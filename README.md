@@ -1,156 +1,280 @@
 # Personal AI Orchestrator
 
-An open-source, safety-first **resource scheduler for coding agents and multi-model AI workflows**.
+An open-source, safety-first **quota-aware resource scheduler for coding agents**.
 
 > Status: **Pre-alpha / architecture & feasibility stage**
 
 ## What problem this project solves
 
-Modern coding-agent users increasingly have access to several model providers, several concrete model SKUs per provider, subscription coding plans, API wallets, and local models at the same time.
+Advanced coding-agent users may hold several paid AI subscriptions at the same time. Those plans are not interchangeable:
 
-The difficult problem is no longer only *which model is strongest?*
+- different model SKUs share different quota pools;
+- burn rates may change by model, time window, or provider policy;
+- quota resets on rolling or billing windows;
+- unused subscription capacity may expire;
+- a premium reasoning plan can be exhausted early while another paid plan remains mostly idle.
+
+The difficult question is therefore not only:
+
+> Which model is strongest?
 
 It is:
 
-> **Use the right model SKU for the right task, at the right quality, latency, quota burn, and cost — without weakening repository safety or deterministic verification.**
+> **How should scarce, time-bounded AI subscription capacity be rationed across a long-running coding workload without wasting paid quota or reducing verified quality?**
 
-Personal AI Orchestrator combines two layers:
+Personal AI Orchestrator combines:
 
-1. a host-owned **Safety Kernel** for task state, worktree isolation, verification, approvals, recovery, and auditability;
-2. an explainable **Model Resource Scheduler** for model-SKU selection, shared quota pools, routing, escalation, telemetry, and Cost-to-Green optimization.
+1. a host-owned **Safety Kernel** for task state, worktree isolation, deterministic verification, approvals, recovery, and auditability;
+2. a deterministic **Quota-Aware Scheduler** for model selection, subscription reserves, escalation, task ownership, and measured Cost-to-Green.
 
 ## Core architecture
 
 ```text
-OpenCode / CLI / macOS / DeskPet / future clients
-                     |
-                     v
+                    OpenCode
+                       |
+                       v
         Personal AI Orchestrator Core
 +------------------------------------------------+
 | Safety Kernel                                  |
-| - Task / Run state                             |
-| - Git worktree isolation                      |
-| - Single-writer ownership                     |
-| - Deterministic verifier                      |
-| - Approval / recovery / audit                 |
+| - authoritative Task / Run state               |
+| - Git worktree isolation                       |
+| - single-writer ownership                      |
+| - deterministic verifier                       |
+| - approval / recovery / audit                  |
 |                                                |
-| Model Resource Scheduler                      |
-| - Provider / Account / Plan                   |
-| - Shared Quota Pools                          |
-| - Concrete Model SKUs                         |
-| - Capability profiles                         |
-| - Worker / Reasoning / Review / Escalation    |
-| - Quota-aware routing                         |
-| - Cost-to-Green telemetry                     |
+| Quota-Aware Scheduler                          |
+| - Account / Plan / QuotaPool                   |
+| - QuotaBinding / ConsumptionRule               |
+| - candidate pools                              |
+| - reserve / escalation policy                  |
+| - temporal scarcity scoring                    |
+| - ownership / structured handoff               |
 +------------------------------------------------+
-                     |
-             worker/gateway adapters
-                     |
-        +------------+-------------+
-        |            |             |
-      Codex       Claude Code    OpenCode
-                                   |
-                       GLM / MiniMax / DeepSeek /
-                       other API or local models
+           |                           |
+           v                           v
+    models.dev metadata          quota collectors
+                                      |
+                              Z.AI / MiniMax first
 ```
+
+The MVP deliberately targets **OpenCode + Z.AI/GLM + MiniMax** before broadening to more execution clients or providers.
 
 ## Important invariant
 
 A worker saying `COMPLETE` is **not** task completion.
 
-A task may only advance after host-owned deterministic verification passes.
+A task becomes green only after host-owned deterministic verification succeeds.
 
-Model routing, quota optimization, or fallback logic can never bypass this rule.
+Model routing, quota optimization, fallback, or escalation can never bypass the Safety Kernel.
 
-## Model-SKU-aware scheduling
+## Why this is not another generic model router
 
-The scheduler does not treat a vendor as a model.
+The project is not primarily trying to outperform learned meta-routers at predicting which model is smartest for a prompt.
 
-```text
-Provider != Account != Plan != QuotaPool != ModelSKU != RuntimeVariant
-```
+Its distinctive resource is **subscription scarcity**.
 
-For example, two models from the same provider may have different coding quality, latency, context limits, price, and task-specific performance while still consuming the same subscription quota pool.
-
-The registry therefore models concrete SKUs and the scarcity boundary they actually consume.
-
-See [`docs/MODEL_RESOURCE_ORCHESTRATION.md`](docs/MODEL_RESOURCE_ORCHESTRATION.md).
-
-## What the scheduler should optimize
-
-Public benchmarks are useful as priors, but real routing should increasingly use observed local outcomes:
-
-- Pass@1
-- attempts-to-green
-- time-to-green
-- tokens-to-green
-- quota-to-green
-- monetary cost-to-green
-- verifier failure rate
-- regression rate
-- context/runtime fit
-- task-family-specific reliability
-
-The first scheduler is deliberately deterministic and explainable. Adaptive routing comes only after enough real telemetry exists.
-
-## Quota truth matters
-
-Quota state is normalized and confidence-labelled:
+Ordinary API routing often treats cost as dollars per token. Subscription capacity behaves differently:
 
 ```text
-AVAILABLE / LIMITED / CRITICAL / EXHAUSTED / UNKNOWN
-
-EXACT      provider-reported truth
-ESTIMATED  derived from local telemetry/signals
-UNKNOWN    no reliable estimate
+remaining quota
++ time until reset
++ recent burn velocity
++ expected workload
++ fallback quality
+= current scarcity value
 ```
+
+Ten percent of a plan may be extremely valuable when only 8% remains and reset is days away, but nearly disposable when abundant quota expires in a few hours.
+
+The scheduler should make that tradeoff explicit and auditable.
+
+## Domain model
+
+The commercial boundary remains explicit:
+
+```text
+Provider
+  -> Account
+      -> Plan
+          -> QuotaPool
+
+ModelSKU <- upstream metadata
+   |
+   +-> QuotaBinding
+   +-> ConsumptionRule
+```
+
+This distinction matters because:
+
+- one provider may have multiple accounts;
+- one account may have multiple plans;
+- multiple model SKUs may share one pool;
+- provider policy can move models between pools or change burn multipliers over time.
+
+`QuotaBinding` and `ConsumptionRule` are time-aware so provider policy changes do not require schema redesign or corrupt historical analytics.
 
 The project must never display a guessed shared-plan value as a fake exact per-model percentage.
 
-Quota reserves allow scarce premium capacity to be protected for architecture, blockers, release gates, or repeated-failure escalation instead of being exhausted by routine review work.
+See [`docs/MODEL_RESOURCE_ORCHESTRATION.md`](docs/MODEL_RESOURCE_ORCHESTRATION.md).
 
-## macOS experience
+## Reuse model catalogs instead of rebuilding them
 
-The orchestrator core remains headless and cross-client.
+Static public model facts should come from upstream metadata where practical, with `models.dev` as the preferred initial source for OpenCode-aligned data.
 
-A first-party macOS client is planned with three complementary surfaces:
+The orchestrator should focus on information upstream catalogs cannot know about the user:
 
-- **Menu Bar** — live status and quick routing controls;
-- **Desktop / Notification Center Widgets** — glanceable quota health, current model, and current run;
-- **Full App** — providers, plans, model SKUs, pools, routing rules, runs, and analytics.
+- accounts and subscriptions;
+- shared quota pools;
+- quota observations and confidence;
+- provider-specific consumption rules;
+- reserve/protection policy;
+- local coding-task outcomes;
+- ownership and handoff history.
 
-DeskPet is an optional client, not a dependency of the project.
+## Quota truth matters
+
+Quota observations are confidence-labelled:
+
+```text
+EXACT       directly provider-reported for the relevant pool
+ESTIMATED   inferred from incomplete signals/local telemetry
+UNKNOWN     no defensible estimate exists
+```
+
+Availability is normalized separately:
+
+```text
+AVAILABLE / LIMITED / CRITICAL / EXHAUSTED / UNKNOWN
+```
+
+Provider visibility may get worse over time. An observation is allowed to degrade from `EXACT` to `ESTIMATED` or `UNKNOWN`; the UI/API must expose that honestly.
+
+Reserve policies protect scarce premium capacity for genuine blockers rather than routine work.
+
+## Deterministic and explainable routing first
+
+The MVP scheduler is a transparent rule/weighted-score engine, not an opaque model-selection prompt or learned router.
+
+For every candidate it should record the exact scoring trace:
+
+- raw values;
+- normalized values;
+- weights;
+- hard exclusions;
+- quota/reserve effects;
+- temporal scarcity contribution;
+- final score.
+
+Human-readable explanations must be generated from that same trace.
+
+Identical authoritative inputs must produce identical routing output.
+
+## Task ownership and cross-model handoff
+
+Dynamic model selection must not create agent thrashing.
+
+The orchestrator persists:
+
+- current implementation owner;
+- frozen architecture decisions/invariants;
+- reviewer role;
+- ownership-transfer history;
+- versioned structured task state.
+
+Ownership transfer uses hysteresis: minimum attempts, transfer limits/cooldowns, and explicit reason codes.
+
+When a task escalates from one model to another, the new model receives a structured handoff rather than an uncontrolled transcript dump.
+
+## What the MVP must prove
+
+The project should earn expansion by passing three falsifiable experiments.
+
+### 1. Quota survival / utilization
+
+Does scheduling prevent a scarce premium plan from exhausting prematurely while reducing unused quota in another paid plan?
+
+### 2. Routing quality
+
+Does deterministic routing match or beat manual routing on verified quality, attempts-to-green, time-to-green, quota-to-green, and regression rate?
+
+### 3. Handoff penalty
+
+Can a structured escalation between models preserve success rate without unacceptable rework or context overhead?
+
+If these three claims fail, adding more providers, UI, or adaptive routing does not fix the product thesis.
+
+## MVP scope
+
+Initial critical path:
+
+```text
+OpenCode
++ Z.AI/GLM
++ MiniMax
++ Python headless daemon
++ CLI
++ Safety Kernel
++ quota collectors
++ deterministic scheduler
++ structured handoff
+```
+
+Explicitly **not required for MVP**:
+
+- ACP;
+- LiteLLM;
+- Claude/Codex adapters;
+- macOS UI or WidgetKit;
+- DeskPet;
+- adaptive/ML routing;
+- generalized local-GPU scheduling;
+- a hand-maintained global model catalog.
+
+ACP and generic gateways may become useful later, but they do not solve the core subscription-scarcity problem.
+
+## macOS experience — planned after dogfooding
+
+The long-term product still includes a first-party macOS control plane:
+
+- Menu Bar status and bounded controls;
+- full SwiftUI dashboard;
+- WidgetKit desktop/Notification Center widgets;
+- DeskPet as an optional independent client.
+
+Implementation is intentionally deferred until the headless daemon API and state schemas survive real OpenCode dogfooding. CLI is the MVP interface.
 
 See [`docs/MACOS_CONTROL_PLANE.md`](docs/MACOS_CONTROL_PLANE.md).
 
-## Safety principles
+## Cost-to-Green
 
-1. Workers do not write to the main repository.
-2. Every implementation task gets a task-specific Git worktree.
-3. A worktree has at most one active writer.
-4. Agents do not create or destroy their own safety boundaries.
-5. Natural-language prompts cannot define executable verifier commands.
-6. Trusted project profiles define build/test/hygiene commands.
-7. Worker completion and task completion are separate states.
-8. Unknown or inconsistent state fails closed to `BLOCKED`.
-9. Credentials remain in provider-native stores or macOS Keychain; secrets are not stored in plaintext task records.
-10. Dynamic model routing cannot weaken verification, approval, or isolation policy.
-11. Automatic paid overage is forbidden unless explicitly enabled by user policy.
-12. Multi-agent execution is justified by task complexity; it is not the default merely because several models are available.
+Public benchmarks are useful priors, but the scheduler should increasingly care about real verified outcomes:
+
+- Pass@1;
+- attempts-to-green;
+- time-to-green;
+- native quota-to-green;
+- direct API spend;
+- temporal scarcity/opportunity cost;
+- verifier failure rate;
+- regression rate;
+- rework after model handoff.
+
+Subscription quota should remain visible in its native units even if a combined effective-cost score is computed.
 
 ## Planned phases
 
 | Phase | Goal |
 |---|---|
-| Spike / PoC | Prove Codex, Claude Code, and OpenCode can be driven safely through a common supervised path. |
+| MVP integration spike | Prove safe OpenCode model assignment with Z.AI/GLM and MiniMax plus quota observability. |
 | P0 Safety Kernel | Durable task/run/audit state, worktree management, writer locking, supervision, fail-closed recovery. |
 | P1 Verification | Trusted deterministic build/test/diff verification and explicit `VERIFIED` gate. |
-| P2 Multi-worker | Provider plurality, reviewer separation, strict task ownership. |
-| P2.5 Model Resource Registry | Concrete model SKUs, shared quota pools, pools, task profiles, explainable routing. |
-| P3 Quota Governor | Provider/plan collectors, confidence-labelled quota, reserves, fallback and harvest policy. |
-| P4 Clients / macOS | Local API, CLI, Menu Bar, WidgetKit widgets, dashboard, DeskPet integration. |
-| P5 Cost-to-Green | Real task analytics by model SKU, runtime, language/framework, role and risk. |
-| P6 Adaptive Scheduler | Evidence-driven routing improvement with deterministic rollback and hard constraints. |
+| P2 Subscription Resource Domain | Account/Plan/QuotaPool, QuotaBinding, ConsumptionRule, upstream model metadata. |
+| P3 Quota Observability | Provider reconciliation, confidence-labelled quota, reset/window data and ToS audit. |
+| P4 Deterministic Scheduler | Candidate pools, reserve/escalation rules, scoring trace, temporal scarcity. |
+| P5 OpenCode Dogfooding | Real task routing, ownership hysteresis, versioned handoff and audit. |
+| P6 MVP Evidence | Quota-survival, routing-quality and handoff-penalty experiments. |
+| P7 Clients / macOS | Freeze daemon contract, then Menu Bar, dashboard, widgets and optional DeskPet client. |
+| P8 Adaptive Scheduler | Only after enough real evidence exists; bounded and reversible. |
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for acceptance gates.
 
@@ -160,24 +284,31 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for acceptance gates.
 - `asyncio`
 - Pydantic typed models
 - SQLite + WAL
-- ACP v1 where appropriate
 - Git worktrees
 - pytest + disposable Git repositories + fake workers
 - structured JSON audit logs first; OpenTelemetry later
-- Unix Domain Socket / typed local API for clients
-- macOS Keychain for orchestrator-owned secrets
-- SwiftUI + WidgetKit for the optional macOS client
+- typed local daemon API / IPC
+- `models.dev`-aligned upstream model metadata where practical
+- SwiftUI + WidgetKit only after daemon/API stabilization
 
-The MVP intentionally avoids PostgreSQL, Redis, Kafka, Kubernetes, public SaaS APIs, vector databases, opaque ML routers, and distributed scheduling.
+The MVP intentionally avoids public SaaS infrastructure, distributed scheduling, opaque ML routers, generalized gateway replacement, and premature desktop UI work.
 
-## Development policy
+## Safety principles
 
-Changes should be small, auditable, and milestone-oriented. Prefer one focused branch/PR per engineering milestone. Every milestone should leave the repository in a deterministic, testable state.
-
-See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+1. Workers do not write directly to the protected main repository.
+2. Implementation tasks use host-controlled workspaces/worktrees.
+3. A writable task workspace has at most one active implementation owner.
+4. Agents do not create or destroy their own safety boundaries.
+5. Natural-language prompts cannot define executable verifier commands.
+6. Worker completion and host verification are separate states.
+7. Unknown/inconsistent authoritative task state fails closed.
+8. Credentials remain provider-native or in approved secret stores.
+9. Scheduler decisions cannot weaken verification, approval, or isolation policy.
+10. Automatic paid overage is forbidden unless explicitly enabled.
+11. High-risk/irreversible permission remains a Safety Kernel decision, not a quota decision.
 
 ## Open-source status
 
 The project is intended to be open source, but **no license has been selected yet**. Until a license is added, the repository should be treated as all rights reserved even if the source becomes publicly visible.
 
-Selecting an explicit license is a release blocker before the first public open-source release.
+Selecting an explicit license remains a blocker before the first public open-source release.
