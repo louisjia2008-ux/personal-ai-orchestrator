@@ -1,16 +1,46 @@
 # macOS Control Plane
 
+> **Status: deferred until after OpenCode dogfooding and daemon/API stabilization.**
+
 ## Goal
 
-The macOS experience is an optional control plane for Personal AI Orchestrator. The core scheduler must remain headless and usable without the macOS app, DeskPet, or any specific UI.
+The macOS experience remains a planned first-party control plane for Personal AI Orchestrator, but it is **not part of the MVP critical path**.
 
-The macOS client should provide three complementary surfaces:
+The first product hypothesis must be proven with a headless Python daemon + CLI + OpenCode integration before SwiftUI or WidgetKit implementation begins.
 
-1. **Menu Bar** — live status and quick controls.
-2. **Desktop / Notification Center Widgets** — glanceable quota, routing, and current-run state.
-3. **Full App** — complete model registry, pool, routing, analytics, and configuration UI.
+The eventual macOS client should provide three complementary surfaces:
 
-DeskPet is a separate optional client of the same local orchestrator API.
+1. **Menu Bar** — live status and quick, bounded controls.
+2. **Full App** — complete subscription/quota/routing/run analytics and configuration UI.
+3. **WidgetKit** — glanceable quota health, current model/run, and safe reversible actions.
+
+DeskPet remains a separate optional client of the same local daemon API.
+
+## Why implementation is deferred
+
+The macOS UI depends on state that is still expected to change during MVP dogfooding:
+
+- quota observation schema;
+- `QuotaBinding` and `ConsumptionRule` representation;
+- routing explanation/scoring trace;
+- temporal scarcity state;
+- ownership/handoff records;
+- provider reconciliation events;
+- task/run event schemas.
+
+Implementing SwiftUI and WidgetKit before these contracts stabilize would create avoidable duplicate migrations across Python and Swift.
+
+The sequence should therefore be:
+
+```text
+Headless daemon
+  -> CLI dogfooding
+  -> freeze/version local API + event JSON schemas
+  -> Menu Bar
+  -> Full Dashboard
+  -> WidgetKit
+  -> optional DeskPet integration
+```
 
 ## Architectural boundary
 
@@ -27,163 +57,98 @@ DeskPet is a separate optional client of the same local orchestrator API.
    MenuBar  Widget   Dashboard
 ```
 
-The macOS client must not become the source of truth for task state, quota state, or routing state.
+The client is never the source of truth for task state, quota state, routing state, or safety decisions.
 
-## Menu Bar
+Dependency direction remains:
 
-The menu bar is the fastest interactive surface and may update more frequently than widgets.
+`clients -> core API`, never `core -> macOS UI`.
 
-Recommended information:
+## Domain hierarchy shown by the UI
 
-- orchestrator running/paused state;
-- current task and selected model SKU;
-- current worker role;
-- plan/quota health summary;
-- active routing mode;
-- protected quota pools;
-- warnings and exhausted providers.
-
-Recommended quick actions:
-
-- Auto / Balanced mode;
-- Max Quality;
-- Save Quota;
-- Low Latency;
-- pause scheduler;
-- protect/unprotect a configured quota pool;
-- open full dashboard.
-
-The menu bar should not expose destructive repository actions directly.
-
-## Desktop Widget
-
-Widgets are for glanceable state and a small number of safe actions. They are not the full scheduler editor.
-
-### Small widget
-
-Suggested content:
-
-```text
-ORCHESTRATOR
-Balanced
-
-M3       Healthy
-GLM      Conserve
-GPT      Healthy
-
-Running: M3 / Builder
-```
-
-### Medium widget
-
-Suggested content:
-
-```text
-PLAN HEALTH
-MiniMax    39% used / Healthy
-Z.AI       82% used / Conserve
-Codex      61% used / Healthy
-
-CURRENT TASK
-Swift debugging -> M3
-
-Mode: Balanced
-```
-
-Quota percentages must be labelled by confidence/source:
-
-- Provider reported
-- Estimated
-- Unknown
-
-### Large widget
-
-May additionally show:
-
-- task/risk class;
-- selected model and role;
-- selection explanation;
-- protected reserve state;
-- recent model utilization;
-- warning conditions.
-
-Example selection explanation:
-
-```text
-Selected M3
-+ strong local Swift debugging history
-+ MiniMax quota healthy
-+ medium-risk task
-- GLM reserve protected
-```
-
-## Widget interactions
-
-Only bounded, reversible actions belong in widgets.
-
-Good candidates:
-
-- switch routing mode;
-- enable/disable quota protection;
-- pause/resume new task dispatch;
-- open the relevant dashboard page.
-
-Not appropriate for widgets:
-
-- editing arbitrary routing expressions;
-- reordering large model pools;
-- credential entry;
-- repository integration/merge actions;
-- complex approval workflows;
-- free-form prompt entry.
-
-## Full App
-
-The full app owns configuration UX while the daemon owns configuration state.
-
-Recommended sections:
-
-### Dashboard
-
-- current run;
-- current model SKU/role;
-- provider and plan health;
-- scheduler mode;
-- alerts;
-- recent routing decisions.
-
-### Providers & Plans
-
-Hierarchical view:
+The UI must preserve the commercial scarcity boundary:
 
 ```text
 Provider
   Account
     Plan
       Quota Pool
-        Model SKU
-          Runtime Variant
 ```
 
-This hierarchy is mandatory so shared quotas are represented honestly.
+Models are shown as resources bound to those pools:
+
+```text
+Model SKU
+  -> Quota Binding
+  -> active Consumption Rule
+```
+
+The UI must not fabricate a per-model remaining percentage when only a shared quota-pool observation exists.
+
+Reasoning/high-speed/model variants should initially display upstream/OpenCode model-variant metadata rather than requiring a separate local `RuntimeVariant` hierarchy.
+
+## Menu Bar
+
+Recommended information:
+
+- orchestrator running/paused state;
+- current task and selected model SKU;
+- current implementation owner/role;
+- plan/quota health summary;
+- active routing mode;
+- protected quota pools;
+- quota confidence warnings;
+- exhausted/unavailable providers.
+
+Recommended bounded actions:
+
+- Balanced / Save Quota / Max Quality / Low Latency mode;
+- pause/resume new dispatch;
+- protect/unprotect a configured quota pool;
+- open the relevant dashboard view.
+
+The menu bar should not expose destructive repository actions directly.
+
+## Full App
+
+### Dashboard
+
+- current run;
+- current selected model/owner;
+- provider/plan/quota-pool health;
+- current routing mode;
+- alerts;
+- recent routing decisions and explanations.
+
+### Providers, Accounts, Plans & Quota Pools
+
+Show:
+
+- provider/account identity;
+- commercial plan;
+- shared quota pools;
+- remaining/reset state when observable;
+- source/confidence;
+- reserve/protection policy;
+- last provider reconciliation;
+- active time-aware quota bindings and consumption rules.
 
 ### Models
 
-Per-SKU view should include:
+Static public metadata should be sourced upstream where practical (for example models.dev aligned data) and combined with local scheduler state:
 
+- canonical model ID;
 - enabled/disabled;
-- provider/account/plan/quota-pool relationship;
-- context/runtime properties;
-- price data where known;
-- observed latency;
-- capability prior;
-- local performance score;
-- supported pools;
+- quota binding;
+- active consumption rule;
+- public context/capability/pricing metadata;
+- observed latency/reliability;
+- local task-performance summaries;
+- candidate-pool memberships;
 - routing restrictions.
 
-### Pools
+### Candidate Pools
 
-Users can add/remove/reorder concrete model SKUs in:
+Users may configure model membership/priority for:
 
 - Worker;
 - Reasoning;
@@ -191,126 +156,130 @@ Users can add/remove/reorder concrete model SKUs in:
 - Escalation;
 - Fallback.
 
-Pools are candidate sets; the scheduler still applies quota, risk, cost, and performance constraints.
+Pools are candidate sets. The deterministic scheduler still applies hard eligibility, reserve policy, temporal scarcity, task fit, and observed reliability.
 
-### Routing
+### Routing / Explanation
 
-Expose deterministic rules first.
+The UI should render the actual machine-readable scoring trace, not an independently written explanation.
 
-Examples:
+For a decision, show:
 
 ```text
-Task risk = high           -> Reasoning pool
-Worker failures >= 2       -> Escalation pool
-Quota usage >= threshold   -> Conservation policy
-Requires vision            -> vision-capable candidates only
-Context requirement high   -> exclude insufficient context variants
+Selected: MiniMax M3
+
+Capability fit            +0.24
+Observed reliability      +0.18
+Quota health              +0.16
+Temporal scarcity         -0.03
+Latency                   -0.04
+--------------------------------
+Final score                0.51
+
+GLM-5.3 excluded/protected:
+quota reserve policy
 ```
 
-Every active rule should be explainable and testable.
+Exact visual design may evolve, but the explanation must remain trace-derived and auditable.
 
-### Runs
+### Runs / Ownership
 
-Show a timeline such as:
+Show a versioned timeline such as:
 
 ```text
 Task classified
--> M3 selected
--> worker launched
+-> M3 selected / ownership v1
 -> verifier failed
--> M3 repair attempt
--> verifier failed
--> escalation triggered
--> GLM-5.3 selected
+-> M3 attempt 2 / state v2
+-> escalation threshold reached
+-> ownership transfer approved
+-> GLM selected / handoff v3
 -> verifier passed
--> review gate
 ```
+
+Ownership-transfer cooldown/limits and transfer reasons should be visible.
 
 ### Analytics
 
-Primary metrics:
+Primary metrics after sufficient real data exists:
 
 - Pass@1;
 - attempts-to-green;
 - time-to-green;
-- quota-to-green;
-- cost-to-green;
-- regression rate;
-- model utilization by role/task family;
-- quota consumed by task class;
-- avoidable escalation / low-value premium-model calls.
+- native quota-to-green;
+- direct monetary spend;
+- temporal scarcity/effective cost;
+- regression/verifier failure rate;
+- unused quota at reset;
+- quota survival / reserve breaches;
+- rework after handoff;
+- model utilization by task family.
 
-A useful visualization is a task-specific Pareto frontier of expected quality vs effective cost, with quota health and latency encoded separately.
+## WidgetKit
 
-## UI status language
+Widgets are deliberately the last macOS surface to implement because they should consume a stable read model rather than mirror mutable internal entities.
 
-Quota state should use a small normalized vocabulary:
-
-```text
-Healthy
-Conserve
-Critical
-Exhausted
-Unknown
-```
-
-Do not imply precision the backend does not possess.
-
-Examples:
+### Small
 
 ```text
-Z.AI plan: 82% used (provider reported)
-MiniMax plan: ~39% used (estimated)
-Provider X: remaining quota unknown
+ORCHESTRATOR
+Balanced
+
+MiniMax   Healthy
+Z.AI      Conserve
+
+M3 / Builder
 ```
+
+### Medium
+
+May show:
+
+- plan/quota health;
+- confidence (`provider reported`, `estimated`, `unknown`);
+- current task/model;
+- routing mode;
+- protected reserve state.
+
+### Large
+
+May additionally show:
+
+- current selection scoring summary;
+- recent quota utilization;
+- current ownership/handoff state;
+- warnings.
+
+Only bounded reversible actions belong in widgets, such as mode changes, quota protection, pause/resume dispatch, or opening a dashboard page.
+
+Do not put credential entry, arbitrary routing expressions, repository merge actions, free-form prompts, or complex approvals in widgets.
 
 ## Local API contract
 
-The macOS app should consume typed daemon endpoints/events rather than reading scheduler database files directly.
+The client consumes typed/versioned daemon endpoints/events rather than reading SQLite or scheduler files directly.
 
-Expected read surfaces:
+Expected reads:
 
-- orchestrator status;
-- plans/quota pools;
-- model registry;
-- current runs;
-- routing decisions/explanations;
+- daemon status;
+- providers/accounts/plans/quota pools;
+- quota observations and confidence;
+- active quota bindings/consumption rules;
+- models and candidate pools;
+- current runs/ownership state;
+- routing scoring traces;
 - analytics summaries;
 - alerts.
 
-Expected write surfaces:
+Expected audited writes:
 
 - routing mode;
-- pool membership/order;
-- quota reserve policy;
+- candidate-pool configuration;
+- quota reserve/protection policy;
 - model enable/disable;
 - pause/resume dispatch;
-- bounded approval actions defined by the Safety Kernel.
-
-Writes must be audited by the core.
+- bounded approval actions explicitly defined by the Safety Kernel.
 
 ## Open-source requirement
 
-The macOS UI is a first-party client, not a dependency of the open-source core.
+A user who never installs the macOS client or DeskPet must still be able to run and use the headless orchestrator and CLI.
 
-A user must be able to run the headless daemon and CLI on a supported non-macOS environment without compiling SwiftUI/WidgetKit code.
-
-Suggested repository separation:
-
-```text
-core/
-providers/
-adapters/
-clients/
-  cli/
-  macos/
-    app/
-    menubar/
-    widgets/
-benchmarks/
-docs/
-```
-
-The exact physical layout can evolve, but dependency direction must remain:
-
-`clients -> core API`, never `core -> macOS UI`.
+The macOS client is a convenience and observability layer, not the scheduler itself and not the project's technical moat.
