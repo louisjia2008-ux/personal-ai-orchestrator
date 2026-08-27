@@ -85,7 +85,7 @@ class QuotaSnapshot(RegistryModel):
     source: str | None = None
 
     @model_validator(mode="after")
-    def validate_unknown_precision(self) -> "QuotaSnapshot":
+    def validate_unknown_precision(self) -> QuotaSnapshot:
         if self.confidence is EvidenceConfidence.UNKNOWN and (
             self.used_fraction is not None or self.remaining_units is not None
         ):
@@ -107,7 +107,7 @@ class CapabilityProfile(RegistryModel):
     scores: dict[str, float] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_score_range(self) -> "CapabilityProfile":
+    def validate_score_range(self) -> CapabilityProfile:
         invalid = {name: value for name, value in self.scores.items() if not 0.0 <= value <= 1.0}
         if invalid:
             raise ValueError(f"capability scores must be within [0, 1]: {invalid}")
@@ -152,7 +152,7 @@ class ModelRegistry(RegistryModel):
     pool_memberships: tuple[PoolMembership, ...] = ()
 
     @model_validator(mode="after")
-    def validate_references(self) -> "ModelRegistry":
+    def validate_references(self) -> ModelRegistry:
         self._validate_key_identity(self.providers)
         self._validate_key_identity(self.accounts)
         self._validate_key_identity(self.plans)
