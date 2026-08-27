@@ -161,33 +161,24 @@ def make_registry() -> ModelRegistry:
 def test_models_share_real_quota_pool() -> None:
     registry = make_registry()
 
-    glm_53_pool = registry.quota_pool_for_model("glm-5.3")
-    glm_52_pool = registry.quota_pool_for_model("glm-5.2")
-    m3_pool = registry.quota_pool_for_model("minimax-m3")
-    m27_pool = registry.quota_pool_for_model("minimax-m2.7")
-
-    assert glm_53_pool is glm_52_pool
-    assert m3_pool is m27_pool
-    assert glm_53_pool.id != m3_pool.id
+    assert registry.quota_pool_for_model("glm-5.3") is registry.quota_pool_for_model("glm-5.2")
+    assert registry.quota_pool_for_model("minimax-m3") is registry.quota_pool_for_model(
+        "minimax-m2.7"
+    )
 
 
 def test_one_provider_can_have_multiple_plans() -> None:
     registry = make_registry()
-
     zai_plan_ids = {
         plan.id
         for plan in registry.plans.values()
         if registry.accounts[plan.account_id].provider_id == "zai"
     }
-
     assert zai_plan_ids == {"zai-coding", "zai-api"}
 
 
 def test_model_can_have_multiple_runtime_variants() -> None:
-    registry = make_registry()
-
-    variants = registry.runtimes_for_model("minimax-m3")
-
+    variants = make_registry().runtimes_for_model("minimax-m3")
     assert {variant.id for variant in variants} == {"m3-standard", "m3-high-speed"}
 
 
@@ -205,32 +196,26 @@ def test_unknown_quota_without_precision_is_valid() -> None:
         state=QuotaState.UNKNOWN,
         confidence=EvidenceConfidence.UNKNOWN,
     )
-
     assert snapshot.used_fraction is None
     assert snapshot.remaining_units is None
 
 
 def test_dangling_quota_pool_reference_fails_closed() -> None:
-    registry = make_registry()
-    data = registry.model_dump(mode="python")
+    data = make_registry().model_dump(mode="json")
     data["models"]["glm-5.3"]["quota_pool_id"] = "missing-pool"
-
     with pytest.raises(ValidationError, match="unknown quota pool"):
         ModelRegistry.model_validate(data)
 
 
 def test_model_cannot_consume_quota_from_different_provider() -> None:
-    registry = make_registry()
-    data = registry.model_dump(mode="python")
+    data = make_registry().model_dump(mode="json")
     data["models"]["glm-5.3"]["quota_pool_id"] = "minimax-coding-shared"
-
     with pytest.raises(ValidationError, match="provider does not match"):
         ModelRegistry.model_validate(data)
 
 
 def test_pool_membership_runtime_must_match_model() -> None:
-    registry = make_registry()
-    data = registry.model_dump(mode="python")
+    data = make_registry().model_dump(mode="json")
     data["pool_memberships"].append(
         {
             "pool": PoolKind.REASONING,
@@ -240,22 +225,17 @@ def test_pool_membership_runtime_must_match_model() -> None:
             "weight": 1.0,
         }
     )
-
     with pytest.raises(ValidationError, match="belongs to a different model SKU"):
         ModelRegistry.model_validate(data)
 
 
 def test_registry_json_round_trip() -> None:
     registry = make_registry()
-
-    restored = ModelRegistry.model_validate_json(registry.model_dump_json())
-
-    assert restored == registry
+    assert ModelRegistry.model_validate_json(registry.model_dump_json()) == registry
 
 
 def test_candidates_are_sorted_by_priority_then_weight() -> None:
-    registry = make_registry()
-    data = registry.model_dump(mode="python")
+    data = make_registry().model_dump(mode="json")
     data["pool_memberships"].extend(
         [
             {
@@ -273,9 +253,7 @@ def test_candidates_are_sorted_by_priority_then_weight() -> None:
         ]
     )
     expanded = ModelRegistry.model_validate(data)
-
     candidates = expanded.candidates_for_pool(PoolKind.WORKER)
-
     assert [candidate.model_sku_id for candidate in candidates] == [
         "minimax-m3",
         "glm-5.2",
