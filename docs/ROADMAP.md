@@ -1,241 +1,252 @@
 # Roadmap
 
-This roadmap is intentionally conservative. The project should earn autonomy by passing explicit engineering gates rather than accumulating agent features first.
+This roadmap is intentionally evidence-driven. The project should first prove that subscription-aware scheduling creates measurable value before expanding into a general multi-agent platform or polished desktop product.
 
-## Spike / PoC — ACP feasibility
+## MVP integration spike — OpenCode + quota observability
 
 ### Objective
-Prove that Codex, Claude Code, and OpenCode/MiniMax can be driven through a common ACP-oriented control path on a disposable repository/worktree.
+Prove the minimum execution path needed for the product hypothesis:
+
+```text
+OpenCode
+  -> orchestrator scheduling decision
+  -> concrete GLM or MiniMax model selection
+  -> supervised coding task
+  -> deterministic verification
+```
 
 ### Required experiments
-- Launch each worker through a pinned ACP-compatible command.
-- Reuse provider-native subscription authentication without copying credentials into project files.
-- Capture streaming events and terminal/tool activity.
-- Verify cancellation works and does not leave uncontrolled child processes.
-- Run read-only tasks for all workers.
-- Run one small edit + test task through OpenCode/MiniMax.
-- Verify the main repository remains unchanged while workers operate only in disposable worktrees.
-- Record permission-request behavior, including any auto-approval behavior in reused infrastructure.
-- Capture basic usage/telemetry when available.
+- confirm a reliable OpenCode model-selection/switch surface that does not require unsafe global config mutation;
+- preserve provider-native authentication where possible;
+- run one disposable-repository task with MiniMax;
+- run one disposable-repository task with Z.AI/GLM;
+- capture cancellation and provider/model errors;
+- identify observable quota/usage signals for both providers;
+- prove concurrent sessions cannot overwrite each other's model assignment;
+- keep deterministic host verification authoritative.
 
 ### Go / No-Go gate
-Proceed to P0 only if all of the following are true:
-1. Codex ACP path works.
-2. Claude Code ACP path works.
-3. OpenCode/MiniMax ACP path works.
-4. Subscription authentication can be reused safely.
-5. Streaming + cancellation are reliable enough for supervision.
-6. External isolation and deterministic verification can remain authoritative over agent-reported completion.
+Proceed only if OpenCode can be supervised and routed between at least two concrete model families without creating a credential, concurrency, or verification bypass.
 
-If any item fails, stop and document the incompatibility before building a production safety kernel around it.
+ACP is not required for this gate.
 
 ---
 
 ## P0 — Safety Kernel
 
 ### Objective
-Create the host-owned source of truth for task execution.
+Maintain the host-owned source of truth for task execution.
 
 ### Scope
-- SQLite + WAL state store.
-- Typed `Task`, `Run`, `Approval`, `AuditEvent`, and workspace records.
-- Idempotent task submission.
-- Host-owned Git worktree lifecycle.
-- One active writer per task worktree.
-- Process-group supervision and cancellation.
-- Fail-closed startup reconciliation between DB, Git, and process state.
-- Explicit blocked/error states.
-- No worker integration authority over `main`.
+- SQLite + WAL state store;
+- typed `Task`, `Run`, `Approval`, `AuditEvent`, and workspace records;
+- idempotent task submission;
+- host-owned Git worktree lifecycle;
+- one active writer per task worktree;
+- process supervision and cancellation;
+- fail-closed startup reconciliation;
+- explicit blocked/error states;
+- no worker integration authority over `main`.
 
 ### Acceptance gate
-Chaos tests must cover:
-- worker crash;
-- orchestrator crash;
-- duplicate submit;
-- missing worktree;
-- unexpected process exit;
-- stale writer lock;
-- invalid worker result;
-- restart/recovery.
-
-No tested scenario may silently advance to `COMPLETED` when state is uncertain.
+Chaos tests cover worker/orchestrator crash, duplicate submit, missing worktree, unexpected process exit, stale writer ownership, invalid worker result, and restart/recovery. Uncertain state must never silently advance to completion.
 
 ---
 
 ## P1 — Deterministic Verification
 
 ### Objective
-Separate worker completion from task completion.
+Keep worker completion separate from verified task completion.
 
 ### Scope
-- Trusted verifier profiles stored outside natural-language prompts.
-- argv-based commands rather than arbitrary shell strings.
+- trusted verifier profiles outside natural-language prompts;
+- argv-based build/test/hygiene commands;
 - targeted tests;
 - build checks;
 - `git diff --check`;
-- allowed-path / changed-file policy;
-- structured evidence JSON;
-- `VERIFIED` state distinct from worker `FINISHED`.
+- changed-file/allowed-path policy;
+- structured evidence;
+- explicit `VERIFIED` state.
 
 ### Acceptance gate
-Injected failures in tests, build, evidence, and file-scope checks must prevent verification.
+Injected build/test/evidence/file-scope failures must block verification.
 
 ---
 
-## P2 — Multi-worker orchestration
+## P2 — Subscription Resource Domain
 
 ### Objective
-Add provider plurality without turning the core into provider-specific middleware.
+Represent the real commercial scarcity boundary without rebuilding a global model catalog.
 
 ### Scope
-- thin Worker Registry: command, transport, capabilities;
-- routing policy separated from transport registry;
-- primary worker;
-- reviewer from a different provider by default for selected risk classes;
-- single writer preserved at all times;
-- separate worktrees for truly parallel engineering tasks.
-
-### Non-goal
-Do not build a five-agent swarm by default. The baseline flow is:
-
-```text
-Primary -> Verifier -> Reviewer -> Verifier -> Final gate
-```
-
----
-
-## P2.5 — Model Resource Registry / Explainable Routing
-
-### Objective
-Make concrete model SKUs, plans, quota pools, runtime variants, and task-specific capability profiles first-class scheduling resources.
-
-### Scope
-- `Provider -> Account -> Plan -> QuotaPool -> ModelSKU -> RuntimeVariant` hierarchy;
-- concrete model-SKU registry rather than vendor-only routing;
-- Worker / Reasoning / Review / Escalation / Fallback candidate pools;
-- task profiles including risk, language/framework, context needs, failure count, and long-horizon requirements;
-- deterministic, auditable routing rules;
-- per-selection explanation records;
-- task ownership and architecture-ownership semantics to prevent cross-model thrashing;
-- structured cross-model handoff state;
-- manual and static routing before adaptive routing.
+- `Provider -> Account -> Plan -> QuotaPool` hierarchy;
+- concrete `ModelSKU` references sourced from upstream metadata such as `models.dev` where practical;
+- time-aware `QuotaBinding`;
+- time-aware `ConsumptionRule`;
+- quota observations with `EXACT / ESTIMATED / UNKNOWN` confidence;
+- reserve/protection policy on quota pools;
+- provider-policy changes represented through effective dates rather than schema changes;
+- local models treated as a separate/deferred resource class rather than forced into subscription semantics.
 
 ### Acceptance gate
-Given a fixed registry, task profile, quota snapshot, and routing configuration, the scheduler must make a deterministic model selection and emit a machine-readable explanation of why that SKU was chosen and why excluded candidates were rejected.
-
-Routing decisions must never weaken P0/P1 safety and verification invariants.
+The same quota pool can be shared by multiple models, provider policy can change over time without losing history, and no shared/estimated observation is exposed as exact per-model quota.
 
 See [`MODEL_RESOURCE_ORCHESTRATION.md`](MODEL_RESOURCE_ORCHESTRATION.md).
 
 ---
 
-## P3 — Quota Governor / Harvest
+## P3 — Quota Observability / Reconciliation
 
 ### Objective
-Use paid subscription and API capacity intelligently without allowing quota logic to weaken safety.
+Know what quota truth is actually observable and degrade confidence honestly when it is not.
+
+### Initial providers
+- Z.AI / GLM coding plan;
+- MiniMax coding plan.
 
 ### Scope
-- provider/plan-specific collectors;
-- shared quota-pool representation;
-- normalized states: `AVAILABLE`, `LIMITED`, `CRITICAL`, `EXHAUSTED`, `UNKNOWN`;
-- remaining quota when genuinely observable;
-- reset time;
-- source-of-truth/confidence: `EXACT`, `ESTIMATED`, `UNKNOWN`;
-- reserve policy;
-- provider/model protection modes;
-- reset-soon harvest policy;
-- conservative fallback behavior;
-- no automatic paid overage without explicit approval.
-
-ACP session usage may be telemetry input, but account-level weekly quota is treated as a separate concern.
+- provider/plan collectors;
+- remaining capacity when genuinely observable;
+- rolling/billing reset data;
+- rate-limit and usage signals;
+- shared-pool semantics;
+- external-consumption reconciliation where provider usage APIs permit it;
+- observation timestamps/source/confidence;
+- ToS/account-policy audit for any automated quota access;
+- no scraping presented as exact truth.
 
 ### Acceptance gate
-The UI/API must never render an estimated or shared-pool value as an exact per-model remaining quota. Reserve policy must deterministically prevent routine traffic from consuming protected capacity.
+Every quota value returned by the daemon includes scope, source, observation time, and confidence. Loss of provider visibility can explicitly downgrade `EXACT -> ESTIMATED -> UNKNOWN`.
 
 ---
 
-## P4 — Clients / macOS Control Plane
+## P4 — Deterministic Explainable Scheduler
 
 ### Objective
-Expose the same orchestrator state safely to multiple front ends while keeping the core headless.
+Make auditable model-selection decisions that ration subscription capacity over time.
 
 ### Scope
-- typed local API / Unix Domain Socket;
-- CLI client;
-- macOS full dashboard;
-- macOS menu-bar surface;
-- WidgetKit desktop / Notification Center widgets;
-- DeskPet client/tool;
-- optional Telegram client;
-- submit/status/cancel/approve/report;
-- model pool and routing configuration;
-- quota-plan health and confidence display;
-- idempotent request IDs;
-- proactive notification of important state changes.
+- Worker / Reasoning / Review / Escalation / Fallback candidate pools;
+- structured task profile;
+- hard eligibility filters;
+- quota reserve/protection rules;
+- failure-count escalation;
+- task/pool-specific weighted scoring;
+- time-dependent scarcity penalty using remaining capacity, time-to-reset, burn velocity, expected workload, and fallback quality;
+- generated explanation from the exact scoring trace;
+- no opaque routing prompt or ML router.
 
-### Safety rule
-Natural-language client messages never become direct shell commands. Client writes are audited by the core.
+### Acceptance gate
+Given identical authoritative task state, model metadata, quota observations, telemetry, and policy, the scheduler must return the identical concrete model decision and identical machine-readable scoring trace.
+
+---
+
+## P5 — OpenCode Dogfooding / Ownership / Handoff
+
+### Objective
+Use the scheduler on real coding work and measure whether model switching remains coherent.
+
+### Scope
+- OpenCode adapter/session model assignment;
+- no shared-global-config race as the normal switching path;
+- authoritative Safety Kernel read-only task-health interface;
+- implementation ownership;
+- architecture/frozen-decision ownership where needed;
+- ownership-transfer hysteresis and limits;
+- versioned structured task state;
+- structured cross-model handoff;
+- routing/provider/error audit trail.
+
+### Acceptance gate
+A forced escalation between MiniMax and GLM preserves task/worktree ownership, frozen decisions, verification history, and cancellation semantics. Transfer history is versioned and auditable.
+
+---
+
+## P6 — MVP Evidence / Cost-to-Green
+
+### Objective
+Test the product hypothesis with falsifiable real-workload evidence.
+
+### Experiment A — Quota survival
+Compare scheduled vs unscheduled periods/tasks for:
+- time to premium-plan exhaustion/reserve breach;
+- unused quota at reset;
+- utilization across paid plans;
+- premium calls avoided/deferred.
+
+### Experiment B — Routing quality
+Compare manual and orchestrator routing for:
+- verified success;
+- Pass@1;
+- attempts-to-green;
+- time-to-green;
+- native quota-to-green;
+- direct monetary cost;
+- regression/verifier failure rate.
+
+### Experiment C — Handoff penalty
+Compare single-model completion vs structured handoff/escalation for:
+- verified success;
+- rework after transfer;
+- time-to-green;
+- context/request overhead;
+- regression rate.
+
+### Acceptance gate
+The project should show improved quota survival/utilization without material verified-quality degradation, and cross-model handoff must not introduce an unacceptable success/rework penalty.
+
+---
+
+## P7 — Clients / macOS Control Plane
+
+### Objective
+Build user-facing controls only after the daemon API and state schemas have survived real dogfooding.
+
+### Sequence
+1. CLI remains the MVP interface.
+2. Freeze/version the local daemon API and JSON/event schemas.
+3. Add macOS Menu Bar status/control.
+4. Add full SwiftUI dashboard.
+5. Add WidgetKit surfaces for glanceable state and bounded actions.
+6. Keep DeskPet as an optional independent client.
 
 ### Product boundary
-The macOS app and DeskPet are optional clients. The open-source scheduler must remain usable headlessly without either UI.
+The headless orchestrator remains usable without macOS or DeskPet.
 
 See [`MACOS_CONTROL_PLANE.md`](MACOS_CONTROL_PLANE.md).
 
 ---
 
-## P5 — Cost-to-Green Analytics
-
-### Objective
-Measure actual usefulness of each model SKU in real coding-agent workloads rather than relying on public benchmark prestige alone.
-
-### Scope
-- Pass@1;
-- attempts-to-green;
-- time-to-green;
-- tokens-to-green;
-- quota-to-green;
-- monetary cost-to-green;
-- regression rate;
-- verifier failure rate;
-- model utilization by task family and role;
-- public benchmark priors stored separately from local observed performance;
-- task-family segmentation where sample size is sufficient.
-
-### Acceptance gate
-Analytics must be reproducible from immutable/auditable run telemetry and must separate measured values from estimates.
-
----
-
-## P6 — Adaptive Scheduler
-
-### Objective
-Allow routing weights to improve from real historical performance while preserving explainability and hard safety constraints.
+## P8 — Adaptive Scheduling (deferred)
 
 ### Preconditions
-P6 does not begin until enough P5 data exists to make local performance estimates meaningful.
+Do not begin until P6 produces enough task-specific evidence to estimate local performance meaningfully.
 
-### Scope
-- local posterior capability scores;
-- expected time/cost/quota-to-green estimates;
-- task-specific candidate ranking;
-- Pareto-frontier analysis;
+### Possible scope
+- local posterior capability estimates;
+- expected time/quota/cost-to-green;
 - bounded online adaptation;
-- rollback to deterministic static policy;
-- explicit policy floors for risk, reserve, safety, and provider cost.
+- Pareto analysis;
+- deterministic rollback;
+- hard policy floors for safety, reserve, cost, and risk.
 
 ### Non-goal
-Do not deploy an opaque reinforcement-learning or neural router as the first implementation.
+Do not deploy an opaque reinforcement-learning/neural router as the first scheduling implementation.
 
 ---
 
-## Deferred until evidence justifies them
+## Explicitly deferred until evidence justifies them
 
-- CAID-style dependency-graph multi-agent decomposition;
+- ACP as a core dependency;
+- LiteLLM or another universal gateway in the MVP critical path;
+- Claude/Codex execution adapters;
+- generalized local GPU/thermal resource scheduling;
+- macOS UI before daemon-state stabilization;
 - distributed execution;
 - Kubernetes;
-- public SaaS API;
+- public SaaS control plane;
 - PostgreSQL/Redis/Kafka;
-- autonomous merge to protected branches;
 - generalized plugin marketplace;
-- opaque model-selection neural networks;
-- autonomous paid overage.
+- autonomous paid overage;
+- autonomous architecture migration;
+- opaque learned model routing.
