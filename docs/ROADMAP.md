@@ -104,42 +104,127 @@ Primary -> Verifier -> Reviewer -> Verifier -> Final gate
 
 ---
 
+## P2.5 — Model Resource Registry / Explainable Routing
+
+### Objective
+Make concrete model SKUs, plans, quota pools, runtime variants, and task-specific capability profiles first-class scheduling resources.
+
+### Scope
+- `Provider -> Account -> Plan -> QuotaPool -> ModelSKU -> RuntimeVariant` hierarchy;
+- concrete model-SKU registry rather than vendor-only routing;
+- Worker / Reasoning / Review / Escalation / Fallback candidate pools;
+- task profiles including risk, language/framework, context needs, failure count, and long-horizon requirements;
+- deterministic, auditable routing rules;
+- per-selection explanation records;
+- task ownership and architecture-ownership semantics to prevent cross-model thrashing;
+- structured cross-model handoff state;
+- manual and static routing before adaptive routing.
+
+### Acceptance gate
+Given a fixed registry, task profile, quota snapshot, and routing configuration, the scheduler must make a deterministic model selection and emit a machine-readable explanation of why that SKU was chosen and why excluded candidates were rejected.
+
+Routing decisions must never weaken P0/P1 safety and verification invariants.
+
+See [`MODEL_RESOURCE_ORCHESTRATION.md`](MODEL_RESOURCE_ORCHESTRATION.md).
+
+---
+
 ## P3 — Quota Governor / Harvest
 
 ### Objective
-Use paid subscription capacity intelligently without allowing quota logic to weaken safety.
+Use paid subscription and API capacity intelligently without allowing quota logic to weaken safety.
 
 ### Scope
-- provider-specific collectors;
-- normalized states: `AVAILABLE`, `LIMITED`, `EXHAUSTED`, `UNKNOWN`;
-- remaining quota when observable;
+- provider/plan-specific collectors;
+- shared quota-pool representation;
+- normalized states: `AVAILABLE`, `LIMITED`, `CRITICAL`, `EXHAUSTED`, `UNKNOWN`;
+- remaining quota when genuinely observable;
 - reset time;
-- confidence;
+- source-of-truth/confidence: `EXACT`, `ESTIMATED`, `UNKNOWN`;
 - reserve policy;
+- provider/model protection modes;
 - reset-soon harvest policy;
 - conservative fallback behavior;
 - no automatic paid overage without explicit approval.
 
 ACP session usage may be telemetry input, but account-level weekly quota is treated as a separate concern.
 
+### Acceptance gate
+The UI/API must never render an estimated or shared-pool value as an exact per-model remaining quota. Reserve policy must deterministically prevent routine traffic from consuming protected capacity.
+
 ---
 
-## P4 — Clients
+## P4 — Clients / macOS Control Plane
 
 ### Objective
-Expose the same orchestrator state safely to multiple front ends.
+Expose the same orchestrator state safely to multiple front ends while keeping the core headless.
 
 ### Scope
 - typed local API / Unix Domain Socket;
-- Telegram client;
+- CLI client;
+- macOS full dashboard;
+- macOS menu-bar surface;
+- WidgetKit desktop / Notification Center widgets;
 - DeskPet client/tool;
+- optional Telegram client;
 - submit/status/cancel/approve/report;
+- model pool and routing configuration;
+- quota-plan health and confidence display;
 - idempotent request IDs;
-- user/chat allowlists;
 - proactive notification of important state changes.
 
 ### Safety rule
-Natural-language client messages never become direct shell commands.
+Natural-language client messages never become direct shell commands. Client writes are audited by the core.
+
+### Product boundary
+The macOS app and DeskPet are optional clients. The open-source scheduler must remain usable headlessly without either UI.
+
+See [`MACOS_CONTROL_PLANE.md`](MACOS_CONTROL_PLANE.md).
+
+---
+
+## P5 — Cost-to-Green Analytics
+
+### Objective
+Measure actual usefulness of each model SKU in real coding-agent workloads rather than relying on public benchmark prestige alone.
+
+### Scope
+- Pass@1;
+- attempts-to-green;
+- time-to-green;
+- tokens-to-green;
+- quota-to-green;
+- monetary cost-to-green;
+- regression rate;
+- verifier failure rate;
+- model utilization by task family and role;
+- public benchmark priors stored separately from local observed performance;
+- task-family segmentation where sample size is sufficient.
+
+### Acceptance gate
+Analytics must be reproducible from immutable/auditable run telemetry and must separate measured values from estimates.
+
+---
+
+## P6 — Adaptive Scheduler
+
+### Objective
+Allow routing weights to improve from real historical performance while preserving explainability and hard safety constraints.
+
+### Preconditions
+P6 does not begin until enough P5 data exists to make local performance estimates meaningful.
+
+### Scope
+- local posterior capability scores;
+- expected time/cost/quota-to-green estimates;
+- task-specific candidate ranking;
+- Pareto-frontier analysis;
+- bounded online adaptation;
+- rollback to deterministic static policy;
+- explicit policy floors for risk, reserve, safety, and provider cost.
+
+### Non-goal
+Do not deploy an opaque reinforcement-learning or neural router as the first implementation.
 
 ---
 
@@ -151,4 +236,6 @@ Natural-language client messages never become direct shell commands.
 - public SaaS API;
 - PostgreSQL/Redis/Kafka;
 - autonomous merge to protected branches;
-- generalized plugin marketplace.
+- generalized plugin marketplace;
+- opaque model-selection neural networks;
+- autonomous paid overage.
