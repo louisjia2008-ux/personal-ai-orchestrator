@@ -2,73 +2,93 @@
 
 ## Purpose
 
-Personal AI Orchestrator is not intended to be another generic LLM gateway or a black-box "best model" router.
+Personal AI Orchestrator is not another generic LLM gateway or black-box "best model" router.
 
-Its primary scheduling problem is narrower:
+Its product thesis is narrower:
 
-> **Ration scarce, non-fungible AI subscription capacity across long-running coding work without wasting paid quota, exhausting premium models too early, or weakening deterministic verification.**
+> **Schedule expiring, non-fungible AI subscription capacity across coding-agent workloads without wasting paid quota, exhausting premium capacity too early, or weakening verified task quality.**
 
-The project may consider model quality, latency, API price, and observed task performance, but its distinctive resource is **time-bounded subscription capacity**: coding-plan quota that is shared across model SKUs, may have changing burn rules, may reset on rolling or billing windows, and may not be convertible into dollars at a fixed rate.
+The three core product capabilities are:
 
-This layer remains separate from the host-owned Safety Kernel.
+1. **Quota Governor** — understand shared subscription scarcity, resets, reserves, confidence, and provider reconciliation.
+2. **Temporal Scarcity Scheduler** — ration capacity according to how far ahead/behind consumption is relative to reset windows.
+3. **Stateful Cross-model Handoff** — switch owners without losing verified state, invariants, failed approaches, or auditability.
 
----
+**Explainability is not a fourth product pillar. It is a system invariant.** Every scheduling, reserve, escalation, and ownership decision must be reconstructable from the exact machine-readable inputs and scoring trace that produced it.
 
-## Product boundary
-
-The project should not compete primarily on:
-
-- universal provider normalization;
-- generic token-price routing;
-- a learned meta-router that predicts the strongest model for every prompt;
-- editor-to-agent interoperability protocols;
-- a model metadata catalog maintained by hand.
-
-Those concerns already have mature or fast-moving ecosystems.
-
-The initial differentiators are:
-
-1. **subscription-aware Quota Governor**;
-2. **deterministic, explainable model scheduling**;
-3. **stateful cross-model handoff with anti-thrashing ownership rules**;
-4. **temporal resource economics**: remaining quota, time-to-reset, burn velocity, and expected future workload all affect current scarcity value.
-
-The first real deployment target is OpenCode with a small number of providers, initially Z.AI/GLM and MiniMax.
+This resource layer remains subordinate to the host-owned Safety Kernel.
 
 ---
 
-## Model metadata: reuse, do not rebuild
+## MVP boundary
 
-Static public model facts should come from an upstream model catalog where practical, with `models.dev` as the preferred initial source for OpenCode-aligned metadata.
+The first falsifiable deployment target is intentionally narrow:
 
-Examples of upstream facts:
+```text
+OpenCode
+  + Z.AI / GLM
+  + MiniMax
+  + Python headless daemon
+  + CLI
+  + quota collectors
+  + deterministic scheduler
+  + Safety Kernel read-only task view
+  + structured handoff
+```
 
-- model identifier and provider;
-- context window;
-- output limits;
-- reasoning/tool/structured-output capabilities;
-- public API pricing;
-- release/update metadata.
+Not required for MVP:
 
-The orchestrator should own only information that a public model catalog cannot know about the local user:
+- ACP;
+- LiteLLM / universal gateway execution;
+- Claude Code or Codex execution adapters;
+- macOS / WidgetKit / DeskPet;
+- adaptive or learned routing;
+- generalized local GPU/thermal scheduling;
+- a hand-maintained global model catalog.
 
-- authenticated accounts;
-- subscriptions/plans;
-- shared quota pools;
-- quota observability and confidence;
-- quota bindings and burn rules;
-- reserve/protection policy;
-- local task performance;
-- ownership/handoff state;
+The orchestrator returns routing decisions. OpenCode remains responsible for executing model completions in the MVP.
+
+---
+
+## Reuse model metadata
+
+Static public model facts should be imported from an upstream catalog where practical, initially `models.dev` because it aligns with OpenCode's model ecosystem.
+
+Use **local versioned snapshots**, not a live network dependency on every route:
+
+```text
+models.dev
+   -> background/periodic refresh
+   -> validate snapshot
+   -> persist last-known-good snapshot
+   -> scheduler reads local snapshot only
+```
+
+Each snapshot should carry:
+
+- `catalog_snapshot_id`;
+- `as_of` / fetched time;
+- upstream source/version/hash where available;
+- validation result.
+
+A routing decision records the exact `catalog_snapshot_id` it used. Stale snapshots remain usable but should be identified as stale in decision evidence.
+
+The orchestrator owns user-specific facts upstream catalogs cannot know:
+
+- accounts and entitlements;
+- quota pools and reset windows;
+- quota observations and confidence;
+- quota bindings and consumption rules;
+- reserves/protection;
+- local task outcomes;
+- task ownership/handoff;
 - routing policy.
 
-Public benchmark data is an initialization prior, not permanent routing truth.
-
 ---
 
-## Domain model
+## Commercial scarcity domain
 
-The MVP should keep the commercial scarcity boundary explicit without adding unnecessary runtime ceremony.
+Keep the identity boundary explicit while keeping Account/Plan implementation lightweight in the MVP:
 
 ```text
 Provider
@@ -76,247 +96,342 @@ Provider
       -> Plan
           -> QuotaPool
 
-ModelSKU  <- upstream model metadata
+ModelSKU <- upstream model metadata
    |
    +-> QuotaBinding -> QuotaPool
-   +-> ConsumptionRule(s)
+   +-> ConsumptionRule
 ```
+
+`Account` and `Plan` remain representable so multi-account/multi-entitlement support does not require a breaking schema migration later. The MVP does not need rich Account/Plan lifecycle UI or complex CRUD machinery.
 
 ### Provider
 
-Vendor or execution family, for example Z.AI, MiniMax, OpenAI, Anthropic, DeepSeek, or a local runtime family.
+Vendor/execution family such as Z.AI or MiniMax.
 
 ### Account
 
-A concrete authentication boundary. Multiple accounts for one provider must be representable.
-
-Credentials are references only; plaintext secrets do not belong in registry records.
+Authentication identity boundary. Credentials are references only; plaintext secrets do not belong in registry/task records.
 
 ### Plan
 
-Commercial entitlement attached to an account, for example:
-
-- coding subscription;
-- prepaid API wallet;
-- pay-as-you-go API;
-- other provider-defined entitlement.
+Commercial entitlement such as a coding subscription, prepaid wallet, or pay-as-you-go account.
 
 ### QuotaPool
 
-The actual scarcity boundary shared by one or more resources.
+The actual scarcity boundary shared by one or more models/resources.
 
-A pool owns:
+A pool may expose multiple simultaneous quota windows, for example a rolling five-hour window plus a weekly limit.
 
-- current normalized state;
-- measured/estimated remaining capacity when observable;
-- reset/window information;
-- observation source and confidence;
-- reserve/protection policy;
-- overage policy;
-- last reconciliation time.
-
-Normalized state:
+Quota state is normalized separately from observation confidence:
 
 ```text
-AVAILABLE
-LIMITED
-CRITICAL
-EXHAUSTED
-UNKNOWN
+AVAILABLE / LIMITED / CRITICAL / EXHAUSTED / UNKNOWN
+
+EXACT       directly provider-reported for the relevant scope
+ESTIMATED   inferred from incomplete provider signals/local telemetry
+UNKNOWN     no defensible estimate
 ```
 
-Evidence confidence:
+Unknown/shared observations must never be rendered as fake precise per-model quota.
 
-```text
-EXACT       directly reported for the relevant account/plan/pool
-ESTIMATED   inferred from incomplete provider signals and local telemetry
-UNKNOWN     no defensible remaining-capacity estimate
-```
-
-An `UNKNOWN` or shared-pool observation must never be presented as a fake precise per-model remaining percentage.
+Reserve/protection policy belongs to the QuotaPool/Safety policy boundary, not to a particular model name.
 
 ### ModelSKU
 
-Concrete schedulable model identity.
+Concrete schedulable model identity. Generic static metadata should reference a catalog snapshot rather than being manually duplicated wherever possible.
 
-Model metadata may be imported from an upstream catalog, while local scheduler metadata references the canonical model ID.
+### Runtime/model variants
+
+`RuntimeVariant` is not a required first-class MVP entity. Reasoning/high-speed variants should initially reuse OpenCode/upstream identifiers unless a real scarcity/routing requirement proves a dedicated local entity is necessary.
+
+---
+
+## Evidence provenance
+
+Evidence source must be structured rather than a free-form string.
+
+Suggested source types:
+
+```text
+PROVIDER_API
+PROVIDER_DOCUMENTATION
+PROVIDER_ANNOUNCEMENT
+LOCAL_OBSERVATION
+INFERRED
+MANUAL_OVERRIDE
+COMMUNITY_REPORT
+```
+
+Evidence records should include source type, reference/URI when safe, observation/record time, and confidence.
+
+Provider API/doc evidence and inferred/community evidence are not equivalent even when they currently imply the same value.
+
+---
+
+## QuotaBinding and ConsumptionRule are append-only temporal facts
+
+Provider policy can change independently along two axes:
+
+1. which QuotaPool a model consumes;
+2. how quickly activity consumes that pool.
+
+Therefore keep these as separate facts.
 
 ### QuotaBinding
 
-Time-aware relation between a model/resource and the quota pool it consumes.
-
-It must support provider policy changes without a database-schema migration.
+Represents which pool a model consumes for an effective period.
 
 Suggested fields:
 
 ```text
+binding_id
 model_id
 quota_pool_id
 effective_from
-effective_until
+effective_until?       # only when known at record creation
+recorded_at
+supersedes_binding_id?
 confidence
 source
-last_verified_at
 ```
-
-A model may move to a different pool when provider policy changes.
 
 ### ConsumptionRule
 
-Time-aware rule describing how activity consumes a quota pool.
+Represents the burn semantics for a model/pool relationship.
 
-Examples of rule dimensions:
-
-- model multiplier;
-- request/point/token unit mapping;
-- peak/off-peak windows;
-- temporary promotional multipliers;
-- cached-input treatment;
-- modality-specific consumption;
-- effective date range;
-- confidence and evidence source.
-
-The scheduler must not hard-code provider burn multipliers into routing code.
-
-### Runtime/model variants
-
-`RuntimeVariant` is **not a required first-class MVP entity**.
-
-Reasoning effort, high-speed modes, or other variants should initially reuse the upstream/OpenCode model-variant representation when possible. Promote variants into a dedicated local entity only when a real quota or routing requirement cannot be expressed otherwise.
-
----
-
-## Local models are a different scarcity class
-
-Local models should not be forced into subscription quota semantics.
-
-Their scarce resources may instead be:
-
-- RAM / VRAM;
-- thermal or power budget;
-- device occupancy;
-- latency / throughput;
-- concurrent inference capacity.
-
-The MVP may treat local models as an unmetered fallback with simple availability metadata. A generalized compute-resource model is deferred until real use justifies it.
-
----
-
-## Quota observability and reconciliation
-
-Provider quota truth is unstable and may become less observable over time.
-
-Collectors therefore record both **what was observed** and **how trustworthy it was**.
-
-A provider collector should capture, where available:
-
-- account/plan/pool scope;
-- remaining capacity or percentage;
-- rolling-window and billing reset times;
-- provider-reported usage;
-- rate-limit headers/signals;
-- token/request accounting;
-- shared-pool membership;
-- observation timestamp;
-- source and confidence.
-
-Local request accounting alone is insufficient when the same pool can be consumed outside this orchestrator. Provider reconciliation should be performed whenever a reliable provider usage endpoint exists.
-
-If provider visibility degrades, confidence may move from `EXACT` to `ESTIMATED` or `UNKNOWN`; this is a normal state transition, not an error to hide.
-
-Terms-of-service and account-policy compatibility are release-critical concerns. The orchestrator must not depend on prohibited scraping or automation to claim exact quota truth.
-
----
-
-## Safety Kernel boundary
-
-The Scheduler recommends resource allocation. The Safety Kernel retains authority.
-
-### Safety Kernel owns
-
-- durable task/run state;
-- worktree isolation and writer locks;
-- deterministic verification;
-- approval and risk gates;
-- cancellation/recovery;
-- authoritative attempt/verification outcomes;
-- whether a high-risk or irreversible action may proceed.
-
-### Scheduler reads
-
-A documented read-only task-health contract, for example:
+Suggested fields:
 
 ```text
-TaskState
-RiskClass
-AttemptCount
-VerificationResult
-OwnershipState
-ApprovedCapabilities
+rule_id
+model_id
+quota_pool_id
+multiplier / native burn semantics
+effective_from
+effective_until?       # only when known at record creation
+recorded_at
+supersedes_rule_id?
+confidence
+source
 ```
 
-The Scheduler must not create an independent shadow copy of task health.
+Provider-specific peak/off-peak, promotional, point/request/token, cache, or modality semantics can later extend the rule without hard-coding them into scheduler logic.
 
-### Scheduler may propose
+### Append-only rule
 
-- model selection;
-- escalation;
-- fallback;
-- quota reserve consumption;
-- ownership transfer.
+Persisted `QuotaBinding` and `ConsumptionRule` facts are immutable. Do not mutate an old fact merely because new information arrives.
 
-Safety policy may deny the proposal.
+If a provider changes policy, append a new fact with a later effective time and/or a `supersedes_*` reference. If an end time was already known when the original fact was created, it may be recorded at creation; otherwise do not retroactively edit the old row just to close it.
 
-Quota exhaustion never grants or removes repository permissions by itself.
+### Two times matter
+
+The scheduler must distinguish:
+
+- **valid/effective time** — when the provider rule applies;
+- **recorded/knowledge time** — when this orchestrator learned the fact.
+
+This prevents a later backdated provider correction from silently changing the answer to:
+
+> Why did the scheduler choose model X two weeks ago?
+
+Replay uses only facts that were known at the historical decision time.
 
 ---
 
-## OpenCode integration
+## Quota windows and MVP temporal scarcity primitive
 
-OpenCode is the first execution client because it already supports model/provider plurality and model selection at agent/run/session boundaries.
+Do not start with a six-variable forecasting model.
 
-The preferred integration is **not** repeated mutation of one shared global configuration file.
+For each active quota window with defensible remaining capacity, compute:
+
+```text
+pace = remaining_quota_fraction / remaining_time_fraction
+```
+
+where `remaining_time_fraction` is the fraction of that reset window still remaining at the observation time.
+
+Interpretation:
+
+- `pace << 1` — quota is being consumed too quickly; conserve;
+- `pace ~= 1` — consumption is approximately on pace;
+- `pace >> 1` — quota is underused relative to time remaining; harvesting may be appropriate.
+
+Initial policy bands may be simple and configurable, for example:
+
+```text
+pace < 0.5      CRITICAL_SCARCITY
+0.5 - 0.8       CONSERVE
+0.8 - 1.2       ON_PACE
+1.2 - 1.5       SURPLUS
+> 1.5           HARVEST_CANDIDATE
+```
+
+These thresholds are hypotheses, not truths; dogfooding data should calibrate them.
+
+### Multiple simultaneous windows
+
+A provider may constrain usage by more than one window. Compute pace per window:
+
+```text
+pace_5h
+pace_week
+pace_month
+```
+
+The MVP effective scarcity signal should be conservative and explainable:
+
+```text
+effective_pace = min(valid_window_paces)
+```
+
+A short window being abundant must not hide a nearly exhausted weekly constraint.
+
+Future burn velocity/workload forecasting may be added only after real failures of the simple pace model are observed. Fallback model quality remains a separate capability/utility signal rather than being hidden inside the scarcity metric.
+
+---
+
+## Decision replay versus actual invocation accounting
+
+These are different concerns and must not be conflated.
+
+### RoutingDecision snapshot
+
+Every model-selection decision records the inputs the scheduler knew at that moment, including at least:
+
+```text
+task_state_version
+routing_policy_snapshot_id
+quota_snapshot_id / observation ids
+consumption_rule_id(s)
+quota_binding_id
+catalog_snapshot_id
+selected model
+candidate scoring trace
+```
+
+This makes the **decision** replayable.
+
+### Invocation accounting
+
+Actual model calls are accounted using the rule that applies to each invocation when it occurs/provider-reported consumption when available.
+
+A long task may therefore legitimately contain:
+
+```text
+call 1 -> ConsumptionRule A
+call 2 -> ConsumptionRule A
+call 3 -> ConsumptionRule B
+```
+
+Task Cost-to-Green aggregates actual invocation consumption. Do not lock all accounting to the rule that happened to be active at task start.
+
+This distinction preserves both historical explanation and truthful cost accounting when provider policy/time bands change during a task.
+
+---
+
+## Quota reconciliation and ToS gate
+
+Local request accounting is insufficient when a shared plan can be consumed by other clients.
+
+Collectors should record where available:
+
+- scope (account/plan/pool/window);
+- remaining capacity;
+- reset/window data;
+- provider usage/rate-limit signals;
+- observation time;
+- structured evidence source;
+- confidence.
+
+If provider visibility degrades, confidence may move `EXACT -> ESTIMATED -> UNKNOWN`.
+
+Before implementing automated quota collectors for a provider, complete a terms/account-policy preflight:
+
+```text
+official usage API?
+automation permitted?
+authentication path permitted?
+rate limits?
+third-party client restrictions?
+scraping required?
+account-ban risk?
+```
+
+Prefer official APIs. Undocumented internal endpoints require explicit review. Web scraping is disabled by default and must never be represented as exact provider-supported telemetry.
+
+---
+
+## Safety Kernel -> Scheduler read-only contract
+
+The Safety Kernel remains authoritative.
+
+A minimal scheduler view should expose only derived task-health signals, for example:
+
+```text
+task_id
+task_state_version
+current_owner
+risk_class
+attempt_count
+consecutive_failure_count
+last_verification_result
+last_verification_at
+approval_state
+reserve_eligibility / reserve_class
+```
+
+Do not expose credentials, raw permission internals, full audit logs, or full worktree contents merely to choose a model.
+
+The Scheduler may recommend model selection, escalation, reserve use, fallback, or ownership transfer. Safety policy may deny the recommendation.
+
+Quota state never changes repository permissions by itself.
+
+---
+
+## OpenCode integration: thin in-process adapter, out-of-process policy
+
+OpenCode is the first execution client.
 
 Preferred shape:
 
 ```text
-OpenCode task/session
-       |
-       v
-Orchestrator scheduling API
-       |
-       v
-selected concrete model ID
-       |
-       v
-OpenCode-supported model selection/switch surface
+OpenCode session/agent
+        |
+        v
+thin OpenCode plugin/adapter
+        |
+        v
+local Orchestrator daemon
+  - Quota Governor
+  - Scheduler
+  - Safety task view
+        |
+        v
+RoutingDecision
+        |
+        v
+thin adapter applies session/run/agent-scoped model selection
 ```
 
-If per-session switching is supported reliably, use it. Otherwise use launch-level assignment of a concrete model to a child agent.
+The plugin is a translator, not the policy engine. Quota logic, scoring, ownership policy, and durable state remain out-of-process in the daemon.
 
 Requirements:
 
-- concurrent sessions must not overwrite one another's model selection;
-- provider-native authentication should remain provider/OpenCode owned where possible;
-- cancellation must remain supervised;
-- all routing decisions and provider errors must be auditable;
-- OpenCode cannot bypass host deterministic verification.
+- avoid repeated shared-global-config mutation as the normal path;
+- concurrent sessions must not overwrite one another;
+- provider-native authentication remains OpenCode/provider owned where possible;
+- daemon/plugin failure has an explicit safe bypass/fallback path;
+- routing decisions/provider errors are audited;
+- host deterministic verification remains authoritative.
 
-### ACP
+An experimental OpenCode compaction/context hook may be used to inject structured task state as an optimization, but cross-model handoff must not depend on an experimental API existing.
 
-ACP is an optional future interoperability adapter, not an MVP dependency. It solves editor/agent interoperability rather than subscription resource scheduling.
-
-### LiteLLM / generic gateways
-
-A generic gateway may be integrated later for non-OpenCode clients or provider normalization. It is deliberately not an MVP dependency while OpenCode already provides the required provider execution surface.
+ACP remains an optional future interoperability adapter. LiteLLM/generic gateways remain optional future execution adapters for non-OpenCode clients.
 
 ---
 
-## Task profiles and candidate pools
+## Candidate pools and deterministic scheduling
 
-Pools remain useful as candidate sets, not fixed vendor-role assignments.
-
-Initial pools:
+Pools are candidate sets, not vendor-role bindings:
 
 - Worker;
 - Reasoning;
@@ -324,36 +439,18 @@ Initial pools:
 - Escalation;
 - Fallback.
 
-Example task profile:
+The MVP scheduler is a deterministic rule/weighted-score engine.
 
-```yaml
-task_type: debugging
-language: swift
-framework: swiftui
-risk: medium
-context_requirement: high
-previous_failures: 1
-requires_long_horizon: true
-```
+Every candidate produces one machine-readable scoring trace:
 
-A model may appear in several pools. Selection still depends on task fit, quota scarcity, observed reliability, and policy.
-
----
-
-## Deterministic explainable scheduling
-
-The first production scheduler is a transparent scoring/rule engine, not an ML router or another LLM prompt.
-
-For each candidate, produce a scoring trace with:
-
-1. raw input value;
-2. normalized `[0,1]` value where applicable;
-3. task/pool-specific weight;
-4. weighted contribution;
-5. exclusions and hard constraints;
+1. raw inputs;
+2. normalized values where applicable;
+3. weights;
+4. hard exclusions;
+5. weighted contributions;
 6. final score.
 
-The human-readable explanation must be generated from this same trace. There must not be a second, separately maintained prose explanation path.
+Human-readable explanation is generated from that same trace, never from a separately maintained prose path.
 
 Conceptually:
 
@@ -363,191 +460,140 @@ score =
   + observed_reliability
   + context_fit
   + availability
-  + quota_health
-  - temporal_scarcity_cost
-  - monetary_cost
+  + quota_pace_utility
+  - direct_cost
   - expected_latency
   - retry_risk
 ```
 
-Identical task state, registry state, quota snapshot, policy, and telemetry must produce identical routing output.
+Reserve policy may impose hard eligibility constraints rather than merely adjusting score.
+
+Identical authoritative task view, catalog snapshot, quota observations, temporal facts, policy snapshot, and telemetry must produce identical routing output.
 
 ---
 
-## Temporal scarcity economics
+## Ownership hysteresis and cross-model handoff
 
-A subscription quota percentage has no fixed dollar exchange rate.
+Resource-driven transfer and failure-driven transfer are different signals and must not consume the same transfer budget.
 
-Ten percent of a pool has different opportunity cost depending on:
-
-- remaining quota;
-- time until reset;
-- recent burn velocity;
-- forecast workload before reset;
-- quality of available fallback models;
-- whether unused capacity expires.
-
-The scheduler should therefore model a time-dependent scarcity penalty rather than treating subscription quota as ordinary API dollars.
-
-Conceptually:
+Track at least:
 
 ```text
-temporal_scarcity_cost = f(
-    remaining_capacity,
-    time_to_reset,
-    burn_velocity,
-    forecast_workload,
-    fallback_quality
-)
+failure_transfer_count
+resource_transfer_count
+manual_transfer_count
 ```
 
-Important behavior:
+Minimum-attempt gates are the main hysteresis mechanism. A short time cooldown may additionally prevent second-scale transfer loops, but should not be the primary scale-independent rule.
 
-- low remaining quota with a distant reset should become expensive to consume;
-- abundant quota close to expiry may become cheap enough to "harvest" rather than waste;
-- protected reserve is a hard or near-hard constraint, not merely a cosmetic score.
+When transfer limits are exhausted and the task is still unresolved, enter an explicit terminal/escalated state such as `HUMAN_REVIEW_REQUIRED`; do not silently continue thrashing.
 
-The exact function should remain simple and inspectable in the MVP.
+### Minimal TaskHandoff
+
+```text
+objective
+handoff_reason
+invariants
+rejected_approaches
+current_diff_ref
+verification_summary
+next_action
+from_owner
+to_owner
+task_state_version
+```
+
+Suggested handoff reasons:
+
+```text
+REPEATED_FAILURE
+QUOTA_EXHAUSTION
+RISK_ESCALATION
+EXPLICIT_REVIEW
+PROVIDER_UNAVAILABLE
+MANUAL_REROUTE
+```
+
+Reason matters: quota-driven transfer usually means the prior work may be sound and should continue; failure-driven transfer should make the new owner more skeptical of the previous hypothesis/diff.
+
+Large diffs belong in referenced artifacts/evidence, not inline in the handoff payload.
+
+Structured handoff is daemon-owned. OpenCode compaction/context injection is only an optimization path for delivering it.
+
+---
+
+## MVP rollout and falsifiable experiments
+
+Before active auto-routing, prove safe bypass behavior:
+
+```text
+daemon unavailable -> OpenCode can continue in configured/manual mode
+scheduler disabled -> OpenCode works normally
+quota collector unavailable -> conservative/manual fallback, no fake exact quota
+```
+
+### Phase 1: Shadow mode
+
+The scheduler recommends but does not switch models.
+
+Record:
+
+```text
+human/manual choice
+scheduler recommendation
+input snapshots
+final verified outcome
+time / attempts / quota / regression
+```
+
+Use matched/similar task families and record risk/previous-failure covariates so manual-vs-scheduler comparisons are not treated as perfectly randomized.
+
+### Phase 2: Active mode
+
+Only after shadow/bypass checks pass, allow automatic model assignment/switching.
+
+### Experiment A — Quota survival/utilization
+
+Measure time-to-exhaustion/reserve breach, unused quota at reset, utilization across paid pools, and premium calls avoided/deferred.
+
+### Experiment B — Routing quality
+
+Measure verified success, Pass@1, attempts-to-green, time-to-green, native quota-to-green, direct monetary cost, and regression/verifier failures versus manual routing on comparable workloads.
+
+### Experiment C — Handoff penalty
+
+Measure verified success, rework after transfer, time/context/request overhead, and regression versus appropriate single-model baselines.
+
+Each production conclusion should span at least two complete relevant reset cycles when practical; short shadow/replay data may be used to debug the mechanism but not to claim the thesis proven.
 
 ---
 
 ## Cost-to-Green
 
-A task reaches green only after host-owned verification succeeds.
+A task is green only after host-owned verification succeeds.
 
-Cost-to-Green aggregates all attempts required to reach that state.
+Keep these separately observable:
 
-Tracked components should include:
-
-- direct API monetary spend;
-- subscription quota consumption in native units;
-- temporal scarcity/opportunity cost;
+- direct API money;
+- provider/native quota units actually consumed;
 - attempts-to-green;
 - time-to-green;
-- tokens/requests-to-green;
-- regression/verifier failures.
+- requests/tokens-to-green;
+- verifier/regression failures;
+- handoff rework.
 
-Native quota usage and monetary spend should remain separately observable even if a combined effective-cost score is computed.
-
----
-
-## Ownership, hysteresis, and versioned handoff
-
-Dynamic routing must not create a new source of thrashing.
-
-Persist:
-
-- current implementation owner;
-- architecture/frozen decision owner where relevant;
-- reviewer role;
-- ownership-transfer history;
-- versioned structured task state.
-
-Ownership transfer requires hysteresis, for example:
-
-- minimum attempts before escalation;
-- maximum transfers per task;
-- cooldown/minimum work window after transfer;
-- explicit reason code for every transfer.
-
-The same model repeatedly changing its own hypothesis must also produce new task-state versions; anti-thrashing is not limited to cross-model changes.
-
-Structured handoff should contain at least:
-
-- objective;
-- current hypothesis/state;
-- frozen architectural decisions/invariants;
-- files inspected;
-- changes made;
-- verifier/test results;
-- failed attempts;
-- rejected hypotheses;
-- relevant diff/evidence references;
-- unresolved questions;
-- next recommended action.
-
----
-
-## MVP scope
-
-The MVP should be intentionally narrow:
-
-```text
-OpenCode
-  + Z.AI/GLM
-  + MiniMax
-  + headless Python daemon
-  + CLI
-  + quota collectors
-  + deterministic scheduler
-  + Safety Kernel integration
-```
-
-Do **not** make the MVP depend on:
-
-- ACP;
-- LiteLLM;
-- macOS/WidgetKit;
-- DeskPet;
-- Claude/Codex adapters;
-- a learned/adaptive router;
-- a generalized local-GPU resource scheduler;
-- a hand-maintained global model catalog.
-
----
-
-## MVP falsifiable experiments
-
-### A. Quota survival / utilization
-
-Test whether the orchestrator prevents a scarce premium plan from exhausting prematurely while reducing unused capacity in another paid plan.
-
-Measure at least:
-
-- time-to-exhaustion / reserve breach;
-- unused quota at reset;
-- utilization by plan/pool;
-- number of premium calls avoided or deferred.
-
-### B. Routing quality vs manual choice
-
-Replay or compare similar real coding tasks under manual routing and orchestrator routing.
-
-Measure:
-
-- verified success;
-- Pass@1;
-- attempts-to-green;
-- time-to-green;
-- native quota-to-green;
-- direct monetary cost;
-- regression/verifier failure rate.
-
-The scheduler is not successful if quota savings require a material quality collapse.
-
-### C. Handoff penalty
-
-Compare single-model completion against a structured escalation/handoff path on appropriate tasks.
-
-Measure:
-
-- verified success rate;
-- rework after transfer;
-- time-to-green;
-- context/request overhead;
-- regression rate.
-
-The project should prove these three claims before broadening into a general multi-agent platform.
+Temporal pace affects scheduling opportunity cost. Actual task accounting remains grounded in per-invocation/provider-reconciled consumption.
 
 ---
 
 ## Deferred until evidence justifies them
 
-- adaptive / contextual-bandit scheduling;
+- adaptive/contextual-bandit scheduling;
 - opaque neural routing;
-- macOS Menu Bar, dashboard, and WidgetKit implementation;
+- macOS Menu Bar/dashboard/WidgetKit implementation;
 - ACP editor integration;
-- LiteLLM or another universal gateway in the critical path;
+- LiteLLM/universal gateway in the critical path;
+- Claude/Codex execution adapters;
 - generalized local-compute resource scheduling;
 - distributed execution;
 - public SaaS control plane;
