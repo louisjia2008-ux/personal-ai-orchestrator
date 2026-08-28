@@ -77,6 +77,12 @@ jobs:
           fixture="$(mktemp -d)"
           mkdir -p "$fixture/xdg"
           git -C "$fixture" init -q
+          git -C "$fixture" config user.email "spike@example.invalid"
+          git -C "$fixture" config user.name "OpenCode Spike"
+          printf '# disposable OpenCode fixture\n' > "$fixture/README.md"
+          git -C "$fixture" add README.md
+          git -C "$fixture" commit -q -m "fixture: initialize"
+
           plugin="$GITHUB_WORKSPACE/integrations/opencode/plugin.ts"
           cat > "$fixture/opencode.json" <<EOF
           {
