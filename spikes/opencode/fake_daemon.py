@@ -1,6 +1,6 @@
 """Spike-only HTTP daemon for disposable OpenCode integration tests.
 
-This is deliberately not the production daemon.  It exists to prove the thin
+This is deliberately not the production daemon. It exists to prove the thin
 OpenCode adapter, safe bypass, Shadow Mode, and session-scoped switching before
 quota collectors or scheduler policy are connected.
 """
@@ -41,6 +41,23 @@ class FakeRoutingHandler(BaseHTTPRequestHandler):
         except (ValueError, json.JSONDecodeError, ValidationError):
             self.send_error(HTTPStatus.BAD_REQUEST)
             return
+
+        # Deliberately log only contract metadata needed as disposable spike evidence.
+        # Provider credentials, prompts, and model-completion content never pass through
+        # this daemon and therefore cannot be emitted here.
+        print(
+            json.dumps(
+                {
+                    "event": "route_request",
+                    "request_id": request.request_id,
+                    "session_id": request.session_id,
+                    "mode": request.mode.value,
+                    "project_id": request.project_id,
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
 
         selected_model = None if request.mode is RoutingMode.BYPASS else self.target_model
         decision = RoutingDecision(
@@ -84,8 +101,8 @@ def main() -> None:
 
     FakeRoutingHandler.target_model = args.model
     server = ThreadingHTTPServer((args.host, args.port), FakeRoutingHandler)
-    print(f"fake orchestrator listening on http://{args.host}:{args.port}")
-    print(f"fixed model: {args.model.provider_id}/{args.model.model_id}")
+    print(f"fake orchestrator listening on http://{args.host}:{args.port}", flush=True)
+    print(f"fixed model: {args.model.provider_id}/{args.model.model_id}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
