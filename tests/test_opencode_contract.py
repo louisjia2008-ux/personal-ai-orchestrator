@@ -13,7 +13,6 @@ from personal_ai_orchestrator.opencode_contract import (
     resolve_adapter_outcome,
 )
 
-
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
 M3 = ModelRef(provider_id="minimax", model_id="m3")
 GLM = ModelRef(provider_id="zai", model_id="glm-5.3")
