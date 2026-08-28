@@ -145,3 +145,183 @@ jobs:
               -exec tail -n 300 {} \; 2>/dev/null || true
             exit 1
           fi
+
+  opencode-shadow-bypass-runtime-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install spike runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          npm install --global @opencode-ai/cli@0.0.0-beta-18387
+          opencode2 --version
+
+      - name: Prove Shadow Mode and daemon-failure bypass
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$(mktemp -d)"
+          daemon_log="$fixture/fake-daemon.log"
+          daemon_pid=""
+
+          mkdir -p "$fixture/xdg" "$fixture/plugins"
+          git -C "$fixture" init -q
+          git -C "$fixture" config user.email "spike@example.invalid"
+          git -C "$fixture" config user.name "OpenCode Spike"
+          printf '# disposable OpenCode Shadow fixture\n' > "$fixture/README.md"
+          git -C "$fixture" add README.md
+          git -C "$fixture" commit -q -m "fixture: initialize"
+
+          cp "$GITHUB_WORKSPACE/integrations/opencode/plugin.ts" \
+            "$fixture/plugins/orchestrator.ts"
+          cat > "$fixture/package.json" <<'EOF'
+          {
+            "private": true,
+            "type": "module",
+            "dependencies": {
+              "@opencode-ai/plugin": "0.0.0-beta-18387"
+            }
+          }
+          EOF
+          npm install --prefix "$fixture"
+
+          cat > "$fixture/opencode.json" <<'EOF'
+          {
+            "plugins": [
+              {
+                "package": "./plugins/orchestrator.ts",
+                "options": {
+                  "endpoint": "http://127.0.0.1:8765",
+                  "mode": "SHADOW"
+                }
+              }
+            ]
+          }
+          EOF
+
+          export XDG_CONFIG_HOME="$fixture/xdg"
+          export OPENCODE_DB="$fixture/opencode.db"
+
+          cleanup() {
+            if [ -n "$daemon_pid" ] && kill -0 "$daemon_pid" 2>/dev/null; then
+              kill "$daemon_pid"
+              wait "$daemon_pid" || true
+            fi
+            (cd "$fixture" && opencode2 service stop >/dev/null 2>&1) || true
+            rm -rf "$fixture"
+          }
+          trap cleanup EXIT
+
+          python "$GITHUB_WORKSPACE/spikes/opencode/fake_daemon.py" \
+            --model minimax/m3 > "$daemon_log" 2>&1 &
+          daemon_pid=$!
+
+          for attempt in $(seq 1 20); do
+            if grep -q 'fake orchestrator listening' "$daemon_log"; then
+              break
+            fi
+            if ! kill -0 "$daemon_pid" 2>/dev/null; then
+              cat "$daemon_log"
+              exit 1
+            fi
+            sleep 0.25
+          done
+          grep -q 'fake orchestrator listening' "$daemon_log"
+
+          cd "$fixture"
+
+          # Wait for the configured plugin command to become visible.
+          command_ready=0
+          for attempt in $(seq 1 25); do
+            timeout 15 opencode2 api get /api/command \
+              --header "x-opencode-directory: $fixture" > commands.json || true
+            if grep -q 'orchestrator-route' commands.json; then
+              command_ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$command_ready" -ne 1 ]; then
+            cat commands.json || true
+            tail -n 300 "$HOME/.local/share/opencode/log/opencode.log" || true
+            exit 1
+          fi
+
+          # Create a session without selecting or invoking any real provider model.
+          timeout 30 opencode2 api post /api/session \
+            --header "x-opencode-directory: $fixture" \
+            --data '{}' > session.json
+          cat session.json
+          session_id="$(python -c 'import json; print(json.load(open("session.json"))["data"]["id"])')"
+          test -n "$session_id"
+
+          # Execute the programmatic routing command. In SHADOW it must contact the
+          # daemon and persist/log the recommendation, but it must not switch models.
+          timeout 30 opencode2 api post "/api/session/$session_id/command" \
+            --header "x-opencode-directory: $fixture" \
+            --data '{"command":"orchestrator-route","arguments":""}' \
+            > shadow-command.json
+          cat shadow-command.json
+
+          for attempt in $(seq 1 20); do
+            if grep -q "\"session_id\": \"$session_id\"" "$daemon_log"; then
+              break
+            fi
+            sleep 0.25
+          done
+          grep -q '"event": "route_request"' "$daemon_log"
+          grep -q '"mode": "SHADOW"' "$daemon_log"
+          grep -q "\"session_id\": \"$session_id\"" "$daemon_log"
+
+          timeout 30 opencode2 api get "/api/session/$session_id/context" \
+            --header "x-opencode-directory: $fixture" > shadow-context.json
+          cat shadow-context.json
+          if grep -q 'model-switched' shadow-context.json; then
+            echo 'SHADOW unexpectedly switched the OpenCode session model'
+            exit 1
+          fi
+
+          route_count_before="$(grep -c '"'"'event"'"': "'"'route_request"'"'' "$daemon_log")"
+          test "$route_count_before" -eq 1
+
+          # Stop only the exact fake-daemon PID created by this job. A second command
+          # must still return successfully; adapter timeout/unavailability is bypass.
+          kill "$daemon_pid"
+          wait "$daemon_pid" || true
+          daemon_pid=""
+
+          timeout 30 opencode2 api post "/api/session/$session_id/command" \
+            --header "x-opencode-directory: $fixture" \
+            --data '{"command":"orchestrator-route","arguments":""}' \
+            > bypass-command.json
+          cat bypass-command.json
+
+          route_count_after="$(grep -c '"'"'event"'"': "'"'route_request"'"'' "$daemon_log")"
+          test "$route_count_after" -eq "$route_count_before"
+
+          timeout 30 opencode2 api get "/api/session/$session_id/context" \
+            --header "x-opencode-directory: $fixture" > bypass-context.json
+          cat bypass-context.json
+          if grep -q 'model-switched' bypass-context.json; then
+            echo 'daemon failure unexpectedly changed the OpenCode session model'
+            exit 1
+          fi
+
+          echo '--- fake daemon evidence ---'
+          cat "$daemon_log"
+          echo "SHADOW route count: $route_count_before"
+          echo 'daemon-failure safe bypass: PASS'
