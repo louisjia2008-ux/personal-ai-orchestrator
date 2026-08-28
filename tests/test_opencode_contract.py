@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
-from pydantic import ValidationError
 import pytest
+from pydantic import ValidationError
 
 from personal_ai_orchestrator.opencode_contract import (
     AdapterAction,
