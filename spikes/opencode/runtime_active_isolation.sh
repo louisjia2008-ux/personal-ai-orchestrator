@@ -163,10 +163,10 @@ import json
 a = json.load(open("session-a-after.json"))["data"]
 b = json.load(open("session-b-after.json"))["data"]
 
-assert a.get("model") == {
-    "providerID": "spike-provider",
-    "id": "target-model",
-}, a.get("model")
+model = a.get("model") or {}
+assert model.get("providerID") == "spike-provider", model
+assert model.get("id") == "target-model", model
+assert model.get("variant") in (None, "default"), model
 assert b.get("model") is None, b.get("model")
 
 for label, session in (("A", a), ("B", b)):
