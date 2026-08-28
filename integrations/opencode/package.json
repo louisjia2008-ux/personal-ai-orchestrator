@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@opencode-ai/plugin": "beta",
+    "typescript": "^5.9.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}
