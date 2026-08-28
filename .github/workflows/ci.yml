@@ -65,9 +65,9 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install current OpenCode V2 beta CLI
+      - name: Install pinned OpenCode V2 beta CLI
         run: |
-          npm install --global @opencode-ai/cli@beta
+          npm install --global @opencode-ai/cli@0.0.0-beta-18387
           opencode2 --version
 
       - name: Load adapter in disposable OpenCode project
@@ -85,6 +85,17 @@ jobs:
 
           cp "$GITHUB_WORKSPACE/integrations/opencode/plugin.ts" \
             "$fixture/.opencode/plugins/orchestrator.ts"
+          cat > "$fixture/.opencode/package.json" <<'EOF'
+          {
+            "private": true,
+            "type": "module",
+            "dependencies": {
+              "@opencode-ai/plugin": "0.0.0-beta-18387"
+            }
+          }
+          EOF
+          npm install --prefix "$fixture/.opencode"
+          npm list --prefix "$fixture/.opencode" @opencode-ai/plugin
 
           export XDG_CONFIG_HOME="$fixture/xdg"
           export OPENCODE_DB="$fixture/opencode.db"
