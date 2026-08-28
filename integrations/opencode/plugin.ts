@@ -1,4 +1,4 @@
-import { Plugin } from "@opencode-ai/plugin"
+import { Plugin } from "@opencode-ai/plugin/v2"
 
 type RoutingMode = "BYPASS" | "SHADOW" | "ACTIVE"
 
@@ -81,7 +81,7 @@ export default Plugin.define({
         description: "Ask Personal AI Orchestrator for a model-routing recommendation",
         async execute({ sessionID }) {
           // Stage A/B intentionally uses an explicit command instead of silently routing
-          // every prompt.  Once retry/idempotency behavior is proven against a real
+          // every prompt. Once retry/idempotency behavior is proven against a real
           // OpenCode build, the same thin client can be called from an admission hook.
           const requestID = crypto.randomUUID()
           const decision = await requestRoute({
