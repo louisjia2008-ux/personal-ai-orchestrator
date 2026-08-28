@@ -126,7 +126,7 @@ grep -q '"event": "route_request"' "$daemon_log"
 grep -q '"mode": "SHADOW"' "$daemon_log"
 grep -q "\"session_id\": \"$session_id\"" "$daemon_log"
 
-route_count_before="$(grep -c '"'"'event"'"': "'"'route_request"'"'' "$daemon_log")"
+route_count_before="$(grep -c '"event": "route_request"' "$daemon_log")"
 test "$route_count_before" -eq 1
 
 # Stop only the exact fake-daemon PID created by this job. The same command must
@@ -140,7 +140,7 @@ timeout 30 opencode2 api post "/api/session/$session_id/command" \
   --data "$command_payload" > bypass-command.json
 cat bypass-command.json
 
-route_count_after="$(grep -c '"'"'event"'"': "'"'route_request"'"'' "$daemon_log")"
+route_count_after="$(grep -c '"event": "route_request"' "$daemon_log")"
 test "$route_count_after" -eq "$route_count_before"
 
 echo '--- fake daemon evidence ---'
