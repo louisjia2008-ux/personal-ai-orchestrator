@@ -85,16 +85,6 @@ jobs:
 
           cp "$GITHUB_WORKSPACE/integrations/opencode/plugin.ts" \
             "$fixture/.opencode/plugins/orchestrator.ts"
-          cat > "$fixture/.opencode/package.json" <<'EOF'
-          {
-            "private": true,
-            "type": "module",
-            "dependencies": {
-              "@opencode-ai/plugin": "beta"
-            }
-          }
-          EOF
-          npm install --prefix "$fixture/.opencode"
 
           export XDG_CONFIG_HOME="$fixture/xdg"
           export OPENCODE_DB="$fixture/opencode.db"
