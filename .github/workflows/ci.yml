@@ -75,7 +75,7 @@ jobs:
         run: |
           set -euo pipefail
           fixture="$(mktemp -d)"
-          mkdir -p "$fixture/xdg"
+          mkdir -p "$fixture/xdg" "$fixture/.opencode/plugins"
           git -C "$fixture" init -q
           git -C "$fixture" config user.email "spike@example.invalid"
           git -C "$fixture" config user.name "OpenCode Spike"
@@ -83,20 +83,18 @@ jobs:
           git -C "$fixture" add README.md
           git -C "$fixture" commit -q -m "fixture: initialize"
 
-          plugin="$GITHUB_WORKSPACE/integrations/opencode/plugin.ts"
-          cat > "$fixture/opencode.json" <<EOF
+          cp "$GITHUB_WORKSPACE/integrations/opencode/plugin.ts" \
+            "$fixture/.opencode/plugins/orchestrator.ts"
+          cat > "$fixture/.opencode/package.json" <<'EOF'
           {
-            "plugins": [
-              {
-                "package": "$plugin",
-                "options": {
-                  "endpoint": "http://127.0.0.1:8765",
-                  "mode": "SHADOW"
-                }
-              }
-            ]
+            "private": true,
+            "type": "module",
+            "dependencies": {
+              "@opencode-ai/plugin": "beta"
+            }
           }
           EOF
+          npm install --prefix "$fixture/.opencode"
 
           export XDG_CONFIG_HOME="$fixture/xdg"
           export OPENCODE_DB="$fixture/opencode.db"
@@ -111,4 +109,8 @@ jobs:
           timeout 60 opencode2 api get /api/command \
             --header "x-opencode-directory: $fixture" > commands.json
           cat commands.json
-          grep -q 'orchestrator-route' commands.json
+          if ! grep -q 'orchestrator-route' commands.json; then
+            echo '--- OpenCode logs ---'
+            find "$HOME/.local/share/opencode" -type f -maxdepth 3 -print -exec tail -n 200 {} \; 2>/dev/null || true
+            exit 1
+          fi
