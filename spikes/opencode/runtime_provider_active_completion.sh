@@ -95,8 +95,13 @@ grep -q 'fake orchestrator listening' "$daemon_log"
 DAEMON_URL="http://127.0.0.1:$DAEMON_PORT"
 
 # --- Real headless OpenCode runtime (owns provider credentials). --------------
-( cd "$fixture" && "$OPENCODE_BIN" serve --port 0 --hostname 127.0.0.1 > "$serve_log" 2>&1 ) &
+# Launch without a subshell so $! is the real opencode PID (a subshell's PID
+# would leave the server orphaned when the cleanup trap fires). pushd/popd keeps
+# the caller's cwd intact for any relative --evidence-out path.
+pushd "$fixture" >/dev/null
+"$OPENCODE_BIN" serve --port 0 --hostname 127.0.0.1 > "$serve_log" 2>&1 &
 serve_pid=$!
+popd >/dev/null
 SERVER_URL=""
 for _ in $(seq 1 60); do
   SERVER_URL="$(grep -oE 'http://127\.0\.0\.1:[0-9]+' "$serve_log" | head -n1 || true)"
