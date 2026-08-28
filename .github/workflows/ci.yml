@@ -106,11 +106,25 @@ jobs:
           trap cleanup EXIT
 
           cd "$fixture"
+          timeout 60 opencode2 api get /api/plugin \
+            --header "x-opencode-directory: $fixture" > plugins.json
           timeout 60 opencode2 api get /api/command \
             --header "x-opencode-directory: $fixture" > commands.json
+
+          echo '--- active plugins ---'
+          cat plugins.json
+          echo '--- commands ---'
           cat commands.json
+
+          if ! grep -q 'personal-ai-orchestrator.spike' plugins.json; then
+            echo '--- OpenCode logs: plugin missing ---'
+            find "$HOME/.local/share/opencode" -maxdepth 3 -type f -print \
+              -exec tail -n 300 {} \; 2>/dev/null || true
+            exit 1
+          fi
           if ! grep -q 'orchestrator-route' commands.json; then
-            echo '--- OpenCode logs ---'
-            find "$HOME/.local/share/opencode" -type f -maxdepth 3 -print -exec tail -n 200 {} \; 2>/dev/null || true
+            echo '--- OpenCode logs: command missing ---'
+            find "$HOME/.local/share/opencode" -maxdepth 3 -type f -print \
+              -exec tail -n 300 {} \; 2>/dev/null || true
             exit 1
           fi
