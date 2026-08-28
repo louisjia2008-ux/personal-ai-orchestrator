@@ -166,6 +166,10 @@ jobs:
           npm install --global @opencode-ai/cli@0.0.0-beta-18387
           opencode2 --version
 
+      - name: Check Shadow runtime harness syntax
+        shell: bash
+        run: bash -n "$GITHUB_WORKSPACE/spikes/opencode/runtime_shadow_bypass.sh"
+
       - name: Prove Shadow Mode and daemon-failure bypass
         shell: bash
         run: bash "$GITHUB_WORKSPACE/spikes/opencode/runtime_shadow_bypass.sh"
