@@ -243,11 +243,12 @@ jobs:
           grep -q 'fake orchestrator listening' "$daemon_log"
 
           cd "$fixture"
+          directory_query="$(python -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$fixture")"
 
           # Wait for the configured plugin command to become visible.
           command_ready=0
           for attempt in $(seq 1 25); do
-            timeout 15 opencode2 api get /api/command \
+            timeout 15 opencode2 api get "/api/command?directory=$directory_query" \
               --header "x-opencode-directory: $fixture" > commands.json || true
             if grep -q 'orchestrator-route' commands.json; then
               command_ready=1
@@ -261,13 +262,20 @@ jobs:
             exit 1
           fi
 
-          # Create a session without selecting or invoking any real provider model.
-          timeout 30 opencode2 api post /api/session \
+          # Bind the session explicitly to the disposable directory. The directory
+          # query is authoritative in OpenCode workspace routing; the header remains
+          # as a compatibility duplicate. Never accept a session created elsewhere.
+          timeout 30 opencode2 api post "/api/session?directory=$directory_query" \
             --header "x-opencode-directory: $fixture" \
             --data '{}' > session.json
           cat session.json
           session_id="$(python -c 'import json; print(json.load(open("session.json"))["data"]["id"])')"
+          session_dir="$(python -c 'import json; print(json.load(open("session.json"))["data"]["location"]["directory"])')"
           test -n "$session_id"
+          if [ "$session_dir" != "$fixture" ]; then
+            echo "session escaped disposable workspace: $session_dir != $fixture"
+            exit 1
+          fi
 
           # beta-18387's /api compatibility surface requires a textual command envelope
           # in addition to the programmatic command name/arguments pair. This still
@@ -276,7 +284,7 @@ jobs:
 
           # Execute the programmatic routing command. In SHADOW it must contact the
           # daemon and persist/log the recommendation, but it must not switch models.
-          timeout 30 opencode2 api post "/api/session/$session_id/command" \
+          timeout 30 opencode2 api post "/api/session/$session_id/command?directory=$directory_query" \
             --header "x-opencode-directory: $fixture" \
             --data "$command_payload" \
             > shadow-command.json
@@ -292,7 +300,7 @@ jobs:
           grep -q '"mode": "SHADOW"' "$daemon_log"
           grep -q "\"session_id\": \"$session_id\"" "$daemon_log"
 
-          timeout 30 opencode2 api get "/api/session/$session_id/context" \
+          timeout 30 opencode2 api get "/api/session/$session_id/context?directory=$directory_query" \
             --header "x-opencode-directory: $fixture" > shadow-context.json
           cat shadow-context.json
           if grep -q 'model-switched' shadow-context.json; then
@@ -309,7 +317,7 @@ jobs:
           wait "$daemon_pid" || true
           daemon_pid=""
 
-          timeout 30 opencode2 api post "/api/session/$session_id/command" \
+          timeout 30 opencode2 api post "/api/session/$session_id/command?directory=$directory_query" \
             --header "x-opencode-directory: $fixture" \
             --data "$command_payload" \
             > bypass-command.json
@@ -318,7 +326,7 @@ jobs:
           route_count_after="$(grep -c '"'"'event"'"': "'"'route_request"'"'' "$daemon_log")"
           test "$route_count_after" -eq "$route_count_before"
 
-          timeout 30 opencode2 api get "/api/session/$session_id/context" \
+          timeout 30 opencode2 api get "/api/session/$session_id/context?directory=$directory_query" \
             --header "x-opencode-directory: $fixture" > bypass-context.json
           cat bypass-context.json
           if grep -q 'model-switched' bypass-context.json; then
