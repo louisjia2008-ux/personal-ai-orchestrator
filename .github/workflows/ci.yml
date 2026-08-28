@@ -112,20 +112,21 @@ jobs:
           timeout 60 opencode2 api get /api/command \
             --header "x-opencode-directory: $fixture" > commands.json
 
-          echo '--- active plugins ---'
+          echo '--- active plugins (informational; beta-18387 omits local plugin IDs here) ---'
           cat plugins.json
           echo '--- commands ---'
           cat commands.json
 
-          if ! grep -q 'personal-ai-orchestrator.spike' plugins.json; then
-            echo '--- OpenCode logs: plugin missing ---'
-            find "$HOME/.local/share/opencode" -maxdepth 3 -type f -print \
-              -exec tail -n 300 {} \; 2>/dev/null || true
-            exit 1
-          fi
           if ! grep -q 'orchestrator-route' commands.json; then
             echo '--- OpenCode logs: command missing ---'
             find "$HOME/.local/share/opencode" -maxdepth 3 -type f -print \
               -exec tail -n 300 {} \; 2>/dev/null || true
+            exit 1
+          fi
+
+          if grep -q 'failed to load plugin.*orchestrator.ts' \
+            "$HOME/.local/share/opencode/log/opencode.log" 2>/dev/null; then
+            echo '--- OpenCode logs: plugin load failure ---'
+            tail -n 300 "$HOME/.local/share/opencode/log/opencode.log" || true
             exit 1
           fi
