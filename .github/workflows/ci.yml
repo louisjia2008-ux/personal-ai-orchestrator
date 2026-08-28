@@ -52,3 +52,56 @@ jobs:
       - name: Typecheck OpenCode adapter
         working-directory: integrations/opencode
         run: npm run typecheck
+
+  opencode-runtime-load-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install current OpenCode V2 beta CLI
+        run: |
+          npm install --global @opencode-ai/cli@beta
+          opencode2 --version
+
+      - name: Load adapter in disposable OpenCode project
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$(mktemp -d)"
+          mkdir -p "$fixture/xdg"
+          git -C "$fixture" init -q
+          plugin="$GITHUB_WORKSPACE/integrations/opencode/plugin.ts"
+          cat > "$fixture/opencode.json" <<EOF
+          {
+            "plugins": [
+              {
+                "package": "$plugin",
+                "options": {
+                  "endpoint": "http://127.0.0.1:8765",
+                  "mode": "SHADOW"
+                }
+              }
+            ]
+          }
+          EOF
+
+          export XDG_CONFIG_HOME="$fixture/xdg"
+          export OPENCODE_DB="$fixture/opencode.db"
+
+          cleanup() {
+            (cd "$fixture" && opencode2 service stop >/dev/null 2>&1) || true
+            rm -rf "$fixture"
+          }
+          trap cleanup EXIT
+
+          cd "$fixture"
+          timeout 60 opencode2 api get /command > commands.json
+          cat commands.json
+          grep -q 'orchestrator-route' commands.json
