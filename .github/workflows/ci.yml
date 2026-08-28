@@ -107,26 +107,41 @@ jobs:
           trap cleanup EXIT
 
           cd "$fixture"
+
+          # The first API request boots the shared OpenCode service for this isolated
+          # XDG/DB pair. Local plugin setup is asynchronous relative to that first
+          # response, so a one-shot command-registry read is racy on busy runners.
           timeout 60 opencode2 api get /api/plugin \
             --header "x-opencode-directory: $fixture" > plugins.json
-          timeout 60 opencode2 api get /api/command \
-            --header "x-opencode-directory: $fixture" > commands.json
 
-          echo '--- active plugins (informational; beta-18387 omits local plugin IDs here) ---'
+          ready=0
+          : > commands.json
+          for attempt in $(seq 1 25); do
+            timeout 15 opencode2 api get /api/command \
+              --header "x-opencode-directory: $fixture" > commands.json || true
+            if grep -q 'orchestrator-route' commands.json; then
+              echo "OpenCode command registry ready after attempt $attempt"
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+
+          echo '--- active plugins (informational; beta-18387 may omit local plugin IDs here) ---'
           cat plugins.json
           echo '--- commands ---'
           cat commands.json
-
-          if ! grep -q 'orchestrator-route' commands.json; then
-            echo '--- OpenCode logs: command missing ---'
-            find "$HOME/.local/share/opencode" -maxdepth 3 -type f -print \
-              -exec tail -n 300 {} \; 2>/dev/null || true
-            exit 1
-          fi
 
           if grep -q 'failed to load plugin.*orchestrator.ts' \
             "$HOME/.local/share/opencode/log/opencode.log" 2>/dev/null; then
             echo '--- OpenCode logs: plugin load failure ---'
             tail -n 300 "$HOME/.local/share/opencode/log/opencode.log" || true
+            exit 1
+          fi
+
+          if [ "$ready" -ne 1 ]; then
+            echo '--- OpenCode logs: command activation timeout ---'
+            find "$HOME/.local/share/opencode" -maxdepth 3 -type f -print \
+              -exec tail -n 300 {} \; 2>/dev/null || true
             exit 1
           fi
