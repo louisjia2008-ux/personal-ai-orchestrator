@@ -1,34 +1,56 @@
 # Roadmap
 
-This roadmap is intentionally evidence-driven. The project should first prove that subscription-aware scheduling creates measurable value before expanding into a general multi-agent platform or polished desktop product.
+This roadmap is evidence-driven. The project should first prove that subscription-aware scheduling creates measurable value before expanding into a general multi-agent platform or polished desktop product.
 
-## MVP integration spike — OpenCode + quota observability
+## Preflight — Provider policy / safe bypass
 
 ### Objective
-Prove the minimum execution path needed for the product hypothesis:
+Prove that the MVP can be tested without putting provider accounts or the user's normal OpenCode workflow at unnecessary risk.
+
+### Scope
+- audit Z.AI and MiniMax terms/account policies for automated quota/usage access;
+- prefer official usage APIs;
+- document authentication/rate-limit/third-party restrictions;
+- keep undocumented endpoints blocked pending explicit review;
+- keep scraping disabled by default;
+- define safe bypass behavior when daemon/scheduler/collector is unavailable.
+
+### Acceptance gate
+- daemon unavailable -> OpenCode can continue in configured/manual mode;
+- scheduler disabled -> OpenCode works normally;
+- quota collector unavailable -> conservative/manual fallback with no fake exact quota;
+- no MVP collector depends on a prohibited access path.
+
+---
+
+## MVP integration spike — OpenCode + two model families
+
+### Objective
+Prove the minimum execution path:
 
 ```text
 OpenCode
-  -> orchestrator scheduling decision
-  -> concrete GLM or MiniMax model selection
-  -> supervised coding task
-  -> deterministic verification
+  -> thin adapter/plugin
+  -> local orchestrator decision
+  -> concrete GLM or MiniMax model assignment/switch
+  -> coding task
+  -> deterministic host verification
 ```
 
 ### Required experiments
-- confirm a reliable OpenCode model-selection/switch surface that does not require unsafe global config mutation;
+- confirm a reliable session/run/agent-scoped OpenCode model-selection surface;
+- avoid shared global config mutation as the normal switching path;
+- keep scheduling policy out-of-process in the daemon;
 - preserve provider-native authentication where possible;
-- run one disposable-repository task with MiniMax;
-- run one disposable-repository task with Z.AI/GLM;
-- capture cancellation and provider/model errors;
-- identify observable quota/usage signals for both providers;
-- prove concurrent sessions cannot overwrite each other's model assignment;
-- keep deterministic host verification authoritative.
+- run disposable-repository tasks with MiniMax and Z.AI/GLM;
+- capture cancellation/provider/model errors;
+- prove concurrent sessions cannot overwrite one another;
+- treat any experimental OpenCode compaction hook as optional handoff delivery optimization only.
 
 ### Go / No-Go gate
-Proceed only if OpenCode can be supervised and routed between at least two concrete model families without creating a credential, concurrency, or verification bypass.
+Proceed only if OpenCode can be supervised and routed between at least two concrete model families without a credential, concurrency, or verification bypass.
 
-ACP is not required for this gate.
+ACP and LiteLLM are not required for this gate.
 
 ---
 
@@ -38,215 +60,262 @@ ACP is not required for this gate.
 Maintain the host-owned source of truth for task execution.
 
 ### Scope
-- SQLite + WAL state store;
-- typed `Task`, `Run`, `Approval`, `AuditEvent`, and workspace records;
-- idempotent task submission;
-- host-owned Git worktree lifecycle;
-- one active writer per task worktree;
-- process supervision and cancellation;
-- fail-closed startup reconciliation;
-- explicit blocked/error states;
-- no worker integration authority over `main`.
+- durable task/run/audit state;
+- host-owned worktree/workspace lifecycle;
+- one active implementation owner per writable task workspace;
+- deterministic verification;
+- approvals/risk gates;
+- process supervision/cancellation/recovery;
+- fail-closed reconciliation.
 
-### Acceptance gate
-Chaos tests cover worker/orchestrator crash, duplicate submit, missing worktree, unexpected process exit, stale writer ownership, invalid worker result, and restart/recovery. Uncertain state must never silently advance to completion.
+### Scheduler read-only view
+Expose only the derived fields required for model allocation, initially:
 
----
+```text
+task_id
+task_state_version
+current_owner
+risk_class
+attempt_count
+consecutive_failure_count
+last_verification_result
+last_verification_at
+approval_state
+reserve_eligibility / reserve_class
+```
 
-## P1 — Deterministic Verification
-
-### Objective
-Keep worker completion separate from verified task completion.
-
-### Scope
-- trusted verifier profiles outside natural-language prompts;
-- argv-based build/test/hygiene commands;
-- targeted tests;
-- build checks;
-- `git diff --check`;
-- changed-file/allowed-path policy;
-- structured evidence;
-- explicit `VERIFIED` state.
-
-### Acceptance gate
-Injected build/test/evidence/file-scope failures must block verification.
+The Scheduler must not maintain a shadow safety state.
 
 ---
 
-## P2 — Subscription Resource Domain
+## P1 — Subscription Resource Domain
 
 ### Objective
 Represent the real commercial scarcity boundary without rebuilding a global model catalog.
 
 ### Scope
-- `Provider -> Account -> Plan -> QuotaPool` hierarchy;
-- concrete `ModelSKU` references sourced from upstream metadata such as `models.dev` where practical;
-- time-aware `QuotaBinding`;
-- time-aware `ConsumptionRule`;
+- lightweight but explicit `Provider -> Account -> Plan -> QuotaPool` identity chain;
+- ModelSKU references aligned with upstream metadata such as `models.dev`;
+- local versioned catalog snapshots with `catalog_snapshot_id` and last-known-good fallback;
+- append-only `QuotaBinding` temporal facts;
+- append-only `ConsumptionRule` temporal facts;
+- structured evidence provenance;
+- valid/effective time distinct from recorded/knowledge time;
 - quota observations with `EXACT / ESTIMATED / UNKNOWN` confidence;
-- reserve/protection policy on quota pools;
-- provider-policy changes represented through effective dates rather than schema changes;
-- local models treated as a separate/deferred resource class rather than forced into subscription semantics.
+- quota pools with multiple simultaneous windows;
+- reserve/protection policy;
+- RuntimeVariant deferred as a first-class local entity unless real requirements prove it necessary.
 
 ### Acceptance gate
-The same quota pool can be shared by multiple models, provider policy can change over time without losing history, and no shared/estimated observation is exposed as exact per-model quota.
-
-See [`MODEL_RESOURCE_ORCHESTRATION.md`](MODEL_RESOURCE_ORCHESTRATION.md).
+- multiple models can share one pool;
+- a model can change pool/rate over time without mutating historical facts;
+- a later backdated provider correction cannot silently rewrite a past routing replay;
+- no shared/estimated observation is exposed as exact per-model quota.
 
 ---
 
-## P3 — Quota Observability / Reconciliation
-
-### Objective
-Know what quota truth is actually observable and degrade confidence honestly when it is not.
+## P2 — Quota Observability / Reconciliation
 
 ### Initial providers
 - Z.AI / GLM coding plan;
 - MiniMax coding plan.
 
 ### Scope
-- provider/plan collectors;
-- remaining capacity when genuinely observable;
-- rolling/billing reset data;
-- rate-limit and usage signals;
-- shared-pool semantics;
-- external-consumption reconciliation where provider usage APIs permit it;
-- observation timestamps/source/confidence;
-- ToS/account-policy audit for any automated quota access;
-- no scraping presented as exact truth.
+- provider/plan/pool/window collectors;
+- remaining capacity/reset data when genuinely observable;
+- external-consumption reconciliation where official provider signals permit it;
+- observation time/source/confidence;
+- confidence degradation `EXACT -> ESTIMATED -> UNKNOWN` when visibility worsens;
+- append-only evidence/history for rule/binding changes.
 
 ### Acceptance gate
-Every quota value returned by the daemon includes scope, source, observation time, and confidence. Loss of provider visibility can explicitly downgrade `EXACT -> ESTIMATED -> UNKNOWN`.
+Every quota value returned by the daemon includes scope, source, observation time, and confidence.
 
 ---
 
-## P4 — Deterministic Explainable Scheduler
+## P3 — Temporal Scarcity Scheduler
 
 ### Objective
-Make auditable model-selection decisions that ration subscription capacity over time.
+Build a deterministic, auditable scheduler around expiring subscription capacity.
+
+### MVP scarcity primitive
+For each active window:
+
+```text
+pace = remaining_quota_fraction / remaining_time_fraction
+```
+
+For multiple simultaneous windows:
+
+```text
+effective_pace = min(valid_window_paces)
+```
+
+Initial configurable bands may classify critical scarcity / conserve / on-pace / surplus / harvest-candidate states.
+
+Do not add burn-velocity/workload forecasting until real pace-model failures justify it.
 
 ### Scope
 - Worker / Reasoning / Review / Escalation / Fallback candidate pools;
-- structured task profile;
-- hard eligibility filters;
-- quota reserve/protection rules;
-- failure-count escalation;
-- task/pool-specific weighted scoring;
-- time-dependent scarcity penalty using remaining capacity, time-to-reset, burn velocity, expected workload, and fallback quality;
-- generated explanation from the exact scoring trace;
-- no opaque routing prompt or ML router.
+- hard capability/context/availability filters;
+- reserve constraints;
+- task/pool weighted scoring;
+- deterministic output;
+- one scoring trace used for both machine decision and human explanation.
+
+### Decision replay
+Every RoutingDecision records at least:
+
+```text
+task_state_version
+routing_policy_snapshot_id
+quota observation ids
+quota_binding_id
+consumption_rule_id(s)
+catalog_snapshot_id
+selected model
+candidate scoring trace
+```
 
 ### Acceptance gate
-Given identical authoritative task state, model metadata, quota observations, telemetry, and policy, the scheduler must return the identical concrete model decision and identical machine-readable scoring trace.
+Identical authoritative inputs and snapshots produce identical decisions and explanations.
 
 ---
 
-## P5 — OpenCode Dogfooding / Ownership / Handoff
+## P4 — Ownership / Handoff
 
 ### Objective
-Use the scheduler on real coding work and measure whether model switching remains coherent.
+Make resource-driven and failure-driven model switching coherent and auditable.
 
 ### Scope
-- OpenCode adapter/session model assignment;
-- no shared-global-config race as the normal switching path;
-- authoritative Safety Kernel read-only task-health interface;
-- implementation ownership;
-- architecture/frozen-decision ownership where needed;
-- ownership-transfer hysteresis and limits;
 - versioned structured task state;
-- structured cross-model handoff;
-- routing/provider/error audit trail.
+- separate failure/resource/manual transfer counters;
+- minimum-attempt hysteresis;
+- short cooldown only as a rapid-loop safety backstop;
+- explicit `HUMAN_REVIEW_REQUIRED` when transfer limits are exhausted;
+- minimal handoff payload:
+
+```text
+objective
+handoff_reason
+invariants
+rejected_approaches
+current_diff_ref
+verification_summary
+next_action
+from_owner
+to_owner
+task_state_version
+```
+
+### Handoff reasons
+`REPEATED_FAILURE`, `QUOTA_EXHAUSTION`, `RISK_ESCALATION`, `EXPLICIT_REVIEW`, `PROVIDER_UNAVAILABLE`, `MANUAL_REROUTE`.
 
 ### Acceptance gate
-A forced escalation between MiniMax and GLM preserves task/worktree ownership, frozen decisions, verification history, and cancellation semantics. Transfer history is versioned and auditable.
+A forced transfer preserves authoritative verification/invariant state and does not consume the wrong transfer budget merely because quota/resource state changed.
 
 ---
 
-## P6 — MVP Evidence / Cost-to-Green
+## P5 — Shadow-mode Dogfooding
 
 ### Objective
-Test the product hypothesis with falsifiable real-workload evidence.
+Collect real routing evidence before allowing the scheduler to change models automatically.
 
-### Experiment A — Quota survival
-Compare scheduled vs unscheduled periods/tasks for:
-- time to premium-plan exhaustion/reserve breach;
-- unused quota at reset;
-- utilization across paid plans;
-- premium calls avoided/deferred.
+### Behavior
+The scheduler recommends but does not switch.
+
+Record:
+
+```text
+manual choice
+scheduler recommendation
+all decision snapshot ids
+risk / previous-failure covariates
+verified outcome
+time / attempts / quota / regression
+```
+
+Use matched/similar task families where practical rather than assuming manual and scheduled task distributions are randomized.
+
+### Acceptance gate
+Shadow mode is stable enough to identify decision mistakes without interrupting normal OpenCode work.
+
+---
+
+## P6 — Active Dogfooding / MVP Evidence
+
+### Objective
+Test the three falsifiable product claims after safe bypass and shadow-mode gates pass.
+
+### Experiment A — Quota survival/utilization
+Measure time-to-exhaustion/reserve breach, unused quota at reset, utilization across paid pools, and premium calls avoided/deferred.
 
 ### Experiment B — Routing quality
-Compare manual and orchestrator routing for:
-- verified success;
-- Pass@1;
-- attempts-to-green;
-- time-to-green;
-- native quota-to-green;
-- direct monetary cost;
-- regression/verifier failure rate.
+Measure verified success, Pass@1, attempts-to-green, time-to-green, native quota-to-green, direct monetary cost, and regression/verifier failures versus manual routing on comparable workloads.
 
 ### Experiment C — Handoff penalty
-Compare single-model completion vs structured handoff/escalation for:
-- verified success;
-- rework after transfer;
-- time-to-green;
-- context/request overhead;
-- regression rate.
+Measure verified success, rework after transfer, time/context/request overhead, and regression versus appropriate single-model baselines.
 
-### Acceptance gate
-The project should show improved quota survival/utilization without material verified-quality degradation, and cross-model handoff must not introduce an unacceptable success/rework penalty.
+### Observation window
+Production conclusions should span at least two complete relevant reset cycles when practical. Short replay/shadow data may debug the mechanism but must not be presented as proof of the thesis.
 
 ---
 
-## P7 — Clients / macOS Control Plane
+## P7 — Cost-to-Green / Invocation Accounting
 
 ### Objective
-Build user-facing controls only after the daemon API and state schemas have survived real dogfooding.
+Keep decision economics and actual provider consumption truthful when rules change during a task.
 
-### Sequence
-1. CLI remains the MVP interface.
-2. Freeze/version the local daemon API and JSON/event schemas.
-3. Add macOS Menu Bar status/control.
-4. Add full SwiftUI dashboard.
-5. Add WidgetKit surfaces for glanceable state and bounded actions.
-6. Keep DeskPet as an optional independent client.
+### Rule
+**Decision snapshots are locked; invocation accounting is not locked to task-start policy.**
 
-### Product boundary
-The headless orchestrator remains usable without macOS or DeskPet.
+Each model invocation records the binding/rule actually applicable to that call and provider-reported consumption when available.
 
-See [`MACOS_CONTROL_PLANE.md`](MACOS_CONTROL_PLANE.md).
+A long task may legitimately contain calls charged under multiple ConsumptionRules. Task Cost-to-Green sums actual invocation consumption plus time/retry/verification/handoff outcomes.
 
 ---
 
-## P8 — Adaptive Scheduling (deferred)
+## P8 — Clients / macOS Control Plane
 
-### Preconditions
-Do not begin until P6 produces enough task-specific evidence to estimate local performance meaningfully.
+Only after daemon API/state schemas survive real dogfooding:
 
-### Possible scope
+1. freeze/version local daemon API/event schemas;
+2. add macOS Menu Bar;
+3. add full SwiftUI dashboard;
+4. add WidgetKit glanceable surfaces;
+5. keep DeskPet as an optional independent client.
+
+CLI remains the MVP control surface.
+
+---
+
+## P9 — Adaptive Scheduling (deferred)
+
+Begin only after enough real P5-P7 evidence exists.
+
+Possible scope:
 - local posterior capability estimates;
 - expected time/quota/cost-to-green;
-- bounded online adaptation;
+- bounded adaptation;
 - Pareto analysis;
 - deterministic rollback;
-- hard policy floors for safety, reserve, cost, and risk.
+- hard safety/reserve/cost floors.
 
-### Non-goal
-Do not deploy an opaque reinforcement-learning/neural router as the first scheduling implementation.
+Explainability/auditability remains an invariant even if selection eventually becomes adaptive.
 
 ---
 
-## Explicitly deferred until evidence justifies them
+## Explicitly deferred
 
 - ACP as a core dependency;
-- LiteLLM or another universal gateway in the MVP critical path;
+- LiteLLM/universal gateway in the MVP critical path;
 - Claude/Codex execution adapters;
-- generalized local GPU/thermal resource scheduling;
+- generalized local GPU/thermal scheduling;
 - macOS UI before daemon-state stabilization;
-- distributed execution;
-- Kubernetes;
+- distributed execution / Kubernetes;
 - public SaaS control plane;
 - PostgreSQL/Redis/Kafka;
 - generalized plugin marketplace;
 - autonomous paid overage;
 - autonomous architecture migration;
-- opaque learned model routing.
+- opaque learned routing without replayable evidence.
