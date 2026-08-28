@@ -1,0 +1,48 @@
+{
+  "active": {
+    "action": "SWITCH_MODEL",
+    "result": "PASS",
+    "session_a_model": "zai-coding-plan/glm-5.3-flash",
+    "session_a_variant": "default",
+    "session_b_model": null
+  },
+  "cancellation": {
+    "reason": "provider model does not execute turns; nothing to cancel",
+    "result": "SKIPPED"
+  },
+  "completion": {
+    "assistant_error": null,
+    "finish": null,
+    "provider_error": "MODEL_UNAVAILABLE (OpenCode SessionRunnerModel.ModelUnavailableError: zai-coding-plan/glm-5.3-flash)",
+    "reason": "no successful assistant turn from the authenticated provider",
+    "result": "BLOCKED"
+  },
+  "model_id": "glm-5.3-flash",
+  "provider_id": "zai-coding-plan",
+  "result": "PARTIAL",
+  "server": "http://127.0.0.1:61663",
+  "session_isolation": {
+    "result": "PASS",
+    "session_b_cost": 0,
+    "session_b_model": null,
+    "session_b_tokens": {
+      "cache": {
+        "read": 0,
+        "write": 0
+      },
+      "input": 0,
+      "output": 0,
+      "reasoning": 0
+    }
+  },
+  "sessions_deleted": [
+    "ses_fb59c4f91ffefkbatar8jfH3Qu",
+    "ses_fb59c4f59ffeJRzXduso2gOJrE"
+  ],
+  "shadow": {
+    "action": "RECORD_ONLY",
+    "recommended_model": "zai-coding-plan/glm-5.3-flash",
+    "result": "PASS",
+    "session_model_after": null
+  }
+}

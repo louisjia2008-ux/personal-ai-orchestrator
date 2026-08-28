@@ -1,0 +1,62 @@
+{
+  "active": {
+    "action": "SWITCH_MODEL",
+    "result": "PASS",
+    "session_a_model": "minimax-cn-coding-plan/MiniMax-M2.5",
+    "session_a_variant": "default",
+    "session_b_model": null
+  },
+  "cancellation": {
+    "finish": "error",
+    "interrupt_marker": "Provider turn interrupted",
+    "result": "PASS",
+    "server_healthy_after": true
+  },
+  "completion": {
+    "cost": 0,
+    "finish": "stop",
+    "model": "minimax-cn-coding-plan/MiniMax-M2.5",
+    "result": "PASS",
+    "text": "# OpenCode Stage C Disposable Fixture",
+    "text_matches_fixture_h1": true,
+    "tokens": {
+      "cache": {
+        "read": 2727,
+        "write": 313
+      },
+      "input": 184,
+      "output": 31,
+      "reasoning": 0
+    },
+    "variant": "default"
+  },
+  "model_id": "MiniMax-M2.5",
+  "provider_id": "minimax-cn-coding-plan",
+  "result": "PASS",
+  "server": "http://127.0.0.1:61786",
+  "session_isolation": {
+    "result": "PASS",
+    "session_b_cost": 0,
+    "session_b_model": null,
+    "session_b_tokens": {
+      "cache": {
+        "read": 0,
+        "write": 0
+      },
+      "input": 0,
+      "output": 0,
+      "reasoning": 0
+    }
+  },
+  "sessions_deleted": [
+    "ses_fb59af3bbffeOwKQji5SEkm2xI",
+    "ses_fb59af380ffepvk4qMD4jJPndk",
+    "ses_fb59ae95affeHvBhdFS82ZB5J9"
+  ],
+  "shadow": {
+    "action": "RECORD_ONLY",
+    "recommended_model": "minimax-cn-coding-plan/MiniMax-M2.5",
+    "result": "PASS",
+    "session_model_after": null
+  }
+}

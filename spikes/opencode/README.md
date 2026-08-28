@@ -152,21 +152,51 @@ OpenCode prompt/session
 - deterministic host verification remains authoritative;
 - experimental compaction hooks may enrich handoff context later but are never required for correctness.
 
-## Stage C — real provider-native authentication: NOT YET VERIFIED
+## Stage C — real provider-native authentication: PARTIAL
 
-Stage C must use OpenCode's normal provider authentication and a model actually present in the authenticated OpenCode catalog.
+Stage C uses OpenCode's normal provider authentication and a model actually
+present in the authenticated OpenCode catalog. It was executed locally on macOS
+against a real `opencode` 1.18.23 install. Full sanitized evidence is under
+[`results/`](./results/) (`STAGE_C_FINAL_REPORT.md`, `STAGE_C_ENVIRONMENT.md`,
+`STAGE_C_MINIMAX.md`, `STAGE_C_ZAI_GLM.md`, and the two evidence JSONs).
 
-Minimum real-provider smoke:
+| Provider | id | model | SHADOW | ACTIVE | isolation | completion | cancel | overall |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| MiniMax | `minimax-cn-coding-plan` | `MiniMax-M2.5` | PASS | PASS | PASS | PASS | PASS | **PASS** |
+| Z.AI/GLM | `zai-coding-plan` | `glm-5.3-flash` | PASS | PASS | PASS | BLOCKED | SKIPPED | **PARTIAL** |
 
-1. verify provider auth presence without printing credential contents;
-2. enumerate/identify an available provider-native catalog model;
-3. create a disposable session in SHADOW and confirm routing does not disturb normal provider operation;
-4. switch one disposable session in ACTIVE to the real catalog model;
-5. run a minimal harmless read-only completion/task through that session;
-6. verify a second session remains independent;
-7. record provider/model identity, OpenCode build, success/failure, token counters, and any quota/rate-limit error without exposing secrets.
+Overall Stage C is **PARTIAL**: MiniMax completes a real harmless completion end
+to end; every `zai-coding-plan` model fails at turn execution with OpenCode's
+`SessionRunnerModel.ModelUnavailableError` ("Model unavailable"), a provider/plan
+availability blocker (credential present, switch succeeds, execution unavailable)
+that needs user action on the Z.AI Coding Plan.
 
-MiniMax and Z.AI/GLM should be tested independently. A missing login, MFA requirement, or unavailable credential is an authentication blocker and must not be worked around by copying credential files into the repository or GitHub Actions logs.
+### Runtime (recorded drift)
+
+The pinned `@opencode-ai/cli@0.0.0-beta-18387` (`opencode2`) has no darwin-arm64
+binary and cannot be installed on this Mac, and 1.18.23's plugin command/switch
+API differs from beta-18387. Stage C runs on the standalone `opencode` 1.18.23
+(which holds the real credentials) with `@opencode-ai/plugin@1.18.23` /
+`@opencode-ai/sdk@1.18.23`, realizing the thin adapter as a host-side client over
+the documented `POST /api/session/{id}/model` switch — the same
+`session.next.model.switched` durable event Stage B asserts. Stage A/B and their
+beta-18387 pin are unchanged.
+
+### Harness
+
+- `runtime_provider_auth_smoke.sh` — auth + catalog preflight (refuses if the
+  provider is not authenticated; never reads credential contents).
+- `runtime_provider_active_completion.sh` — disposable fixture + real
+  `opencode serve` + credential-free `fake_daemon.py` + the driver; exact-PID
+  and session cleanup; asserts the fixture stays byte-clean.
+- `stage_c_runtime.py` — drives SHADOW → ACTIVE → completion → isolation →
+  cancellation using the committed `resolve_adapter_outcome` and emits sanitized
+  JSON evidence.
+
+These require a local `opencode` with the provider authenticated and are **not**
+wired into CI (CI has no provider credentials). A missing login, MFA requirement,
+or unavailable credential is an authentication blocker and must not be worked
+around by copying credential files into the repository or CI logs.
 
 ## Not part of this spike
 
