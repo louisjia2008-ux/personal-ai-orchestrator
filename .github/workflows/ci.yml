@@ -102,6 +102,7 @@ jobs:
           trap cleanup EXIT
 
           cd "$fixture"
-          timeout 60 opencode2 api get /api/command > commands.json
+          timeout 60 opencode2 api get /api/command \
+            --header "x-opencode-directory: $fixture" > commands.json
           cat commands.json
           grep -q 'orchestrator-route' commands.json
