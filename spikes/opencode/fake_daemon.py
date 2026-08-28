@@ -15,7 +15,12 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from personal_ai_orchestrator.opencode_contract import ModelRef, RoutingDecision, RoutingMode, RoutingRequest
+from personal_ai_orchestrator.opencode_contract import (
+    ModelRef,
+    RoutingDecision,
+    RoutingMode,
+    RoutingRequest,
+)
 
 
 class FakeRoutingHandler(BaseHTTPRequestHandler):
