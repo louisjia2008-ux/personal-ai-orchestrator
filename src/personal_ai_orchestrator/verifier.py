@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
+from hashlib import sha256
 from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -43,6 +45,7 @@ class VerificationResult(FrozenModel):
     changed_paths: tuple[str, ...]
     unexpected_paths: tuple[str, ...]
     stages: tuple[VerificationStage, ...]
+    evidence_id: str | None = None
     failure_reason: str | None = None
 
 
@@ -92,6 +95,61 @@ def _allowed(path: str, prefixes: tuple[str, ...]) -> bool:
     return False
 
 
+def _evidence_id(
+    *,
+    profile: VerifierProfile,
+    base_sha: str,
+    changed: tuple[str, ...],
+    unexpected: tuple[str, ...],
+    stages: tuple[VerificationStage, ...],
+    passed: bool,
+    failure_reason: str | None,
+) -> str:
+    payload = {
+        "profile": profile.model_dump(mode="json"),
+        "base_sha": base_sha,
+        "changed_paths": changed,
+        "unexpected_paths": unexpected,
+        "stages": [stage.model_dump(mode="json") for stage in stages],
+        "passed": passed,
+        "failure_reason": failure_reason,
+    }
+    digest = sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return f"verify-{digest[:24]}"
+
+
+def _result(
+    *,
+    profile: VerifierProfile,
+    base_sha: str,
+    passed: bool,
+    changed: tuple[str, ...],
+    unexpected: tuple[str, ...],
+    stages: tuple[VerificationStage, ...],
+    failure_reason: str | None = None,
+) -> VerificationResult:
+    evidence_id = _evidence_id(
+        profile=profile,
+        base_sha=base_sha,
+        changed=changed,
+        unexpected=unexpected,
+        stages=stages,
+        passed=passed,
+        failure_reason=failure_reason,
+    )
+    return VerificationResult(
+        profile=profile.name,
+        passed=passed,
+        changed_paths=changed,
+        unexpected_paths=unexpected,
+        stages=stages,
+        evidence_id=evidence_id,
+        failure_reason=failure_reason,
+    )
+
+
 class DeterministicVerifier:
     """Run only host-configured argv commands; natural-language prompts cannot add commands."""
 
@@ -105,11 +163,12 @@ class DeterministicVerifier:
         paths = changed_paths(worktree, base_sha=base_sha)
         unexpected = tuple(path for path in paths if not _allowed(path, profile.allowed_paths))
         if unexpected:
-            return VerificationResult(
-                profile=profile.name,
+            return _result(
+                profile=profile,
+                base_sha=base_sha,
                 passed=False,
-                changed_paths=paths,
-                unexpected_paths=unexpected,
+                changed=paths,
+                unexpected=unexpected,
                 stages=(),
                 failure_reason="changed-file scope violation",
             )
@@ -119,11 +178,12 @@ class DeterministicVerifier:
             diff = _run(("git", "diff", "--check", base_sha, "--"), cwd=worktree, timeout=60)
             stages.append(diff.model_copy(update={"name": "git diff --check"}))
             if not diff.passed:
-                return VerificationResult(
-                    profile=profile.name,
+                return _result(
+                    profile=profile,
+                    base_sha=base_sha,
                     passed=False,
-                    changed_paths=paths,
-                    unexpected_paths=(),
+                    changed=paths,
+                    unexpected=(),
                     stages=tuple(stages),
                     failure_reason="git diff --check failed",
                 )
@@ -133,20 +193,33 @@ class DeterministicVerifier:
             stage = stage.model_copy(update={"name": command.name})
             stages.append(stage)
             if not stage.passed:
-                return VerificationResult(
-                    profile=profile.name,
+                return _result(
+                    profile=profile,
+                    base_sha=base_sha,
                     passed=False,
-                    changed_paths=paths,
-                    unexpected_paths=(),
+                    changed=paths,
+                    unexpected=(),
                     stages=tuple(stages),
                     failure_reason=f"verifier command failed: {command.name}",
                 )
 
-        return VerificationResult(
-            profile=profile.name,
+        if not stages:
+            return VerificationResult(
+                profile=profile.name,
+                passed=False,
+                changed_paths=paths,
+                unexpected_paths=(),
+                stages=(),
+                evidence_id=None,
+                failure_reason="verifier profile produced no host evidence",
+            )
+
+        return _result(
+            profile=profile,
+            base_sha=base_sha,
             passed=True,
-            changed_paths=paths,
-            unexpected_paths=(),
+            changed=paths,
+            unexpected=(),
             stages=tuple(stages),
         )
 
