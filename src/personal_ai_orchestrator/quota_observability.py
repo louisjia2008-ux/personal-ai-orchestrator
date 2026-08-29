@@ -181,6 +181,9 @@ def render_quota_explanation(
     lines.extend(
         [
             f"known minimum pace: {known_min}",
+            # Preserve the established explanation key for existing consumers while
+            # additionally making its stricter routing semantics explicit below.
+            f"effective pace: {effective}",
             f"effective routing pace: {effective}",
             f"all binding windows known: {str(trace.all_binding_windows_known).lower()}",
             f"scarcity class: {trace.scarcity_class.value}",
