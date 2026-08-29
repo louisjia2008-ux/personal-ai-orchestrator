@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "provider": "minimax",
+  "plan": "token-plan",
+  "quota_pool_id": "minimax-token-plan",
+  "observed_at": "2026-08-29T00:58:00Z",
+  "official_endpoint": "https://www.minimax.io/v1/token_plan/remains",
+  "auth_method": "Bearer Token Plan subscription key",
+  "runtime_probe": "AUTHENTICATION_INTEGRATION_BLOCKED",
+  "confidence": "UNKNOWN",
+  "windows": ["5h", "weekly"],
+  "remaining": null,
+  "reset": null,
+  "pace": null,
+  "effective_pace": null,
+  "credentials_read": false,
+  "credentials_logged": false,
+  "raw_provider_response_committed": false,
+  "completion_quota_consumed": false,
+  "reason": "Existing OpenCode credential is not available through a supported non-secret handoff in this execution surface."
+}
