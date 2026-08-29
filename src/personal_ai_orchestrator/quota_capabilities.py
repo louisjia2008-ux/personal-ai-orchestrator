@@ -37,10 +37,15 @@ _CAPABILITIES = {
         existing_opencode_auth_reusable_without_secret_read=False,
         requires_independent_credential_surface=True,
         automation_allowed=True,
-        rate_limit="Dynamic RPM/TPM throttling; provider says throttles typically reset within ~1 minute",
+        rate_limit=(
+            "Dynamic RPM/TPM throttling; provider says throttles typically reset "
+            "within ~1 minute"
+        ),
         quota_windows=("5-hour rolling", "weekly"),
         scope="Token Plan shared quota with provider-returned model remains records",
-        remaining_semantics="Provider API exposes explicit remaining percentage fields when available",
+        remaining_semantics=(
+            "Provider API exposes explicit remaining percentage fields when available"
+        ),
         confidence=EvidenceConfidence.EXACT,
         source_uris=(
             "https://platform.minimax.io/subscribe/token-plan",
