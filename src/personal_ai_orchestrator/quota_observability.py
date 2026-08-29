@@ -1,7 +1,7 @@
 """Temporal-scarcity traces over the canonical model-registry quota snapshots.
 
 P3 does not define a second quota domain. Provider collectors, the model registry, cache,
-explanations, and the future scheduler all share ``model_registry.QuotaSnapshot`` and
+explanations, and the scheduler all share ``model_registry.QuotaSnapshot`` and
 ``model_registry.QuotaWindowSnapshot``.
 """
 
@@ -78,9 +78,12 @@ class QuotaWindowPaceTrace(RegistryModel):
 
 class QuotaPaceTrace(RegistryModel):
     quota_pool_id: str
+    quota_snapshot_id: str
     observed_at: datetime
     windows: tuple[QuotaWindowPaceTrace, ...]
+    known_min_pace: float | None
     effective_pace: float | None
+    all_binding_windows_known: bool
     scarcity_class: ScarcityClass
 
 
@@ -89,15 +92,13 @@ def build_pace_trace(
     *,
     at: datetime | None = None,
     thresholds: ScarcityThresholds = DEFAULT_SCARCITY_THRESHOLDS,
+    required_window_kinds: tuple[QuotaWindowKind, ...] = (),
 ) -> QuotaPaceTrace:
     reference = at or snapshot.observation_time()
     windows: list[QuotaWindowPaceTrace] = []
-    valid_paces: list[float] = []
     for window in snapshot.windows:
         remaining_time_fraction = window.remaining_time_fraction(at=reference)
         pace = window.pace(at=reference)
-        if pace is not None:
-            valid_paces.append(pace)
         windows.append(
             QuotaWindowPaceTrace(
                 window_id=window.window_id,
@@ -109,12 +110,28 @@ def build_pace_trace(
                 scarcity_class=thresholds.classify(pace),
             )
         )
-    effective = min(valid_paces) if valid_paces else None
+
+    known_min = snapshot.known_min_pace(
+        at=reference,
+        required_window_kinds=required_window_kinds,
+    )
+    effective = snapshot.effective_pace(
+        at=reference,
+        required_window_kinds=required_window_kinds,
+    )
+    active = snapshot.active_windows(
+        at=reference,
+        required_window_kinds=required_window_kinds,
+    )
+    all_known = bool(active) and all(window.pace(at=reference) is not None for window in active)
     return QuotaPaceTrace(
         quota_pool_id=snapshot.quota_pool_id or "UNKNOWN",
+        quota_snapshot_id=snapshot.id,
         observed_at=reference,
         windows=tuple(windows),
+        known_min_pace=known_min,
         effective_pace=effective,
+        all_binding_windows_known=all_known,
         scarcity_class=thresholds.classify(effective),
     )
 
@@ -126,13 +143,20 @@ def render_quota_explanation(
     *,
     at: datetime | None = None,
     thresholds: ScarcityThresholds = DEFAULT_SCARCITY_THRESHOLDS,
+    required_window_kinds: tuple[QuotaWindowKind, ...] = (),
 ) -> str:
     """Render a human explanation directly from the computed pace trace."""
 
-    trace = build_pace_trace(snapshot, at=at, thresholds=thresholds)
+    trace = build_pace_trace(
+        snapshot,
+        at=at,
+        thresholds=thresholds,
+        required_window_kinds=required_window_kinds,
+    )
     lines = [
         f"Provider: {provider_name}",
         f"Pool: {pool_name}",
+        f"Quota snapshot: {snapshot.id}",
         f"Observation: {snapshot.confidence.value}",
     ]
     for window in trace.windows:
@@ -151,11 +175,14 @@ def render_quota_explanation(
                 f"  pace: {pace}",
             ]
         )
+    known_min = "UNKNOWN" if trace.known_min_pace is None else f"{trace.known_min_pace:.3f}"
     effective = "UNKNOWN" if trace.effective_pace is None else f"{trace.effective_pace:.3f}"
     source = snapshot.source.reference or snapshot.source.source_type.value
     lines.extend(
         [
-            f"effective pace: {effective}",
+            f"known minimum pace: {known_min}",
+            f"effective routing pace: {effective}",
+            f"all binding windows known: {str(trace.all_binding_windows_known).lower()}",
             f"scarcity class: {trace.scarcity_class.value}",
             f"Source: {source}",
             f"As of: {snapshot.observation_time().isoformat()}",
