@@ -55,6 +55,7 @@ class RoutingDecision(FrozenModel):
     selected_model: ModelRef | None = None
     selected_execution_target_id: str | None = None
     switch_requested: bool = False
+    task_state_version: int | None = Field(default=None, ge=0)
     explanation_ref: str | None = None
     catalog_snapshot_id: str | None = None
     policy_snapshot_id: str | None = None
@@ -68,6 +69,8 @@ class RoutingDecision(FrozenModel):
             raise ValueError("only ACTIVE decisions may request a model switch")
         if self.switch_requested and self.selected_model is None:
             raise ValueError("switch_requested requires selected_model")
+        if self.switch_requested and self.task_state_version is None:
+            raise ValueError("switch_requested requires task_state_version")
         if self.mode is RoutingMode.BYPASS and self.selected_model is not None:
             raise ValueError("BYPASS decisions must not select a model")
         return self
@@ -122,6 +125,13 @@ def resolve_adapter_outcome(
             target_model=decision.selected_model,
             decision_id=decision.decision_id,
             reason=decision.fallback_reason or "active decision requested no model switch",
+        )
+    if decision.task_state_version != request.task_state_version:
+        return AdapterOutcome(
+            action=AdapterAction.KEEP_CURRENT,
+            target_model=decision.selected_model,
+            decision_id=decision.decision_id,
+            reason="active decision task state version does not match the routing request",
         )
     if decision.selected_model == request.current_model:
         return AdapterOutcome(
