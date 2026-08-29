@@ -270,6 +270,7 @@ def build_providers() -> list[dict]:
             "id": pid, "name": name, "endpoint": endpoint_of(entry),
             "credType": "api", "connected": True, "envVar": None,
             "doc": entry.get("doc"), "models": models,
+            "pricing": price_map_for(registry, pid, models),
             "testModel": cheap_model(models), "health": "unknown",
         })
         seen.add(pid)
@@ -288,11 +289,28 @@ def build_providers() -> list[dict]:
                 "id": pid, "name": entry.get("name", pid), "endpoint": endpoint_of(entry),
                 "credType": "env", "connected": True, "envVar": set_var,
                 "doc": entry.get("doc"), "models": models,
+                "pricing": price_map_for(registry, pid, models),
                 "testModel": cheap_model(models), "health": "unknown",
             })
             seen.add(pid)
 
     out.sort(key=lambda p: (p["credType"] != "api", p["name"]))
+    return out
+
+
+# A curated set of well-known providers offered for "connect via login".
+CONNECTABLE = ["anthropic", "openai", "minimax", "zai", "openrouter", "google"]
+
+
+def available_providers(connected_ids: set[str]) -> list[dict]:
+    registry = load_models_json()
+    out = []
+    for pid in CONNECTABLE:
+        if pid in connected_ids:
+            continue
+        entry = registry.get(pid)
+        if isinstance(entry, dict):
+            out.append({"id": pid, "name": entry.get("name", pid)})
     return out
 
 
@@ -302,9 +320,159 @@ def endpoint_of(entry: dict) -> str:
     return m.group(1) if m else ""
 
 
+# ---- Pricing & spend (all figures from the real models.dev registry) -------
+# Base providers that carry standalone pay-as-you-go prices for a model that a
+# subscription plan lists at $0. Used to compute the API-equivalent value a plan
+# covered ("how much you'd have paid without the plan").
+BASE_PRICE_PROVIDERS = {
+    "minimax": ["minimax-cn", "minimax"],
+    "glm": ["zhipuai", "zai"],
+}
+COST_KEYS = ("input", "output", "cache_read", "cache_write")
+
+
+def _model_cost(registry: dict, provider: str, model: str) -> dict | None:
+    e = registry.get(provider, {})
+    m = (e.get("models") or {}).get(model)
+    return m.get("cost") if isinstance(m, dict) else None
+
+
+def _family(provider: str, model: str) -> str | None:
+    s = f"{provider} {model}".lower()
+    if "minimax" in s:
+        return "minimax"
+    if "glm" in s or "zai" in s or "zhipu" in s:
+        return "glm"
+    return None
+
+
+def resolve_price(registry: dict, provider: str, model: str) -> dict:
+    """Return {price, plan, source}. If the provider's own price is all-zero
+    (a plan), fall back to a base provider's standalone price for the same model."""
+    own = _model_cost(registry, provider, model)
+    if own and any(float(own.get(k, 0) or 0) for k in COST_KEYS):
+        return {"price": own, "plan": False, "source": provider}
+    fam = _family(provider, model)
+    for base in BASE_PRICE_PROVIDERS.get(fam, []):
+        cost = _model_cost(registry, base, model)
+        if cost and any(float(cost.get(k, 0) or 0) for k in COST_KEYS):
+            return {"price": cost, "plan": True, "source": base}
+    return {"price": own or {k: 0 for k in COST_KEYS}, "plan": own is not None, "source": provider}
+
+
+def cost_usd(tokens: dict, price: dict) -> float:
+    # prices are USD per 1,000,000 tokens
+    return round(sum((tokens.get(k, 0) or 0) / 1e6 * float(price.get(k, 0) or 0) for k in COST_KEYS), 4)
+
+
+def _num(text: str) -> float:
+    text = text.replace(",", "").strip().rstrip("$").strip()
+    mult = 1.0
+    if text and text[-1] in "KkMmBb":
+        mult = {"k": 1e3, "m": 1e6, "b": 1e9}[text[-1].lower()]
+        text = text[:-1]
+    try:
+        return float(text) * mult
+    except ValueError:
+        return 0.0
+
+
+STRIP_BOX = str.maketrans("", "", "│├─┤┌┐└┘")
+
+
+def parse_model_stats(days: int | None = None) -> list[dict]:
+    args = ["stats", "--models"]
+    if days:
+        args += ["--days", str(days)]
+    raw = run_cli(*args, timeout=40)
+    lines = raw.splitlines()
+    try:
+        start = next(i for i, ln in enumerate(lines) if "MODEL USAGE" in ln)
+    except StopIteration:
+        return []
+    labels = {
+        "Input Tokens": "input", "Output Tokens": "output",
+        "Cache Read": "cache_read", "Cache Write": "cache_write", "Cost": "reported_cost",
+    }
+    out: list[dict] = []
+    cur: dict | None = None
+    for ln in lines[start + 1:]:
+        s = ln.translate(STRIP_BOX).strip()
+        if not s:
+            continue
+        matched = None
+        for lab, key in labels.items():
+            if s.startswith(lab):
+                matched = (key, s[len(lab):].strip())
+                break
+        if matched:
+            key, valtext = matched
+            if cur is not None:
+                if key == "reported_cost":
+                    cur["reported_cost"] = _num(valtext)
+                else:
+                    cur["tokens"][key] = _num(valtext)
+        elif "/" in s and " " not in s.split("/")[0]:
+            if cur:
+                out.append(cur)
+            provider, _, model = s.partition("/")
+            cur = {"provider": provider, "model": model,
+                   "tokens": {k: 0 for k in COST_KEYS}, "reported_cost": 0.0}
+    if cur:
+        out.append(cur)
+    return out
+
+
+def spend_report(days: int | None = None) -> dict:
+    registry = load_models_json()
+    rows = []
+    api_actual = 0.0
+    plan_saved = 0.0
+    by_provider: dict[str, dict] = {}
+    for m in parse_model_stats(days):
+        pr = resolve_price(registry, m["provider"], m["model"])
+        value = cost_usd(m["tokens"], pr["price"])
+        is_plan = pr["plan"]
+        row = {
+            "provider": m["provider"], "model": m["model"], "tokens": m["tokens"],
+            "plan": is_plan, "price": {k: pr["price"].get(k, 0) for k in COST_KEYS},
+            "price_source": pr["source"], "value_usd": value,
+            "reported_cost": round(m.get("reported_cost", 0.0), 4),
+        }
+        rows.append(row)
+        agg = by_provider.setdefault(m["provider"], {"plan": is_plan, "value_usd": 0.0, "actual_usd": 0.0})
+        if is_plan:
+            plan_saved += value
+            agg["value_usd"] += value
+            agg["plan"] = True
+        else:
+            api_actual += value
+            agg["actual_usd"] += value
+    rows.sort(key=lambda r: r["value_usd"], reverse=True)
+    return {
+        "days": days, "rows": rows,
+        "api_actual_usd": round(api_actual, 2),
+        "plan_saved_usd": round(plan_saved, 2),
+        "by_provider": {k: {"plan": v["plan"], "value_usd": round(v["value_usd"], 2),
+                            "actual_usd": round(v["actual_usd"], 4)} for k, v in by_provider.items()},
+        "state": "LOCALLY_MEASURED",
+    }
+
+
+def price_map_for(registry: dict, provider: str, models: list[str]) -> dict:
+    out = {}
+    for model in models:
+        pr = resolve_price(registry, provider, model)
+        out[model] = {**{k: pr["price"].get(k, 0) for k in COST_KEYS},
+                      "plan": pr["plan"], "source": pr["source"]}
+    return out
+
+
 # ---- HTTP handler ----------------------------------------------------------
 SERVER: OpenCodeServer | None = None
 LOG_PATH: str | None = None
+POOLS_PATH = os.environ.get("POOLS_PATH", str(HERE / "pools.json"))
+LOGIN_PROCS: list[subprocess.Popen] = []
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -332,31 +500,89 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, html, "text/html; charset=utf-8")
         elif self.path.startswith("/api/providers"):
             try:
-                self._json(200, {"live": True, "providers": build_providers()})
+                provs = build_providers()
+                self._json(200, {"live": True, "providers": provs,
+                                 "available": available_providers({p["id"] for p in provs})})
+            except Exception as exc:  # noqa: BLE001
+                self._json(500, {"error": sanitize(str(exc))})
+        elif self.path.startswith("/api/stats"):
+            days = None
+            m = re.search(r"[?&]days=(\d+)", self.path)
+            if m:
+                days = int(m.group(1))
+            try:
+                self._json(200, spend_report(days))
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"error": sanitize(str(exc))})
         else:
             self._send(404, b"not found", "text/plain")
 
-    def do_POST(self):
-        if not self.path.startswith("/api/test"):
-            self._send(404, b"not found", "text/plain")
-            return
+    def _body(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
         try:
-            payload = json.loads(self.rfile.read(length) or b"{}")
+            return json.loads(self.rfile.read(length) or b"{}")
         except json.JSONDecodeError:
-            self._json(400, {"error": "invalid json"})
-            return
-        provider = payload.get("provider")
-        model = payload.get("model")
-        if not provider or not model:
-            self._json(400, {"error": "provider and model required"})
-            return
-        result = SERVER.test_model(provider, model, LOG_PATH)
-        result["provider"] = provider
-        result["model"] = model
-        self._json(200, result)
+            return {}
+
+    def do_POST(self):
+        if self.path.startswith("/api/test"):
+            payload = self._body()
+            provider, model = payload.get("provider"), payload.get("model")
+            if not provider or not model:
+                self._json(400, {"error": "provider and model required"})
+                return
+            result = SERVER.test_model(provider, model, LOG_PATH)
+            result["provider"], result["model"] = provider, model
+            self._json(200, result)
+        elif self.path.startswith("/api/pools"):
+            payload = self._body()
+            pools = payload.get("pools")
+            if not isinstance(pools, list):
+                self._json(400, {"error": "pools array required"})
+                return
+            doc = {
+                "version": 1,
+                "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "mode": payload.get("mode", "SHADOW"),
+                "pools": pools,
+            }
+            try:
+                with open(POOLS_PATH, "w") as fh:
+                    json.dump(doc, fh, indent=2, ensure_ascii=False)
+                self._json(200, {"ok": True, "path": POOLS_PATH,
+                                 "pools": len(pools),
+                                 "models": sum(len(p.get("models", [])) for p in pools)})
+            except OSError as exc:
+                self._json(500, {"error": sanitize(str(exc))})
+        elif self.path.startswith("/api/login"):
+            payload = self._body()
+            provider = payload.get("provider")
+            if not provider:
+                self._json(400, {"error": "provider required"})
+                return
+            # Kick off OpenCode's real login flow (may open a browser / print a
+            # device code). We never handle the credential ourselves.
+            try:
+                proc = subprocess.Popen(
+                    [OPENCODE, "providers", "login", provider],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                LOGIN_PROCS.append(proc)
+                self._json(200, {
+                    "started": True, "provider": provider,
+                    "command": f"opencode providers login {provider}",
+                    "hint": "已发起 OpenCode 登录。若未自动打开浏览器，请在终端运行上面的命令完成，然后点“刷新”。",
+                })
+            except Exception as exc:  # noqa: BLE001
+                self._json(200, {
+                    "started": False, "provider": provider,
+                    "command": f"opencode providers login {provider}",
+                    "hint": "无法自动发起，请在终端运行上面的命令完成登录后点“刷新”。",
+                    "error": sanitize(str(exc)),
+                })
+        else:
+            self._send(404, b"not found", "text/plain")
 
 
 def main() -> None:
@@ -371,6 +597,7 @@ def main() -> None:
     print("· starting opencode serve …")
     SERVER.start()
     atexit.register(SERVER.stop)
+    atexit.register(lambda: [p.terminate() for p in LOGIN_PROCS if p.poll() is None])
     for s in (signal.SIGINT, signal.SIGTERM):
         signal.signal(s, lambda *_: (SERVER.stop(), os._exit(0)))
 

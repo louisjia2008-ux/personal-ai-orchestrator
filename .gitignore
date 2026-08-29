@@ -14,3 +14,5 @@ build/
 .coverage
 htmlcov/
 .personal-ai-orchestrator/
+dashboard/pools.json
+node_modules/

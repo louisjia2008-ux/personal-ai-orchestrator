@@ -36,8 +36,22 @@ A front-end control panel for the Personal AI Orchestrator. It runs two ways:
   ESTIMATED / UNKNOWN`). Because OpenCode does not expose plan quota, providers
   default to an `UNKNOWN` hatched track rather than a fake percentage; entering a
   known plan limit turns it into a `LOCALLY_MEASURED` meter.
+- **支出与节省 / Spend & savings** — separates pay-as-you-go **API 实付** from
+  subscription **套餐等值/已省**. Plan usage is priced at each model's *standalone*
+  API rate (`实际单价 × 实际消耗`) to show how much value the flat plan covered —
+  computed from real `opencode stats --models` × the models.dev registry prices
+  (live), or a real on-machine snapshot (standalone).
+- **成本 / 定价 · 延迟** — each provider card expands to a per-model list with the
+  registry unit price ($ in / out per 1M tokens), a 套餐/按量 tag, and the measured
+  latency from the last connection test.
+- **导出 pools.json / Export** — writes the current pool assignment to
+  `dashboard/pools.json` (live) or downloads it (standalone) for a routing daemon
+  to consume.
+- **连接更多厂商 / Connect more** — a "添加厂商" card lists connectable providers;
+  the button triggers OpenCode's real `opencode providers login` (credentials
+  handled entirely by OpenCode), then "刷新状态" re-reads auth.
 - **模型池 / Model pools** — drag any model chip between routing pools
-  (快速通道 / 重度编程 / 推理 / 兜底 / 已禁用·阻断); counts and KPIs update live.
+  (未分配 / 快速通道 / 重度编程 / 推理 / 兜底 / 已禁用·阻断); counts and KPIs update live.
 - **路由模式 / Routing mode** — a 旁路 / 影子 / 主动 (BYPASS / SHADOW / ACTIVE)
   segmented control mirroring the adapter contract, plus a light/dark theme
   toggle.
@@ -53,8 +67,11 @@ A ~300-line stdlib HTTP server that shells out to the real `opencode` CLI:
 | Route | What it does |
 | --- | --- |
 | `GET /` | serves the dashboard (same origin — no CORS) |
-| `GET /api/providers` | authenticated providers + **full** catalogs + endpoints + plan docs, from `opencode providers list` and the `models.json` registry |
+| `GET /api/providers` | authenticated providers + **full** catalogs + per-model **prices** + endpoints + plan docs + a list of connectable providers, from `opencode providers list` and the `models.json` registry |
 | `POST /api/test` | a real, bounded connection test for `{provider, model}` — switches a disposable session to the model and runs one tiny turn; returns `ok` / `model_unavailable` / `error` with latency and token usage |
+| `GET /api/stats` | real spend & savings from `opencode stats --models` × registry prices: pay-as-you-go actual vs plan API-equivalent value, per provider and per model |
+| `POST /api/pools` | writes the current pool assignment to `dashboard/pools.json` |
+| `POST /api/login` | starts OpenCode's real `opencode providers login <provider>` (interactive login handled by OpenCode; the bridge never sees the credential) |
 
 **Credential safety.** The bridge never reads, stores, logs, or returns credential
 *values*. Provider auth is reported only as presence + type + the env-var *name*;

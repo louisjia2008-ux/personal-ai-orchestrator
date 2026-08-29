@@ -218,6 +218,41 @@
   .flow .step{background:var(--surface-2); border:1px solid var(--border); border-radius:6px; padding:3px 8px}
   .flow .arr{color:var(--ink-3)}
 
+  /* spend & savings */
+  .spend-zone{margin:0 0 22px}
+  .spend-grid{display:grid; grid-template-columns:minmax(0,1.7fr) minmax(0,1fr); gap:14px}
+  @media(max-width:820px){.spend-grid{grid-template-columns:1fr}}
+  .spend-hero{background:linear-gradient(135deg,color-mix(in srgb,var(--accent-soft) 75%,var(--surface)),var(--surface)); border:1px solid color-mix(in srgb,var(--accent) 22%,var(--border)); border-radius:var(--radius); padding:18px 18px 16px; box-shadow:var(--shadow-sm)}
+  .hero-lab{font-size:12px; color:var(--accent-2); font-weight:650; letter-spacing:.02em}
+  .hero-big{font-size:clamp(34px,6vw,46px); font-weight:720; letter-spacing:-.03em; color:var(--ink); line-height:1.05; margin:4px 0 6px}
+  .hero-sub{font-size:12px; color:var(--ink-2); max-width:46ch}
+  .sbars{display:flex; flex-direction:column; gap:9px; margin-top:14px}
+  .sbar-row{display:flex; align-items:center; gap:9px}
+  .sbar-name{font-size:12.5px; color:var(--ink-2); min-width:118px}
+  .sbar-track{position:relative; flex:1; height:9px; background:var(--surface-3); border-radius:6px; overflow:hidden}
+  .sbar-fill{position:absolute; left:0; top:0; bottom:0; border-radius:6px; transition:width .5s cubic-bezier(.2,.7,.2,1)}
+  .sbar-val{font-size:12.5px; font-weight:600; min-width:74px; text-align:right}
+  .spend-side{display:flex; flex-direction:column; gap:14px}
+  .scard{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:15px 16px; box-shadow:var(--shadow-sm); flex:1}
+  .scard.accent{border-color:color-mix(in srgb,var(--accent) 26%,var(--border)); background:color-mix(in srgb,var(--accent-soft) 40%,var(--surface))}
+  .scard .lab{font-size:11.5px; color:var(--ink-3); font-weight:600}
+  .scard .mid{font-size:26px; font-weight:700; letter-spacing:-.02em; margin-top:4px}
+  .scard .ssub{font-size:11.5px; color:var(--ink-2); margin-top:2px}
+  .spend-rows{margin-top:14px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; box-shadow:var(--shadow-sm)}
+  .mrow{display:flex; align-items:center; gap:9px; padding:5px 0}
+  .mname{font-size:12.5px; font-weight:600}
+  .chip-plan{font-size:10.5px; font-weight:650; padding:1px 7px; border-radius:6px; white-space:nowrap}
+  .chip-plan.is-plan{background:var(--accent-soft); color:var(--accent-2)}
+  .chip-plan.is-payg{background:var(--surface-2); color:var(--ink-2); border:1px solid var(--border-2)}
+  .ptag{font-size:12px; color:var(--ink-2)} .ptag .per{color:var(--ink-3); font-size:10px; margin-left:1px}
+  .models-det{margin-top:2px; border-top:1px dashed var(--border-2); padding-top:10px}
+  .models-det summary{cursor:pointer; font-size:12px; color:var(--ink-2); list-style:none; display:flex; align-items:center; gap:8px}
+  .models-det summary::-webkit-details-marker{display:none}
+  .models-det summary::before{content:"▸"; color:var(--ink-3); transition:transform .15s}
+  .models-det[open] summary::before{transform:rotate(90deg)}
+  .modellist{display:flex; flex-direction:column; gap:2px; margin-top:9px}
+  .add-list{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px}
+
   .toast{position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px); background:var(--ink); color:var(--bg); padding:10px 16px; border-radius:10px; font-size:13px; box-shadow:var(--shadow-md); opacity:0; pointer-events:none; transition:opacity .25s,transform .25s; z-index:50; display:flex; align-items:center; gap:9px; max-width:90vw}
   .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
   .toast svg{width:16px; height:16px; color:var(--accent-2); flex:none}
@@ -253,6 +288,8 @@
 <main>
   <div class="kpis" id="kpis"></div>
 
+  <section id="spendZone" class="spend-zone"></section>
+
   <div class="cols">
     <section>
       <div class="zone-head">
@@ -266,6 +303,7 @@
       <div class="zone-head">
         <h2>模型池</h2>
         <span class="hint">拖动模型即可路由</span>
+        <button class="btn btn-sm" id="exportPools" style="margin-left:auto">导出 pools.json</button>
       </div>
       <div class="board" id="board"></div>
     </section>
@@ -371,11 +409,122 @@
       id:p.id, name:p.name, endpoint:p.endpoint||"", color:PALETTE[i%PALETTE.length],
       connected:p.connected!==false, credType:p.credType||"api", envVar:p.envVar||null,
       fp:p.credType==="env"?("$"+p.envVar):"由 OpenCode 保管", doc:p.doc||null,
-      health:"unknown", testModel:p.testModel||(p.models[0]||""),
+      health:"unknown", testModel:p.testModel||(p.models[0]||""), latency:null,
+      pricing:p.pricing||{},
       plan:{ kind:PLAN_KIND[p.id]||(p.credType==="env"?"环境变量":"API 套餐"),
         unit:"令牌", used:null, cap:null, capLabel:null, state:"UNKNOWN" },
       models:p.models||[],
     }));
+  }
+
+  // ---- Pricing & spend helpers ----
+  const fmtUsd = n => "$" + (n==null?0:n).toLocaleString("en-US",{minimumFractionDigits:2, maximumFractionDigits:2});
+  function demoPrice(pid, model){
+    const hs=/highspeed/i.test(model);
+    if(/minimax/i.test(pid)) return {input:hs?0.6:0.3, output:hs?2.4:1.2, plan:true, source:"minimax-cn"};
+    if(/zai/i.test(pid)){
+      if(/flash/i.test(model)) return {input:0.1, output:0.3, plan:true, source:"zhipuai"};
+      if(/turbo/i.test(model)) return {input:1.2, output:4, plan:true, source:"zhipuai"};
+      if(/glm-4/i.test(model)) return {input:0.6, output:2.2, plan:true, source:"zhipuai"};
+      return {input:hs?2.8:1.4, output:hs?8.8:4.4, plan:true, source:"zhipuai"};
+    }
+    if(/deepseek/i.test(pid)) return /pro/i.test(model)
+      ? {input:0.28, output:1.1, plan:false, source:"deepseek"}
+      : {input:0.14, output:0.28, plan:false, source:"deepseek"};
+    return {input:0, output:0, plan:false, source:pid};
+  }
+  function attachSeedPricing(p){
+    p.pricing={}; p.models.forEach(m=>{ p.pricing[m]=demoPrice(p.id,m); }); return p;
+  }
+  // Real snapshot measured on this machine (opencode stats × registry prices),
+  // shown as a snapshot in standalone demo mode; live mode fetches /api/stats.
+  const SEED_SPEND = {
+    api_actual_usd:0.02, plan_saved_usd:230.67, state:"LOCALLY_MEASURED", snapshot:true,
+    by_provider:{
+      "minimax-cn-coding-plan":{plan:true, value_usd:148.88, actual_usd:0},
+      "zai-coding-plan":{plan:true, value_usd:81.78, actual_usd:0},
+      "deepseek":{plan:false, value_usd:0, actual_usd:0.02},
+    },
+    rows:[
+      {provider:"minimax-cn-coding-plan", model:"MiniMax-M3", plan:true, value_usd:148.88},
+      {provider:"zai-coding-plan", model:"glm-5.3", plan:true, value_usd:58.43},
+      {provider:"zai-coding-plan", model:"glm-5.2", plan:true, value_usd:23.36},
+      {provider:"minimax-cn-coding-plan", model:"MiniMax-M2.7", plan:true, value_usd:0},
+      {provider:"deepseek", model:"deepseek-v4-pro", plan:false, value_usd:0.01},
+    ],
+  };
+
+  function providerColor(pid){ const p=providerById(pid); return p?p.color:"var(--ink-3)"; }
+  function shortName(pid){ const p=providerById(pid); return p?p.name:pid; }
+
+  function renderSpend(){
+    const zone=$("#spendZone"); if(!zone) return;
+    const s=state.spend; if(!s){ zone.innerHTML=""; return; }
+    const planRows=Object.entries(s.by_provider).filter(([,v])=>v.plan && v.value_usd>0)
+      .sort((a,b)=>b[1].value_usd-a[1].value_usd);
+    const maxPlan=Math.max(1,...planRows.map(([,v])=>v.value_usd));
+    const total=(s.plan_saved_usd||0)+(s.api_actual_usd||0);
+    const badge = state.live ? "LOCALLY_MEASURED" : (s.snapshot?"快照 · 本机":"演示");
+    const bars=planRows.map(([pid,v])=>`
+      <div class="sbar-row">
+        <span class="cdot" style="background:${providerColor(pid)}"></span>
+        <span class="sbar-name">${shortName(pid)}</span>
+        <span class="sbar-track"><span class="sbar-fill" style="width:${Math.max(4,v.value_usd/maxPlan*100)}%;background:${providerColor(pid)}"></span></span>
+        <span class="sbar-val mono">${fmtUsd(v.value_usd)}</span>
+      </div>`).join("");
+    const topRows=(s.rows||[]).filter(r=>r.value_usd>0).slice(0,5);
+    const maxRow=Math.max(1,...topRows.map(r=>r.value_usd));
+    const rows=topRows.map(r=>`
+      <div class="mrow">
+        <span class="cdot" style="background:${providerColor(r.provider)}"></span>
+        <span class="mono mname">${r.model}</span>
+        <span class="chip-plan ${r.plan?'is-plan':'is-payg'}">${r.plan?'套餐':'按量'}</span>
+        <span class="sbar-track" style="flex:1"><span class="sbar-fill" style="width:${Math.max(3,r.value_usd/maxRow*100)}%;background:${r.plan?'var(--accent)':'var(--ink-3)'}"></span></span>
+        <span class="sbar-val mono">${fmtUsd(r.value_usd)}</span>
+      </div>`).join("");
+    zone.innerHTML=`
+      <div class="zone-head">
+        <h2>支出与节省</h2>
+        <span class="hint">按真实调用量 × 独立 API 单价</span>
+        <span class="qbadge measured" style="margin-left:auto">${badge}</span>
+      </div>
+      <div class="spend-grid">
+        <div class="spend-hero">
+          <div class="hero-lab">套餐已为你省下</div>
+          <div class="hero-big mono">${fmtUsd(s.plan_saved_usd)}</div>
+          <div class="hero-sub">这些回合若按各模型的独立 API 单价计费需要这么多——而你只付了固定订阅费。</div>
+          <div class="sbars">${bars||'<div class="hero-sub">暂无套餐用量</div>'}</div>
+        </div>
+        <div class="spend-side">
+          <div class="scard"><div class="lab">API 实付（按量）</div><div class="mid mono">${fmtUsd(s.api_actual_usd)}</div><div class="ssub">DeepSeek 等按量厂商累计</div></div>
+          <div class="scard accent"><div class="lab">等值消费合计</div><div class="mid mono">${fmtUsd(total)}</div><div class="ssub">套餐等值 + API 实付</div></div>
+        </div>
+      </div>
+      <div class="spend-rows">
+        <div class="row-lab" style="margin:2px 2px 8px">按模型 · 等值消费 Top 5</div>
+        ${rows||'<div class="hero-sub">暂无数据</div>'}
+      </div>`;
+  }
+
+  function modelsBlock(p){
+    const items=p.models.map(m=>{
+      const pr=(p.pricing||{})[m]||{};
+      const price = (pr.input!=null&&(pr.input||pr.output))
+        ? `<span class="ptag mono">$${pr.input}/$${pr.output}<span class="per">/1M</span></span>`
+        : `<span class="ptag mono" style="color:var(--ink-3)">—</span>`;
+      const tag = pr.plan ? `<span class="chip-plan is-plan">套餐</span>`
+        : (pr.plan===false ? `<span class="chip-plan is-payg">按量</span>` : "");
+      return `<div class="mrow">
+          <span class="cdot" style="background:${p.color}"></span>
+          <span class="mono mname">${m}</span>${tag}
+          <span style="margin-left:auto;display:flex;gap:8px;align-items:center">${price}</span>
+        </div>`;
+    }).join("");
+    const lat = p.latency!=null ? `<span class="mono" style="color:var(--ink-2)">· 实测延迟 ${p.latency} ms</span>` : "";
+    return `<details class="models-det">
+      <summary>模型与定价 <span class="mono" style="color:var(--ink-3)">${p.models.length} 个</span> ${lat}</summary>
+      <div class="modellist">${items}</div>
+    </details>`;
   }
 
   const $ = s => document.querySelector(s);
@@ -494,9 +643,22 @@
           </div>
           ${statusPill(p)}
         </div>
-        <div class="pcard-body">${keyBlock(p)}${quotaBlock(p)}</div>`;
+        <div class="pcard-body">${keyBlock(p)}${quotaBlock(p)}${modelsBlock(p)}</div>`;
       wrap.appendChild(c);
     });
+    if(state.live && state.available && state.available.length){
+      const c=el("div","pcard");
+      c.innerHTML=`<div class="pcard-top">
+          <span class="pdot" style="background:var(--ink-3)"></span>
+          <div class="pmeta"><div class="name">添加厂商</div><div class="pid">通过 OpenCode 登录连接更多厂商</div></div>
+          <button class="btn btn-sm" data-refresh>刷新状态</button>
+        </div>
+        <div class="pcard-body">
+          <div class="add-list">${state.available.map(a=>`<button class="btn btn-sm" data-login="${a.id}" data-name="${a.name}">${IC.bolt}登录 ${a.name}</button>`).join("")}</div>
+          ${state.loginPending?`<div class="safenote">${IC.lock}<span>已为 <b>${state.loginPending}</b> 发起 <span class="mono">opencode providers login</span>，按提示在浏览器/终端完成后点“刷新状态”。</span></div>`:`<div class="safenote">${IC.lock}<span>登录全程由 OpenCode 处理，密钥不经过本面板。</span></div>`}
+        </div>`;
+      wrap.appendChild(c);
+    }
   }
 
   function modelHealth(key){ const p=providerById(key.split("/")[0]); return p?p.health:"ok"; }
@@ -565,6 +727,7 @@
           body:JSON.stringify({provider:p.id, model:p.testModel})});
         const r=await res.json();
         p.testing=false;
+        p.latency=r.latency_ms!=null?r.latency_ms:p.latency;
         const ok=r.state==="ok";
         p.health=ok?"ok":(r.state==="model_unavailable"?"warn":"warn");
         if(!ok) p.healthNote = r.state==="model_unavailable" ? "模型不可用" : "连接异常";
@@ -618,7 +781,45 @@
     if(seg){ state.mode=seg.dataset.mode;
       document.querySelectorAll(".seg button").forEach(b=>b.setAttribute("aria-pressed",String(b===seg)));
       renderKpis(); toast(`路由模式 · ${MODE_LABEL[state.mode]}`,"ok"); return; }
+
+    if(e.target.closest("#exportPools")){ exportPools(); return; }
+
+    const lg=e.target.closest("[data-login]");
+    if(lg){ loginProvider(lg.dataset.login, lg.dataset.name||lg.dataset.login); return; }
+
+    const rf=e.target.closest("[data-refresh]");
+    if(rf){ toast("正在刷新厂商状态…","ok"); init(); return; }
   });
+
+  async function exportPools(){
+    const pools=state.pools.map(p=>({id:p.id, name:p.name, desc:p.desc, models:p.models}));
+    if(state.live){
+      try{
+        const res=await fetch("/api/pools",{method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify({mode:state.mode, pools})});
+        const r=await res.json();
+        if(r.ok) toast(`已写入 ${r.path}（${r.pools} 池 / ${r.models} 模型）`,"ok");
+        else toast("导出失败","warn");
+      }catch(e){ toast("导出失败：后端不可用","warn"); }
+    } else {
+      const doc={version:1, mode:state.mode, pools};
+      const blob=new Blob([JSON.stringify(doc,null,2)],{type:"application/json"});
+      const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="pools.json";
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
+      toast("已下载 pools.json","ok");
+    }
+  }
+
+  async function loginProvider(id,name){
+    if(!state.live){ toast(`演示模式：${name} 登录为模拟`,"ok"); return; }
+    try{
+      const res=await fetch("/api/login",{method:"POST",headers:{"content-type":"application/json"},
+        body:JSON.stringify({provider:id})});
+      const r=await res.json();
+      state.loginPending=id; renderProviders();
+      toast(`${name}：${r.hint||"已发起登录"}`,"ok");
+    }catch(e){ toast("发起登录失败：后端不可用","warn"); }
+  }
 
   document.addEventListener("change",e=>{
     const cap=e.target.closest("[data-cap]");
@@ -652,24 +853,30 @@
   }
 
   async function init(){
-    let live=null;
+    let live=null, avail=[];
     try{
       const res=await fetch("/api/providers",{cache:"no-store"});
       if(res.ok){ const j=await res.json();
-        if(j && j.live && Array.isArray(j.providers) && j.providers.length) live=j.providers; }
+        if(j && j.live && Array.isArray(j.providers) && j.providers.length){ live=j.providers; avail=j.available||[]; } }
     }catch(_){ /* opened standalone / as an artifact — fall back to demo */ }
+    state.available = live ? avail : [];
 
     if(live){
       state.live=true;
       state.providers=providersFromLive(live);
       state.pools=buildPools(state.providers,{});
+      try{
+        const sres=await fetch("/api/stats",{cache:"no-store"});
+        if(sres.ok) state.spend=await sres.json();
+      }catch(_){ state.spend=SEED_SPEND; }
     } else {
       state.live=false;
-      state.providers=SEED.providers.map(p=>({...p, plan:{...p.plan}}));
+      state.providers=SEED.providers.map(p=>attachSeedPricing({...p, plan:{...p.plan}}));
       state.pools=buildPools(state.providers, SEED.curated);
+      state.spend=SEED_SPEND;
     }
     setSourceBadge();
-    renderKpis(); renderProviders(); renderBoard(); syncToggleIcon();
+    renderKpis(); renderProviders(); renderBoard(); renderSpend(); syncToggleIcon();
   }
 
   syncToggleIcon();
