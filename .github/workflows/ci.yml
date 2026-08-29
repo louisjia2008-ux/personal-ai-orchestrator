@@ -91,6 +91,8 @@ jobs:
 
           cp "$GITHUB_WORKSPACE/integrations/opencode/plugin.ts" \
             "$fixture/.opencode/plugins/orchestrator.ts"
+          cp "$GITHUB_WORKSPACE/integrations/opencode/decision_contract.ts" \
+            "$fixture/.opencode/plugins/decision_contract.ts"
           cat > "$fixture/.opencode/package.json" <<'EOF'
           {
             "private": true,
