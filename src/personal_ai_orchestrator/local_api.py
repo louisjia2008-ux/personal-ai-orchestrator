@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
@@ -17,14 +18,27 @@ from personal_ai_orchestrator.routing_service import RoutingService
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore
 
 MAX_REQUEST_BYTES = 64 * 1024
-_ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
+_ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def _host_allowed(value: str | None) -> bool:
     if value is None:
         return False
-    host = value.rsplit(":", 1)[0] if not value.startswith("[") else value.split("]", 1)[0] + "]"
-    return host in _ALLOWED_HOSTS
+    try:
+        parsed = urlsplit(f"http://{value}")
+    except ValueError:
+        return False
+    return parsed.hostname in _ALLOWED_HOSTS
+
+
+def _origin_allowed(value: str | None) -> bool:
+    if value is None:
+        return True
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    return parsed.scheme == "http" and parsed.hostname in _ALLOWED_HOSTS
 
 
 def _route_thread_safe(service: RoutingService, request: RoutingRequest):
@@ -68,11 +82,7 @@ def handler_for(service: RoutingService) -> type[BaseHTTPRequestHandler]:
             if not _host_allowed(self.headers.get("host")):
                 self._json(403, {"error": "invalid_host"})
                 return
-            origin = self.headers.get("origin")
-            if origin is not None and not any(
-                origin.startswith(f"http://{host}")
-                for host in ("127.0.0.1", "localhost", "[::1]")
-            ):
+            if not _origin_allowed(self.headers.get("origin")):
                 self._json(403, {"error": "invalid_origin"})
                 return
             content_type = self.headers.get("content-type", "").split(";", 1)[0].strip().lower()
