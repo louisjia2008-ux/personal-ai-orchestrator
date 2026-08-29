@@ -7,12 +7,14 @@ and returns sanitized errors. Provider credentials never transit this endpoint.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from pydantic import ValidationError
 
 from personal_ai_orchestrator.opencode_contract import RoutingRequest
 from personal_ai_orchestrator.routing_service import RoutingService
+from personal_ai_orchestrator.safety_kernel import SafetyKernelStore
 
 MAX_REQUEST_BYTES = 64 * 1024
 _ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
@@ -23,6 +25,24 @@ def _host_allowed(value: str | None) -> bool:
         return False
     host = value.rsplit(":", 1)[0] if not value.startswith("[") else value.split("]", 1)[0] + "]"
     return host in _ALLOWED_HOSTS
+
+
+def _route_thread_safe(service: RoutingService, request: RoutingRequest):
+    """Use a request-local SQLite connection when the durable store is file backed.
+
+    ``ThreadingHTTPServer`` executes handlers on worker threads. Sharing one sqlite3 connection
+    across those threads would weaken the source-of-truth boundary and fails under Python's
+    default thread checks. A short-lived connection per request keeps SQLite/WAL as the durable
+    serialization point without disabling SQLite's thread-safety guard.
+    """
+
+    if service.store.path == ":memory:":
+        raise RuntimeError("threaded local API requires a file-backed SafetyKernelStore")
+    request_store = SafetyKernelStore(service.store.path)
+    try:
+        return replace(service, store=request_store).route(request)
+    finally:
+        request_store.close()
 
 
 def handler_for(service: RoutingService) -> type[BaseHTTPRequestHandler]:
@@ -71,7 +91,7 @@ def handler_for(service: RoutingService) -> type[BaseHTTPRequestHandler]:
                 raw = self.rfile.read(length)
                 payload = json.loads(raw)
                 request = RoutingRequest.model_validate(payload)
-                decision = service.route(request)
+                decision = _route_thread_safe(service, request)
             except (UnicodeDecodeError, json.JSONDecodeError, ValidationError, ValueError):
                 self._json(400, {"error": "invalid_routing_request"})
                 return
@@ -86,6 +106,8 @@ def handler_for(service: RoutingService) -> type[BaseHTTPRequestHandler]:
 def serve(service: RoutingService, *, host: str = "127.0.0.1", port: int = 8765) -> None:
     if host not in {"127.0.0.1", "::1", "localhost"}:
         raise ValueError("local routing API must bind to loopback")
+    if service.store.path == ":memory:":
+        raise ValueError("threaded local routing API requires a durable file-backed state store")
     server = ThreadingHTTPServer((host, port), handler_for(service))
     server.serve_forever()
 
