@@ -4,7 +4,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from personal_ai_orchestrator.model_registry import EvidenceConfidence
-from personal_ai_orchestrator.quota_capabilities import quota_observability
+from personal_ai_orchestrator.quota_capabilities import (
+    all_quota_observability,
+    quota_observability,
+)
 from personal_ai_orchestrator.quota_cli import load_snapshot
 from personal_ai_orchestrator.quota_collectors.minimax import normalize_minimax_quota
 
@@ -27,6 +30,17 @@ def test_quota_observability_answers_provider_plan_identity() -> None:
     assert zai.official_api is True
     assert zai.confidence is EvidenceConfidence.ESTIMATED
     assert zai.runtime_status == "DEFERRED_PENDING_QUOTA_RESET_OR_AUTH"
+
+
+def test_initial_provider_classes_all_have_explicit_audit_records() -> None:
+    records = all_quota_observability()
+    providers = {record.provider_id for record in records}
+    assert {"minimax", "zai", "openai", "anthropic", "deepseek", "local"} <= providers
+
+    assert quota_observability("openai", "codex-chatgpt-plan").confidence is EvidenceConfidence.UNKNOWN
+    assert quota_observability("anthropic", "claude-plan").confidence is EvidenceConfidence.UNKNOWN
+    assert quota_observability("deepseek", "api").confidence is EvidenceConfidence.EXACT
+    assert quota_observability("local", "unmetered").runtime_status == "UNMETERED_CONFIG_TRUTH"
 
 
 def test_unknown_provider_plan_has_no_fabricated_capability() -> None:
