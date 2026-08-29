@@ -2,15 +2,9 @@
 """Local backend bridge for the Orchestrator Console dashboard.
 
 Serves ``dashboard/index.html`` and a tiny JSON API that shells out to the real
-local OpenCode install, so the panel can show real providers / catalogs and run
-a real connection test:
-
-    GET  /                 -> the dashboard (same origin, so no CORS needed)
-    GET  /api/providers    -> authenticated providers, full model catalogs,
-                              endpoints and plan docs (from OpenCode metadata)
-    POST /api/test         -> a real, bounded connection test for {provider,model}:
-                              switch a disposable session to the model and run one
-                              tiny turn; classify ok / model_unavailable / error
+local OpenCode install. The bridge binds only to loopback and additionally checks
+Host/Origin on API requests so a remote web page cannot use the browser as a
+confused deputy against the local control surface.
 
 Credential safety: this bridge never reads, stores, logs, or returns credential
 *values*. Provider auth is reported only as presence + type + the env-var *name*.
@@ -77,8 +71,13 @@ class OpenCodeServer:
     def _init_fixture(self) -> None:
         f = self.fixture
         subprocess.run(["git", "-C", f, "init", "-q"], check=False)
-        subprocess.run(["git", "-C", f, "config", "user.email", "bridge@example.invalid"], check=False)
-        subprocess.run(["git", "-C", f, "config", "user.name", "Console Bridge"], check=False)
+        subprocess.run(
+            ["git", "-C", f, "config", "user.email", "bridge@example.invalid"],
+            check=False,
+        )
+        subprocess.run(
+            ["git", "-C", f, "config", "user.name", "Console Bridge"], check=False
+        )
         Path(f, "README.md").write_text("# Orchestrator Console bridge workspace\n")
 
     def start(self) -> None:
@@ -118,10 +117,14 @@ class OpenCodeServer:
         return parsed.get("data", parsed) if isinstance(parsed, dict) else parsed
 
     def test_model(self, provider: str, model: str, log_path: str | None) -> dict:
+        """Run a bounded exact-provider/model smoke in a disposable session."""
+
         t0 = time.time()
         sid = None
         try:
-            sid = self._req("POST", "/api/session", {"location": {"directory": self.fixture}})["id"]
+            sid = self._req(
+                "POST", "/api/session", {"location": {"directory": self.fixture}}
+            )["id"]
             payload = {"model": {"providerID": provider, "id": model}}
             self._req("POST", f"/api/session/{sid}/model", payload)
             self._req(
@@ -147,24 +150,61 @@ class OpenCodeServer:
                     "message": "凭证有效，但该模型当前不可用（OpenCode: ModelUnavailable）",
                 }
             if assistant and assistant.get("error"):
-                return {"state": "error", "latency_ms": latency,
-                        "message": "厂商返回错误", "detail": sanitize(str(assistant.get("error")))}
+                return {
+                    "state": "error",
+                    "latency_ms": latency,
+                    "message": "厂商返回错误",
+                    "detail": sanitize(str(assistant.get("error"))),
+                }
             if assistant and assistant.get("finish") == "stop":
+                observed = assistant.get("model") or {}
+                if observed.get("providerID") != provider:
+                    return {
+                        "state": "error",
+                        "latency_ms": latency,
+                        "message": "连接测试失败：实际 provider 与请求不一致",
+                        "detail": "PROVIDER_MISMATCH",
+                    }
+                if observed.get("id") != model:
+                    return {
+                        "state": "error",
+                        "latency_ms": latency,
+                        "message": "连接测试失败：实际 model 与请求不一致",
+                        "detail": "MODEL_MISMATCH",
+                    }
+                reply = (assistant.get("text") or "").strip()
+                if reply != "pong":
+                    return {
+                        "state": "error",
+                        "latency_ms": latency,
+                        "message": "连接测试失败：确定性输出校验未通过",
+                        "detail": "OUTPUT_MISMATCH",
+                    }
                 return {
                     "state": "ok",
                     "latency_ms": latency,
-                    "message": "连接正常，鉴权通过",
+                    "message": "连接正常，鉴权与指定模型均已验证",
                     "tokens": assistant.get("tokens"),
-                    "reply": (assistant.get("text") or "").strip()[:40],
+                    "reply": reply,
+                    "observed_model": f"{provider}/{model}",
                 }
-            return {"state": "timeout", "latency_ms": latency,
-                    "message": "未在时限内收到回复"}
+            return {
+                "state": "timeout",
+                "latency_ms": latency,
+                "message": "未在时限内收到回复",
+            }
         except urllib.error.HTTPError as exc:
-            return {"state": "error", "latency_ms": int((time.time() - t0) * 1000),
-                    "message": f"请求失败 HTTP {exc.code}"}
+            return {
+                "state": "error",
+                "latency_ms": int((time.time() - t0) * 1000),
+                "message": f"请求失败 HTTP {exc.code}",
+            }
         except Exception as exc:  # noqa: BLE001
-            return {"state": "error", "latency_ms": int((time.time() - t0) * 1000),
-                    "message": sanitize(str(exc))}
+            return {
+                "state": "error",
+                "latency_ms": int((time.time() - t0) * 1000),
+                "message": sanitize(str(exc)),
+            }
         finally:
             if sid:
                 try:
@@ -188,6 +228,7 @@ class OpenCodeServer:
                 "text": text,
                 "tokens": info.get("tokens"),
                 "finish": info.get("finish"),
+                "model": info.get("model"),
                 "error": info.get("error"),
                 "completed": bool((info.get("time") or {}).get("completed")),
             }
@@ -231,7 +272,8 @@ def load_models_json() -> dict:
 
 
 def authed_provider_names() -> set[str]:
-    """Display names in the auth.json credentials block (metadata only)."""
+    """Display names in the provider-list credential block (metadata only)."""
+
     raw = ANSI.sub("", run_cli("providers", "list"))
     cred_block = raw.split("Environment", 1)[0]
     names = set()
@@ -239,7 +281,6 @@ def authed_provider_names() -> set[str]:
         line = line.strip()
         if line.startswith("●"):
             name = line.lstrip("● ").rsplit("  ", 1)[0].strip()
-            # trailing credential-type word (e.g. "api") lives after the name
             name = re.sub(r"\s+(api|oauth)$", "", name)
             names.add(name.strip())
     return names
@@ -260,46 +301,57 @@ def build_providers() -> list[dict]:
                     return m
         return models[0] if models else ""
 
-    # 1) API-key providers present in auth.json
     for name in authed:
         pid = name_to_id.get(name)
         if not pid or pid in seen:
             continue
         entry = registry.get(pid, {})
         models = sorted((entry.get("models") or {}).keys())
-        out.append({
-            "id": pid, "name": name, "endpoint": endpoint_of(entry),
-            "credType": "api", "connected": True, "envVar": None,
-            "doc": entry.get("doc"), "models": models,
-            "pricing": price_map_for(registry, pid, models),
-            "testModel": cheap_model(models), "health": "unknown",
-        })
+        out.append(
+            {
+                "id": pid,
+                "name": name,
+                "endpoint": endpoint_of(entry),
+                "credType": "api",
+                "connected": True,
+                "envVar": None,
+                "doc": entry.get("doc"),
+                "models": models,
+                "pricing": price_map_for(registry, pid, models),
+                "testModel": cheap_model(models),
+                "health": "unknown",
+            }
+        )
         seen.add(pid)
 
-    # 2) Environment-variable providers whose var is actually set
     for pid, entry in registry.items():
         if pid in seen or not isinstance(entry, dict):
             continue
         env_vars = entry.get("env") or []
         set_var = next((v for v in env_vars if os.environ.get(v)), None)
-        # only surface env providers that have a real catalog and a set var,
-        # and that are not merely the env alias of an already-authed api plan
         if set_var and entry.get("models") and pid in {"deepseek"}:
             models = sorted(entry["models"].keys())
-            out.append({
-                "id": pid, "name": entry.get("name", pid), "endpoint": endpoint_of(entry),
-                "credType": "env", "connected": True, "envVar": set_var,
-                "doc": entry.get("doc"), "models": models,
-                "pricing": price_map_for(registry, pid, models),
-                "testModel": cheap_model(models), "health": "unknown",
-            })
+            out.append(
+                {
+                    "id": pid,
+                    "name": entry.get("name", pid),
+                    "endpoint": endpoint_of(entry),
+                    "credType": "env",
+                    "connected": True,
+                    "envVar": set_var,
+                    "doc": entry.get("doc"),
+                    "models": models,
+                    "pricing": price_map_for(registry, pid, models),
+                    "testModel": cheap_model(models),
+                    "health": "unknown",
+                }
+            )
             seen.add(pid)
 
     out.sort(key=lambda p: (p["credType"] != "api", p["name"]))
     return out
 
 
-# A curated set of well-known providers offered for "connect via login".
 CONNECTABLE = ["anthropic", "openai", "minimax", "zai", "openrouter", "google"]
 
 
@@ -313,10 +365,15 @@ def list_projects() -> list[dict]:
         wt = p.get("worktree") or ""
         if p.get("id") == "global" or not wt or wt == "/":
             continue
-        # skip disposable temp workspaces (mktemp fixtures)
         if "/T/tmp." in wt or wt.startswith("/tmp/") or "/var/folders/" in wt:
             continue
-        out.append({"id": p.get("id"), "path": wt, "name": os.path.basename(wt.rstrip("/")) or wt})
+        out.append(
+            {
+                "id": p.get("id"),
+                "path": wt,
+                "name": os.path.basename(wt.rstrip("/")) or wt,
+            }
+        )
     return out
 
 
@@ -338,10 +395,6 @@ def endpoint_of(entry: dict) -> str:
     return m.group(1) if m else ""
 
 
-# ---- Pricing & spend (all figures from the real models.dev registry) -------
-# Base providers that carry standalone pay-as-you-go prices for a model that a
-# subscription plan lists at $0. Used to compute the API-equivalent value a plan
-# covered ("how much you'd have paid without the plan").
 BASE_PRICE_PROVIDERS = {
     "minimax": ["minimax-cn", "minimax"],
     "glm": ["zhipuai", "zai"],
@@ -365,8 +418,6 @@ def _family(provider: str, model: str) -> str | None:
 
 
 def resolve_price(registry: dict, provider: str, model: str) -> dict:
-    """Return {price, plan, source}. If the provider's own price is all-zero
-    (a plan), fall back to a base provider's standalone price for the same model."""
     own = _model_cost(registry, provider, model)
     if own and any(float(own.get(k, 0) or 0) for k in COST_KEYS):
         return {"price": own, "plan": False, "source": provider}
@@ -375,12 +426,21 @@ def resolve_price(registry: dict, provider: str, model: str) -> dict:
         cost = _model_cost(registry, base, model)
         if cost and any(float(cost.get(k, 0) or 0) for k in COST_KEYS):
             return {"price": cost, "plan": True, "source": base}
-    return {"price": own or {k: 0 for k in COST_KEYS}, "plan": own is not None, "source": provider}
+    return {
+        "price": own or {k: 0 for k in COST_KEYS},
+        "plan": own is not None,
+        "source": provider,
+    }
 
 
 def cost_usd(tokens: dict, price: dict) -> float:
-    # prices are USD per 1,000,000 tokens
-    return round(sum((tokens.get(k, 0) or 0) / 1e6 * float(price.get(k, 0) or 0) for k in COST_KEYS), 4)
+    return round(
+        sum(
+            (tokens.get(k, 0) or 0) / 1e6 * float(price.get(k, 0) or 0)
+            for k in COST_KEYS
+        ),
+        4,
+    )
 
 
 def _num(text: str) -> float:
@@ -411,19 +471,22 @@ def parse_model_stats(days: int | None = None, project: str | None = None) -> li
     except StopIteration:
         return []
     labels = {
-        "Input Tokens": "input", "Output Tokens": "output",
-        "Cache Read": "cache_read", "Cache Write": "cache_write", "Cost": "reported_cost",
+        "Input Tokens": "input",
+        "Output Tokens": "output",
+        "Cache Read": "cache_read",
+        "Cache Write": "cache_write",
+        "Cost": "reported_cost",
     }
     out: list[dict] = []
     cur: dict | None = None
-    for ln in lines[start + 1:]:
+    for ln in lines[start + 1 :]:
         s = ln.translate(STRIP_BOX).strip()
         if not s:
             continue
         matched = None
         for lab, key in labels.items():
             if s.startswith(lab):
-                matched = (key, s[len(lab):].strip())
+                matched = (key, s[len(lab) :].strip())
                 break
         if matched:
             key, valtext = matched
@@ -436,8 +499,12 @@ def parse_model_stats(days: int | None = None, project: str | None = None) -> li
             if cur:
                 out.append(cur)
             provider, _, model = s.partition("/")
-            cur = {"provider": provider, "model": model,
-                   "tokens": {k: 0 for k in COST_KEYS}, "reported_cost": 0.0}
+            cur = {
+                "provider": provider,
+                "model": model,
+                "tokens": {k: 0 for k in COST_KEYS},
+                "reported_cost": 0.0,
+            }
     if cur:
         out.append(cur)
     return out
@@ -454,13 +521,19 @@ def spend_report(days: int | None = None, project: str | None = None) -> dict:
         value = cost_usd(m["tokens"], pr["price"])
         is_plan = pr["plan"]
         row = {
-            "provider": m["provider"], "model": m["model"], "tokens": m["tokens"],
-            "plan": is_plan, "price": {k: pr["price"].get(k, 0) for k in COST_KEYS},
-            "price_source": pr["source"], "value_usd": value,
+            "provider": m["provider"],
+            "model": m["model"],
+            "tokens": m["tokens"],
+            "plan": is_plan,
+            "price": {k: pr["price"].get(k, 0) for k in COST_KEYS},
+            "price_source": pr["source"],
+            "value_usd": value,
             "reported_cost": round(m.get("reported_cost", 0.0), 4),
         }
         rows.append(row)
-        agg = by_provider.setdefault(m["provider"], {"plan": is_plan, "value_usd": 0.0, "actual_usd": 0.0})
+        agg = by_provider.setdefault(
+            m["provider"], {"plan": is_plan, "value_usd": 0.0, "actual_usd": 0.0}
+        )
         if is_plan:
             plan_saved += value
             agg["value_usd"] += value
@@ -470,12 +543,20 @@ def spend_report(days: int | None = None, project: str | None = None) -> dict:
             agg["actual_usd"] += value
     rows.sort(key=lambda r: r["value_usd"], reverse=True)
     return {
-        "days": days, "project": project, "rows": rows,
+        "days": days,
+        "project": project,
+        "rows": rows,
         "api_actual_usd": round(api_actual, 2),
         "plan_saved_usd": round(plan_saved, 2),
-        "by_provider": {k: {"plan": v["plan"], "value_usd": round(v["value_usd"], 2),
-                            "actual_usd": round(v["actual_usd"], 4)} for k, v in by_provider.items()},
-        "state": "LOCALLY_MEASURED",
+        "by_provider": {
+            k: {
+                "plan": v["plan"],
+                "value_usd": round(v["value_usd"], 2),
+                "actual_usd": round(v["actual_usd"], 4),
+            }
+            for k, v in by_provider.items()
+        },
+        "measurement_method": "LOCALLY_MEASURED",
     }
 
 
@@ -483,20 +564,23 @@ def price_map_for(registry: dict, provider: str, models: list[str]) -> dict:
     out = {}
     for model in models:
         pr = resolve_price(registry, provider, model)
-        out[model] = {**{k: pr["price"].get(k, 0) for k in COST_KEYS},
-                      "plan": pr["plan"], "source": pr["source"]}
+        out[model] = {
+            **{k: pr["price"].get(k, 0) for k in COST_KEYS},
+            "plan": pr["plan"],
+            "source": pr["source"],
+        }
     return out
 
 
-# ---- HTTP handler ----------------------------------------------------------
 SERVER: OpenCodeServer | None = None
 LOG_PATH: str | None = None
 POOLS_PATH = os.environ.get("POOLS_PATH", str(HERE / "pools.json"))
 LOGIN_PROCS: list[subprocess.Popen] = []
+LAST_MODEL_TEST: dict[tuple[str, str], float] = {}
 
 
 class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *args):  # quiet
+    def log_message(self, *args):
         return
 
     def _send(self, code: int, body: bytes, ctype: str) -> None:
@@ -504,13 +588,33 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         self.wfile.write(body)
 
     def _json(self, code: int, obj) -> None:
         self._send(code, json.dumps(obj).encode(), "application/json; charset=utf-8")
 
+    def _local_api_request_allowed(self) -> bool:
+        host = self.headers.get("Host", "")
+        allowed_hosts = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
+        if host not in allowed_hosts:
+            return False
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True
+        return origin in {f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"}
+
+    def _reject_nonlocal_api(self) -> bool:
+        if self.path.startswith("/api/") and not self._local_api_request_allowed():
+            self._json(403, {"error": "local same-origin API request required"})
+            return True
+        return False
+
     def do_GET(self):
+        if self._reject_nonlocal_api():
+            return
         if self.path in ("/", "/index.html"):
             try:
                 html = (HERE / "index.html").read_bytes()
@@ -521,8 +625,14 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/providers"):
             try:
                 provs = build_providers()
-                self._json(200, {"live": True, "providers": provs,
-                                 "available": available_providers({p["id"] for p in provs})})
+                self._json(
+                    200,
+                    {
+                        "live": True,
+                        "providers": provs,
+                        "available": available_providers({p["id"] for p in provs}),
+                    },
+                )
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"error": sanitize(str(exc))})
         elif self.path.startswith("/api/stats"):
@@ -546,68 +656,102 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
+        if length > 1_000_000:
+            return {}
         try:
             return json.loads(self.rfile.read(length) or b"{}")
         except json.JSONDecodeError:
             return {}
 
     def do_POST(self):
+        if self._reject_nonlocal_api():
+            return
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.lower().startswith("application/json"):
+            self._json(415, {"error": "application/json required"})
+            return
+
         if self.path.startswith("/api/test"):
             payload = self._body()
             provider, model = payload.get("provider"), payload.get("model")
             if not provider or not model:
                 self._json(400, {"error": "provider and model required"})
                 return
-            result = SERVER.test_model(provider, model, LOG_PATH)
+            key = (str(provider), str(model))
+            current = time.monotonic()
+            prior = LAST_MODEL_TEST.get(key)
+            if prior is not None and current - prior < 5.0:
+                self._json(429, {"error": "connection test rate limited; retry shortly"})
+                return
+            LAST_MODEL_TEST[key] = current
+            assert SERVER is not None
+            result = SERVER.test_model(str(provider), str(model), LOG_PATH)
             result["provider"], result["model"] = provider, model
             self._json(200, result)
         elif self.path.startswith("/api/pools"):
             payload = self._body()
             pools = payload.get("pools")
+            mode = payload.get("mode", "SHADOW")
             if not isinstance(pools, list):
                 self._json(400, {"error": "pools array required"})
+                return
+            if mode not in {"BYPASS", "SHADOW", "ACTIVE"}:
+                self._json(400, {"error": "invalid routing mode"})
                 return
             doc = {
                 "version": 1,
                 "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                "mode": payload.get("mode", "SHADOW"),
+                "mode": mode,
                 "pools": pools,
             }
             try:
                 with open(POOLS_PATH, "w") as fh:
                     json.dump(doc, fh, indent=2, ensure_ascii=False)
-                self._json(200, {"ok": True, "path": POOLS_PATH,
-                                 "pools": len(pools),
-                                 "models": sum(len(p.get("models", [])) for p in pools)})
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "path": POOLS_PATH,
+                        "pools": len(pools),
+                        "models": sum(len(p.get("models", [])) for p in pools),
+                    },
+                )
             except OSError as exc:
                 self._json(500, {"error": sanitize(str(exc))})
         elif self.path.startswith("/api/login"):
             payload = self._body()
             provider = payload.get("provider")
-            if not provider:
-                self._json(400, {"error": "provider required"})
+            if not provider or provider not in CONNECTABLE:
+                self._json(400, {"error": "supported provider required"})
                 return
-            # Kick off OpenCode's real login flow (may open a browser / print a
-            # device code). We never handle the credential ourselves.
             try:
                 proc = subprocess.Popen(
                     [OPENCODE, "providers", "login", provider],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
                 LOGIN_PROCS.append(proc)
-                self._json(200, {
-                    "started": True, "provider": provider,
-                    "command": f"opencode providers login {provider}",
-                    "hint": "已发起 OpenCode 登录。若未自动打开浏览器，请在终端运行上面的命令完成，然后点“刷新”。",
-                })
+                self._json(
+                    200,
+                    {
+                        "started": True,
+                        "provider": provider,
+                        "command": f"opencode providers login {provider}",
+                        "hint": "已发起 OpenCode 登录。若未自动打开浏览器，请在终端运行上面的命令完成，然后点“刷新”。",
+                    },
+                )
             except Exception as exc:  # noqa: BLE001
-                self._json(200, {
-                    "started": False, "provider": provider,
-                    "command": f"opencode providers login {provider}",
-                    "hint": "无法自动发起，请在终端运行上面的命令完成登录后点“刷新”。",
-                    "error": sanitize(str(exc)),
-                })
+                self._json(
+                    200,
+                    {
+                        "started": False,
+                        "provider": provider,
+                        "command": f"opencode providers login {provider}",
+                        "hint": "无法自动发起，请在终端运行上面的命令完成登录后点“刷新”。",
+                        "error": sanitize(str(exc)),
+                    },
+                )
         else:
             self._send(404, b"not found", "text/plain")
 
