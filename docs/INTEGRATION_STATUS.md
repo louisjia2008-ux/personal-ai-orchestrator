@@ -1,6 +1,6 @@
 # Integration Status
 
-Status: `INTEGRATION_IMPLEMENTED / LIVE_ACCEPTANCE_PENDING`
+Status: `INTEGRATION_IMPLEMENTED / LOCAL_MAC_ACCEPTED / LIVE_ACCEPTANCE_PENDING`
 
 This document records what the `integration/end-to-end-shadow-safety` line implements and what
 still requires evidence that cannot be fabricated on GitHub-hosted runners.
@@ -119,8 +119,19 @@ final branch head. These are Linux CI results and do not replace target-Mac acce
 ## External acceptance still required
 
 - provider-native MiniMax/Z.AI authentication evidence on the intended local environment;
-- macOS-specific process/Keychain/runtime and switch-lease timing acceptance;
 - real Shadow evidence across multiple quota reset cycles;
 - explicit owner acceptance for production ACTIVE routing.
 
 Until those gates are satisfied, production ACTIVE routing remains disabled by design.
+
+## Target Mac local acceptance
+
+Local disposable-repository acceptance on 2026-08-30 recorded:
+`PASS_LOCAL_P0_P1_ROUTING_PROVIDER_AND_LONGITUDINAL_SHADOW_NOT_EXECUTED`.
+
+See [`acceptance/TARGET_MAC_ACCEPTANCE_2026-08-30.md`](acceptance/TARGET_MAC_ACCEPTANCE_2026-08-30.md).
+
+This evidence covers the local P0 Safety Kernel, P1 deterministic verifier, loopback routing API,
+OpenCode adapter fail-closed semantics, SHADOW record-only behavior and negative ACTIVE gate
+combinations. It does not include provider-native MiniMax/Z.AI quota truth, multiple real Shadow
+reset cycles, Keychain-specific credential handoff, or production owner approval.
