@@ -119,6 +119,42 @@ def test_worktree_manager_keeps_source_checkout_head_unchanged(tmp_path: Path) -
     assert not managed.worktree_path.exists()
 
 
+def test_worktree_manager_can_adopt_persisted_worktree_after_restart(tmp_path: Path) -> None:
+    repo, base_sha = _repo(tmp_path)
+    managed_root = tmp_path / "managed"
+    first_manager = WorktreeManager(managed_root)
+    created = first_manager.create(repo_path=repo, task_id="PT-restart", base_sha=base_sha)
+
+    restarted_manager = WorktreeManager(managed_root)
+    adopted = restarted_manager.adopt(
+        repo_path=repo,
+        task_id="PT-restart",
+        worktree_path=created.worktree_path,
+        branch=created.branch,
+        base_sha=created.base_sha,
+    )
+    assert adopted == created
+    restarted_manager.remove("PT-restart")
+    assert not created.worktree_path.exists()
+
+
+def test_worktree_manager_rejects_tampered_recovery_metadata(tmp_path: Path) -> None:
+    repo, base_sha = _repo(tmp_path)
+    managed_root = tmp_path / "managed"
+    first_manager = WorktreeManager(managed_root)
+    created = first_manager.create(repo_path=repo, task_id="PT-tamper", base_sha=base_sha)
+
+    restarted_manager = WorktreeManager(managed_root)
+    with pytest.raises(ValueError, match="branch does not match"):
+        restarted_manager.adopt(
+            repo_path=repo,
+            task_id="PT-tamper",
+            worktree_path=created.worktree_path,
+            branch="task/not-the-recorded-branch",
+            base_sha=created.base_sha,
+        )
+
+
 def test_verifier_passes_trusted_argv_and_scope(tmp_path: Path) -> None:
     repo, base_sha = _repo(tmp_path)
     manager = WorktreeManager(tmp_path / "managed")
