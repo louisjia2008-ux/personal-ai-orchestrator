@@ -1,6 +1,6 @@
 # Integration Status
 
-Status: `INTEGRATION_IMPLEMENTED / LOCAL_MAC_ACCEPTED / LIVE_ACCEPTANCE_PENDING`
+Status: `INTEGRATION_IMPLEMENTED / LOCAL_MAC_ACCEPTED / P3_6_SHADOW_BOOTSTRAPPED`
 
 This document records what the `integration/end-to-end-shadow-safety` line implements and what
 still requires evidence that cannot be fabricated on GitHub-hosted runners.
@@ -118,7 +118,8 @@ final branch head. These are Linux CI results and do not replace target-Mac acce
 
 ## External acceptance still required
 
-- provider-native MiniMax/Z.AI authentication evidence on the intended local environment;
+- supported credential handoff for provider-native MiniMax/Z.AI quota evidence on the intended
+  local environment;
 - real Shadow evidence across multiple quota reset cycles;
 - explicit owner acceptance for production ACTIVE routing.
 
@@ -135,3 +136,19 @@ This evidence covers the local P0 Safety Kernel, P1 deterministic verifier, loop
 OpenCode adapter fail-closed semantics, SHADOW record-only behavior and negative ACTIVE gate
 combinations. It does not include provider-native MiniMax/Z.AI quota truth, multiple real Shadow
 reset cycles, Keychain-specific credential handoff, or production owner approval.
+
+## P3.6 live provider and Shadow campaign
+
+P3.6 provider-surface discovery on 2026-08-30 found no supported machine-readable remaining-quota
+truth available through existing local non-secret CLI metadata. MiniMax OpenCode model catalog
+metadata is visible, Z.AI is not configured as an OpenCode provider on this host, Codex/Claude CLI
+availability does not prove subscription quota truth, DeepSeek remains PAYG-balance-only without a
+safe credential handoff, and local Ollama capacity remains runtime availability rather than provider
+quota.
+
+The local Shadow campaign has been bootstrapped in ignored durable state under
+`.personal-ai-orchestrator/p36-shadow/` with production ACTIVE disabled. It has 0 observations and
+0 reset cycles so far, so Shadow review eligibility remains false.
+
+See
+[`acceptance/LIVE_PROVIDER_SHADOW_ACCEPTANCE_2026-08-30.md`](acceptance/LIVE_PROVIDER_SHADOW_ACCEPTANCE_2026-08-30.md).

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -5,6 +6,7 @@ import pytest
 from personal_ai_orchestrator.activation_authority import build_active_gate
 from personal_ai_orchestrator.approval import ApprovalAuthority, ApprovalKind, ApprovalStatus
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore
+from personal_ai_orchestrator.shadow_evidence import ShadowEvidenceJournal, ShadowObservation
 from personal_ai_orchestrator.verification_evidence import (
     RetryPolicy,
     VerificationEvidenceJournal,
@@ -18,6 +20,28 @@ def _store(tmp_path: Path) -> SafetyKernelStore:
     store = SafetyKernelStore(tmp_path / "state.sqlite3")
     store.submit_task(task_id="control", request_id="control-request", intent="control-plane")
     return store
+
+
+def _shadow_observation(
+    *,
+    task_id: str,
+    request_id: str,
+    decision_id: str,
+    reset_cycle_ids: tuple[str, ...],
+) -> ShadowObservation:
+    return ShadowObservation.build(
+        task_id=task_id,
+        request_id=request_id,
+        decision_id=decision_id,
+        reset_cycle_ids=reset_cycle_ids,
+        manual_execution_target_id="m3-sub",
+        scheduler_execution_target_id="m3-sub",
+        catalog_snapshot_id="catalog-1",
+        policy_snapshot_id="policy-1",
+        quota_snapshot_ids=("quota-before",),
+        verified=True,
+        observed_at=datetime(2026, 8, 30, tzinfo=UTC),
+    )
 
 
 def test_owner_approval_is_durable_and_immutable(tmp_path: Path) -> None:
@@ -64,6 +88,44 @@ def test_active_gate_requires_persisted_owner_approval(tmp_path: Path) -> None:
         safe_bypass_validated=True,
     )
     assert approved.authorized is True
+
+
+def test_shadow_review_eligibility_cannot_create_active_owner_approval(tmp_path: Path) -> None:
+    authority = ApprovalAuthority(_store(tmp_path))
+    journal = ShadowEvidenceJournal(tmp_path / "shadow")
+    journal.append(
+        _shadow_observation(
+            task_id="task-1",
+            request_id="req-1",
+            decision_id="dec-1",
+            reset_cycle_ids=("minimax-week-1",),
+        )
+    )
+    journal.append(
+        _shadow_observation(
+            task_id="task-2",
+            request_id="req-2",
+            decision_id="dec-2",
+            reset_cycle_ids=("minimax-week-2",),
+        )
+    )
+    summary = journal.summarize(minimum_observations=2, minimum_reset_cycles=2)
+    gate = build_active_gate(
+        approvals=authority,
+        owner_approval_id="missing-owner-approval",
+        p0_safety_kernel_authoritative=True,
+        p1_verifier_authoritative=True,
+        adapter_fail_closed_validated=True,
+        shadow_evidence_accepted=summary.review_eligible,
+        safe_bypass_validated=True,
+    )
+
+    assert summary.review_eligible is True
+    assert gate.authorized is False
+    assert authority.is_approved(
+        "missing-owner-approval",
+        kind=ApprovalKind.PRODUCTION_ACTIVE_ROUTING,
+    ) is False
 
 
 def _result(
