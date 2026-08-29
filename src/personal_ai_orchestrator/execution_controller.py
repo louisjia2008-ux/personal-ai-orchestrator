@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +16,10 @@ from personal_ai_orchestrator.verifier import VerificationResult
 _TERMINAL_STATES = {TaskState.FAILED, TaskState.CANCELLED, TaskState.COMPLETED}
 
 
+def _render_result(payload: Any) -> str:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+
+
 def start_worker_run(
     store: SafetyKernelStore,
     *,
@@ -22,39 +29,39 @@ def start_worker_run(
     writer_token: str,
     pid: int | None = None,
 ) -> None:
-    """Start one worker only when the host-owned task worktree lock is held."""
+    """Atomically authorize and persist one worker run for a host-owned task worktree."""
 
-    task = store.get_task(task_id)
-    if task.state is not TaskState.RUNNING:
-        raise ValueError("worker run can only start for a RUNNING task")
-    workspace = store.get_workspace(task_id)
-    if workspace.writer_token != writer_token:
-        raise RuntimeError("worker run requires ownership of the task worktree writer lock")
-    active = store.connection.execute(
-        "SELECT run_id FROM runs WHERE task_id=? AND status='RUNNING' LIMIT 1",
-        (task_id,),
-    ).fetchone()
-    if active is not None:
-        raise RuntimeError("task already has an active worker run")
-    store.start_run(run_id=run_id, task_id=task_id, worker_id=worker_id, pid=pid)
-
-
-def _require_active_run_for_task(
-    store: SafetyKernelStore,
-    *,
-    task_id: str,
-    run_id: str,
-) -> None:
-    row = store.connection.execute(
-        "SELECT task_id,status FROM runs WHERE run_id=?",
-        (run_id,),
-    ).fetchone()
-    if row is None:
-        raise KeyError(run_id)
-    if row["task_id"] != task_id:
-        raise ValueError("run_id does not belong to task_id")
-    if row["status"] != "RUNNING":
-        raise RuntimeError("worker run is not active")
+    store.connection.execute("BEGIN IMMEDIATE")
+    try:
+        task = store.get_task(task_id)
+        if task.state is not TaskState.RUNNING:
+            raise ValueError("worker run can only start for a RUNNING task")
+        workspace = store.get_workspace(task_id)
+        if workspace.writer_token != writer_token:
+            raise RuntimeError("worker run requires ownership of the task worktree writer lock")
+        active = store.connection.execute(
+            "SELECT run_id FROM runs WHERE task_id=? AND status='RUNNING' LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        if active is not None:
+            raise RuntimeError("task already has an active worker run")
+        started_at = datetime.now(UTC).isoformat()
+        store.connection.execute(
+            "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?)",
+            (run_id, task_id, worker_id, pid, "RUNNING", started_at, None, None),
+        )
+        store._audit(
+            task_id,
+            "RUN_STARTED",
+            {"run_id": run_id, "worker_id": worker_id, "pid": pid},
+        )
+        store.connection.execute("COMMIT")
+    except sqlite3.IntegrityError as error:
+        store.connection.execute("ROLLBACK")
+        raise RuntimeError("worker run violates durable run ownership constraints") from error
+    except Exception:
+        store.connection.execute("ROLLBACK")
+        raise
 
 
 def record_worker_exit(
@@ -65,38 +72,89 @@ def record_worker_exit(
     exit_code: int,
     worker_result: Any,
 ) -> TaskState:
-    """Record a worker process outcome without ever granting VERIFIED authority."""
+    """Atomically record worker exit and its corresponding task-state transition.
 
-    task = store.get_task(task_id)
-    if task.state is not TaskState.RUNNING:
-        raise ValueError("worker exit can only be recorded for a RUNNING task")
-    _require_active_run_for_task(store, task_id=task_id, run_id=run_id)
+    The run row, audit entries and task transition commit as one SQLite transaction. A crash or
+    audit failure therefore cannot leave a FINISHED run paired with a still-RUNNING task.
+    """
 
-    if exit_code != 0:
-        store.finish_run(run_id, status="FAILED", result={"exit_code": exit_code})
-        return store.transition_task(
+    store.connection.execute("BEGIN IMMEDIATE")
+    try:
+        task = store.get_task(task_id)
+        if task.state is not TaskState.RUNNING:
+            raise ValueError("worker exit can only be recorded for a RUNNING task")
+        run = store.connection.execute(
+            "SELECT task_id,status FROM runs WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+        if run is None:
+            raise KeyError(run_id)
+        if run["task_id"] != task_id:
+            raise ValueError("run_id does not belong to task_id")
+        if run["status"] != "RUNNING":
+            raise RuntimeError("worker run is not active")
+
+        if exit_code != 0:
+            run_status = "FAILED"
+            persisted_result: Any = {"exit_code": exit_code}
+            next_state = TaskState.BLOCKED
+            reason = f"worker exited unexpectedly with code {exit_code}"
+        elif not isinstance(worker_result, dict):
+            run_status = "INVALID_RESULT"
+            persisted_result = {"exit_code": exit_code}
+            next_state = TaskState.BLOCKED
+            reason = "worker returned an invalid structured result"
+        else:
+            run_status = "FINISHED"
+            persisted_result = worker_result
+            next_state = TaskState.WORKER_FINISHED
+            reason = "worker process finished; deterministic verification still required"
+
+        stamp = datetime.now(UTC).isoformat()
+        updated_run = store.connection.execute(
+            """
+            UPDATE runs SET status=?, finished_at=?, result_json=?
+            WHERE run_id=? AND status='RUNNING'
+            """,
+            (run_status, stamp, _render_result(persisted_result), run_id),
+        )
+        if updated_run.rowcount != 1:
+            raise RuntimeError("worker exit lost run-state concurrency race")
+
+        next_version = task.state_version + 1
+        updated_task = store.connection.execute(
+            """
+            UPDATE tasks SET state=?, state_version=?, updated_at=?
+            WHERE task_id=? AND state_version=? AND state=?
+            """,
+            (
+                next_state.value,
+                next_version,
+                stamp,
+                task_id,
+                task.state_version,
+                TaskState.RUNNING.value,
+            ),
+        )
+        if updated_task.rowcount != 1:
+            raise RuntimeError("worker exit lost task-state concurrency race")
+
+        store._audit(task_id, "RUN_FINISHED", {"run_id": run_id, "status": run_status})
+        store._audit(
             task_id,
-            TaskState.BLOCKED,
-            expected_version=task.state_version,
-            reason=f"worker exited unexpectedly with code {exit_code}",
-        ).state
-
-    if not isinstance(worker_result, dict):
-        store.finish_run(run_id, status="INVALID_RESULT", result={"exit_code": exit_code})
-        return store.transition_task(
-            task_id,
-            TaskState.BLOCKED,
-            expected_version=task.state_version,
-            reason="worker returned an invalid structured result",
-        ).state
-
-    store.finish_run(run_id, status="FINISHED", result=worker_result)
-    return store.transition_task(
-        task_id,
-        TaskState.WORKER_FINISHED,
-        expected_version=task.state_version,
-        reason="worker process finished; deterministic verification still required",
-    ).state
+            "TASK_STATE_CHANGED",
+            {
+                "from": TaskState.RUNNING.value,
+                "to": next_state.value,
+                "state_version": next_version,
+                "reason": reason,
+            },
+        )
+        store.connection.execute("COMMIT")
+        return next_state
+    except Exception:
+        store.connection.execute("ROLLBACK")
+        raise
 
 
 def begin_verification(store: SafetyKernelStore, *, task_id: str) -> None:
