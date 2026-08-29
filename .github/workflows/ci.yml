@@ -30,3 +30,11 @@ jobs:
 
       - name: Test
         run: python -m pytest -q
+
+      - name: Diff hygiene
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "${{ github.base_ref }}" --depth=1
+          git diff --check FETCH_HEAD...HEAD
