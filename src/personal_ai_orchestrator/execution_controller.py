@@ -71,13 +71,20 @@ def apply_verification_result(
     task_id: str,
     result: VerificationResult,
 ) -> TaskState:
-    """Only a passing host result can advance VERIFYING -> VERIFIED."""
+    """Only a passing host result with immutable evidence can advance to VERIFIED."""
 
     task = store.get_task(task_id)
     if task.state is not TaskState.VERIFYING:
         raise ValueError("verification result requires VERIFYING state")
-    target = TaskState.VERIFIED if result.passed else TaskState.BLOCKED
-    reason = "deterministic verification passed" if result.passed else result.failure_reason
+
+    has_authoritative_pass = result.passed and result.evidence_id is not None
+    target = TaskState.VERIFIED if has_authoritative_pass else TaskState.BLOCKED
+    if result.passed and result.evidence_id is None:
+        reason = "passing verifier result is missing immutable host evidence"
+    elif result.passed:
+        reason = f"deterministic verification passed: {result.evidence_id}"
+    else:
+        reason = result.failure_reason or "deterministic verification failed"
     return store.transition_task(
         task_id,
         target,
