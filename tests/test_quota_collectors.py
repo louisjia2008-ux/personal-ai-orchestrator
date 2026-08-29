@@ -90,7 +90,7 @@ def test_minimax_fixture_normalizes_two_exact_windows() -> None:
     assert five_hour.pace() == pytest.approx(2.0)
     assert weekly.pace() == pytest.approx(0.4)
     assert snapshot.effective_pace() == pytest.approx(0.4)
-    assert snapshot.source.source_uri == MINIMAX_CN_QUOTA_ENDPOINT
+    assert snapshot.source.reference == MINIMAX_CN_QUOTA_ENDPOINT
 
 
 def test_minimax_missing_weekly_percentage_does_not_invent_precision() -> None:
@@ -147,7 +147,7 @@ def test_minimax_global_collector_uses_global_documented_endpoint() -> None:
     assert result.status is QuotaCollectionStatus.SUCCESS
     assert transport.calls[0][0] == MINIMAX_GLOBAL_QUOTA_ENDPOINT
     assert result.snapshot is not None
-    assert result.snapshot.source.source_uri == MINIMAX_GLOBAL_QUOTA_ENDPOINT
+    assert result.snapshot.source.reference == MINIMAX_GLOBAL_QUOTA_ENDPOINT
 
 
 def test_provider_error_is_not_converted_to_exhausted_quota() -> None:
@@ -185,7 +185,7 @@ def test_zai_mocked_fixture_preserves_derived_confidence() -> None:
     assert window.used_fraction == pytest.approx(0.6)
     assert window.reset_at is None
     assert window.pace() is None
-    assert snapshot.source.source_uri == ZAI_QUOTA_ENDPOINT
+    assert snapshot.source.reference == ZAI_QUOTA_ENDPOINT
 
 
 def test_zai_missing_percentage_stays_unknown() -> None:

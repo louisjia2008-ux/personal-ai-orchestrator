@@ -3,6 +3,10 @@
 The registry keeps provider/account/plan identity separate from model identity and models
 quota membership/burn rules as append-only temporal facts. This prevents current provider
 policy from silently rewriting historical routing explanations.
+
+P3 extends the existing quota snapshot types in-place so collectors, the registry, and the
+future scheduler share one normalized quota truth contract rather than parallel snapshot
+models.
 """
 
 from __future__ import annotations
@@ -53,6 +57,15 @@ class PoolKind(StrEnum):
     FALLBACK = "FALLBACK"
 
 
+class QuotaWindowKind(StrEnum):
+    FIVE_HOUR = "FIVE_HOUR"
+    WEEKLY = "WEEKLY"
+    MONTHLY = "MONTHLY"
+    DAILY = "DAILY"
+    CUSTOM = "CUSTOM"
+    UNKNOWN = "UNKNOWN"
+
+
 class RegistryModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -80,6 +93,7 @@ class EvidenceSource(RegistryModel):
     observed_at: datetime
     reference: str | None = None
     note: str | None = None
+    confidence: EvidenceConfidence = EvidenceConfidence.UNKNOWN
 
     @model_validator(mode="after")
     def validate_observed_at(self) -> EvidenceSource:
@@ -125,63 +139,135 @@ class ModelCatalogSnapshot(RegistryModel):
 
 
 class QuotaWindowSnapshot(RegistryModel):
-    """Observed remaining fraction for one simultaneous quota/reset window."""
+    """Observed truth for one simultaneous quota/reset window.
+
+    Reset semantics are optional because some official provider surfaces expose remaining
+    quota without a trustworthy reset timestamp. Missing data remains ``None``; it is never
+    synthesized solely to make pace calculable.
+    """
 
     window_id: str = Field(min_length=1)
+    window_kind: QuotaWindowKind = QuotaWindowKind.UNKNOWN
+    duration_seconds: float | None = Field(default=None, gt=0.0)
     remaining_fraction: float | None = Field(default=None, ge=0.0, le=1.0)
-    window_started_at: datetime
-    reset_at: datetime
+    used_fraction: float | None = Field(default=None, ge=0.0, le=1.0)
+    remaining_units: float | None = Field(default=None, ge=0.0)
+    used_units: float | None = Field(default=None, ge=0.0)
+    unit: str | None = None
+    window_started_at: datetime | None = None
+    reset_at: datetime | None = None
+    state: QuotaState = QuotaState.UNKNOWN
     confidence: EvidenceConfidence
     source: EvidenceSource
 
     @model_validator(mode="after")
     def validate_window(self) -> QuotaWindowSnapshot:
-        _require_aware(self.window_started_at, "window_started_at")
-        _require_aware(self.reset_at, "reset_at")
-        if self.reset_at <= self.window_started_at:
+        if self.window_started_at is not None:
+            _require_aware(self.window_started_at, "window_started_at")
+        if self.reset_at is not None:
+            _require_aware(self.reset_at, "reset_at")
+        if (
+            self.window_started_at is not None
+            and self.reset_at is not None
+            and self.reset_at <= self.window_started_at
+        ):
             raise ValueError("reset_at must be after window_started_at")
-        observed_at = self.source.observed_at
-        if observed_at < self.window_started_at or observed_at > self.reset_at:
-            raise ValueError("quota-window observation must fall inside its reset window")
-        if self.confidence is EvidenceConfidence.UNKNOWN and self.remaining_fraction is not None:
-            raise ValueError("UNKNOWN confidence cannot carry precise quota fraction")
+
+        precise_values = (
+            self.remaining_fraction,
+            self.used_fraction,
+            self.remaining_units,
+            self.used_units,
+        )
+        if self.confidence is EvidenceConfidence.UNKNOWN and any(
+            value is not None for value in precise_values
+        ):
+            raise ValueError("UNKNOWN confidence cannot carry precise quota values")
+
+        if self.remaining_fraction is not None and self.used_fraction is not None:
+            if abs((self.remaining_fraction + self.used_fraction) - 1.0) > 1e-6:
+                raise ValueError("remaining_fraction + used_fraction must equal 1")
         return self
 
-    def pace(self) -> float | None:
-        """Return remaining quota fraction / remaining time fraction at observation time."""
+    def remaining_time_fraction(self, *, at: datetime | None = None) -> float | None:
+        """Return the fraction of the reset window remaining when it is observable."""
 
-        if self.remaining_fraction is None:
+        reference = at or self.source.observed_at
+        _require_aware(reference, "at")
+        if self.reset_at is None or reference >= self.reset_at:
             return None
-        duration = (self.reset_at - self.window_started_at).total_seconds()
-        remaining_time = (self.reset_at - self.source.observed_at).total_seconds()
-        if duration <= 0 or remaining_time <= 0:
+        if self.window_started_at is not None and reference < self.window_started_at:
             return None
-        remaining_time_fraction = remaining_time / duration
+
+        duration = self.duration_seconds
+        if duration is None and self.window_started_at is not None:
+            duration = (self.reset_at - self.window_started_at).total_seconds()
+        if duration is None or duration <= 0:
+            return None
+
+        remaining = (self.reset_at - reference).total_seconds()
+        fraction = remaining / duration
+        if not isfinite(fraction) or fraction <= 0:
+            return None
+        return min(1.0, fraction)
+
+    def pace(self, *, at: datetime | None = None) -> float | None:
+        """Return remaining quota fraction / remaining time fraction."""
+
+        if self.remaining_fraction is None or self.confidence is EvidenceConfidence.UNKNOWN:
+            return None
+        remaining_time_fraction = self.remaining_time_fraction(at=at)
+        if remaining_time_fraction is None or remaining_time_fraction <= 0:
+            return None
         value = self.remaining_fraction / remaining_time_fraction
         return value if isfinite(value) else None
 
 
 class QuotaSnapshot(RegistryModel):
+    schema_version: int = Field(default=1, ge=1)
+    quota_pool_id: str | None = None
+    provider_id: str | None = None
+    account_id: str | None = None
+    plan_id: str | None = None
+    observed_at: datetime | None = None
     state: QuotaState = QuotaState.UNKNOWN
     confidence: EvidenceConfidence = EvidenceConfidence.UNKNOWN
     source: EvidenceSource
     remaining_units: float | None = Field(default=None, ge=0.0)
+    used_units: float | None = Field(default=None, ge=0.0)
+    unit: str | None = None
     windows: tuple[QuotaWindowSnapshot, ...] = ()
 
     @model_validator(mode="after")
-    def validate_unknown_precision(self) -> QuotaSnapshot:
-        if self.confidence is EvidenceConfidence.UNKNOWN and self.remaining_units is not None:
+    def validate_snapshot(self) -> QuotaSnapshot:
+        if self.observed_at is not None:
+            _require_aware(self.observed_at, "observed_at")
+        if self.confidence is EvidenceConfidence.UNKNOWN and (
+            self.remaining_units is not None or self.used_units is not None
+        ):
             raise ValueError("UNKNOWN confidence cannot carry precise quota units")
         ids = [window.window_id for window in self.windows]
         if len(ids) != len(set(ids)):
             raise ValueError("quota snapshot contains duplicate window_id values")
         return self
 
-    def effective_pace(self) -> float | None:
-        """Return the most constrained observable quota-window pace."""
+    def observation_time(self) -> datetime:
+        return self.observed_at or self.source.observed_at
 
-        paces = [pace for window in self.windows if (pace := window.pace()) is not None]
+    def effective_pace(self, *, at: datetime | None = None) -> float | None:
+        """Return the most constrained observable active-window pace."""
+
+        reference = at or self.observation_time()
+        paces = [
+            pace
+            for window in self.windows
+            if (pace := window.pace(at=reference)) is not None
+        ]
         return min(paces) if paces else None
+
+    def is_stale(self, *, as_of: datetime, max_age_seconds: float) -> bool:
+        _require_aware(as_of, "as_of")
+        return (as_of - self.observation_time()).total_seconds() > max_age_seconds
 
 
 class QuotaPool(RegistryModel):

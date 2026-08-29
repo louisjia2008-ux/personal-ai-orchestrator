@@ -65,7 +65,7 @@ def normalize_zai_quota(
     )
     source = QuotaEvidenceSource(
         source_type=EvidenceSourceType.PROVIDER_API,
-        source_uri=ZAI_QUOTA_ENDPOINT,
+        reference=ZAI_QUOTA_ENDPOINT,
         observed_at=observed_at,
         confidence=confidence,
         note="Remaining fraction derived from official quota-limit usage percentage",

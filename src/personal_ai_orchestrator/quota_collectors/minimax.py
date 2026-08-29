@@ -108,7 +108,7 @@ def normalize_minimax_quota(
 
     exact_source = QuotaEvidenceSource(
         source_type=EvidenceSourceType.PROVIDER_API,
-        source_uri=source_uri,
+        reference=source_uri,
         observed_at=observed_at,
         confidence=EvidenceConfidence.EXACT,
         note="Official MiniMax Token Plan remains API",
