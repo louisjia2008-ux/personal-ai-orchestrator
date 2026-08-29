@@ -32,8 +32,8 @@ _CAPABILITIES = {
         provider_id="minimax",
         plan_id="token-plan",
         official_api=True,
-        endpoint="https://www.minimax.io/v1/token_plan/remains",
-        authentication="Bearer Token Plan subscription key",
+        endpoint="https://api.minimaxi.com/v1/token_plan/remains",
+        authentication="Bearer Token Plan subscription key (CN region)",
         existing_opencode_auth_reusable_without_secret_read=False,
         requires_independent_credential_surface=True,
         automation_allowed=True,
@@ -42,16 +42,16 @@ _CAPABILITIES = {
             "within ~1 minute"
         ),
         quota_windows=("5-hour rolling", "weekly"),
-        scope="Token Plan shared quota with provider-returned model remains records",
+        scope="CN Token Plan shared quota; current MVP provider is minimax-cn-coding-plan",
         remaining_semantics=(
             "Provider API exposes explicit remaining percentage fields when available"
         ),
         confidence=EvidenceConfidence.EXACT,
         source_uris=(
-            "https://platform.minimax.io/subscribe/token-plan",
-            "https://www.minimax.io/v1/token_plan/remains",
+            "https://platform.minimaxi.com/subscribe/token-plan",
             "https://github.com/MiniMax-AI/cli",
-            "https://platform.minimax.io/protocol/paid-agreement",
+            "https://platform.minimaxi.com/protocol/paid-agreement",
+            "https://platform.minimax.io/subscribe/token-plan",
         ),
         runtime_status="AUTHENTICATION_INTEGRATION_BLOCKED",
     ),

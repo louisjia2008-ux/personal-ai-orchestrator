@@ -9,8 +9,10 @@ from personal_ai_orchestrator.quota_collectors.base import (
     QuotaTransportError,
 )
 from personal_ai_orchestrator.quota_collectors.minimax import (
-    MINIMAX_QUOTA_ENDPOINT,
+    MINIMAX_CN_QUOTA_ENDPOINT,
+    MINIMAX_GLOBAL_QUOTA_ENDPOINT,
     MiniMaxQuotaCollector,
+    minimax_quota_endpoint,
     normalize_minimax_quota,
 )
 from personal_ai_orchestrator.quota_collectors.zai import (
@@ -70,11 +72,17 @@ class FakeTransport:
         return self.payload
 
 
+def test_minimax_region_endpoints_are_provider_published_surfaces() -> None:
+    assert minimax_quota_endpoint("cn") == MINIMAX_CN_QUOTA_ENDPOINT
+    assert minimax_quota_endpoint("global") == MINIMAX_GLOBAL_QUOTA_ENDPOINT
+
+
 def test_minimax_fixture_normalizes_two_exact_windows() -> None:
     snapshot = normalize_minimax_quota(minimax_payload(), observed_at=NOW)
 
     five_hour, weekly = snapshot.windows
     assert snapshot.confidence is EvidenceConfidence.EXACT
+    assert snapshot.quota_pool_id == "minimax-token-plan-cn"
     assert five_hour.window_kind is QuotaWindowKind.FIVE_HOUR
     assert weekly.window_kind is QuotaWindowKind.WEEKLY
     assert five_hour.remaining_fraction == pytest.approx(0.8)
@@ -82,7 +90,7 @@ def test_minimax_fixture_normalizes_two_exact_windows() -> None:
     assert five_hour.pace() == pytest.approx(2.0)
     assert weekly.pace() == pytest.approx(0.4)
     assert snapshot.effective_pace() == pytest.approx(0.4)
-    assert snapshot.source.source_uri == MINIMAX_QUOTA_ENDPOINT
+    assert snapshot.source.source_uri == MINIMAX_CN_QUOTA_ENDPOINT
 
 
 def test_minimax_missing_weekly_percentage_does_not_invent_precision() -> None:
@@ -105,10 +113,11 @@ def test_minimax_collector_requires_explicit_supported_credential_input() -> Non
     assert result.snapshot is None
 
 
-def test_minimax_collector_is_read_only_and_normalized() -> None:
+def test_minimax_cn_collector_is_read_only_and_normalized() -> None:
     transport = FakeTransport(minimax_payload())
     collector = MiniMaxQuotaCollector(
         bearer_token="fixture-only-value",
+        region="cn",
         transport=transport,
         timeout=3.0,
     )
@@ -120,9 +129,25 @@ def test_minimax_collector_is_read_only_and_normalized() -> None:
     assert result.snapshot.provider_id == "minimax"
     assert len(transport.calls) == 1
     url, headers, timeout = transport.calls[0]
-    assert url == MINIMAX_QUOTA_ENDPOINT
+    assert url == MINIMAX_CN_QUOTA_ENDPOINT
     assert headers["Authorization"].startswith("Bearer ")
     assert timeout == 3.0
+
+
+def test_minimax_global_collector_uses_global_documented_endpoint() -> None:
+    transport = FakeTransport(minimax_payload())
+    collector = MiniMaxQuotaCollector(
+        bearer_token="fixture-only-value",
+        region="global",
+        transport=transport,
+    )
+
+    result = collector.collect()
+
+    assert result.status is QuotaCollectionStatus.SUCCESS
+    assert transport.calls[0][0] == MINIMAX_GLOBAL_QUOTA_ENDPOINT
+    assert result.snapshot is not None
+    assert result.snapshot.source.source_uri == MINIMAX_GLOBAL_QUOTA_ENDPOINT
 
 
 def test_provider_error_is_not_converted_to_exhausted_quota() -> None:
