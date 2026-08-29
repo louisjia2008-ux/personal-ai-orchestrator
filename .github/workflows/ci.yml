@@ -43,3 +43,25 @@ jobs:
           git diff --check \
             "${{ github.event.pull_request.base.sha }}" \
             "${{ github.event.pull_request.head.sha }}"
+
+  opencode-adapter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: integrations/opencode/package.json
+
+      - name: Install adapter dependencies
+        working-directory: integrations/opencode
+        run: npm install
+
+      - name: Typecheck and contract tests
+        working-directory: integrations/opencode
+        run: npm run typecheck
