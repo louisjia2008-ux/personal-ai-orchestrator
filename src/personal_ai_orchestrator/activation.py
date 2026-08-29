@@ -13,6 +13,7 @@ class ActiveRoutingGate(BaseModel):
     adapter_fail_closed_validated: bool = False
     shadow_evidence_accepted: bool = False
     safe_bypass_validated: bool = False
+    owner_approved: bool = False
 
     @property
     def authorized(self) -> bool:
@@ -23,6 +24,7 @@ class ActiveRoutingGate(BaseModel):
                 self.adapter_fail_closed_validated,
                 self.shadow_evidence_accepted,
                 self.safe_bypass_validated,
+                self.owner_approved,
             )
         )
 
@@ -38,6 +40,8 @@ class ActiveRoutingGate(BaseModel):
             reasons.append("P3.5 Shadow evidence not accepted")
         if not self.safe_bypass_validated:
             reasons.append("safe BYPASS not validated")
+        if not self.owner_approved:
+            reasons.append("explicit owner approval missing")
         return tuple(reasons)
 
 
