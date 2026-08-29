@@ -236,6 +236,7 @@ def test_bridge_allows_active_only_with_complete_gate() -> None:
         adapter_fail_closed_validated=True,
         shadow_evidence_accepted=True,
         safe_bypass_validated=True,
+        owner_approved=True,
     )
     decision = build_routing_decision(
         request,
