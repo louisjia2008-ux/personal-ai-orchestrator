@@ -12,6 +12,50 @@ from personal_ai_orchestrator.verifier import VerificationResult
 _TERMINAL_STATES = {TaskState.FAILED, TaskState.CANCELLED, TaskState.COMPLETED}
 
 
+def start_worker_run(
+    store: SafetyKernelStore,
+    *,
+    task_id: str,
+    run_id: str,
+    worker_id: str,
+    writer_token: str,
+    pid: int | None = None,
+) -> None:
+    """Start one worker only when the host-owned task worktree lock is held."""
+
+    task = store.get_task(task_id)
+    if task.state is not TaskState.RUNNING:
+        raise ValueError("worker run can only start for a RUNNING task")
+    workspace = store.get_workspace(task_id)
+    if workspace.writer_token != writer_token:
+        raise RuntimeError("worker run requires ownership of the task worktree writer lock")
+    active = store.connection.execute(
+        "SELECT run_id FROM runs WHERE task_id=? AND status='RUNNING' LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    if active is not None:
+        raise RuntimeError("task already has an active worker run")
+    store.start_run(run_id=run_id, task_id=task_id, worker_id=worker_id, pid=pid)
+
+
+def _require_active_run_for_task(
+    store: SafetyKernelStore,
+    *,
+    task_id: str,
+    run_id: str,
+) -> None:
+    row = store.connection.execute(
+        "SELECT task_id,status FROM runs WHERE run_id=?",
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        raise KeyError(run_id)
+    if row["task_id"] != task_id:
+        raise ValueError("run_id does not belong to task_id")
+    if row["status"] != "RUNNING":
+        raise RuntimeError("worker run is not active")
+
+
 def record_worker_exit(
     store: SafetyKernelStore,
     *,
@@ -25,6 +69,7 @@ def record_worker_exit(
     task = store.get_task(task_id)
     if task.state is not TaskState.RUNNING:
         raise ValueError("worker exit can only be recorded for a RUNNING task")
+    _require_active_run_for_task(store, task_id=task_id, run_id=run_id)
 
     if exit_code != 0:
         store.finish_run(run_id, status="FAILED", result={"exit_code": exit_code})
@@ -127,4 +172,5 @@ __all__ = [
     "begin_verification",
     "record_worker_exit",
     "reconcile_workspace_truth",
+    "start_worker_run",
 ]
