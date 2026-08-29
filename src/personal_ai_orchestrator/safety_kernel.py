@@ -117,6 +117,8 @@ class SafetyKernelStore:
                 finished_at TEXT,
                 result_json TEXT
             );
+            CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_task
+                ON runs(task_id) WHERE status = 'RUNNING';
             CREATE TABLE IF NOT EXISTS workspaces (
                 task_id TEXT PRIMARY KEY REFERENCES tasks(task_id),
                 repo_path TEXT NOT NULL,
@@ -158,18 +160,19 @@ class SafetyKernelStore:
         )
 
     def submit_task(self, *, task_id: str, request_id: str, intent: str) -> TaskRecord:
-        existing = self.connection.execute(
-            "SELECT * FROM tasks WHERE request_id = ?", (request_id,)
-        ).fetchone()
-        if existing is not None:
-            record = self._task_from_row(existing)
-            if record.task_id != task_id or record.intent != intent:
-                raise ValueError("request_id already belongs to a different task submission")
-            return record
-
-        stamp = _now()
         self.connection.execute("BEGIN IMMEDIATE")
         try:
+            existing = self.connection.execute(
+                "SELECT * FROM tasks WHERE request_id = ?", (request_id,)
+            ).fetchone()
+            if existing is not None:
+                record = self._task_from_row(existing)
+                if record.task_id != task_id or record.intent != intent:
+                    raise ValueError("request_id already belongs to a different task submission")
+                self.connection.execute("COMMIT")
+                return record
+
+            stamp = _now()
             self.connection.execute(
                 "INSERT INTO tasks VALUES(?,?,?,?,?,?,?)",
                 (task_id, request_id, intent, TaskState.SUBMITTED.value, 0, stamp, stamp),
@@ -250,25 +253,36 @@ class SafetyKernelStore:
         branch: str,
         base_sha: str,
     ) -> WorkspaceRecord:
-        self.get_task(task_id)
-        existing = self.connection.execute(
-            "SELECT * FROM workspaces WHERE task_id = ?", (task_id,)
-        ).fetchone()
-        if existing is not None:
-            record = self._workspace_from_row(existing)
-            expected = (repo_path, worktree_path, branch, base_sha)
-            actual = (record.repo_path, record.worktree_path, record.branch, record.base_sha)
-            if actual != expected:
-                raise ValueError("task already has a different workspace")
-            return record
-        self.connection.execute(
-            """
-            INSERT INTO workspaces(task_id,repo_path,worktree_path,branch,base_sha)
-            VALUES(?,?,?,?,?)
-            """,
-            (task_id, repo_path, worktree_path, branch, base_sha),
-        )
-        self._audit(task_id, "WORKSPACE_REGISTERED", {"worktree_path": worktree_path, "base_sha": base_sha})
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            self.get_task(task_id)
+            existing = self.connection.execute(
+                "SELECT * FROM workspaces WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            if existing is not None:
+                record = self._workspace_from_row(existing)
+                expected = (repo_path, worktree_path, branch, base_sha)
+                actual = (record.repo_path, record.worktree_path, record.branch, record.base_sha)
+                if actual != expected:
+                    raise ValueError("task already has a different workspace")
+                self.connection.execute("COMMIT")
+                return record
+            self.connection.execute(
+                """
+                INSERT INTO workspaces(task_id,repo_path,worktree_path,branch,base_sha)
+                VALUES(?,?,?,?,?)
+                """,
+                (task_id, repo_path, worktree_path, branch, base_sha),
+            )
+            self._audit(
+                task_id,
+                "WORKSPACE_REGISTERED",
+                {"worktree_path": worktree_path, "base_sha": base_sha},
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
         return self.get_workspace(task_id)
 
     def get_workspace(self, task_id: str) -> WorkspaceRecord:
@@ -335,24 +349,56 @@ class SafetyKernelStore:
         worker_id: str,
         pid: int | None = None,
     ) -> None:
-        self.get_task(task_id)
-        self.connection.execute(
-            "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?)",
-            (run_id, task_id, worker_id, pid, "RUNNING", _now(), None, None),
-        )
-        self._audit(task_id, "RUN_STARTED", {"run_id": run_id, "worker_id": worker_id, "pid": pid})
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            self.get_task(task_id)
+            active = self.connection.execute(
+                "SELECT run_id FROM runs WHERE task_id=? AND status='RUNNING' LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            if active is not None:
+                raise RuntimeError("task already has an active worker run")
+            self.connection.execute(
+                "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?)",
+                (run_id, task_id, worker_id, pid, "RUNNING", _now(), None, None),
+            )
+            self._audit(
+                task_id,
+                "RUN_STARTED",
+                {"run_id": run_id, "worker_id": worker_id, "pid": pid},
+            )
+            self.connection.execute("COMMIT")
+        except sqlite3.IntegrityError as error:
+            self.connection.execute("ROLLBACK")
+            raise RuntimeError("worker run violates durable run ownership constraints") from error
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
 
     def finish_run(self, run_id: str, *, status: str, result: Any = None) -> None:
-        row = self.connection.execute("SELECT task_id,status FROM runs WHERE run_id=?", (run_id,)).fetchone()
-        if row is None:
-            raise KeyError(run_id)
-        if row["status"] != "RUNNING":
-            raise RuntimeError("run is not active")
-        self.connection.execute(
-            "UPDATE runs SET status=?, finished_at=?, result_json=? WHERE run_id=?",
-            (status, _now(), _json(result), run_id),
-        )
-        self._audit(row["task_id"], "RUN_FINISHED", {"run_id": run_id, "status": status})
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.connection.execute(
+                "SELECT task_id,status FROM runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(run_id)
+            if row["status"] != "RUNNING":
+                raise RuntimeError("run is not active")
+            updated = self.connection.execute(
+                """
+                UPDATE runs SET status=?, finished_at=?, result_json=?
+                WHERE run_id=? AND status='RUNNING'
+                """,
+                (status, _now(), _json(result), run_id),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("run finish lost concurrency race")
+            self._audit(row["task_id"], "RUN_FINISHED", {"run_id": run_id, "status": status})
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
 
     def record_routing_decision(
         self,
@@ -363,45 +409,91 @@ class SafetyKernelStore:
         payload: Any,
     ) -> None:
         rendered = _json(payload)
-        existing = self.connection.execute(
-            "SELECT * FROM routing_decisions WHERE request_id=?", (request_id,)
-        ).fetchone()
-        if existing is not None:
-            if existing["decision_id"] != decision_id or existing["payload_json"] != rendered:
-                raise ValueError("request_id already has a conflicting routing decision")
-            return
-        self.connection.execute(
-            "INSERT INTO routing_decisions VALUES(?,?,?,?,?)",
-            (decision_id, request_id, task_id, rendered, _now()),
-        )
-        self._audit(task_id, "ROUTING_DECISION_RECORDED", {"decision_id": decision_id})
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            existing = self.connection.execute(
+                "SELECT * FROM routing_decisions WHERE request_id=?", (request_id,)
+            ).fetchone()
+            if existing is not None:
+                if existing["decision_id"] != decision_id or existing["payload_json"] != rendered:
+                    raise ValueError("request_id already has a conflicting routing decision")
+                self.connection.execute("COMMIT")
+                return
+            self.connection.execute(
+                "INSERT INTO routing_decisions VALUES(?,?,?,?,?)",
+                (decision_id, request_id, task_id, rendered, _now()),
+            )
+            self._audit(task_id, "ROUTING_DECISION_RECORDED", {"decision_id": decision_id})
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
 
     def reconcile_startup(self) -> tuple[str, ...]:
-        """Fail closed any task/run whose live process truth cannot be proven after restart."""
+        """Atomically block uncertain in-flight task state and interrupt active runs."""
 
         blocked: list[str] = []
-        rows = self.connection.execute(
-            "SELECT task_id FROM tasks WHERE state IN (?,?,?)",
-            (
-                TaskState.RUNNING.value,
-                TaskState.WORKER_FINISHED.value,
-                TaskState.VERIFYING.value,
-            ),
-        ).fetchall()
-        for row in rows:
-            task_id = row["task_id"]
-            current = self.get_task(task_id)
-            self.transition_task(
-                task_id,
-                TaskState.BLOCKED,
-                expected_version=current.state_version,
-                reason="startup reconciliation cannot prove prior execution state",
-            )
-            blocked.append(task_id)
-        self.connection.execute(
-            "UPDATE runs SET status='INTERRUPTED', finished_at=? WHERE status='RUNNING'",
-            (_now(),),
-        )
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            rows = self.connection.execute(
+                "SELECT task_id,state,state_version FROM tasks WHERE state IN (?,?,?) ORDER BY task_id",
+                (
+                    TaskState.RUNNING.value,
+                    TaskState.WORKER_FINISHED.value,
+                    TaskState.VERIFYING.value,
+                ),
+            ).fetchall()
+            for row in rows:
+                next_version = row["state_version"] + 1
+                updated = self.connection.execute(
+                    """
+                    UPDATE tasks SET state=?, state_version=?, updated_at=?
+                    WHERE task_id=? AND state_version=?
+                    """,
+                    (
+                        TaskState.BLOCKED.value,
+                        next_version,
+                        _now(),
+                        row["task_id"],
+                        row["state_version"],
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise RuntimeError("startup reconciliation lost task state race")
+                self._audit(
+                    row["task_id"],
+                    "TASK_STATE_CHANGED",
+                    {
+                        "from": row["state"],
+                        "to": TaskState.BLOCKED.value,
+                        "state_version": next_version,
+                        "reason": "startup reconciliation cannot prove prior execution state",
+                    },
+                )
+                blocked.append(row["task_id"])
+            interrupted_at = _now()
+            active_runs = self.connection.execute(
+                "SELECT run_id,task_id FROM runs WHERE status='RUNNING' ORDER BY run_id"
+            ).fetchall()
+            for run in active_runs:
+                updated = self.connection.execute(
+                    """
+                    UPDATE runs SET status='INTERRUPTED', finished_at=?
+                    WHERE run_id=? AND status='RUNNING'
+                    """,
+                    (interrupted_at, run["run_id"]),
+                )
+                if updated.rowcount != 1:
+                    raise RuntimeError("startup reconciliation lost run state race")
+                self._audit(
+                    run["task_id"],
+                    "RUN_FINISHED",
+                    {"run_id": run["run_id"], "status": "INTERRUPTED"},
+                )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
         return tuple(blocked)
 
     def audit_events(self, task_id: str) -> tuple[dict[str, Any], ...]:
