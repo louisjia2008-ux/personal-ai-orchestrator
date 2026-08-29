@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
+from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
 from personal_ai_orchestrator.verifier import VerificationResult
 
 
@@ -110,22 +111,41 @@ def begin_verification(store: SafetyKernelStore, *, task_id: str) -> None:
     )
 
 
+def _persisted_evidence_matches(
+    journal: VerificationEvidenceJournal,
+    result: VerificationResult,
+) -> bool:
+    if result.evidence_id is None:
+        return False
+    persisted = journal.load(result.evidence_id)
+    return persisted == result
+
+
 def apply_verification_result(
     store: SafetyKernelStore,
     *,
     task_id: str,
     result: VerificationResult,
+    evidence_journal: VerificationEvidenceJournal,
 ) -> TaskState:
-    """Only a passing host result with immutable evidence can advance to VERIFIED."""
+    """Advance to VERIFIED only when the exact host result is durably journaled.
+
+    A non-null ``evidence_id`` is only an identifier, not authority. The immutable journal must
+    already contain the exact result before this transition is allowed; forged or mismatched
+    in-memory results fail closed to BLOCKED.
+    """
 
     task = store.get_task(task_id)
     if task.state is not TaskState.VERIFYING:
         raise ValueError("verification result requires VERIFYING state")
 
-    has_authoritative_pass = result.passed and result.evidence_id is not None
+    evidence_matches = _persisted_evidence_matches(evidence_journal, result)
+    has_authoritative_pass = result.passed and evidence_matches
     target = TaskState.VERIFIED if has_authoritative_pass else TaskState.BLOCKED
     if result.passed and result.evidence_id is None:
         reason = "passing verifier result is missing immutable host evidence"
+    elif result.passed and not evidence_matches:
+        reason = "passing verifier result is not backed by matching persisted host evidence"
     elif result.passed:
         reason = f"deterministic verification passed: {result.evidence_id}"
     else:
