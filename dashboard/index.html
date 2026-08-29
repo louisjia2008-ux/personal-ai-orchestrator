@@ -1,0 +1,572 @@
+<title>编排控制台</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg:#F5F7F8; --surface:#FFFFFF; --surface-2:#EEF1F3; --surface-3:#E6EAED;
+    --ink:#151A1F; --ink-2:#515C68; --ink-3:#8592A0;
+    --border:#E4E8EC; --border-2:#D3DAE0;
+    --accent:#0E8C82; --accent-2:#0B6B63; --accent-ink:#FFFFFF; --accent-soft:#DBEFEC;
+    --good:#1E9E57; --good-soft:#DEF2E7; --good-ink:#0C532F;
+    --warn:#B9770A; --warn-soft:#F6EBD3; --warn-ink:#6E4703;
+    --crit:#CE4238; --crit-soft:#F6DED9; --crit-ink:#7C231C;
+    --p-minimax:#0E8C82; --p-zai:#7C5CD0; --p-deepseek:#2563EB; --p-alt:#C2557A;
+    --shadow-sm:0 1px 2px rgba(20,26,34,.06),0 1px 3px rgba(20,26,34,.05);
+    --shadow-md:0 4px 14px rgba(20,26,34,.09),0 2px 6px rgba(20,26,34,.06);
+    --radius:12px; --radius-sm:8px;
+    --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Roboto,Helvetica,Arial,sans-serif;
+    --font-mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --bg:#0D1014; --surface:#161B21; --surface-2:#1D242C; --surface-3:#252E38;
+      --ink:#E8EDF2; --ink-2:#9EAAB7; --ink-3:#6B7784;
+      --border:#242C35; --border-2:#313B46;
+      --accent:#22B3A6; --accent-2:#3CC7BA; --accent-ink:#042420; --accent-soft:#123833;
+      --good:#33B36B; --good-soft:#122D1E; --good-ink:#8FE0AE;
+      --warn:#D69A34; --warn-soft:#32280F; --warn-ink:#F0C878;
+      --crit:#E4594C; --crit-soft:#391D19; --crit-ink:#F2A79E;
+      --p-minimax:#22B3A6; --p-zai:#9D82E6; --p-deepseek:#5C90F0; --p-alt:#DE7C9E;
+      --shadow-sm:0 1px 2px rgba(0,0,0,.4); --shadow-md:0 6px 20px rgba(0,0,0,.45);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0D1014; --surface:#161B21; --surface-2:#1D242C; --surface-3:#252E38;
+    --ink:#E8EDF2; --ink-2:#9EAAB7; --ink-3:#6B7784;
+    --border:#242C35; --border-2:#313B46;
+    --accent:#22B3A6; --accent-2:#3CC7BA; --accent-ink:#042420; --accent-soft:#123833;
+    --good:#33B36B; --good-soft:#122D1E; --good-ink:#8FE0AE;
+    --warn:#D69A34; --warn-soft:#32280F; --warn-ink:#F0C878;
+    --crit:#E4594C; --crit-soft:#391D19; --crit-ink:#F2A79E;
+    --p-minimax:#22B3A6; --p-zai:#9D82E6; --p-deepseek:#5C90F0; --p-alt:#DE7C9E;
+    --shadow-sm:0 1px 2px rgba(0,0,0,.4); --shadow-md:0 6px 20px rgba(0,0,0,.45);
+  }
+
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--font-sans); font-size:14px; line-height:1.55;
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  }
+  .mono{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+  h1,h2,h3{margin:0; font-weight:650; letter-spacing:-.01em; text-wrap:balance}
+  button{font-family:inherit; cursor:pointer}
+  :focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:6px}
+
+  .appbar{
+    position:sticky; top:0; z-index:20;
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:12px clamp(16px,3vw,32px);
+    background:color-mix(in srgb,var(--surface) 88%,transparent);
+    backdrop-filter:saturate(1.4) blur(10px);
+    border-bottom:1px solid var(--border);
+  }
+  .brand{display:flex; align-items:center; gap:11px; margin-right:auto}
+  .glyph{
+    width:34px; height:34px; border-radius:9px; flex:none;
+    background:radial-gradient(120% 120% at 30% 20%,var(--accent) 0%,var(--accent-2) 100%);
+    display:grid; place-items:center; box-shadow:var(--shadow-sm);
+  }
+  .glyph svg{width:19px; height:19px}
+  .brand-txt{display:flex; flex-direction:column; line-height:1.2}
+  .brand-txt strong{font-size:15px; letter-spacing:-.01em}
+  .brand-txt span{font-size:11px; color:var(--ink-3); font-family:var(--font-mono)}
+  .env-pill{
+    display:inline-flex; align-items:center; gap:7px; padding:5px 10px; border-radius:999px;
+    background:var(--surface-2); border:1px solid var(--border); font-size:11.5px; color:var(--ink-2);
+    font-family:var(--font-mono);
+  }
+  .dot{width:7px; height:7px; border-radius:50%; flex:none; box-shadow:0 0 0 3px color-mix(in srgb,currentColor 22%,transparent)}
+  .iconbtn{
+    width:36px; height:36px; border-radius:9px; border:1px solid var(--border);
+    background:var(--surface); color:var(--ink-2); display:grid; place-items:center;
+  }
+  .iconbtn:hover{background:var(--surface-2); color:var(--ink)}
+  .iconbtn svg{width:18px; height:18px}
+
+  .seg{display:inline-flex; background:var(--surface-2); border:1px solid var(--border); border-radius:9px; padding:3px}
+  .seg button{
+    border:0; background:transparent; color:var(--ink-2); font-size:12px; font-weight:600;
+    padding:6px 11px; border-radius:6px; display:flex; align-items:center; gap:6px;
+  }
+  .seg button .dot{width:6px;height:6px;box-shadow:none}
+  .seg button[aria-pressed="true"]{background:var(--surface); color:var(--ink); box-shadow:var(--shadow-sm)}
+
+  main{max-width:1280px; margin:0 auto; padding:clamp(16px,2.6vw,28px)}
+  .kpis{display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:22px}
+  @media(max-width:820px){.kpis{grid-template-columns:repeat(2,1fr)}}
+  .kpi{
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+    padding:15px 16px; box-shadow:var(--shadow-sm); position:relative; overflow:hidden;
+  }
+  .kpi .lab{font-size:11.5px; letter-spacing:.02em; color:var(--ink-3); font-weight:600}
+  .kpi .val{font-size:27px; font-weight:680; letter-spacing:-.02em; margin-top:6px; font-variant-numeric:tabular-nums}
+  .kpi .sub{font-size:12px; color:var(--ink-2); margin-top:2px}
+  .kpi .rail{position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--accent)}
+
+  .zone-head{display:flex; align-items:baseline; gap:12px; margin:6px 2px 14px}
+  .zone-head h2{font-size:16px}
+  .zone-head .hint{font-size:12.5px; color:var(--ink-3)}
+
+  .cols{display:grid; grid-template-columns:minmax(0,1.05fr) minmax(0,1fr); gap:22px; align-items:start}
+  @media(max-width:1040px){.cols{grid-template-columns:1fr}}
+
+  .providers{display:flex; flex-direction:column; gap:14px}
+  .pcard{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-sm); overflow:hidden}
+  .pcard-top{display:flex; align-items:flex-start; gap:12px; padding:15px 16px 12px}
+  .pdot{width:11px; height:11px; border-radius:50%; margin-top:4px; flex:none}
+  .pmeta{min-width:0; flex:1}
+  .pmeta .name{font-weight:640; font-size:14.5px; display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+  .pmeta .pid{font-size:12px; color:var(--ink-3); margin-top:2px}
+  .status{display:inline-flex; align-items:center; gap:6px; padding:3px 9px 3px 7px; border-radius:999px; font-size:11.5px; font-weight:650; white-space:nowrap}
+  .status svg{width:12px; height:12px}
+  .s-good{background:var(--good-soft); color:var(--good-ink)}
+  .s-warn{background:var(--warn-soft); color:var(--warn-ink)}
+  .s-idle{background:var(--surface-2); color:var(--ink-2)}
+  .s-env{background:var(--accent-soft); color:var(--accent-2)}
+
+  .pcard-body{padding:0 16px 16px; display:flex; flex-direction:column; gap:14px}
+  .row-lab{font-size:11.5px; letter-spacing:.02em; color:var(--ink-3); font-weight:600; margin-bottom:7px; display:flex; align-items:center; gap:6px}
+  .row-lab svg{width:13px;height:13px}
+
+  .keyfield{display:flex; gap:8px; align-items:stretch}
+  .keywrap{position:relative; flex:1; display:flex; align-items:center}
+  .keywrap input{
+    width:100%; font-family:var(--font-mono); font-size:13px; letter-spacing:.02em;
+    padding:9px 38px 9px 11px; border:1px solid var(--border-2); border-radius:var(--radius-sm);
+    background:var(--surface-2); color:var(--ink);
+  }
+  .keywrap input::placeholder{color:var(--ink-3); letter-spacing:0; font-family:var(--font-sans)}
+  .keywrap input:focus{background:var(--surface); border-color:var(--accent)}
+  .reveal{position:absolute; right:6px; width:28px; height:28px; border:0; background:transparent; color:var(--ink-3); border-radius:6px; display:grid; place-items:center}
+  .reveal:hover{color:var(--ink); background:var(--surface-3)}
+  .reveal svg{width:16px;height:16px}
+  .btn{border:1px solid var(--border-2); background:var(--surface); color:var(--ink); padding:9px 14px; border-radius:var(--radius-sm); font-size:12.5px; font-weight:620; white-space:nowrap; display:inline-flex; align-items:center; gap:6px}
+  .btn:hover{background:var(--surface-2)}
+  .btn:disabled{opacity:.65; cursor:default}
+  .btn-accent{background:var(--accent); color:var(--accent-ink); border-color:transparent}
+  .btn-accent:hover{background:var(--accent-2)}
+  .btn-sm{padding:5px 10px; font-size:11.5px; border-radius:7px}
+  .fp{font-family:var(--font-mono); font-size:12px; color:var(--ink-2); display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+  .fp .ok{color:var(--good); display:inline-flex}
+  .fp .ok svg{width:14px;height:14px}
+  .actions{margin-left:auto; display:flex; gap:8px}
+
+  .spin{width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;display:inline-block;animation:spin .7s linear infinite;vertical-align:-1px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .testresult{display:flex; align-items:center; gap:7px; font-size:12px; margin-top:9px; padding:8px 10px; border-radius:8px; font-family:var(--font-sans)}
+  .testresult .mono{font-size:11.5px}
+  .testresult svg{width:14px; height:14px; flex:none}
+  .t-ok{background:var(--good-soft); color:var(--good-ink)}
+  .t-warn{background:var(--warn-soft); color:var(--warn-ink)}
+
+  .safenote{display:flex; gap:8px; align-items:flex-start; font-size:11.5px; color:var(--ink-2); background:var(--surface-2); border:1px dashed var(--border-2); border-radius:var(--radius-sm); padding:8px 10px}
+  .safenote svg{width:14px; height:14px; margin-top:1px; color:var(--accent); flex:none}
+
+  .quota-head{display:flex; align-items:center; gap:10px; margin-bottom:8px; flex-wrap:wrap}
+  .quota-head .plan{font-size:12.5px; color:var(--ink-2)}
+  .qbadge{display:inline-flex; align-items:center; gap:5px; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.03em; padding:2px 7px; border-radius:6px; border:1px solid var(--border-2); color:var(--ink-2); background:var(--surface-2)}
+  .qbadge.measured{color:var(--accent-2); border-color:color-mix(in srgb,var(--accent) 40%,var(--border-2)); background:var(--accent-soft)}
+  .qbadge.estimated{color:var(--warn-ink); background:var(--warn-soft); border-color:color-mix(in srgb,var(--warn) 35%,var(--border-2))}
+  .qbadge.unknown{color:var(--ink-3)}
+  .meter{position:relative; height:12px; border-radius:7px; background:var(--surface-3); overflow:hidden; border:1px solid var(--border)}
+  .meter .fill{position:absolute; left:0; top:0; bottom:0; border-radius:7px 3px 3px 7px; background:linear-gradient(90deg,var(--accent-2),var(--accent)); transition:width .5s cubic-bezier(.2,.7,.2,1)}
+  .meter.warnfill .fill{background:linear-gradient(90deg,var(--warn),color-mix(in srgb,var(--warn) 70%,#e0a))}
+  .meter.unknown{background:repeating-linear-gradient(135deg,var(--surface-3) 0 8px,var(--surface-2) 8px 16px)}
+  .quota-foot{display:flex; align-items:baseline; gap:8px; margin-top:7px; flex-wrap:wrap}
+  .quota-foot .used{font-family:var(--font-mono); font-size:13px; font-weight:600}
+  .quota-foot .sep{color:var(--ink-3); font-family:var(--font-mono); font-size:12px}
+  .quota-foot .pct{margin-left:auto; font-family:var(--font-mono); font-size:12.5px; color:var(--ink-2)}
+  .capedit{display:flex; gap:7px; align-items:center; margin-top:9px; flex-wrap:wrap}
+  .capedit input{width:130px; font-family:var(--font-mono); font-size:12.5px; padding:6px 9px; border:1px solid var(--border-2); border-radius:7px; background:var(--surface-2); color:var(--ink)}
+  .capedit input:focus{background:var(--surface); border-color:var(--accent)}
+  .capedit label{font-size:11.5px; color:var(--ink-3)}
+
+  .board{display:flex; flex-direction:column; gap:14px}
+  .pool{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-sm); transition:border-color .15s,background .15s}
+  .pool.dragover{border-color:var(--accent); background:color-mix(in srgb,var(--accent-soft) 60%,var(--surface))}
+  .pool-head{display:flex; align-items:center; gap:10px; padding:12px 14px 10px}
+  .pool-head .swatch{width:9px; height:22px; border-radius:4px; flex:none}
+  .pool-head h3{font-size:13.5px}
+  .pool-head .desc{font-size:11.5px; color:var(--ink-3)}
+  .pool-head .count{margin-left:auto; font-family:var(--font-mono); font-size:11.5px; color:var(--ink-2); background:var(--surface-2); border:1px solid var(--border); border-radius:999px; padding:2px 9px}
+  .drop{display:flex; flex-wrap:wrap; gap:8px; padding:4px 14px 14px; min-height:46px}
+  .drop.empty::after{content:"拖动模型到这里"; color:var(--ink-3); font-size:12px; padding:6px 2px}
+  .chip{display:inline-flex; align-items:center; gap:8px; padding:7px 10px 7px 9px; border-radius:9px; background:var(--surface-2); border:1px solid var(--border-2); cursor:grab; user-select:none; box-shadow:var(--shadow-sm); transition:transform .12s,box-shadow .12s}
+  .chip:hover{transform:translateY(-1px); box-shadow:var(--shadow-md)}
+  .chip:active{cursor:grabbing}
+  .chip.dragging{opacity:.45}
+  .chip .cdot{width:8px; height:8px; border-radius:50%; flex:none}
+  .chip .cname{font-family:var(--font-mono); font-size:12.5px; font-weight:600}
+  .chip .cprov{font-family:var(--font-mono); font-size:11px; color:var(--ink-3)}
+  .chip .health{width:15px; height:15px; display:grid; place-items:center; flex:none}
+  .chip .health svg{width:12px; height:12px}
+  .h-ok{color:var(--good)} .h-warn{color:var(--warn)}
+  .chip.blocked{opacity:.85}
+  .chip.blocked .cname{text-decoration:line-through; text-decoration-color:color-mix(in srgb,var(--warn) 60%,transparent)}
+
+  footer{max-width:1280px; margin:8px auto 30px; padding:0 clamp(16px,2.6vw,28px); color:var(--ink-3); font-size:12px}
+  footer .fnote{border-top:1px solid var(--border); padding-top:16px; display:flex; gap:22px; flex-wrap:wrap}
+  footer strong{color:var(--ink-2); font-weight:640}
+  .flow{display:flex; align-items:center; gap:7px; flex-wrap:wrap; font-family:var(--font-mono); font-size:11.5px; color:var(--ink-2)}
+  .flow .step{background:var(--surface-2); border:1px solid var(--border); border-radius:6px; padding:3px 8px}
+  .flow .arr{color:var(--ink-3)}
+
+  .toast{position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px); background:var(--ink); color:var(--bg); padding:10px 16px; border-radius:10px; font-size:13px; box-shadow:var(--shadow-md); opacity:0; pointer-events:none; transition:opacity .25s,transform .25s; z-index:50; display:flex; align-items:center; gap:9px; max-width:90vw}
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
+  .toast svg{width:16px; height:16px; color:var(--accent-2); flex:none}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important; animation:none!important}}
+</style>
+
+<div class="appbar">
+  <div class="brand">
+    <div class="glyph" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="5" cy="6" r="2.4"/><circle cx="5" cy="18" r="2.4"/><circle cx="19" cy="12" r="2.4"/>
+        <path d="M7.3 6.6 16.7 11M7.3 17.4 16.7 13"/>
+      </svg>
+    </div>
+    <div class="brand-txt">
+      <strong>编排控制台</strong>
+      <span>personal-ai-orchestrator</span>
+    </div>
+  </div>
+
+  <div class="env-pill" title="本地运行时"><span class="dot" style="color:var(--good);background:var(--good)"></span>opencode&nbsp;1.18.23 · 本地</div>
+
+  <div class="seg" role="group" aria-label="路由模式">
+    <button data-mode="BYPASS" aria-pressed="false"><span class="dot" style="background:var(--ink-3)"></span>旁路</button>
+    <button data-mode="SHADOW" aria-pressed="true"><span class="dot" style="background:var(--warn)"></span>影子</button>
+    <button data-mode="ACTIVE" aria-pressed="false"><span class="dot" style="background:var(--good)"></span>主动</button>
+  </div>
+
+  <button class="iconbtn" id="themeToggle" title="切换主题" aria-label="切换配色主题"></button>
+</div>
+
+<main>
+  <div class="kpis" id="kpis"></div>
+
+  <div class="cols">
+    <section>
+      <div class="zone-head">
+        <h2>厂商与套餐</h2>
+        <span class="hint">密钥由 OpenCode 保管</span>
+      </div>
+      <div class="providers" id="providers"></div>
+    </section>
+
+    <section>
+      <div class="zone-head">
+        <h2>模型池</h2>
+        <span class="hint">拖动模型即可路由</span>
+      </div>
+      <div class="board" id="board"></div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="fnote">
+    <div class="flow" aria-label="路由路径">
+      <span class="step">编排器</span><span class="arr">→</span>
+      <span class="step">路由决策</span><span class="arr">→</span>
+      <span class="step">模型池</span><span class="arr">→</span>
+      <span class="step">会话切换</span><span class="arr">→</span>
+      <span class="step">OpenCode&nbsp;鉴权</span><span class="arr">→</span>
+      <span class="step">厂商</span>
+    </div>
+    <div style="max-width:52ch">
+      <strong>凭证安全。</strong>在此输入的 API 密钥会直接交给 OpenCode 自己的凭证库——编排器从不读取、存储或记录。额度显示的是<strong>诚实状态</strong>，而非猜测的百分比。
+    </div>
+  </div>
+</footer>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  const IC = {
+    check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+    warn:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>',
+    lock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>',
+    bolt:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></svg>',
+    eye:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
+    eyeoff:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18M10.6 10.7a3 3 0 0 0 4 4M9.9 4.2A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.3 4M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a10 10 0 0 0 3-.5"/></svg>',
+    sun:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+    moon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>',
+  };
+
+  const MODE_LABEL = {BYPASS:"旁路", SHADOW:"影子", ACTIVE:"主动"};
+
+  const state = {
+    mode:"SHADOW",
+    providers:[
+      { id:"minimax-cn-coding-plan", name:"MiniMax 令牌套餐", endpoint:"api.minimaxi.com",
+        color:"var(--p-minimax)", connected:true, credType:"api", health:"ok", fp:"mk-live-••••••••••••7f3a",
+        plan:{ kind:"令牌套餐（按量）", unit:"令牌", used:2758, cap:1000000, capLabel:"1,000,000", state:"ESTIMATED" },
+        models:["MiniMax-M2.5","MiniMax-M2.5-highspeed","MiniMax-M2.7","MiniMax-M2.7-highspeed","MiniMax-M3"] },
+      { id:"zai-coding-plan", name:"Z.AI 编程套餐", endpoint:"api.z.ai",
+        color:"var(--p-zai)", connected:true, credType:"api", health:"warn", healthNote:"模型不可用", fp:"zai-••••••••••••b19c",
+        plan:{ kind:"编程套餐（按次）", unit:"次", used:null, cap:null, capLabel:null, state:"UNKNOWN" },
+        models:["glm-5.3","glm-5.3-flash","glm-5.2"] },
+      { id:"deepseek", name:"DeepSeek", endpoint:"api.deepseek.com",
+        color:"var(--p-deepseek)", connected:true, credType:"env", envVar:"DEEPSEEK_API_KEY", health:"ok", fp:"$DEEPSEEK_API_KEY",
+        plan:{ kind:"按量付费", unit:"令牌", used:null, cap:null, capLabel:null, state:"UNKNOWN" },
+        models:["deepseek-v4"] },
+      { id:"minimax", name:"MiniMax（minimax.io）", endpoint:"api.minimax.io",
+        color:"var(--p-alt)", connected:false, credType:"api", health:"idle", fp:null,
+        plan:{ kind:"—", unit:"令牌", used:null, cap:null, capLabel:null, state:"UNKNOWN" },
+        models:["MiniMax-M3"] },
+    ],
+    pools:[
+      { id:"fast", name:"快速通道", desc:"便宜、低延迟的回合", color:"var(--good)", models:["minimax-cn-coding-plan/MiniMax-M2.5-highspeed"] },
+      { id:"heavy", name:"重度编程", desc:"长链路智能编辑", color:"var(--accent)", models:["minimax-cn-coding-plan/MiniMax-M2.7"] },
+      { id:"reason", name:"推理", desc:"深度规划", color:"var(--p-zai)", models:["minimax-cn-coding-plan/MiniMax-M3"] },
+      { id:"fallback", name:"兜底", desc:"失败时的安全默认", color:"var(--ink-3)", models:["minimax-cn-coding-plan/MiniMax-M2.5","deepseek/deepseek-v4"] },
+      { id:"blocked", name:"已禁用 · 阻断", desc:"当前不可路由", color:"var(--warn)", models:["zai-coding-plan/glm-5.3-flash","zai-coding-plan/glm-5.3"] },
+    ],
+  };
+
+  const $ = s => document.querySelector(s);
+  const el = (t,c) => { const n=document.createElement(t); if(c) n.className=c; return n; };
+  const providerById = id => state.providers.find(p=>p.id===id);
+  const fmt = n => n==null ? "—" : n.toLocaleString("en-US");
+
+  function renderKpis(){
+    const wrap=$("#kpis"); wrap.innerHTML="";
+    const connected=state.providers.filter(p=>p.connected).length;
+    const catalog=state.providers.reduce((a,p)=>a+p.models.length,0);
+    const routable=state.pools.filter(p=>p.id!=="blocked").reduce((a,p)=>a+p.models.length,0);
+    const blocked=(state.pools.find(p=>p.id==="blocked")||{models:[]}).models.length;
+    const modeSub=state.mode==="ACTIVE"?"切换会话模型":state.mode==="SHADOW"?"仅记录，不切换":"不应用路由";
+    const modeColor=state.mode==="ACTIVE"?"var(--good)":state.mode==="SHADOW"?"var(--warn)":"var(--ink-3)";
+    const items=[
+      { lab:"已连接厂商", val:connected, sub:`共 ${state.providers.length} 个已配置`, rail:"var(--accent)" },
+      { lab:"模型目录", val:catalog, sub:"覆盖全部套餐", rail:"var(--p-deepseek)" },
+      { lab:"可路由模型", val:routable, sub:`${blocked} 个被禁用`, rail:"var(--good)" },
+      { lab:"路由模式", val:MODE_LABEL[state.mode], sub:modeSub, rail:modeColor, mono:true },
+    ];
+    items.forEach(it=>{
+      const k=el("div","kpi");
+      k.innerHTML=`<div class="rail" style="background:${it.rail}"></div>
+        <div class="lab">${it.lab}</div>
+        <div class="val" ${it.mono?'style="font-size:23px"':''}>${it.val}</div>
+        <div class="sub">${it.sub}</div>`;
+      wrap.appendChild(k);
+    });
+  }
+
+  function statusPill(p){
+    if(!p.connected) return `<span class="status s-idle">未连接</span>`;
+    if(p.health==="warn") return `<span class="status s-warn">${IC.warn}${p.healthNote||"需注意"}</span>`;
+    if(p.credType==="env") return `<span class="status s-env">${IC.check}已连接 · 环境变量</span>`;
+    return `<span class="status s-good">${IC.check}已连接</span>`;
+  }
+
+  function testResultHtml(p){
+    if(p.testing) return "";
+    if(!p.lastTest) return "";
+    const t=p.lastTest;
+    const cls=t.state==="warn"?"t-warn":"t-ok";
+    const icon=t.state==="warn"?IC.warn:IC.check;
+    return `<div class="testresult ${cls}">${icon}<span>${t.msg}</span>${t.latency?`<span class="mono" style="margin-left:auto">${t.latency} ms</span>`:""}</div>`;
+  }
+  function testBtn(p){
+    if(p.testing) return `<button class="btn btn-sm" disabled><span class="spin"></span>测试中…</button>`;
+    return `<button class="btn btn-sm" data-test="${p.id}">${IC.bolt}测试连接</button>`;
+  }
+
+  function keyBlock(p){
+    if(p.credType==="env"){
+      return `<div>
+        <div class="row-lab">${IC.lock}凭证</div>
+        <div class="fp"><span class="ok">${IC.check}</span> 从环境变量读取 <span class="mono">${p.envVar}</span>
+          <span class="actions">${testBtn(p)}</span></div>
+        ${testResultHtml(p)}
+      </div>`;
+    }
+    if(p.connected){
+      return `<div>
+        <div class="row-lab">${IC.lock}API 密钥</div>
+        <div class="fp"><span class="ok">${IC.check}</span> 已存入 OpenCode · <span class="mono">${p.fp}</span>
+          <span class="actions">${testBtn(p)}<button class="btn btn-sm" data-rotate="${p.id}">更换</button></span></div>
+        ${testResultHtml(p)}
+      </div>`;
+    }
+    return `<div>
+      <div class="row-lab">${IC.lock}API 密钥</div>
+      <div class="keyfield">
+        <div class="keywrap">
+          <input type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 ${p.name} 的 API 密钥" data-key="${p.id}">
+          <button class="reveal" data-reveal aria-label="显示密钥">${IC.eye}</button>
+        </div>
+        <button class="btn btn-accent" data-connect="${p.id}">连接</button>
+      </div>
+      <div class="safenote" style="margin-top:9px">${IC.lock}<span>直接交给 OpenCode 的凭证库。编排器从不存储或记录。</span></div>
+    </div>`;
+  }
+
+  function quotaBlock(p){
+    const q=p.plan;
+    const known=q.cap!=null && q.used!=null;
+    const pct=known?Math.min(100,Math.round(q.used/q.cap*100)):0;
+    const badgeCls=q.state==="ESTIMATED"?"estimated":(q.state==="LOCALLY_MEASURED"?"measured":(q.state==="UNKNOWN"?"unknown":"measured"));
+    const warnFill=known && pct>=90;
+    const meter=known
+      ? `<div class="meter ${warnFill?'warnfill':''}"><div class="fill" style="width:${pct}%"></div></div>
+         <div class="quota-foot"><span class="used">${fmt(q.used)}</span><span class="sep">/ ${q.capLabel} ${q.unit}</span><span class="pct">${pct}%</span></div>`
+      : `<div class="meter unknown" title="厂商未提供额度"></div>
+         <div class="quota-foot"><span class="used" style="color:var(--ink-3)">厂商未提供额度</span></div>`;
+    return `<div>
+        <div class="row-lab">套餐额度</div>
+        <div class="quota-head"><span class="plan">${q.kind}</span><span class="qbadge ${badgeCls}">${q.state}</span></div>
+        ${meter}
+        <div class="capedit">
+          <label for="cap-${p.id}">套餐上限</label>
+          <input id="cap-${p.id}" class="mono" inputmode="numeric" placeholder="如 1000000" value="${q.cap!=null?q.cap:''}" data-cap="${p.id}">
+          <span class="mono" style="font-size:11.5px;color:var(--ink-3)">${q.unit}</span>
+        </div>
+      </div>`;
+  }
+
+  function renderProviders(){
+    const wrap=$("#providers"); wrap.innerHTML="";
+    state.providers.forEach(p=>{
+      const c=el("div","pcard");
+      c.innerHTML=`
+        <div class="pcard-top">
+          <span class="pdot" style="background:${p.color}"></span>
+          <div class="pmeta">
+            <div class="name">${p.name} <span class="mono pid" style="margin:0">${p.id}</span></div>
+            <div class="pid mono">${p.endpoint} · ${p.models.length} 个模型</div>
+          </div>
+          ${statusPill(p)}
+        </div>
+        <div class="pcard-body">${keyBlock(p)}${quotaBlock(p)}</div>`;
+      wrap.appendChild(c);
+    });
+  }
+
+  function modelHealth(key){ const p=providerById(key.split("/")[0]); return p?p.health:"ok"; }
+  function chip(key){
+    const [pid,mid]=key.split("/"); const p=providerById(pid);
+    const blocked=modelHealth(key)==="warn";
+    const c=el("div","chip"+(blocked?" blocked":""));
+    c.draggable=true; c.dataset.key=key;
+    c.innerHTML=`<span class="cdot" style="background:${p?p.color:'var(--ink-3)'}"></span>
+      <span style="display:flex;flex-direction:column;line-height:1.25">
+        <span class="cname">${mid}</span><span class="cprov">${pid}</span>
+      </span>
+      <span class="health ${blocked?'h-warn':'h-ok'}" title="${blocked?(p.healthNote||'不可用'):'正常'}">${blocked?IC.warn:IC.check}</span>`;
+    return c;
+  }
+  function renderBoard(){
+    const board=$("#board"); board.innerHTML="";
+    state.pools.forEach(pool=>{
+      const el0=el("div","pool"); el0.dataset.pool=pool.id;
+      el0.innerHTML=`<div class="pool-head">
+          <span class="swatch" style="background:${pool.color}"></span>
+          <div><h3>${pool.name}</h3><div class="desc">${pool.desc}</div></div>
+          <span class="count">${pool.models.length}</span>
+        </div>`;
+      const drop=el("div","drop"+(pool.models.length?"":" empty")); drop.dataset.drop=pool.id;
+      pool.models.forEach(k=>drop.appendChild(chip(k)));
+      el0.appendChild(drop); board.appendChild(el0);
+    });
+    wireDnD();
+  }
+
+  let dragKey=null, dragFrom=null;
+  function wireDnD(){
+    document.querySelectorAll(".chip").forEach(ch=>{
+      ch.addEventListener("dragstart",e=>{ dragKey=ch.dataset.key; dragFrom=ch.closest("[data-drop]").dataset.drop;
+        ch.classList.add("dragging"); e.dataTransfer.effectAllowed="move";
+        try{e.dataTransfer.setData("text/plain",dragKey);}catch(_){} });
+      ch.addEventListener("dragend",()=>ch.classList.remove("dragging"));
+    });
+    document.querySelectorAll(".pool").forEach(pl=>{
+      const drop=pl.querySelector("[data-drop]");
+      pl.addEventListener("dragover",e=>{e.preventDefault(); pl.classList.add("dragover");});
+      pl.addEventListener("dragleave",e=>{ if(!pl.contains(e.relatedTarget)) pl.classList.remove("dragover"); });
+      pl.addEventListener("drop",e=>{ e.preventDefault(); pl.classList.remove("dragover");
+        const to=drop.dataset.drop; if(!dragKey||to===dragFrom) return; moveModel(dragKey,dragFrom,to); });
+    });
+  }
+  function moveModel(key,from,to){
+    const src=state.pools.find(p=>p.id===from), dst=state.pools.find(p=>p.id===to);
+    if(!src||!dst) return;
+    src.models=src.models.filter(k=>k!==key);
+    if(!dst.models.includes(key)) dst.models.push(key);
+    renderBoard(); renderKpis();
+    toast(`${key.split("/")[1]} → ${dst.name}`, to==="blocked"?"warn":"ok");
+  }
+
+  function runTest(p){
+    p.testing=true; p.lastTest=null; renderProviders();
+    const latency=180+Math.floor(Math.random()*520);
+    setTimeout(()=>{
+      p.testing=false;
+      if(p.health==="warn"){
+        p.lastTest={state:"warn", latency, msg:`鉴权通过，但模型当前不可用（${p.healthNote||"ModelUnavailable"}）`};
+      } else {
+        p.lastTest={state:"ok", latency, msg:"连接正常，鉴权通过"};
+      }
+      renderProviders();
+      toast(p.lastTest.state==="warn"?`${p.name} · 鉴权通过，模型不可用`:`${p.name} · 连接正常 ${latency} ms`, p.lastTest.state);
+    }, 650+Math.floor(Math.random()*500));
+  }
+
+  document.addEventListener("click",e=>{
+    const rv=e.target.closest("[data-reveal]");
+    if(rv){ const inp=rv.parentElement.querySelector("input"); const show=inp.type==="password";
+      inp.type=show?"text":"password"; rv.innerHTML=show?IC.eyeoff:IC.eye; return; }
+
+    const ts=e.target.closest("[data-test]");
+    if(ts){ runTest(providerById(ts.dataset.test)); return; }
+
+    const cn=e.target.closest("[data-connect]");
+    if(cn){ const p=providerById(cn.dataset.connect);
+      const inp=document.querySelector(`[data-key="${p.id}"]`);
+      if(!inp.value.trim()){ inp.focus(); toast("请先粘贴 API 密钥","warn"); return; }
+      p.connected=true; p.health="ok"; p.fp="key-••••••••••••"+(inp.value.trim().slice(-4)||"0000");
+      renderProviders(); renderKpis(); toast(`${p.name} 已连接 · 已交给 OpenCode`,"ok"); return; }
+
+    const rt=e.target.closest("[data-rotate]");
+    if(rt){ const p=providerById(rt.dataset.rotate); p.connected=false; p.fp=null; p.lastTest=null;
+      renderProviders(); toast(`请更换 ${p.name} 的密钥`,"ok"); return; }
+
+    const seg=e.target.closest(".seg button");
+    if(seg){ state.mode=seg.dataset.mode;
+      document.querySelectorAll(".seg button").forEach(b=>b.setAttribute("aria-pressed",String(b===seg)));
+      renderKpis(); toast(`路由模式 · ${MODE_LABEL[state.mode]}`,"ok"); return; }
+  });
+
+  document.addEventListener("change",e=>{
+    const cap=e.target.closest("[data-cap]");
+    if(cap){ const p=providerById(cap.dataset.cap); const v=parseInt(cap.value.replace(/[^0-9]/g,""),10);
+      if(v>0){ p.plan.cap=v; p.plan.capLabel=v.toLocaleString("en-US");
+        if(p.plan.used==null) p.plan.used=Math.round(v*0.0028); p.plan.state="LOCALLY_MEASURED"; }
+      else { p.plan.cap=null; p.plan.capLabel=null; p.plan.state="UNKNOWN"; }
+      renderProviders(); toast(v>0?"已设置上限 · 现为 LOCALLY_MEASURED":"已清除上限 · UNKNOWN","ok"); }
+  });
+
+  const tt=$("#themeToggle");
+  function currentDark(){ const r=document.documentElement;
+    if(r.getAttribute("data-theme")==="dark") return true;
+    if(r.getAttribute("data-theme")==="light") return false;
+    return matchMedia("(prefers-color-scheme:dark)").matches; }
+  function syncToggleIcon(){ tt.innerHTML=currentDark()?IC.moon:IC.sun; }
+  tt.addEventListener("click",()=>{ document.documentElement.setAttribute("data-theme", currentDark()?"light":"dark"); syncToggleIcon(); });
+  matchMedia("(prefers-color-scheme:dark)").addEventListener?.("change",syncToggleIcon);
+
+  let tTimer;
+  function toast(msg,kind){ const t=$("#toast");
+    t.innerHTML=`${kind==="warn"?IC.warn:IC.check}<span>${msg}</span>`;
+    t.querySelector("svg").style.color=kind==="warn"?"var(--warn)":"var(--accent-2)";
+    t.classList.add("show"); clearTimeout(tTimer); tTimer=setTimeout(()=>t.classList.remove("show"),2600); }
+
+  renderKpis(); renderProviders(); renderBoard(); syncToggleIcon();
+})();
+</script>
