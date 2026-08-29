@@ -3,12 +3,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
+import personal_ai_orchestrator.model_registry as model_registry
 from personal_ai_orchestrator.model_registry import (
     EvidenceConfidence,
     EvidenceSourceType,
-    QuotaSnapshot as RegistryQuotaSnapshot,
     QuotaState,
-    QuotaWindowSnapshot as RegistryQuotaWindowSnapshot,
 )
 from personal_ai_orchestrator.quota_observability import (
     DEFAULT_SCARCITY_THRESHOLDS,
@@ -75,8 +74,8 @@ def snapshot(*windows: QuotaWindowSnapshot) -> QuotaSnapshot:
 
 
 def test_p3_reuses_model_registry_quota_domain() -> None:
-    assert QuotaSnapshot is RegistryQuotaSnapshot
-    assert QuotaWindowSnapshot is RegistryQuotaWindowSnapshot
+    assert QuotaSnapshot is model_registry.QuotaSnapshot
+    assert QuotaWindowSnapshot is model_registry.QuotaWindowSnapshot
 
 
 def test_snapshot_serialization_round_trip() -> None:
