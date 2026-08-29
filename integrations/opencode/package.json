@@ -6,6 +6,6 @@
     "typescript": "^5.9.0"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && node --test decision_contract.test.ts"
   }
 }
