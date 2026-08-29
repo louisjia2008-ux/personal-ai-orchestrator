@@ -40,32 +40,40 @@ class ApprovalAuthority:
         self.store = store
 
     def request(self, *, approval_id: str, task_id: str, kind: ApprovalKind) -> ApprovalRecord:
-        self.store.get_task(task_id)
-        existing = self.store.connection.execute(
-            "SELECT * FROM approvals WHERE approval_id=?", (approval_id,)
-        ).fetchone()
-        if existing is not None:
-            record = self._from_row(existing)
-            if record.task_id != task_id or record.kind is not kind:
-                raise ValueError("approval_id already belongs to a different request")
-            return record
-        created_at = datetime.now(UTC).isoformat()
-        self.store.connection.execute(
-            "INSERT INTO approvals VALUES(?,?,?,?,?,?)",
-            (
-                approval_id,
+        self.store.connection.execute("BEGIN IMMEDIATE")
+        try:
+            self.store.get_task(task_id)
+            existing = self.store.connection.execute(
+                "SELECT * FROM approvals WHERE approval_id=?", (approval_id,)
+            ).fetchone()
+            if existing is not None:
+                record = self._from_row(existing)
+                if record.task_id != task_id or record.kind is not kind:
+                    raise ValueError("approval_id already belongs to a different request")
+                self.store.connection.execute("COMMIT")
+                return record
+
+            created_at = datetime.now(UTC).isoformat()
+            self.store.connection.execute(
+                "INSERT INTO approvals VALUES(?,?,?,?,?,?)",
+                (
+                    approval_id,
+                    task_id,
+                    kind.value,
+                    ApprovalStatus.PENDING.value,
+                    created_at,
+                    None,
+                ),
+            )
+            self.store._audit(
                 task_id,
-                kind.value,
-                ApprovalStatus.PENDING.value,
-                created_at,
-                None,
-            ),
-        )
-        self.store._audit(
-            task_id,
-            "APPROVAL_REQUESTED",
-            {"approval_id": approval_id, "kind": kind.value},
-        )
+                "APPROVAL_REQUESTED",
+                {"approval_id": approval_id, "kind": kind.value},
+            )
+            self.store.connection.execute("COMMIT")
+        except Exception:
+            self.store.connection.execute("ROLLBACK")
+            raise
         return self.get(approval_id)
 
     def resolve(
@@ -74,27 +82,37 @@ class ApprovalAuthority:
         *,
         approved: bool,
     ) -> ApprovalRecord:
-        current = self.get(approval_id)
         target = ApprovalStatus.APPROVED if approved else ApprovalStatus.REJECTED
-        if current.status is target:
-            return current
-        if current.status is not ApprovalStatus.PENDING:
-            raise ValueError("resolved approval is immutable")
-        resolved_at = datetime.now(UTC).isoformat()
-        self.store.connection.execute(
-            "UPDATE approvals SET status=?,resolved_at=? WHERE approval_id=? AND status=?",
-            (
-                target.value,
-                resolved_at,
-                approval_id,
-                ApprovalStatus.PENDING.value,
-            ),
-        )
-        self.store._audit(
-            current.task_id,
-            "APPROVAL_RESOLVED",
-            {"approval_id": approval_id, "kind": current.kind.value, "status": target.value},
-        )
+        self.store.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get(approval_id)
+            if current.status is target:
+                self.store.connection.execute("COMMIT")
+                return current
+            if current.status is not ApprovalStatus.PENDING:
+                raise ValueError("resolved approval is immutable")
+
+            resolved_at = datetime.now(UTC).isoformat()
+            updated = self.store.connection.execute(
+                "UPDATE approvals SET status=?,resolved_at=? WHERE approval_id=? AND status=?",
+                (
+                    target.value,
+                    resolved_at,
+                    approval_id,
+                    ApprovalStatus.PENDING.value,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("approval resolution lost concurrency race")
+            self.store._audit(
+                current.task_id,
+                "APPROVAL_RESOLVED",
+                {"approval_id": approval_id, "kind": current.kind.value, "status": target.value},
+            )
+            self.store.connection.execute("COMMIT")
+        except Exception:
+            self.store.connection.execute("ROLLBACK")
+            raise
         return self.get(approval_id)
 
     def get(self, approval_id: str) -> ApprovalRecord:
