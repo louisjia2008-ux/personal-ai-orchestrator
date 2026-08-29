@@ -219,6 +219,33 @@ def test_mismatched_persisted_evidence_blocks_claimed_pass(tmp_path: Path) -> No
     )
 
 
+def test_malformed_persisted_evidence_blocks_claimed_pass(tmp_path: Path) -> None:
+    store = _running_store(tmp_path)
+    _finish_worker(store)
+    result = VerificationResult(
+        profile="fixture",
+        passed=True,
+        changed_paths=(),
+        unexpected_paths=(),
+        stages=(),
+        evidence_id="verify-malformed",
+    )
+    journal = VerificationEvidenceJournal(tmp_path / "runtime-state")
+    target = journal.path_for("verify-malformed")
+    target.parent.mkdir(parents=True)
+    target.write_text("{not-json\n", encoding="utf-8")
+
+    assert (
+        apply_verification_result(
+            store,
+            task_id="t1",
+            result=result,
+            evidence_journal=journal,
+        )
+        is TaskState.BLOCKED
+    )
+
+
 def test_missing_verifier_evidence_blocks_even_claimed_pass(tmp_path: Path) -> None:
     store = _running_store(tmp_path)
     _finish_worker(store)

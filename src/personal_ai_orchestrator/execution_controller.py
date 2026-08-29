@@ -286,7 +286,10 @@ def _persisted_evidence_matches(
 ) -> bool:
     if result.evidence_id is None:
         return False
-    persisted = journal.load(result.evidence_id)
+    try:
+        persisted = journal.load(result.evidence_id)
+    except Exception:
+        return False
     return persisted == result
 
 
