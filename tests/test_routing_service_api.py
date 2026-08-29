@@ -11,7 +11,8 @@ from personal_ai_orchestrator.local_api import handler_for
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.opencode_contract import RoutingMode, RoutingRequest
 from personal_ai_orchestrator.routing_service import RoutingService
-from personal_ai_orchestrator.safety_kernel import SafetyKernelStore
+from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
+from personal_ai_orchestrator.scheduler import TaskProfile
 
 NOW = datetime(2026, 8, 30, tzinfo=UTC)
 
@@ -59,6 +60,80 @@ def test_service_unknown_task_returns_no_switch_and_is_idempotent(tmp_path) -> N
     assert first.switch_requested is False
     assert first.selected_model is None
     assert "no authoritative TaskProfile" in (first.fallback_reason or "")
+
+
+def test_profile_without_durable_task_state_fails_closed(tmp_path) -> None:
+    service = _service(tmp_path)
+    service.set_task_profile(TaskProfile(task_id="task-1"))
+    decision = service.route(
+        RoutingRequest(
+            request_id="req-no-state",
+            session_id="session-1",
+            task_id="task-1",
+            mode=RoutingMode.SHADOW,
+            requested_at=NOW,
+        ),
+        now=NOW,
+    )
+    assert decision.selected_model is None
+    assert "not backed by durable Safety Kernel" in (decision.fallback_reason or "")
+
+
+def test_shadow_routing_rejects_stale_task_version(tmp_path) -> None:
+    service = _service(tmp_path)
+    service.set_task_profile(TaskProfile(task_id="task-1"))
+    service.store.submit_task(task_id="task-1", request_id="task-submit", intent="implement")
+    ready = service.store.transition_task("task-1", TaskState.READY)
+    decision = service.route(
+        RoutingRequest(
+            request_id="req-stale-state",
+            session_id="session-1",
+            task_id="task-1",
+            task_state_version=ready.state_version + 1,
+            mode=RoutingMode.SHADOW,
+            requested_at=NOW,
+        ),
+        now=NOW,
+    )
+    assert decision.selected_model is None
+    assert "stale task state version" in (decision.fallback_reason or "")
+
+
+def test_active_routing_requires_exact_task_state_version(tmp_path) -> None:
+    service = _service(tmp_path)
+    service.set_task_profile(TaskProfile(task_id="task-1"))
+    service.store.submit_task(task_id="task-1", request_id="task-submit", intent="implement")
+    service.store.transition_task("task-1", TaskState.READY)
+    decision = service.route(
+        RoutingRequest(
+            request_id="req-active-no-version",
+            session_id="session-1",
+            task_id="task-1",
+            mode=RoutingMode.ACTIVE,
+            requested_at=NOW,
+        ),
+        now=NOW,
+    )
+    assert decision.selected_model is None
+    assert "requires an exact task state version" in (decision.fallback_reason or "")
+
+
+def test_non_routable_task_state_fails_closed(tmp_path) -> None:
+    service = _service(tmp_path)
+    service.set_task_profile(TaskProfile(task_id="task-1"))
+    service.store.submit_task(task_id="task-1", request_id="task-submit", intent="implement")
+    decision = service.route(
+        RoutingRequest(
+            request_id="req-submitted",
+            session_id="session-1",
+            task_id="task-1",
+            mode=RoutingMode.SHADOW,
+            requested_at=NOW,
+        ),
+        now=NOW,
+    )
+    assert decision.selected_model is None
+    assert "not eligible for model routing" in (decision.fallback_reason or "")
 
 
 def test_service_rejects_request_id_reuse_for_different_task_or_mode(tmp_path) -> None:
