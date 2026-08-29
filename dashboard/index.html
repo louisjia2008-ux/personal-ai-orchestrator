@@ -253,6 +253,12 @@
   .modellist{display:flex; flex-direction:column; gap:2px; margin-top:9px}
   .add-list{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px}
 
+  .modal-overlay{position:fixed; inset:0; background:color-mix(in srgb,var(--ink) 45%,transparent); display:grid; place-items:center; z-index:60; padding:20px}
+  .modal{background:var(--surface); border:1px solid var(--border-2); border-radius:var(--radius); box-shadow:var(--shadow-md); width:min(560px,92vw); padding:16px; display:flex; flex-direction:column; gap:12px}
+  .modal-head{display:flex; align-items:center}
+  .modal textarea{width:100%; height:min(46vh,320px); resize:vertical; font-family:var(--font-mono); font-size:12px; line-height:1.5; padding:11px; border:1px solid var(--border-2); border-radius:var(--radius-sm); background:var(--surface-2); color:var(--ink)}
+  .modal-foot{display:flex; justify-content:flex-end}
+
   .toast{position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px); background:var(--ink); color:var(--bg); padding:10px 16px; border-radius:10px; font-size:13px; box-shadow:var(--shadow-md); opacity:0; pointer-events:none; transition:opacity .25s,transform .25s; z-index:50; display:flex; align-items:center; gap:9px; max-width:90vw}
   .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
   .toast svg{width:16px; height:16px; color:var(--accent-2); flex:none}
@@ -803,11 +809,28 @@
       }catch(e){ toast("导出失败：后端不可用","warn"); }
     } else {
       const doc={version:1, mode:state.mode, pools};
-      const blob=new Blob([JSON.stringify(doc,null,2)],{type:"application/json"});
-      const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="pools.json";
-      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
-      toast("已下载 pools.json","ok");
+      showExportModal(JSON.stringify(doc,null,2));
     }
+  }
+
+  function showExportModal(text){
+    const ov=el("div","modal-overlay");
+    ov.innerHTML=`<div class="modal">
+        <div class="modal-head"><strong>pools.json</strong>
+          <span class="hint" style="margin-left:8px">演示模式：复制以下内容（实时后端会直接写入文件）</span>
+          <button class="iconbtn" data-close style="margin-left:auto;width:30px;height:30px">✕</button></div>
+        <textarea readonly spellcheck="false"></textarea>
+        <div class="modal-foot"><button class="btn btn-accent btn-sm" data-copy>复制</button></div>
+      </div>`;
+    ov.querySelector("textarea").value=text;
+    document.body.appendChild(ov);
+    const ta=ov.querySelector("textarea"); ta.focus(); ta.select();
+    ov.addEventListener("click",ev=>{ if(ev.target===ov||ev.target.closest("[data-close]")) ov.remove(); });
+    ov.querySelector("[data-copy]").addEventListener("click",async()=>{
+      ta.select();
+      try{ await navigator.clipboard.writeText(text); toast("已复制到剪贴板","ok"); }
+      catch(_){ try{ document.execCommand("copy"); toast("已复制","ok"); }catch(e){ toast("请手动复制（Ctrl/⌘+C）","warn"); } }
+    });
   }
 
   async function loginProvider(id,name){
