@@ -10,6 +10,7 @@ from personal_ai_orchestrator.execution_controller import (
     start_worker_run,
 )
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
+from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
 from personal_ai_orchestrator.verifier import VerificationResult
 
 
@@ -138,9 +139,7 @@ def test_invalid_worker_result_blocks_task(tmp_path: Path) -> None:
     assert state is TaskState.BLOCKED
 
 
-def test_worker_success_stops_at_worker_finished_until_verifier_evidence_passes(
-    tmp_path: Path,
-) -> None:
+def test_worker_success_requires_matching_persisted_verifier_evidence(tmp_path: Path) -> None:
     store = _running_store(tmp_path)
     state = record_worker_exit(
         store,
@@ -159,7 +158,65 @@ def test_worker_success_stops_at_worker_finished_until_verifier_evidence_passes(
         stages=(),
         evidence_id="verify-fixture",
     )
-    assert apply_verification_result(store, task_id="t1", result=result) is TaskState.VERIFIED
+    journal = VerificationEvidenceJournal(tmp_path / "runtime-state")
+    journal.append(result)
+    assert (
+        apply_verification_result(
+            store,
+            task_id="t1",
+            result=result,
+            evidence_journal=journal,
+        )
+        is TaskState.VERIFIED
+    )
+
+
+def test_forged_non_null_evidence_id_blocks_claimed_pass(tmp_path: Path) -> None:
+    store = _running_store(tmp_path)
+    _finish_worker(store)
+    result = VerificationResult(
+        profile="fixture",
+        passed=True,
+        changed_paths=(),
+        unexpected_paths=(),
+        stages=(),
+        evidence_id="verify-forged",
+    )
+    journal = VerificationEvidenceJournal(tmp_path / "runtime-state")
+    assert (
+        apply_verification_result(
+            store,
+            task_id="t1",
+            result=result,
+            evidence_journal=journal,
+        )
+        is TaskState.BLOCKED
+    )
+
+
+def test_mismatched_persisted_evidence_blocks_claimed_pass(tmp_path: Path) -> None:
+    store = _running_store(tmp_path)
+    _finish_worker(store)
+    persisted = VerificationResult(
+        profile="fixture",
+        passed=True,
+        changed_paths=("src/a.py",),
+        unexpected_paths=(),
+        stages=(),
+        evidence_id="verify-same-id",
+    )
+    claimed = persisted.model_copy(update={"changed_paths": ("src/b.py",)})
+    journal = VerificationEvidenceJournal(tmp_path / "runtime-state")
+    journal.append(persisted)
+    assert (
+        apply_verification_result(
+            store,
+            task_id="t1",
+            result=claimed,
+            evidence_journal=journal,
+        )
+        is TaskState.BLOCKED
+    )
 
 
 def test_missing_verifier_evidence_blocks_even_claimed_pass(tmp_path: Path) -> None:
@@ -173,7 +230,16 @@ def test_missing_verifier_evidence_blocks_even_claimed_pass(tmp_path: Path) -> N
         stages=(),
         evidence_id=None,
     )
-    assert apply_verification_result(store, task_id="t1", result=result) is TaskState.BLOCKED
+    journal = VerificationEvidenceJournal(tmp_path / "runtime-state")
+    assert (
+        apply_verification_result(
+            store,
+            task_id="t1",
+            result=result,
+            evidence_journal=journal,
+        )
+        is TaskState.BLOCKED
+    )
 
 
 def test_failing_verifier_blocks_task(tmp_path: Path) -> None:
@@ -188,7 +254,17 @@ def test_failing_verifier_blocks_task(tmp_path: Path) -> None:
         evidence_id="verify-failure",
         failure_reason="injected failing test",
     )
-    assert apply_verification_result(store, task_id="t1", result=result) is TaskState.BLOCKED
+    journal = VerificationEvidenceJournal(tmp_path / "runtime-state")
+    journal.append(result)
+    assert (
+        apply_verification_result(
+            store,
+            task_id="t1",
+            result=result,
+            evidence_journal=journal,
+        )
+        is TaskState.BLOCKED
+    )
 
 
 def test_missing_worktree_blocks_and_clears_stale_writer_lock(tmp_path: Path) -> None:
