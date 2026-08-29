@@ -26,6 +26,7 @@ from personal_ai_orchestrator.model_registry import (
     PlanKind,
     PoolKind,
     PoolMembership,
+    QuotaSnapshot,
     QuotaState,
     QuotaWindowKind,
     RegistryModel,
@@ -140,7 +141,7 @@ def _membership_targets(
 def _missing_required_window_kinds(
     *,
     required: tuple[QuotaWindowKind, ...],
-    snapshot,
+    snapshot: QuotaSnapshot,
     at: datetime,
 ) -> tuple[QuotaWindowKind, ...]:
     if not required:
@@ -237,6 +238,8 @@ def evaluate_target(
     snapshot = pool.snapshot
     snapshot_id = snapshot.id
 
+    if plan.kind is PlanKind.UNKNOWN:
+        reasons.append("plan kind unknown; routing requires explicit commercial semantics")
     if snapshot.is_stale(as_of=now, max_age_seconds=policy.max_quota_age_seconds):
         reasons.append("quota snapshot stale")
     if snapshot.state is QuotaState.EXHAUSTED:
@@ -368,11 +371,12 @@ def route_task(
     known_at: datetime,
     runtime_availability: dict[str, bool],
     telemetry: dict[str, TargetTelemetry] | None = None,
-    policy: RoutingPolicy = RoutingPolicy(),
+    policy: RoutingPolicy | None = None,
 ) -> SchedulerDecision:
     """Return one deterministic recommendation without applying any runtime switch."""
 
     telemetry = telemetry or {}
+    policy = policy or RoutingPolicy()
     evaluations_by_target: dict[str, CandidateEvaluation] = {}
     membership_by_target: dict[str, PoolMembership] = {}
 
