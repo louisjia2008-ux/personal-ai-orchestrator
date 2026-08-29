@@ -8,10 +8,10 @@ from datetime import UTC, datetime
 
 from personal_ai_orchestrator.activation import ActiveRoutingGate
 from personal_ai_orchestrator.model_registry import ModelRegistry
-from personal_ai_orchestrator.opencode_contract import RoutingDecision, RoutingRequest
+from personal_ai_orchestrator.opencode_contract import RoutingDecision, RoutingMode, RoutingRequest
 from personal_ai_orchestrator.policy_snapshot import PolicySnapshot, PolicySnapshotJournal
 from personal_ai_orchestrator.routing_bridge import build_routing_decision
-from personal_ai_orchestrator.safety_kernel import SafetyKernelStore
+from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
 from personal_ai_orchestrator.scheduler import (
     RoutingPolicy,
     SchedulerDecision,
@@ -19,6 +19,9 @@ from personal_ai_orchestrator.scheduler import (
     TaskProfile,
     route_task,
 )
+
+
+_ROUTABLE_TASK_STATES = {TaskState.READY, TaskState.RUNNING}
 
 
 @dataclass
@@ -63,6 +66,66 @@ class RoutingService:
             raise ValueError("request_id already belongs to a different routing mode")
         return decision
 
+    @staticmethod
+    def _no_selection(request: RoutingRequest, reason: str) -> SchedulerDecision:
+        return SchedulerDecision(
+            task_id=request.task_id or "unattached",
+            selected_execution_target_id=None,
+            selected_model_sku_id=None,
+            evaluations=(),
+            decision_reason=reason,
+        )
+
+    def _scheduler_decision(
+        self,
+        request: RoutingRequest,
+        *,
+        reference: datetime,
+    ) -> SchedulerDecision:
+        profile = self.task_profiles.get(request.task_id or "")
+        if profile is None:
+            return self._no_selection(
+                request,
+                "no authoritative TaskProfile is attached to this routing request",
+            )
+
+        try:
+            task = self.store.get_task(profile.task_id)
+        except KeyError:
+            return self._no_selection(
+                request,
+                "task profile is not backed by durable Safety Kernel task state",
+            )
+
+        if task.state not in _ROUTABLE_TASK_STATES:
+            return self._no_selection(
+                request,
+                f"task state {task.state.value} is not eligible for model routing",
+            )
+        if (
+            request.task_state_version is not None
+            and request.task_state_version != task.state_version
+        ):
+            return self._no_selection(
+                request,
+                "routing request carries a stale task state version",
+            )
+        if request.mode is RoutingMode.ACTIVE and request.task_state_version is None:
+            return self._no_selection(
+                request,
+                "ACTIVE routing requires an exact task state version",
+            )
+
+        return route_task(
+            self.registry,
+            task=profile,
+            now=reference,
+            known_at=request.requested_at,
+            runtime_availability=self.runtime_availability,
+            telemetry=self.telemetry,
+            policy=self.policy,
+        )
+
     def route(self, request: RoutingRequest, *, now: datetime | None = None) -> RoutingDecision:
         existing = self._existing_decision(request)
         if existing is not None:
@@ -73,26 +136,7 @@ class RoutingService:
         if self.policy_journal is not None:
             self.policy_journal.append(policy_snapshot)
 
-        profile = self.task_profiles.get(request.task_id or "")
-        if profile is None:
-            scheduler = SchedulerDecision(
-                task_id=request.task_id or "unattached",
-                selected_execution_target_id=None,
-                selected_model_sku_id=None,
-                evaluations=(),
-                decision_reason="no authoritative TaskProfile is attached to this routing request",
-            )
-        else:
-            scheduler = route_task(
-                self.registry,
-                task=profile,
-                now=reference,
-                known_at=request.requested_at,
-                runtime_availability=self.runtime_availability,
-                telemetry=self.telemetry,
-                policy=self.policy,
-            )
-
+        scheduler = self._scheduler_decision(request, reference=reference)
         decision = build_routing_decision(
             request,
             scheduler,
@@ -102,12 +146,20 @@ class RoutingService:
             activation_gate=self.activation_gate,
             decided_at=reference,
         )
-        self.store.record_routing_decision(
-            decision_id=decision.decision_id,
-            request_id=decision.request_id,
-            task_id=request.task_id,
-            payload=decision.model_dump(mode="json"),
-        )
+        try:
+            self.store.record_routing_decision(
+                decision_id=decision.decision_id,
+                request_id=decision.request_id,
+                task_id=request.task_id,
+                payload=decision.model_dump(mode="json"),
+            )
+        except ValueError:
+            # Two identical retries may race through separate HTTP threads. The first durable
+            # writer wins; the loser returns that exact decision instead of surfacing a 503.
+            existing = self._existing_decision(request)
+            if existing is not None:
+                return existing
+            raise
         return decision
 
 
