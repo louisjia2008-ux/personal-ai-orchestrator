@@ -1,14 +1,14 @@
 """MiniMax Token Plan quota collector.
 
-The endpoint and Bearer authentication are documented by MiniMax's Token Plan page.
-The collector only persists normalized quota fields; the credential and raw response are
-never written by this module.
+MiniMax publishes both Global and CN service regions. The current Personal AI Orchestrator
+MVP provider is ``minimax-cn-coding-plan``, so the collector defaults to the CN endpoint.
+Credentials and raw provider responses are never persisted by this module.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from personal_ai_orchestrator.model_registry import (
     EvidenceConfidence,
@@ -29,8 +29,18 @@ from personal_ai_orchestrator.quota_observability import (
     QuotaWindowSnapshot,
 )
 
-MINIMAX_QUOTA_ENDPOINT = "https://www.minimax.io/v1/token_plan/remains"
+MiniMaxRegion = Literal["global", "cn"]
+MINIMAX_GLOBAL_QUOTA_ENDPOINT = "https://www.minimax.io/v1/token_plan/remains"
+MINIMAX_CN_QUOTA_ENDPOINT = "https://api.minimaxi.com/v1/token_plan/remains"
 MINIMAX_QUOTA_DOC = "https://platform.minimax.io/subscribe/token-plan"
+MINIMAX_CN_QUOTA_DOC = "https://platform.minimaxi.com/subscribe/token-plan"
+MINIMAX_OFFICIAL_CLI = "https://github.com/MiniMax-AI/cli"
+
+
+def minimax_quota_endpoint(region: MiniMaxRegion) -> str:
+    if region == "cn":
+        return MINIMAX_CN_QUOTA_ENDPOINT
+    return MINIMAX_GLOBAL_QUOTA_ENDPOINT
 
 
 def _percent(values: list[object]) -> float | None:
@@ -76,7 +86,8 @@ def normalize_minimax_quota(
     payload: dict[str, Any],
     *,
     observed_at: datetime,
-    quota_pool_id: str = "minimax-token-plan",
+    quota_pool_id: str = "minimax-token-plan-cn",
+    source_uri: str = MINIMAX_CN_QUOTA_ENDPOINT,
 ) -> QuotaSnapshot:
     remains = payload.get("model_remains")
     entries = (
@@ -97,7 +108,7 @@ def normalize_minimax_quota(
 
     exact_source = QuotaEvidenceSource(
         source_type=EvidenceSourceType.PROVIDER_API,
-        source_uri=MINIMAX_QUOTA_ENDPOINT,
+        source_uri=source_uri,
         observed_at=observed_at,
         confidence=EvidenceConfidence.EXACT,
         note="Official MiniMax Token Plan remains API",
@@ -169,11 +180,13 @@ class MiniMaxQuotaCollector:
         self,
         *,
         bearer_token: str | None,
+        region: MiniMaxRegion = "cn",
         transport: QuotaTransport | None = None,
         timeout: float = 10.0,
-        quota_pool_id: str = "minimax-token-plan",
+        quota_pool_id: str = "minimax-token-plan-cn",
     ) -> None:
         self._bearer_token = bearer_token
+        self._endpoint = minimax_quota_endpoint(region)
         self._transport = transport or UrllibQuotaTransport()
         self._timeout = timeout
         self._quota_pool_id = quota_pool_id
@@ -186,7 +199,7 @@ class MiniMaxQuotaCollector:
             )
         try:
             payload = self._transport.get_json(
-                MINIMAX_QUOTA_ENDPOINT,
+                self._endpoint,
                 headers={
                     "Authorization": f"Bearer {self._bearer_token}",
                     "Content-Type": "application/json",
@@ -200,6 +213,7 @@ class MiniMaxQuotaCollector:
             payload,
             observed_at=datetime.now(tz=UTC),
             quota_pool_id=self._quota_pool_id,
+            source_uri=self._endpoint,
         )
         status = (
             QuotaCollectionStatus.SUCCESS

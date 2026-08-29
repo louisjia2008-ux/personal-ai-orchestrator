@@ -2,7 +2,7 @@
 
 Status: P3 foundation audit
 
-As of: 2026-08-29T00:58:00Z
+As of: 2026-08-29T01:08:00Z
 
 This document records only quota/resource state that the orchestrator can justify from provider-published sources. It does not activate routing decisions.
 
@@ -18,27 +18,37 @@ This document records only quota/resource state that the orchestrator can justif
 
 ## MiniMax Token Plan
 
-### Official observability
+### Current MVP region
 
-Official API: YES
+The active OpenCode provider identity for this MVP is `minimax-cn-coding-plan`, so the production collector defaults to the **CN region** rather than silently using the Global endpoint.
 
-Endpoint:
+Provider-published MiniMax CLI documentation explicitly supports two regions:
+
+- Global: `api.minimax.io`
+- CN: `api.minimaxi.com`
+
+The same official CLI constructs the quota path as `/v1/token_plan/remains`. Therefore the current MVP collector uses:
+
+`GET https://api.minimaxi.com/v1/token_plan/remains`
+
+The collector retains an explicit Global option. The Global Token Plan page separately documents:
 
 `GET https://www.minimax.io/v1/token_plan/remains`
 
-Authentication:
+Provider-published sources:
 
-`Authorization: Bearer <Token Plan subscription key>`
-
-Provider-published evidence:
-
-- Token Plan page: https://platform.minimax.io/subscribe/token-plan
-- Paid Services Agreement: https://platform.minimax.io/protocol/paid-agreement
+- CN Token Plan: https://platform.minimaxi.com/subscribe/token-plan
+- CN Paid Services Agreement: https://platform.minimaxi.com/protocol/paid-agreement
 - Official MiniMax CLI: https://github.com/MiniMax-AI/cli
+- Global Token Plan/API example: https://platform.minimax.io/subscribe/token-plan
 
-The Token Plan page explicitly documents a 5-hour rolling quota and a weekly quota, and provides the `token_plan/remains` API as a supported way to check usage. It also states that Token Plan capacity is shared across eligible model/media usage, with provider-specific model consumption behavior.
+### Authentication
 
-The official MiniMax CLI consumes the same remains endpoint and exposes provider-returned fields such as:
+Token Plan uses a subscription key and is distinct from pay-as-you-go API credentials. The collector accepts a supported credential from its caller and sends it only in the provider request header. It does not read OpenCode's credential store.
+
+### Quota semantics
+
+Provider documentation identifies simultaneous 5-hour rolling and weekly quota windows. The official MiniMax CLI consumes the remains endpoint and exposes provider-returned fields including:
 
 - `current_interval_remaining_percent`
 - `current_weekly_remaining_percent` when present
@@ -46,25 +56,23 @@ The official MiniMax CLI consumes the same remains endpoint and exposes provider
 - weekly start/end timestamps
 - provider count fields
 
-The P3 collector uses explicit provider remaining percentages when present. It does not infer a precise percentage from ambiguous count fields.
-
-### Rate limits
-
-The Token Plan page describes dynamic RPM/TPM throttling and states that throttles typically reset within approximately one minute, with tighter limits possible during peak traffic.
-
-### Confidence
+The count fields have changed meaning across provider responses. P3 therefore uses explicit remaining-percentage fields when present and refuses to manufacture a precise percentage from ambiguous count fields.
 
 5-hour remaining percentage: `EXACT` when the official API returns an explicit remaining percentage.
 
 Weekly remaining percentage: `EXACT` when the official API returns an explicit weekly remaining percentage; otherwise `UNKNOWN`.
 
-Reset time: `EXACT` only when the official API returns a usable endpoint timestamp.
+Reset time: `EXACT` only when the official API returns a usable timestamp.
 
-Quota pool scope: plan/shared-pool truth. The orchestrator does not present these values as independent per-model budgets.
+Quota pool scope: shared Token Plan truth. The orchestrator does not present the shared pool as independent per-model budgets.
 
-### Authentication integration status
+### Rate limits / intended use
 
-Current OpenCode authentication is known to exist from non-secret metadata, but this execution surface has no supported way to obtain the MiniMax subscription credential without reading/copying the OpenCode credential store, which is forbidden.
+MiniMax documents dynamic RPM/TPM throttling; throttles typically reset within about one minute and may tighten during peak traffic. The Token Plan is described for individual/interactive developer use, while pay-as-you-go is recommended for production workloads.
+
+### Runtime authentication integration
+
+Current OpenCode authentication is known to exist from non-secret metadata, but this GitHub-connected execution surface has no supported way to obtain the MiniMax subscription credential without reading/copying the OpenCode credential store, which is forbidden.
 
 `MINIMAX_RUNTIME_QUOTA_PROBE = AUTHENTICATION_INTEGRATION_BLOCKED`
 
@@ -83,7 +91,7 @@ Official provider repository:
 
 - https://github.com/zai-org/zai-coding-plugins
 
-The ZCode usage documentation explicitly describes remote Coding Plan quota views for:
+The ZCode usage documentation describes remote Coding Plan views for:
 
 - 5-hour prompt quota
 - weekly quota
@@ -97,21 +105,21 @@ The provider-published `glm-plan-usage` plugin queries read-only monitoring endp
 - `/api/monitor/usage/tool-usage`
 - `/api/monitor/usage/quota/limit`
 
-For the global Z.AI host, P3 records the quota endpoint as:
+For the global Z.AI host, P3 records:
 
 `GET https://api.z.ai/api/monitor/usage/quota/limit`
 
-The provider plugin authenticates using the configured authorization token.
+The provider plugin authenticates using its configured authorization token.
 
 ### Semantics and confidence
 
-The provider plugin labels the `TOKENS_LIMIT.percentage` value as 5-hour token usage. P3 therefore does not silently relabel the raw percentage as an exact remaining percentage. When a remaining fraction is derived as `1 - usage_fraction`, it is marked `ESTIMATED`.
+The provider plugin labels `TOKENS_LIMIT.percentage` as 5-hour token **usage**. P3 does not silently relabel that raw value as an exact remaining percentage. A remaining fraction derived as `1 - usage_fraction` is marked `ESTIMATED`.
 
-The provider documentation confirms 5-hour and weekly quota concepts, but the current adapter intentionally leaves reset timestamps `UNKNOWN` unless the response surface provides them with documented semantics.
+The provider documentation confirms 5-hour and weekly concepts, but the adapter leaves reset timestamps `UNKNOWN` unless the response provides them with documented semantics.
 
 ### Runtime status
 
-No additional Z.AI model calls are made in this phase. The current Stage C runtime completion remains deferred until quota reset, and quota probing is not allowed to trigger a new login or read the OpenCode credential store.
+No additional Z.AI model calls are made in this phase. Stage C runtime completion remains deferred until quota reset, and quota probing is not allowed to trigger a new login or read the OpenCode credential store.
 
 `ZAI_RUNTIME_QUOTA_PROBE = DEFERRED_PENDING_QUOTA_RESET_OR_AUTH`
 
@@ -127,7 +135,7 @@ provider API
   -> future P3.5 scheduler
 ```
 
-Current normalized collector states:
+Normalized collection states:
 
 - `SUCCESS`
 - `STALE`
@@ -146,7 +154,7 @@ For an active window with reliable quota and reset data:
 pace = remaining_quota_fraction / remaining_time_fraction
 ```
 
-For multiple simultaneous quota windows:
+For multiple simultaneous windows:
 
 ```text
 effective_pace = min(valid_window_paces)
@@ -177,6 +185,6 @@ Properties:
 
 ## Scope boundary
 
-This phase does not implement model selection. It does not emit `SELECT M3`, `SELECT GLM`, or any other routing decision.
+P3 does not implement model selection. It does not emit `SELECT M3`, `SELECT GLM`, or any other routing decision.
 
-The next phase may consume these normalized snapshots in shadow mode only after P3 acceptance.
+The next phase may consume normalized snapshots in shadow mode only after P3 acceptance.

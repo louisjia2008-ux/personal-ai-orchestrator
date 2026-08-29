@@ -21,7 +21,8 @@ def test_quota_observability_answers_provider_plan_identity() -> None:
 
     assert minimax.official_api is True
     assert minimax.confidence is EvidenceConfidence.EXACT
-    assert minimax.endpoint == "https://www.minimax.io/v1/token_plan/remains"
+    assert minimax.endpoint == "https://api.minimaxi.com/v1/token_plan/remains"
+    assert "minimax-cn-coding-plan" in minimax.scope
     assert minimax.runtime_status == "AUTHENTICATION_INTEGRATION_BLOCKED"
     assert zai.official_api is True
     assert zai.confidence is EvidenceConfidence.ESTIMATED

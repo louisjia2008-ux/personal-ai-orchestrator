@@ -2,15 +2,18 @@
 
 Status: `AUTHENTICATION_INTEGRATION_BLOCKED`
 
-As of: 2026-08-29T00:58:00Z
+As of: 2026-08-29T01:08:00Z
 
 ## Official surface
 
 - Provider: MiniMax
-- Plan/pool: Token Plan
-- Official read-only endpoint: `GET https://www.minimax.io/v1/token_plan/remains`
-- Authentication documented by provider: Bearer Token Plan subscription key
-- Quota windows documented by provider: 5-hour rolling + weekly
+- OpenCode provider: `minimax-cn-coding-plan`
+- Plan/pool: Token Plan / CN region
+- Official read-only endpoint for current MVP region: `GET https://api.minimaxi.com/v1/token_plan/remains`
+- Global Token Plan page separately documents: `GET https://www.minimax.io/v1/token_plan/remains`
+- Authentication: Bearer Token Plan subscription key
+- Quota windows: 5-hour rolling + weekly
+- Region evidence: official MiniMax CLI documents `api.minimaxi.com` for CN and builds quota requests with `/v1/token_plan/remains`
 
 ## Runtime probe
 
