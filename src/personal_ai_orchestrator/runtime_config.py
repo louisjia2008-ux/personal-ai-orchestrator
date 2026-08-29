@@ -27,7 +27,10 @@ class RuntimeConfig(BaseModel):
         unknown_runtime = set(self.runtime_availability) - target_ids
         unknown_telemetry = set(self.telemetry) - target_ids
         if unknown_runtime:
-            raise ValueError(f"runtime_availability references unknown targets: {sorted(unknown_runtime)}")
+            raise ValueError(
+                "runtime_availability references unknown targets: "
+                f"{sorted(unknown_runtime)}"
+            )
         if unknown_telemetry:
             raise ValueError(f"telemetry references unknown targets: {sorted(unknown_telemetry)}")
         task_ids = [profile.task_id for profile in self.task_profiles]
