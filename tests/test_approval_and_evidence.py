@@ -66,7 +66,12 @@ def test_active_gate_requires_persisted_owner_approval(tmp_path: Path) -> None:
     assert approved.authorized is True
 
 
-def _result(*, passed: bool, evidence_id: str | None, reason: str | None = None) -> VerificationResult:
+def _result(
+    *,
+    passed: bool,
+    evidence_id: str | None,
+    reason: str | None = None,
+) -> VerificationResult:
     return VerificationResult(
         profile="fixture",
         passed=passed,
