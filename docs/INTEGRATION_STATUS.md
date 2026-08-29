@@ -21,6 +21,9 @@ OpenCode thin adapter
   -> ACTIVE only if every activation gate is satisfied
 ```
 
+The loopback API validates Host and Origin by parsed hostname rather than string prefix matching,
+so origins such as `http://localhost.evil.invalid` are rejected instead of being treated as local.
+
 ## P0 Safety Kernel foundation
 
 Implemented:
@@ -31,6 +34,12 @@ Implemented:
 - run/workspace/approval/audit/routing-decision tables;
 - host-owned Git worktree creation;
 - one writer token per task worktree;
+- worker-run admission requires the exact writer token owned by that task worktree;
+- the execution controller permits only one active worker run per task;
+- worker-exit handling verifies that `run_id` belongs to the supplied `task_id` before mutating
+  either run or task state;
+- restart recovery can re-adopt a persisted managed worktree only after verifying managed-root
+  path identity, Git registration, expected branch, and recorded-base ancestry;
 - exact process-group supervision and cancellation;
 - startup reconciliation that blocks uncertain in-flight state;
 - missing-worktree reconciliation;
@@ -111,6 +120,17 @@ Implemented:
 4. Shadow evidence accepted;
 5. safe BYPASS validation;
 6. explicit owner approval.
+
+## Current CI evidence
+
+Latest integration verification on GitHub Actions:
+
+- Ruff: PASS;
+- pytest: **112 passed**;
+- `git diff --check`: PASS;
+- OpenCode adapter typecheck + contract tests: PASS.
+
+These are Linux CI results. They do not replace target-Mac acceptance.
 
 ## External acceptance still required
 
