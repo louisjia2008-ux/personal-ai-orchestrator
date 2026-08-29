@@ -36,8 +36,18 @@ def test_runtime_config_round_trip_and_service_build(tmp_path: Path) -> None:
 
 def test_daemon_build_reconciles_uncertain_execution_before_routing(tmp_path: Path) -> None:
     db = tmp_path / "state.sqlite3"
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
     seed = SafetyKernelStore(db)
     seed.submit_task(task_id="task-1", request_id="req-1", intent="implement")
+    seed.register_workspace(
+        task_id="task-1",
+        repo_path=str(tmp_path / "repo"),
+        worktree_path=str(worktree),
+        branch="task/task-1",
+        base_sha="abc",
+    )
+    seed.acquire_writer("task-1", "writer-before-restart")
     seed.transition_task("task-1", TaskState.READY)
     seed.transition_task("task-1", TaskState.RUNNING)
     seed.start_run(run_id="run-1", task_id="task-1", worker_id="worker", pid=12345)
@@ -55,6 +65,7 @@ def test_daemon_build_reconciles_uncertain_execution_before_routing(tmp_path: Pa
     )
     try:
         assert service.store.get_task("task-1").state is TaskState.BLOCKED
+        assert service.store.get_workspace("task-1").writer_token is None
         run = service.store.connection.execute(
             "SELECT status FROM runs WHERE run_id='run-1'"
         ).fetchone()
