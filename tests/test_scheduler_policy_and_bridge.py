@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+from personal_ai_orchestrator.activation import ActiveRoutingGate
 from personal_ai_orchestrator.model_registry import (
     Account,
     CapabilityProfile,
@@ -23,12 +24,7 @@ from personal_ai_orchestrator.model_registry import (
 )
 from personal_ai_orchestrator.opencode_contract import RoutingMode, RoutingRequest
 from personal_ai_orchestrator.routing_bridge import build_routing_decision
-from personal_ai_orchestrator.scheduler import (
-    RiskClass,
-    TargetTelemetry,
-    TaskProfile,
-    route_task,
-)
+from personal_ai_orchestrator.scheduler import RiskClass, TargetTelemetry, TaskProfile, route_task
 
 NOW = datetime(2026, 8, 30, tzinfo=UTC)
 
@@ -116,7 +112,11 @@ def _registry() -> ModelRegistry:
             ),
         ),
         pool_memberships=(
-            PoolMembership(pool=PoolKind.WORKER, model_sku_id="m3", execution_target_id="m3-sub"),
+            PoolMembership(
+                pool=PoolKind.WORKER,
+                model_sku_id="m3",
+                execution_target_id="m3-sub",
+            ),
         ),
     )
 
@@ -129,6 +129,16 @@ def _task(**overrides: object) -> TaskProfile:
     }
     values.update(overrides)
     return TaskProfile(**values)
+
+
+def _scheduler(registry: ModelRegistry):
+    return route_task(
+        registry,
+        task=_task(),
+        now=NOW,
+        known_at=NOW,
+        runtime_availability={"m3-sub": True},
+    )
 
 
 def test_high_risk_task_fails_closed_without_reliability_prior() -> None:
@@ -183,18 +193,13 @@ def test_failure_count_activates_escalation_floor() -> None:
         known_at=NOW,
         runtime_availability={"m3-sub": True},
     )
-    assert any("failure escalation floor failed" in reason for reason in decision.evaluations[0].reasons)
+    assert any(
+        "failure escalation floor failed" in reason for reason in decision.evaluations[0].reasons
+    )
 
 
 def test_bridge_freezes_snapshot_refs_and_blocks_unapproved_active() -> None:
     registry = _registry()
-    scheduler = route_task(
-        registry,
-        task=_task(),
-        now=NOW,
-        known_at=NOW,
-        runtime_availability={"m3-sub": True},
-    )
     request = RoutingRequest(
         request_id="req-1",
         session_id="session-1",
@@ -204,11 +209,10 @@ def test_bridge_freezes_snapshot_refs_and_blocks_unapproved_active() -> None:
     )
     decision = build_routing_decision(
         request,
-        scheduler,
+        _scheduler(registry),
         registry,
         catalog_snapshot_id="catalog-1",
         policy_snapshot_id="policy-1",
-        production_active_authorized=False,
         decided_at=NOW,
     )
     assert decision.selected_execution_target_id == "m3-sub"
@@ -218,15 +222,36 @@ def test_bridge_freezes_snapshot_refs_and_blocks_unapproved_active() -> None:
     assert "ACTIVE gate" in (decision.fallback_reason or "")
 
 
+def test_bridge_allows_active_only_with_complete_gate() -> None:
+    registry = _registry()
+    request = RoutingRequest(
+        request_id="req-active",
+        session_id="session-1",
+        mode=RoutingMode.ACTIVE,
+        task_id="task-1",
+        requested_at=NOW,
+    )
+    gate = ActiveRoutingGate(
+        p0_safety_kernel_authoritative=True,
+        p1_verifier_authoritative=True,
+        adapter_fail_closed_validated=True,
+        shadow_evidence_accepted=True,
+        safe_bypass_validated=True,
+    )
+    decision = build_routing_decision(
+        request,
+        _scheduler(registry),
+        registry,
+        catalog_snapshot_id="catalog-1",
+        policy_snapshot_id="policy-1",
+        activation_gate=gate,
+        decided_at=NOW,
+    )
+    assert decision.switch_requested is True
+
+
 def test_bridge_is_idempotent_for_identical_inputs() -> None:
     registry = _registry()
-    scheduler = route_task(
-        registry,
-        task=_task(),
-        now=NOW,
-        known_at=NOW,
-        runtime_availability={"m3-sub": True},
-    )
     request = RoutingRequest(
         request_id="req-stable",
         session_id="session-1",
@@ -235,7 +260,7 @@ def test_bridge_is_idempotent_for_identical_inputs() -> None:
     )
     first = build_routing_decision(
         request,
-        scheduler,
+        _scheduler(registry),
         registry,
         catalog_snapshot_id="catalog-1",
         policy_snapshot_id="policy-1",
@@ -243,7 +268,7 @@ def test_bridge_is_idempotent_for_identical_inputs() -> None:
     )
     second = build_routing_decision(
         request,
-        scheduler,
+        _scheduler(registry),
         registry,
         catalog_snapshot_id="catalog-1",
         policy_snapshot_id="policy-1",
