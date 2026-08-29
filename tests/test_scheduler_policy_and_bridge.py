@@ -87,7 +87,6 @@ def _registry() -> ModelRegistry:
                 id="m3",
                 provider_id="minimax",
                 display_name="M3",
-                catalog_snapshot_id="catalog-1",
                 capabilities=CapabilityProfile(scores={"debugging": 0.9, "reasoning": 0.85}),
             )
         },
