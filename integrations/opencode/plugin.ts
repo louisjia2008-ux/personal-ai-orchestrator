@@ -58,14 +58,12 @@ function parseModelRef(value: unknown): ModelRef | null | undefined {
 
 function parseRoutingDecision(
   value: unknown,
-  *,
-  expectedRequestID: string,
-  expectedMode: RoutingMode,
+  expected: { requestID: string; mode: RoutingMode },
 ): RoutingDecision | undefined {
   if (!isRecord(value)) return undefined
   if (typeof value.decision_id !== "string" || value.decision_id.length === 0) return undefined
-  if (value.request_id !== expectedRequestID) return undefined
-  if (!isRoutingMode(value.mode) || value.mode !== expectedMode) return undefined
+  if (value.request_id !== expected.requestID) return undefined
+  if (!isRoutingMode(value.mode) || value.mode !== expected.mode) return undefined
   if (typeof value.switch_requested !== "boolean") return undefined
 
   const selectedModel = parseModelRef(value.selected_model)
@@ -99,8 +97,8 @@ function parseRoutingDecision(
 
   return {
     decision_id: value.decision_id,
-    request_id: expectedRequestID,
-    mode: expectedMode,
+    request_id: expected.requestID,
+    mode: expected.mode,
     selected_model: selectedModel,
     switch_requested: value.switch_requested,
     explanation_ref: value.explanation_ref as string | null | undefined,
@@ -142,10 +140,7 @@ async function requestRoute(input: {
 
     if (!response.ok) return undefined
     const payload: unknown = await response.json()
-    return parseRoutingDecision(payload, {
-      expectedRequestID: input.requestID,
-      expectedMode: input.mode,
-    })
+    return parseRoutingDecision(payload, { requestID: input.requestID, mode: input.mode })
   } catch {
     return undefined
   } finally {
