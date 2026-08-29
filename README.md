@@ -6,18 +6,18 @@ An open-source, safety-first **resource scheduler for coding agents and multi-mo
 
 ## What problem this project solves
 
-Modern coding-agent users increasingly have access to several model providers, several concrete model SKUs per provider, subscription coding plans, API wallets, and local models at the same time.
+Modern coding-agent users increasingly have access to multiple providers, model SKUs, subscription coding plans, API wallets, and local models at the same time.
 
 The difficult problem is no longer only *which model is strongest?*
 
 It is:
 
-> **Use the right model SKU for the right task, at the right quality, latency, quota burn, and cost — without weakening repository safety or deterministic verification.**
+> **Use the right execution target for the right task, at the required quality, latency, quota burn, and cost — without weakening repository safety or deterministic verification.**
 
 Personal AI Orchestrator combines two layers:
 
 1. a host-owned **Safety Kernel** for task state, worktree isolation, verification, approvals, recovery, and auditability;
-2. an explainable **Model Resource Scheduler** for model-SKU selection, shared quota pools, routing, escalation, telemetry, and Cost-to-Green optimization.
+2. an explainable **Model Resource Scheduler** for model/target selection, shared quota pools, admission, routing, escalation, telemetry, and Cost-to-Green optimization.
 
 ## Core architecture
 
@@ -37,10 +37,10 @@ OpenCode / CLI / macOS / DeskPet / future clients
 | Model Resource Scheduler                      |
 | - Provider / Account / Plan                   |
 | - Shared Quota Pools                          |
-| - Concrete Model SKUs                         |
+| - Model SKUs + Execution Targets              |
 | - Capability profiles                         |
-| - Worker / Reasoning / Review / Escalation    |
-| - Quota-aware routing                         |
+| - Hard eligibility + quota admission          |
+| - Deterministic ranking / explanation         |
 | - Cost-to-Green telemetry                     |
 +------------------------------------------------+
                      |
@@ -58,40 +58,51 @@ OpenCode / CLI / macOS / DeskPet / future clients
 
 A worker saying `COMPLETE` is **not** task completion.
 
-A task may only advance after host-owned deterministic verification passes.
+A task may only advance after host-owned deterministic verification passes. Model routing, quota optimization, fallback, or UI controls can never bypass this rule.
 
-Model routing, quota optimization, or fallback logic can never bypass this rule.
+## Resource identities
 
-## Model-SKU-aware scheduling
-
-The scheduler does not treat a vendor as a model.
+The scheduler does not collapse vendor, model, commercial plan, and execution path into one identity.
 
 ```text
-Provider != Account != Plan != QuotaPool != ModelSKU != RuntimeVariant
+Provider != Account != Plan != QuotaPool != ModelSKU != ExecutionTarget
 ```
 
-For example, two models from the same provider may have different coding quality, latency, context limits, price, and task-specific performance while still consuming the same subscription quota pool.
+A `ModelSKU` is the logical model/capability identity. An `ExecutionTarget` is the concrete account/runtime/commercial path used to run it.
 
-The registry therefore models concrete SKUs and the scarcity boundary they actually consume.
+For example:
+
+```text
+GLM-5.3
+  -> Z.AI Coding Plan via OpenCode
+  -> Z.AI PAYG API
+```
+
+Those two targets may share model capability while having different quota, payment, availability, and credential boundaries.
+
+`RuntimeVariant` is not a required first-class MVP entity; lightweight runtime/variant metadata may live on `ExecutionTarget` until evidence justifies more complexity.
 
 See [`docs/MODEL_RESOURCE_ORCHESTRATION.md`](docs/MODEL_RESOURCE_ORCHESTRATION.md).
 
-## What the scheduler should optimize
+## Constraint-first scheduling
 
-Public benchmarks are useful as priors, but real routing should increasingly use observed local outcomes:
+The first production scheduler does **not** run one global weighted score across every model.
 
-- Pass@1
-- attempts-to-green
-- time-to-green
-- tokens-to-green
-- quota-to-green
-- monetary cost-to-green
-- verifier failure rate
-- regression rate
-- context/runtime fit
-- task-family-specific reliability
+It uses three stages:
 
-The first scheduler is deliberately deterministic and explainable. Adaptive routing comes only after enough real telemetry exists.
+```text
+1. hard eligibility
+   -> capability/risk/runtime/payment/quota-truth gates
+
+2. quota/task admission
+   -> predicted task burn must fit usable headroom
+
+3. deterministic ranking
+   -> quality, success prior, time/cost-to-green, latency,
+      temporal surplus/conservation, pool priority
+```
+
+A strong capability score cannot compensate for a failed reserve, payment, runtime, or quota-truth constraint.
 
 ## Quota truth matters
 
@@ -100,14 +111,87 @@ Quota state is normalized and confidence-labelled:
 ```text
 AVAILABLE / LIMITED / CRITICAL / EXHAUSTED / UNKNOWN
 
-EXACT      provider-reported truth
-ESTIMATED  derived from local telemetry/signals
-UNKNOWN    no reliable estimate
+EXACT      provider-reported truth with clear semantics
+ESTIMATED  derived from useful but incomplete signals
+UNKNOWN    no reliable precise value
 ```
 
-The project must never display a guessed shared-plan value as a fake exact per-model percentage.
+Measurement/source method is separate from confidence. `LOCALLY_MEASURED` describes how a value was obtained; it does not by itself mean the value is `EXACT`.
 
-Quota reserves allow scarce premium capacity to be protected for architecture, blockers, release gates, or repeated-failure escalation instead of being exhausted by routine review work.
+The project never displays shared-plan truth as fake exact per-model quota.
+
+### Multiple reset windows
+
+For a reliable active window:
+
+```text
+pace = remaining_quota_fraction / remaining_time_fraction
+```
+
+For simultaneous binding windows, an unknown window makes the **routing** pace unknown rather than being silently discarded. A healthy 5-hour window cannot hide an unknown weekly limit.
+
+### Pace is not admission
+
+A near-reset `HARVEST` signal only says capacity is temporally surplus relative to time. It does not prove there is enough absolute quota for the next task.
+
+For metered subscription traffic the scheduler uses a conservative admission check:
+
+```text
+usable_headroom = minimum_remaining_fraction
+                - reserve_fraction
+                - uncertainty_margin
+
+predicted_burn = task_burn_p90
+               * consumption_multiplier
+```
+
+If predicted burn does not fit usable headroom, the task is not admitted even when pace is `HARVEST`.
+
+## Replayability
+
+Routing explanations must be based on the facts known at decision time.
+
+The registry therefore keeps quota membership and burn semantics as append-only temporal facts, and quota observations have stable immutable snapshot IDs. Routing decisions can record:
+
+```text
+catalog_snapshot_id
+policy_snapshot_id
+quota_snapshot_ids[]
+```
+
+Later provider corrections cannot silently rewrite why an old decision was made.
+
+## What the scheduler should optimize
+
+Public benchmarks are useful as priors, but real ranking should increasingly use observed local outcomes:
+
+- Pass@1;
+- attempts-to-green;
+- time-to-green;
+- tokens-to-green;
+- quota-to-green;
+- monetary cost-to-green;
+- verifier failure rate;
+- regression rate;
+- context/runtime fit;
+- task-family-specific reliability.
+
+Adaptive routing comes only after enough real telemetry exists, and may tune ranking only among candidates that already passed hard constraints.
+
+## ACTIVE routing gate
+
+Resource-scheduler code and Shadow Mode can be developed before the full execution stack is complete, but **production ACTIVE routing is not authorized merely because the scheduler can produce a recommendation**.
+
+Before production ACTIVE switching, the project requires:
+
+1. P0 Safety Kernel authority for the execution path;
+2. P1 deterministic verification authority;
+3. fail-closed adapter decision validation;
+4. safe BYPASS;
+5. real Shadow Mode evidence over multiple relevant quota reset cycles;
+6. no unacceptable verified-quality or regression penalty.
+
+Disposable integration spikes may exercise session-scoped ACTIVE switching without satisfying this production gate.
 
 ## macOS experience
 
@@ -115,9 +199,9 @@ The orchestrator core remains headless and cross-client.
 
 A first-party macOS client is planned with three complementary surfaces:
 
-- **Menu Bar** — live status and quick routing controls;
-- **Desktop / Notification Center Widgets** — glanceable quota health, current model, and current run;
-- **Full App** — providers, plans, model SKUs, pools, routing rules, runs, and analytics.
+- **Menu Bar** — live status and quick safe routing controls;
+- **Desktop / Notification Center Widgets** — glanceable quota health, current model/target, and current run;
+- **Full App** — providers, plans, model SKUs, execution targets, pools, routing rules, runs, and analytics.
 
 DeskPet is an optional client, not a dependency of the project.
 
@@ -134,25 +218,29 @@ See [`docs/MACOS_CONTROL_PLANE.md`](docs/MACOS_CONTROL_PLANE.md).
 7. Worker completion and task completion are separate states.
 8. Unknown or inconsistent state fails closed to `BLOCKED`.
 9. Credentials remain in provider-native stores or macOS Keychain; secrets are not stored in plaintext task records.
-10. Dynamic model routing cannot weaken verification, approval, or isolation policy.
+10. Dynamic routing cannot weaken verification, approval, or isolation policy.
 11. Automatic paid overage is forbidden unless explicitly enabled by user policy.
 12. Multi-agent execution is justified by task complexity; it is not the default merely because several models are available.
+13. Unknown binding quota windows cannot be ignored because another window looks healthy.
+14. Temporal `HARVEST` cannot override absolute task headroom.
+15. Overlapping unsuperseded resource facts fail closed as ambiguous.
 
 ## Planned phases
 
 | Phase | Goal |
 |---|---|
-| Spike / PoC | Prove Codex, Claude Code, and OpenCode can be driven safely through a common supervised path. |
+| Spike / PoC | Prove worker lifecycle and safety boundaries on disposable workspaces. |
 | P0 Safety Kernel | Durable task/run/audit state, worktree management, writer locking, supervision, fail-closed recovery. |
 | P1 Verification | Trusted deterministic build/test/diff verification and explicit `VERIFIED` gate. |
 | P2 Multi-worker | Provider plurality, reviewer separation, strict task ownership. |
-| P2.5 Model Resource Registry | Concrete model SKUs, shared quota pools, pools, task profiles, explainable routing. |
-| P3 Quota Governor | Provider/plan collectors, confidence-labelled quota, reserves, fallback and harvest policy. |
-| P4 Clients / macOS | Local API, CLI, Menu Bar, WidgetKit widgets, dashboard, DeskPet integration. |
-| P5 Cost-to-Green | Real task analytics by model SKU, runtime, language/framework, role and risk. |
-| P6 Adaptive Scheduler | Evidence-driven routing improvement with deterministic rollback and hard constraints. |
+| P2.5 Model Resource Registry | Model SKUs, execution targets, shared quota pools, temporal facts, explainable routing inputs. |
+| P3 Quota Governor | Provider collectors, immutable quota observations, reserves, temporal scarcity and admission inputs. |
+| P3.5 Shadow Validation | Compare scheduler recommendations with real manual choices across reset cycles before production ACTIVE. |
+| P4 Clients / macOS | Local API, CLI, Menu Bar, WidgetKit, dashboard, DeskPet integration. |
+| P5 Cost-to-Green | Real task analytics by model SKU, execution target, language/framework, role and risk. |
+| P6 Adaptive Scheduler | Evidence-driven ranking improvement with deterministic rollback and hard constraints. |
 
-See [`docs/ROADMAP.md`](docs/ROADMAP.md) for acceptance gates.
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for acceptance gates and [`docs/SCHEDULER_CORRECTNESS.md`](docs/SCHEDULER_CORRECTNESS.md) for the current routing-safety contract.
 
 ## Initial technology direction
 
