@@ -31,14 +31,14 @@ so origins such as `http://localhost.evil.invalid` are rejected instead of being
 OpenCode routing requests may carry a host-owned task ID and state version. A configured
 `TaskProfile` is only routable when it is backed by durable Safety Kernel state; READY/RUNNING are
 the only routable states, stale supplied versions fail closed, and ACTIVE requires an exact state
-version. An ACTIVE decision that requests a switch now carries that same version as part of its
+version. An ACTIVE decision that requests a switch carries that same version as part of its
 immutable contract.
 
 ## ACTIVE switch authorization boundary
 
-The prior distributed TOCTOU boundary has been tightened at the durable task-state layer.
-A routing decision alone is not authority to mutate the OpenCode session. Immediately before the
-side effect, the adapter must request a short-lived switch lease from the orchestrator.
+The prior distributed TOCTOU boundary has been tightened at the durable task-state layer. A routing
+decision alone is not authority to mutate the OpenCode session. Immediately before the side effect,
+the adapter must request a short-lived switch lease from the orchestrator.
 
 The switch authority:
 
@@ -133,14 +133,9 @@ Implemented:
 
 ## P3 provider audit
 
-Static audit coverage includes:
-
-- MiniMax Token Plan;
-- Z.AI Coding Plan;
-- OpenAI API and Codex/ChatGPT plan allowance;
-- Anthropic API and Claude subscription allowance;
-- DeepSeek PAYG balance;
-- local/unmetered runtimes.
+Static audit coverage includes MiniMax Token Plan, Z.AI Coding Plan, OpenAI API and Codex/ChatGPT
+plan allowance, Anthropic API and Claude subscription allowance, DeepSeek PAYG balance, and
+local/unmetered runtimes.
 
 `UNKNOWN` is intentional when a stable supported machine-readable remaining subscription quota
 surface is not documented. Historical API usage/cost is not relabelled as remaining plan quota.
@@ -153,26 +148,14 @@ Live blockers remain:
 
 ## P3.5 Shadow evidence
 
-Implemented:
+Implemented: append-only `ShadowObservation` journal, stable observation identity, manual target vs
+scheduler target, immutable catalog/policy/quota references, before/after quota snapshots,
+predicted/observed burn, verified outcome/regression/attempts/time-to-green/handoff count,
+reset-cycle accounting, and conservative `review_eligible` summary.
 
-- append-only `ShadowObservation` journal;
-- stable observation identity;
-- manual target vs scheduler target;
-- immutable catalog/policy/quota references;
-- before/after quota snapshot references;
-- predicted/observed burn fields;
-- verified outcome, regression, attempts/time-to-green, handoff count;
-- reset-cycle accounting;
-- conservative `review_eligible` summary.
-
-`review_eligible` is **not** ACTIVE authorization. `ActiveRoutingGate` additionally requires:
-
-1. P0 authority accepted;
-2. P1 authority accepted;
-3. fail-closed adapter validation;
-4. Shadow evidence accepted;
-5. safe BYPASS validation;
-6. explicit owner approval.
+`review_eligible` is **not** ACTIVE authorization. `ActiveRoutingGate` additionally requires P0
+and P1 authority acceptance, fail-closed adapter validation, accepted Shadow evidence, safe BYPASS
+validation, and explicit owner approval.
 
 ## Current CI evidence
 
