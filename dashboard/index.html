@@ -201,7 +201,13 @@
   .chip .cprov{font-family:var(--font-mono); font-size:11px; color:var(--ink-3)}
   .chip .health{width:15px; height:15px; display:grid; place-items:center; flex:none}
   .chip .health svg{width:12px; height:12px}
-  .h-ok{color:var(--good)} .h-warn{color:var(--warn)}
+  .h-ok{color:var(--good)} .h-warn{color:var(--warn)} .h-unknown{color:var(--ink-3)}
+  .ring{width:9px;height:9px;border:1.6px solid currentColor;border-radius:50%;opacity:.6}
+  .src-badge{font-family:var(--font-mono);font-size:11px;font-weight:600;letter-spacing:.02em;padding:4px 9px;border-radius:999px;border:1px solid var(--border-2)}
+  .src-live{color:var(--good-ink);background:var(--good-soft);border-color:color-mix(in srgb,var(--good) 35%,var(--border-2))}
+  .src-demo{color:var(--ink-2);background:var(--surface-2)}
+  .doclink{margin-left:auto;font-size:11.5px;color:var(--accent-2);text-decoration:none;display:inline-flex;align-items:center;gap:4px}
+  .doclink:hover{text-decoration:underline}
   .chip.blocked{opacity:.85}
   .chip.blocked .cname{text-decoration:line-through; text-decoration-color:color-mix(in srgb,var(--warn) 60%,transparent)}
 
@@ -233,6 +239,7 @@
   </div>
 
   <div class="env-pill" title="本地运行时"><span class="dot" style="color:var(--good);background:var(--good)"></span>opencode&nbsp;1.18.23 · 本地</div>
+  <span id="srcBadge" class="src-badge src-demo">演示数据</span>
 
   <div class="seg" role="group" aria-label="路由模式">
     <button data-mode="BYPASS" aria-pressed="false"><span class="dot" style="background:var(--ink-3)"></span>旁路</button>
@@ -300,34 +307,76 @@
 
   const MODE_LABEL = {BYPASS:"旁路", SHADOW:"影子", ACTIVE:"主动"};
 
-  const state = {
-    mode:"SHADOW",
+  // Full real catalogs (identical to `opencode models <id>`), used as the
+  // standalone demo when no local backend bridge is reachable.
+  const SEED = {
     providers:[
       { id:"minimax-cn-coding-plan", name:"MiniMax 令牌套餐", endpoint:"api.minimaxi.com",
         color:"var(--p-minimax)", connected:true, credType:"api", health:"ok", fp:"mk-live-••••••••••••7f3a",
+        doc:"https://platform.minimaxi.com/docs/token-plan/intro",
         plan:{ kind:"令牌套餐（按量）", unit:"令牌", used:2758, cap:1000000, capLabel:"1,000,000", state:"ESTIMATED" },
-        models:["MiniMax-M2.5","MiniMax-M2.5-highspeed","MiniMax-M2.7","MiniMax-M2.7-highspeed","MiniMax-M3"] },
+        models:["MiniMax-M2","MiniMax-M2.1","MiniMax-M2.5","MiniMax-M2.5-highspeed","MiniMax-M2.7","MiniMax-M2.7-highspeed","MiniMax-M3"] },
       { id:"zai-coding-plan", name:"Z.AI 编程套餐", endpoint:"api.z.ai",
         color:"var(--p-zai)", connected:true, credType:"api", health:"warn", healthNote:"模型不可用", fp:"zai-••••••••••••b19c",
+        doc:"https://docs.z.ai/devpack/overview",
         plan:{ kind:"编程套餐（按次）", unit:"次", used:null, cap:null, capLabel:null, state:"UNKNOWN" },
-        models:["glm-5.3","glm-5.3-flash","glm-5.2"] },
+        models:["glm-4.7","glm-5-turbo","glm-5.2","glm-5.2-highspeed","glm-5.3","glm-5.3-flash","glm-5.3-highspeed"] },
       { id:"deepseek", name:"DeepSeek", endpoint:"api.deepseek.com",
         color:"var(--p-deepseek)", connected:true, credType:"env", envVar:"DEEPSEEK_API_KEY", health:"ok", fp:"$DEEPSEEK_API_KEY",
+        doc:"https://api-docs.deepseek.com/quick_start/pricing",
         plan:{ kind:"按量付费", unit:"令牌", used:null, cap:null, capLabel:null, state:"UNKNOWN" },
-        models:["deepseek-v4"] },
+        models:["deepseek-v4-flash","deepseek-v4-flash-vision-exp","deepseek-v4-pro"] },
       { id:"minimax", name:"MiniMax（minimax.io）", endpoint:"api.minimax.io",
         color:"var(--p-alt)", connected:false, credType:"api", health:"idle", fp:null,
         plan:{ kind:"—", unit:"令牌", used:null, cap:null, capLabel:null, state:"UNKNOWN" },
-        models:["MiniMax-M3"] },
+        models:["MiniMax-M2","MiniMax-M2.1","MiniMax-M2.5","MiniMax-M2.5-highspeed","MiniMax-M2.7","MiniMax-M2.7-highspeed","MiniMax-M3"] },
     ],
-    pools:[
-      { id:"fast", name:"快速通道", desc:"便宜、低延迟的回合", color:"var(--good)", models:["minimax-cn-coding-plan/MiniMax-M2.5-highspeed"] },
-      { id:"heavy", name:"重度编程", desc:"长链路智能编辑", color:"var(--accent)", models:["minimax-cn-coding-plan/MiniMax-M2.7"] },
-      { id:"reason", name:"推理", desc:"深度规划", color:"var(--p-zai)", models:["minimax-cn-coding-plan/MiniMax-M3"] },
-      { id:"fallback", name:"兜底", desc:"失败时的安全默认", color:"var(--ink-3)", models:["minimax-cn-coding-plan/MiniMax-M2.5","deepseek/deepseek-v4"] },
-      { id:"blocked", name:"已禁用 · 阻断", desc:"当前不可路由", color:"var(--warn)", models:["zai-coding-plan/glm-5.3-flash","zai-coding-plan/glm-5.3"] },
-    ],
+    curated:{
+      fast:["minimax-cn-coding-plan/MiniMax-M2.5-highspeed"],
+      heavy:["minimax-cn-coding-plan/MiniMax-M2.7"],
+      reason:["minimax-cn-coding-plan/MiniMax-M3"],
+      fallback:["minimax-cn-coding-plan/MiniMax-M2.5","deepseek/deepseek-v4-flash"],
+      blocked:["zai-coding-plan/glm-5.3-flash","zai-coding-plan/glm-5.3"],
+    },
   };
+
+  const PALETTE = ["var(--p-minimax)","var(--p-zai)","var(--p-deepseek)","var(--p-alt)","var(--good)","var(--warn)"];
+  const PLAN_KIND = { "minimax-cn-coding-plan":"令牌套餐（按量）", "minimax-coding-plan":"令牌套餐（按量）",
+    "zai-coding-plan":"编程套餐（按次）", "deepseek":"按量付费" };
+
+  const state = { mode:"SHADOW", live:false, providers:[], pools:[] };
+
+  const POOL_DEFS = [
+    { id:"unassigned", name:"未分配", desc:"尚未路由的模型", color:"var(--ink-3)" },
+    { id:"fast", name:"快速通道", desc:"便宜、低延迟的回合", color:"var(--good)" },
+    { id:"heavy", name:"重度编程", desc:"长链路智能编辑", color:"var(--accent)" },
+    { id:"reason", name:"推理", desc:"深度规划", color:"var(--p-zai)" },
+    { id:"fallback", name:"兜底", desc:"失败时的安全默认", color:"var(--p-deepseek)" },
+    { id:"blocked", name:"已禁用 · 阻断", desc:"当前不可路由", color:"var(--warn)" },
+  ];
+
+  function buildPools(providers, curated){
+    const all=[]; providers.forEach(p=>{ if(p.connected!==false) p.models.forEach(m=>all.push(p.id+"/"+m)); });
+    const placed=new Set(Object.values(curated||{}).flat());
+    return POOL_DEFS.map(def=>{
+      let models;
+      if(def.id==="unassigned") models=all.filter(k=>!placed.has(k));
+      else models=(curated&&curated[def.id]||[]).filter(k=>all.includes(k));
+      return {...def, models};
+    });
+  }
+
+  function providersFromLive(list){
+    return list.map((p,i)=>({
+      id:p.id, name:p.name, endpoint:p.endpoint||"", color:PALETTE[i%PALETTE.length],
+      connected:p.connected!==false, credType:p.credType||"api", envVar:p.envVar||null,
+      fp:p.credType==="env"?("$"+p.envVar):"由 OpenCode 保管", doc:p.doc||null,
+      health:"unknown", testModel:p.testModel||(p.models[0]||""),
+      plan:{ kind:PLAN_KIND[p.id]||(p.credType==="env"?"环境变量":"API 套餐"),
+        unit:"令牌", used:null, cap:null, capLabel:null, state:"UNKNOWN" },
+      models:p.models||[],
+    }));
+  }
 
   const $ = s => document.querySelector(s);
   const el = (t,c) => { const n=document.createElement(t); if(c) n.className=c; return n; };
@@ -361,6 +410,7 @@
   function statusPill(p){
     if(!p.connected) return `<span class="status s-idle">未连接</span>`;
     if(p.health==="warn") return `<span class="status s-warn">${IC.warn}${p.healthNote||"需注意"}</span>`;
+    if(p.health==="unknown") return `<span class="status s-idle">已连接 · 未测试</span>`;
     if(p.credType==="env") return `<span class="status s-env">${IC.check}已连接 · 环境变量</span>`;
     return `<span class="status s-good">${IC.check}已连接</span>`;
   }
@@ -421,7 +471,7 @@
          <div class="quota-foot"><span class="used" style="color:var(--ink-3)">厂商未提供额度</span></div>`;
     return `<div>
         <div class="row-lab">套餐额度</div>
-        <div class="quota-head"><span class="plan">${q.kind}</span><span class="qbadge ${badgeCls}">${q.state}</span></div>
+        <div class="quota-head"><span class="plan">${q.kind}</span><span class="qbadge ${badgeCls}">${q.state}</span>${p.doc?`<a class="doclink" href="${p.doc}" target="_blank" rel="noopener">套餐文档 ↗</a>`:""}</div>
         ${meter}
         <div class="capedit">
           <label for="cap-${p.id}">套餐上限</label>
@@ -452,14 +502,18 @@
   function modelHealth(key){ const p=providerById(key.split("/")[0]); return p?p.health:"ok"; }
   function chip(key){
     const [pid,mid]=key.split("/"); const p=providerById(pid);
-    const blocked=modelHealth(key)==="warn";
+    const h=modelHealth(key);
+    const blocked=h==="warn";
     const c=el("div","chip"+(blocked?" blocked":""));
     c.draggable=true; c.dataset.key=key;
+    let marker;
+    if(blocked) marker=`<span class="health h-warn" title="${p&&p.healthNote||'不可用'}">${IC.warn}</span>`;
+    else if(h==="unknown") marker=`<span class="health h-unknown" title="未测试"><span class="ring"></span></span>`;
+    else marker=`<span class="health h-ok" title="正常">${IC.check}</span>`;
     c.innerHTML=`<span class="cdot" style="background:${p?p.color:'var(--ink-3)'}"></span>
       <span style="display:flex;flex-direction:column;line-height:1.25">
         <span class="cname">${mid}</span><span class="cprov">${pid}</span>
-      </span>
-      <span class="health ${blocked?'h-warn':'h-ok'}" title="${blocked?(p.healthNote||'不可用'):'正常'}">${blocked?IC.warn:IC.check}</span>`;
+      </span>${marker}`;
     return c;
   }
   function renderBoard(){
@@ -503,15 +557,38 @@
     toast(`${key.split("/")[1]} → ${dst.name}`, to==="blocked"?"warn":"ok");
   }
 
-  function runTest(p){
+  async function runTest(p){
     p.testing=true; p.lastTest=null; renderProviders();
+    if(state.live){
+      try{
+        const res=await fetch("/api/test",{method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify({provider:p.id, model:p.testModel})});
+        const r=await res.json();
+        p.testing=false;
+        const ok=r.state==="ok";
+        p.health=ok?"ok":(r.state==="model_unavailable"?"warn":"warn");
+        if(!ok) p.healthNote = r.state==="model_unavailable" ? "模型不可用" : "连接异常";
+        const extra=[]; if(r.reply) extra.push(`回复“${r.reply}”`);
+        if(r.tokens) extra.push(`${r.tokens.input}/${r.tokens.output} tok`);
+        p.lastTest={ state:ok?"ok":"warn", latency:r.latency_ms,
+          msg:`${r.message||r.state}` + (extra.length?` · ${extra.join(" · ")}`:"") + (r.model?` · ${r.model}`:"") };
+        renderProviders(); renderBoard(); renderKpis();
+        toast(`${p.name} · ${r.message||r.state}`, ok?"ok":"warn");
+      }catch(e){
+        p.testing=false;
+        p.lastTest={state:"warn", latency:null, msg:"无法连接本地后端桥接（dashboard/serve.py 未运行？）"};
+        renderProviders(); toast("本地后端不可用","warn");
+      }
+      return;
+    }
+    // standalone demo (no backend): simulated result
     const latency=180+Math.floor(Math.random()*520);
     setTimeout(()=>{
       p.testing=false;
       if(p.health==="warn"){
         p.lastTest={state:"warn", latency, msg:`鉴权通过，但模型当前不可用（${p.healthNote||"ModelUnavailable"}）`};
       } else {
-        p.lastTest={state:"ok", latency, msg:"连接正常，鉴权通过"};
+        p.lastTest={state:"ok", latency, msg:"连接正常，鉴权通过（演示）"};
       }
       renderProviders();
       toast(p.lastTest.state==="warn"?`${p.name} · 鉴权通过，模型不可用`:`${p.name} · 连接正常 ${latency} ms`, p.lastTest.state);
@@ -567,6 +644,35 @@
     t.querySelector("svg").style.color=kind==="warn"?"var(--warn)":"var(--accent-2)";
     t.classList.add("show"); clearTimeout(tTimer); tTimer=setTimeout(()=>t.classList.remove("show"),2600); }
 
-  renderKpis(); renderProviders(); renderBoard(); syncToggleIcon();
+  function setSourceBadge(){
+    const b=$("#srcBadge"); if(!b) return;
+    b.textContent = state.live ? "实时后端" : "演示数据";
+    b.className = "src-badge " + (state.live ? "src-live" : "src-demo");
+    b.title = state.live ? "已连接本地 OpenCode 后端（serve.py）" : "未检测到后端桥接，展示演示数据";
+  }
+
+  async function init(){
+    let live=null;
+    try{
+      const res=await fetch("/api/providers",{cache:"no-store"});
+      if(res.ok){ const j=await res.json();
+        if(j && j.live && Array.isArray(j.providers) && j.providers.length) live=j.providers; }
+    }catch(_){ /* opened standalone / as an artifact — fall back to demo */ }
+
+    if(live){
+      state.live=true;
+      state.providers=providersFromLive(live);
+      state.pools=buildPools(state.providers,{});
+    } else {
+      state.live=false;
+      state.providers=SEED.providers.map(p=>({...p, plan:{...p.plan}}));
+      state.pools=buildPools(state.providers, SEED.curated);
+    }
+    setSourceBadge();
+    renderKpis(); renderProviders(); renderBoard(); syncToggleIcon();
+  }
+
+  syncToggleIcon();
+  init();
 })();
 </script>
