@@ -24,6 +24,11 @@ OpenCode thin adapter
 The loopback API validates Host and Origin by parsed hostname rather than string prefix matching,
 so origins such as `http://localhost.evil.invalid` are rejected instead of being treated as local.
 
+OpenCode routing requests may carry a host-owned task ID and state version. A configured
+`TaskProfile` is only routable when it is backed by durable Safety Kernel state; READY/RUNNING are
+the only routable states, stale supplied versions fail closed, and ACTIVE requires an exact state
+version.
+
 ## P0 Safety Kernel foundation
 
 Implemented:
@@ -34,18 +39,29 @@ Implemented:
 - run/workspace/approval/audit/routing-decision tables;
 - host-owned Git worktree creation;
 - one writer token per task worktree;
-- worker-run admission requires the exact writer token owned by that task worktree;
-- the execution controller permits only one active worker run per task;
+- DB-level unique constraint allowing at most one RUNNING worker run per task;
+- worker-run admission atomically verifies RUNNING task state, exact writer-token ownership and
+  absence of another active worker run before persisting the run;
+- worker exit atomically updates the run row, task state/version and both audit events, preventing
+  a crash from leaving a FINISHED run paired with a still-RUNNING task;
+- task submission, workspace registration, run persistence, routing-decision persistence and
+  startup reconciliation couple authoritative mutation and audit writes in one SQLite transaction;
 - worker-exit handling verifies that `run_id` belongs to the supplied `task_id` before mutating
   either run or task state;
 - restart recovery can re-adopt a persisted managed worktree only after verifying managed-root
   path identity, Git registration, expected branch, and recorded-base ancestry;
 - exact process-group supervision and cancellation;
-- startup reconciliation that blocks uncertain in-flight state;
-- missing-worktree reconciliation;
-- stale writer-lock release only after the task is blocked/terminal;
+- daemon startup performs fail-closed reconciliation before exposing routing;
+- uncertain RUNNING/WORKER_FINISHED/VERIFYING tasks are atomically blocked and active runs marked
+  INTERRUPTED during startup reconciliation;
+- startup workspace reconciliation clears stale writer ownership after blocking and blocks any
+  otherwise-routable task whose registered worktree disappeared;
 - worker crash / malformed worker-result handling;
 - no worker transition directly to VERIFIED/COMPLETED.
+
+Injected audit-failure tests prove rollback for worker start, worker exit, routing-decision writes
+and startup reconciliation. These tests verify that the authoritative state mutation does not
+survive when its corresponding audit write fails.
 
 The integration line does not claim target-Mac acceptance merely from Linux CI. macOS process,
 filesystem, credential and restart acceptance must still be exercised on the intended host before
@@ -60,7 +76,9 @@ Implemented:
 - changed-file scope gate;
 - `git diff --check`;
 - deterministic command stages and bounded output;
-- immutable verification evidence identity;
+- immutable verification evidence identity and append-only evidence journal;
+- VERIFIED requires the exact passing `VerificationResult` to already exist in that journal;
+- a forged evidence ID or mismatched persisted evidence fails closed to BLOCKED;
 - passing text without host evidence cannot advance to VERIFIED;
 - verifier failure or missing evidence blocks the task.
 
@@ -76,7 +94,11 @@ Implemented:
 - vision/tool runtime requirements;
 - failure-count escalation floor;
 - deterministic scheduler-to-adapter decision bridge;
-- content-addressed policy snapshots plus quota snapshot references.
+- content-addressed policy snapshots plus quota snapshot references;
+- durable retry semantics return the original routing decision instead of recomputing against a
+  later timestamp/quota view;
+- duplicate request races converge on the first durable decision;
+- request-ID reuse for a different task or routing mode fails closed.
 
 ## P3 provider audit
 
@@ -123,10 +145,11 @@ Implemented:
 
 ## Current CI evidence
 
-Latest integration verification on GitHub Actions:
+Latest integration verification on GitHub Actions at
+`442273706b3e573150289526330e15675dda203d`:
 
 - Ruff: PASS;
-- pytest: **112 passed**;
+- pytest: **127 passed**;
 - `git diff --check`: PASS;
 - OpenCode adapter typecheck + contract tests: PASS.
 
@@ -141,5 +164,10 @@ The following cannot be honestly completed from a GitHub-hosted runner:
 - macOS-specific process/Keychain/runtime acceptance;
 - real Shadow evidence across multiple future quota reset cycles;
 - owner acceptance for production ACTIVE routing.
+
+There is also one remaining ACTIVE-specific architecture boundary: the task state/version is
+validated before the routing decision is returned, while the OpenCode session switch is a separate
+operation performed after the HTTP response. That distributed switch TOCTOU boundary must be
+accepted or tightened on the target host before ACTIVE can be considered authoritative.
 
 Until those gates are satisfied, production ACTIVE routing remains disabled by design.
