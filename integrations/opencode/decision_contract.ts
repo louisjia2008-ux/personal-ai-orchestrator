@@ -13,6 +13,7 @@ export type RoutingDecision = {
   selected_model?: ModelRef | null
   selected_execution_target_id?: string | null
   switch_requested: boolean
+  task_state_version?: number | null
   explanation_ref?: string | null
   catalog_snapshot_id?: string | null
   policy_snapshot_id?: string | null
@@ -59,6 +60,18 @@ export function parseRoutingDecision(
   if (value.switch_requested && !selectedModel) return undefined
   if (value.mode === "BYPASS" && selectedModel) return undefined
 
+  const taskStateVersion = value.task_state_version
+  if (
+    taskStateVersion !== undefined &&
+    taskStateVersion !== null &&
+    (typeof taskStateVersion !== "number" || !Number.isInteger(taskStateVersion) || taskStateVersion < 0)
+  ) {
+    return undefined
+  }
+  if (value.switch_requested && (taskStateVersion === undefined || taskStateVersion === null)) {
+    return undefined
+  }
+
   const optionalStrings = [
     "selected_execution_target_id",
     "explanation_ref",
@@ -87,6 +100,7 @@ export function parseRoutingDecision(
     selected_model: selectedModel,
     selected_execution_target_id: value.selected_execution_target_id as string | null | undefined,
     switch_requested: value.switch_requested,
+    task_state_version: taskStateVersion as number | null | undefined,
     explanation_ref: value.explanation_ref as string | null | undefined,
     catalog_snapshot_id: value.catalog_snapshot_id as string | null | undefined,
     policy_snapshot_id: value.policy_snapshot_id as string | null | undefined,
