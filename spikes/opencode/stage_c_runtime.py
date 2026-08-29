@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import socket
 import sys
 import time
 import urllib.error
@@ -110,7 +109,7 @@ class OpenCode:
         except urllib.error.HTTPError as exc:  # pragma: no cover - network contract
             # Never read or persist the raw provider/OpenCode response body here.
             raise OpenCodeHTTPError(method, path, exc.code) from exc
-        except (TimeoutError, socket.timeout) as exc:  # pragma: no cover - network contract
+        except TimeoutError as exc:  # pragma: no cover - network contract
             raise StageCError(f"{method} {path} -> TIMEOUT") from exc
         except urllib.error.URLError as exc:  # pragma: no cover - network contract
             category = "TIMEOUT" if isinstance(exc.reason, TimeoutError) else "PROVIDER_UNAVAILABLE"
