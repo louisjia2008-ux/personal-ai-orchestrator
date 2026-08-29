@@ -176,7 +176,7 @@ Implemented:
 
 ## Current CI evidence
 
-Latest integration verification on GitHub Actions at
+The latest code-bearing integration head verified on GitHub Actions is
 `96ee1fcb6c6891909ec873f91dd43fee789747d9`:
 
 - Ruff: PASS;
@@ -184,7 +184,9 @@ Latest integration verification on GitHub Actions at
 - `git diff --check`: PASS;
 - OpenCode adapter typecheck + contract tests: PASS.
 
-These are Linux CI results. They do not replace target-Mac acceptance.
+Subsequent commits in this section are documentation-only and must still pass the normal PR CI
+before being treated as the final green PR head. These are Linux CI results and do not replace
+target-Mac acceptance.
 
 ## External acceptance still required
 
