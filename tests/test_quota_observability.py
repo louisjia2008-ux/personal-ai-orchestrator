@@ -6,7 +6,9 @@ from pydantic import ValidationError
 from personal_ai_orchestrator.model_registry import (
     EvidenceConfidence,
     EvidenceSourceType,
+    QuotaSnapshot as RegistryQuotaSnapshot,
     QuotaState,
+    QuotaWindowSnapshot as RegistryQuotaWindowSnapshot,
 )
 from personal_ai_orchestrator.quota_observability import (
     DEFAULT_SCARCITY_THRESHOLDS,
@@ -29,7 +31,7 @@ def source(
 ) -> QuotaEvidenceSource:
     return QuotaEvidenceSource(
         source_type=EvidenceSourceType.PROVIDER_API,
-        source_uri="https://provider.example/quota",
+        reference="https://provider.example/quota",
         observed_at=observed_at,
         confidence=confidence,
     )
@@ -72,6 +74,11 @@ def snapshot(*windows: QuotaWindowSnapshot) -> QuotaSnapshot:
     )
 
 
+def test_p3_reuses_model_registry_quota_domain() -> None:
+    assert QuotaSnapshot is RegistryQuotaSnapshot
+    assert QuotaWindowSnapshot is RegistryQuotaWindowSnapshot
+
+
 def test_snapshot_serialization_round_trip() -> None:
     value = snapshot(
         window(
@@ -86,7 +93,7 @@ def test_snapshot_serialization_round_trip() -> None:
     restored = QuotaSnapshot.model_validate_json(value.model_dump_json())
 
     assert restored == value
-    assert restored.source.source_uri == "https://provider.example/quota"
+    assert restored.source.reference == "https://provider.example/quota"
 
 
 def test_exact_precise_value_is_valid() -> None:
