@@ -123,7 +123,16 @@ def build_pace_trace(
         at=reference,
         required_window_kinds=required_window_kinds,
     )
-    all_known = bool(active) and all(window.pace(at=reference) is not None for window in active)
+    required = set(required_window_kinds)
+    present = {window.window_kind for window in active}
+    required_complete = not required or required.issubset(present)
+    all_known = (
+        required_complete
+        and bool(active)
+        and all(window.pace(at=reference) is not None for window in active)
+    )
+    if not required_complete:
+        effective = None
     return QuotaPaceTrace(
         quota_pool_id=snapshot.quota_pool_id or "UNKNOWN",
         quota_snapshot_id=snapshot.id,
