@@ -19,6 +19,17 @@ def _running_store(tmp_path: Path) -> SafetyKernelStore:
     return store
 
 
+def _finish_worker(store: SafetyKernelStore) -> None:
+    record_worker_exit(
+        store,
+        task_id="t1",
+        run_id="run-1",
+        exit_code=0,
+        worker_result={"status": "finished"},
+    )
+    begin_verification(store, task_id="t1")
+
+
 def test_unexpected_worker_exit_blocks_task(tmp_path: Path) -> None:
     store = _running_store(tmp_path)
     state = record_worker_exit(
@@ -43,7 +54,9 @@ def test_invalid_worker_result_blocks_task(tmp_path: Path) -> None:
     assert state is TaskState.BLOCKED
 
 
-def test_worker_success_stops_at_worker_finished_until_verifier_passes(tmp_path: Path) -> None:
+def test_worker_success_stops_at_worker_finished_until_verifier_evidence_passes(
+    tmp_path: Path,
+) -> None:
     store = _running_store(tmp_path)
     state = record_worker_exit(
         store,
@@ -60,26 +73,35 @@ def test_worker_success_stops_at_worker_finished_until_verifier_passes(tmp_path:
         changed_paths=(),
         unexpected_paths=(),
         stages=(),
+        evidence_id="verify-fixture",
     )
     assert apply_verification_result(store, task_id="t1", result=result) is TaskState.VERIFIED
 
 
+def test_missing_verifier_evidence_blocks_even_claimed_pass(tmp_path: Path) -> None:
+    store = _running_store(tmp_path)
+    _finish_worker(store)
+    result = VerificationResult(
+        profile="fixture",
+        passed=True,
+        changed_paths=(),
+        unexpected_paths=(),
+        stages=(),
+        evidence_id=None,
+    )
+    assert apply_verification_result(store, task_id="t1", result=result) is TaskState.BLOCKED
+
+
 def test_failing_verifier_blocks_task(tmp_path: Path) -> None:
     store = _running_store(tmp_path)
-    record_worker_exit(
-        store,
-        task_id="t1",
-        run_id="run-1",
-        exit_code=0,
-        worker_result={"status": "finished"},
-    )
-    begin_verification(store, task_id="t1")
+    _finish_worker(store)
     result = VerificationResult(
         profile="fixture",
         passed=False,
         changed_paths=(),
         unexpected_paths=(),
         stages=(),
+        evidence_id="verify-failure",
         failure_reason="injected failing test",
     )
     assert apply_verification_result(store, task_id="t1", result=result) is TaskState.BLOCKED
