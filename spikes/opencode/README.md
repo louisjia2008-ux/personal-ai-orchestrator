@@ -84,7 +84,7 @@ Verified in a real disposable OpenCode session:
 2. `orchestrator-route` sends exactly one `SHADOW` request to the fake daemon;
 3. SHADOW does not request a model switch;
 4. the exact fake-daemon PID is stopped;
-5. executing the same command again remains non-fatal;
+5. a second command remains non-fatal;
 6. no second daemon request appears after shutdown;
 7. OpenCode remains usable through the adapter's safe-bypass path.
 
@@ -114,15 +114,16 @@ It does **not** prove that `spike-provider/target-model` is a runnable catalog m
 
 ## Current CI gate
 
-The OpenCode integration branch currently requires all of these jobs to pass:
+The OpenCode integration branch requires:
 
-1. Python Ruff + pytest;
-2. OpenCode plugin strict TypeScript typecheck;
-3. real OpenCode plugin-load/command-registration smoke;
-4. real SHADOW + daemon-failure safe-bypass smoke;
-5. real ACTIVE two-session isolation smoke.
+1. Python Ruff + pytest, including non-credential Stage C deterministic-oracle/session-cleanup tests;
+2. shell syntax checks for both Stage C provider harness scripts;
+3. OpenCode plugin strict TypeScript typecheck;
+4. real OpenCode plugin-load/command-registration smoke;
+5. real SHADOW + daemon-failure safe-bypass smoke;
+6. real ACTIVE two-session isolation smoke.
 
-Run #48 passed all five jobs on the pinned beta target.
+Real provider completion remains local-only; credentials are never copied into GitHub Actions.
 
 ## Why routing is not automatic yet
 
@@ -152,58 +153,74 @@ OpenCode prompt/session
 - deterministic host verification remains authoritative;
 - experimental compaction hooks may enrich handoff context later but are never required for correctness.
 
-## Stage C — real provider-native authentication: PARTIAL
+## Stage C — provider-native authentication/completion: REPAIR PARTIAL
 
-Stage C uses OpenCode's normal provider authentication and a model actually
-present in the authenticated OpenCode catalog. It was executed locally on macOS
-against a real `opencode` 1.18.23 install. Full sanitized evidence is under
-[`results/`](./results/) (`STAGE_C_FINAL_REPORT.md`, `STAGE_C_ENVIRONMENT.md`,
-`STAGE_C_MINIMAX.md`, `STAGE_C_ZAI_GLM.md`, and the two evidence JSONs).
+The Stage C harness has been repaired to use a strict repository-read completion oracle and
+verified cleanup semantics.
 
-| Provider | id | model | SHADOW | ACTIVE | isolation | completion | cancel | overall |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| MiniMax | `minimax-cn-coding-plan` | `MiniMax-M2.5` | PASS | PASS | PASS | PASS | PASS | **PASS** |
-| Z.AI/GLM | `zai-coding-plan` | `glm-5.3-flash` | PASS | PASS | PASS | BLOCKED | SKIPPED | **PARTIAL** |
+### Completion oracle
 
-Overall Stage C is **PARTIAL**: MiniMax completes a real harmless completion end
-to end; every `zai-coding-plan` model fails at turn execution with OpenCode's
-`SessionRunnerModel.ModelUnavailableError` ("Model unavailable"), a provider/plan
-availability blocker (credential present, switch succeeds, execution unavailable)
-that needs user action on the Z.AI Coding Plan.
+A provider completion passes only when:
 
-### Runtime (recorded drift)
+- an assistant completion exists;
+- no assistant error exists;
+- provider ID matches exactly;
+- model ID matches exactly;
+- `finish == stop`;
+- output exactly equals the host-parsed Markdown H1 in the disposable `README.md`.
 
-The pinned `@opencode-ai/cli@0.0.0-beta-18387` (`opencode2`) has no darwin-arm64
-binary and cannot be installed on this Mac, and 1.18.23's plugin command/switch
-API differs from beta-18387. Stage C runs on the standalone `opencode` 1.18.23
-(which holds the real credentials) with `@opencode-ai/plugin@1.18.23` /
-`@opencode-ai/sdk@1.18.23`, realizing the thin adapter as a host-side client over
-the documented `POST /api/session/{id}/model` switch — the same
-`session.next.model.switched` durable event Stage B asserts. Stage A/B and their
-beta-18387 pin are unchanged.
+The fixture H1 contains a runtime-generated nonce. The prompt asks the model to read `README.md`
+and return its H1; the expected H1 is never embedded in the prompt.
+
+### Cleanup / sanitization
+
+- `opencode serve` is launched directly so `$!` is the real server PID;
+- the exact server PID and fake-daemon PID are stopped and verified absent;
+- the fixture is verified clean, deleted, and not replaced by a real user repository;
+- session deletion is recorded separately as attempted vs verified;
+- raw HTTP/provider bodies and raw assistant-error objects are not committed;
+- provider errors are reduced to bounded categories such as `HTTP_401`, `HTTP_403`, `HTTP_429`, `TIMEOUT`, `MODEL_UNAVAILABLE`, `AUTHORIZATION_ERROR`, `PROVIDER_UNAVAILABLE`, and `UNKNOWN_PROVIDER_ERROR`.
+
+### MiniMax
+
+The old MiniMax provider evidence was generated before the cleanup fix and before the strict
+completion oracle. It is retained as historical evidence but is superseded for final acceptance.
+
+`MINIMAX_STAGE_C = HARDENED_RETEST_REQUIRED`
+
+The re-test must first discover a currently available model from the OpenCode catalog and then
+run the repaired harness locally using existing OpenCode authentication.
+
+### Z.AI / GLM
+
+No additional Z.AI calls are made during this repair because the user has reported the weekly
+quota is exhausted.
+
+- Observed prior failure: `MODEL_UNAVAILABLE`.
+- Possible contributing factor: weekly quota exhausted.
+- Root cause: `NOT_YET_CONFIRMED`.
+- Re-test: required after quota reset.
+
+`ZAI_STAGE_C = DEFERRED_PENDING_QUOTA_RESET`
+
+The repository does not claim that either provider entitlement or OpenCode is definitely broken.
+
+### Runtime note
+
+The pinned `@opencode-ai/cli@0.0.0-beta-18387` (`opencode2`) has no darwin-arm64 binary and cannot be installed on the Mac used for the earlier Stage C run, and 1.18.23's plugin command/switch API differs from beta-18387. Stage C therefore targets the standalone authenticated `opencode` runtime with the thin adapter realized as a host-side client over the documented session model switch. Stage A/B and their beta-18387 pin remain unchanged.
 
 ### Harness
 
-- `runtime_provider_auth_smoke.sh` — auth + catalog preflight (refuses if the
-  provider is not authenticated; never reads credential contents).
-- `runtime_provider_active_completion.sh` — disposable fixture + real
-  `opencode serve` + credential-free `fake_daemon.py` + the driver; exact-PID
-  and session cleanup; asserts the fixture stays byte-clean.
-- `stage_c_runtime.py` — drives SHADOW → ACTIVE → completion → isolation →
-  cancellation using the committed `resolve_adapter_outcome` and emits sanitized
-  JSON evidence.
-
-These require a local `opencode` with the provider authenticated and are **not**
-wired into CI (CI has no provider credentials). A missing login, MFA requirement,
-or unavailable credential is an authentication blocker and must not be worked
-around by copying credential files into the repository or CI logs.
+- `runtime_provider_auth_smoke.sh` — auth + catalog preflight using supported metadata only;
+- `runtime_provider_active_completion.sh` — disposable nonce fixture + real `opencode serve` + credential-free fake daemon + exact-PID cleanup verification;
+- `stage_c_runtime.py` — drives SHADOW → ACTIVE → repository read → isolation → cancellation, applies the strict oracle, verifies session deletion, and emits sanitized JSON evidence.
 
 ## Not part of this spike
 
 - ACP as the orchestration critical path;
 - OpenHands runtime integration;
 - LiteLLM completion proxying;
-- real quota collectors;
+- production quota collectors;
 - adaptive scheduling;
 - macOS/WidgetKit control center;
 - production persistence/API design.

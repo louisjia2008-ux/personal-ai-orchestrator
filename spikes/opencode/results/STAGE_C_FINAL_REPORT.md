@@ -1,87 +1,89 @@
 # OpenCode Stage C — Final Report
 
-**Status: `OPEN_CODE_STAGE_C_PARTIAL`**
+**Status: `OPEN_CODE_STAGE_C_REPAIR_PARTIAL_PENDING_MINIMAX_RETEST`**
 
-Real provider-native runtime proof of the OpenCode routing spike on macOS
-(`opencode` 1.18.23), driven by the committed credential-free routing daemon and
-the committed thin-adapter decision logic. MiniMax passes every required gate,
-including a real completion; Z.AI/GLM passes routing/switch/isolation but its
-real completion is blocked by a provider-side "model unavailable" condition.
+PR #17's Stage C harness has been hardened so provider acceptance is deterministic and evidence
+semantics are conservative. The repaired code no longer treats non-empty assistant text as a
+completion pass, no longer emits raw HTTP bodies, and no longer claims session deletion unless
+it is verified.
 
-| Provider | Provider id | Model | SHADOW | ACTIVE | Isolation | Completion | Cancellation | Overall |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| MiniMax | `minimax-cn-coding-plan` | `MiniMax-M2.5` | PASS | PASS | PASS | PASS | PASS | **PASS** |
-| Z.AI/GLM | `zai-coding-plan` | `glm-5.3-flash` | PASS | PASS | PASS | BLOCKED (`MODEL_UNAVAILABLE`) | SKIPPED | **PARTIAL** |
+| Provider | SHADOW | ACTIVE | Isolation | Completion | Cancellation | Current status |
+| --- | --- | --- | --- | --- | --- | --- |
+| MiniMax | historical PASS | historical PASS | historical PASS | hardened re-test required | hardened re-test required | **HARDENED_RETEST_REQUIRED** |
+| Z.AI/GLM | historical PASS | historical PASS | historical PASS | not re-run | not re-run | **DEFERRED_PENDING_QUOTA_RESET** |
 
-Per the spike contract, overall Stage C is **PARTIAL** because both providers did
-not complete every required real-runtime gate.
+## Hardened Stage C acceptance contract
 
-## What Stage C proves
+A real completion now passes only when every condition below is true:
 
-For each provider the flow was exercised end to end against the real,
-already-authenticated OpenCode runtime:
+1. an assistant completion exists;
+2. no assistant error is present;
+3. provider ID exactly matches the selected provider;
+4. model ID exactly matches the selected catalog model;
+5. `finish == stop`;
+6. assistant output equals the host-derived expected README H1 exactly.
 
-```
-orchestrator (credential-free fake daemon)
-  -> RoutingRequest / RoutingDecision  (typed contract)
-  -> resolve_adapter_outcome()         (committed thin-adapter logic)
-  -> session-scoped model switch        (POST /api/session/{id}/model)
-  -> real, harmless completion          (POST /api/session/{id}/prompt)  [MiniMax only]
-  -> second session provably untouched
-Orchestrator never receives credentials; OpenCode owns provider auth.
-```
+The disposable fixture now generates a runtime nonce in its H1. The model prompt contains only
+instructions to read `README.md` and return its H1; it never contains the expected heading. The
+host parses the expected H1 independently. This turns the completion smoke into a repository-read
+proof rather than a prompt-echo proof.
 
-- **SHADOW** returns the real catalog model as a recommendation and does **not**
-  switch the session model (`resolve_adapter_outcome` → `RECORD_ONLY`).
-- **ACTIVE** applies a session-scoped switch to the exact real model on session A
-  only (`resolve_adapter_outcome` → `SWITCH_MODEL`), variant normalized to
-  `default`; session B stays model-less with zero cost/tokens.
-- **MiniMax completion** returned the fixture H1 exactly
-  (`# OpenCode Stage C Disposable Fixture`), `finish=stop`,
-  `tokens: input=184, output=31, cache={read:2727, write:313}`.
-- **Cancellation** (MiniMax): an in-flight turn was interrupted precisely,
-  producing `finish=error` / "Provider turn interrupted"; the server stayed
-  healthy and no orphan remained.
-- The disposable fixture was byte-clean after every run; all disposable sessions
-  were deleted.
+## Cleanup and evidence hardening
 
-## Runtime note (drift from the Stage A/B pin)
+The repaired harness:
 
-The pinned `@opencode-ai/cli@0.0.0-beta-18387` (`opencode2`) has **no
-darwin-arm64 binary** and cannot be installed on this Mac; its plugin
-command/switch API also differs from the standalone runtime that holds the real
-credentials. Stage C therefore runs on `opencode` 1.18.23 with
-`@opencode-ai/plugin@1.18.23` / `@opencode-ai/sdk@1.18.23`, realizing the thin
-adapter as a host-side client over the documented `POST /api/session/{id}/model`
-switch (same `session.next.model.switched` durable event as Stage B). Stage A/B
-and their beta-18387 pin are unchanged. See `STAGE_C_ENVIRONMENT.md`.
+- captures the exact fake-daemon PID;
+- captures the exact `opencode serve` PID without a subshell;
+- stops only those exact PIDs;
+- verifies both PIDs are gone;
+- verifies the fixture is Git-clean before deletion;
+- deletes the fixture and work directory;
+- records session deletion as attempted and separately verifies deletion with GET/not-found;
+- reports `session_cleanup = NOT_PROVEN` if deletion cannot be verified;
+- maps provider/runtime errors to bounded categories rather than committing raw response bodies;
+- never dumps raw assistant error objects into evidence.
 
-## Z.AI blocker
+The credential-free Stage C unit/syntax checks are part of normal CI. Real provider smoke remains
+local-only because GitHub Actions has no provider credentials.
 
-All `zai-coding-plan` models fail at turn execution with
-`SessionRunnerModel.ModelUnavailableError: Model unavailable: zai-coding-plan/<model>`.
-The credential is present and the switch succeeds; only provider execution is
-unavailable. This requires user action on the Z.AI Coding Plan and is a stop
-condition for that provider. See `STAGE_C_ZAI_GLM.md`.
+## MiniMax
 
-## Credential safety
+The old MiniMax evidence was generated before the cleanup fix and before the strict completion
+oracle. It is retained as historical evidence but is explicitly superseded for final acceptance.
+The repaired harness must be rerun locally against a model discovered from the current OpenCode
+catalog before PR #17 can be frozen as fully repaired.
 
-`auth.json` was never read, copied, or logged. Authentication was confirmed only
-through supported metadata surfaces. No API keys, tokens, cookies, or headers
-appear in any evidence file. See `STAGE_C_ENVIRONMENT.md`.
+Current status:
 
-## Reproduce
+`MINIMAX_STAGE_C = HARDENED_RETEST_REQUIRED`
 
-```bash
-# preflight only (refuses if the provider is not authenticated)
-spikes/opencode/runtime_provider_auth_smoke.sh \
-  --provider minimax-cn-coding-plan --model MiniMax-M2.5
+## Z.AI / GLM
 
-# full SHADOW + ACTIVE + completion + isolation + cancellation
-spikes/opencode/runtime_provider_active_completion.sh \
-  --provider minimax-cn-coding-plan --model MiniMax-M2.5 \
-  --python .venv/bin/python --evidence-out /tmp/minimax.json
-```
+No additional Z.AI calls were made during this repair. The prior observed failure category is:
 
-Requires a local `opencode` 1.18.23 with the target provider already
-authenticated. Not wired into CI (CI has no provider credentials).
+`MODEL_UNAVAILABLE`
+
+The user has reported that the Z.AI weekly quota is exhausted, which is a possible contributing
+factor. The actual root cause remains:
+
+`NOT_YET_CONFIRMED`
+
+Current status:
+
+`ZAI_STAGE_C = DEFERRED_PENDING_QUOTA_RESET`
+
+A re-test is required after the quota resets. The repository no longer claims that either the
+provider entitlement or OpenCode is definitely broken.
+
+## Security
+
+- Credential contents read by the repaired Stage C code: **NO**.
+- Credential contents logged/committed: **NO**.
+- Raw HTTP/provider response body committed by the repaired path: **NO**.
+- Authorization/Cookie/API-key/OAuth headers committed: **NO**.
+
+## Remaining acceptance blocker for PR #17
+
+One authoritative local MiniMax run with existing authentication is still required. GitHub-hosted
+CI can verify the non-credential contract but cannot perform that runtime acceptance without
+copying credentials into CI, which this spike explicitly forbids.

@@ -1,62 +1,53 @@
-# OpenCode Stage C — Z.AI / GLM: PARTIAL (real completion blocked)
+# OpenCode Stage C — Z.AI / GLM: DEFERRED_PENDING_QUOTA_RESET
 
-Routing/adapter path proven; the real completion is blocked by a provider-side
-"model unavailable" condition. Sanitized machine evidence:
-[`stage_c_zai_glm_evidence.json`](./stage_c_zai_glm_evidence.json).
+**Runtime completion status: `DEFERRED_PENDING_QUOTA_RESET`**
 
-## Identity
+No additional Z.AI provider calls are authorized for this repair cycle. The user has reported
+that the Z.AI weekly quota is currently exhausted, so the previous turn-execution failure is
+frozen as an observation rather than promoted to a provider/OpenCode root-cause claim.
+
+## Frozen identity / prior observation
 
 | Field | Value |
 | --- | --- |
 | Provider display name | Z.AI Coding Plan |
 | Provider id | `zai-coding-plan` |
-| Model id attempted | `glm-5.3-flash` |
-| OpenCode | 1.18.23 |
-| Auth present | YES (credential type: api) |
+| Last model attempted | `glm-5.3-flash` |
+| OpenCode at observation time | 1.18.23 |
+| Auth metadata | PASS |
+| SHADOW routing | PASS |
+| ACTIVE session mutation | PASS |
+| Second-session isolation | PASS |
+| Real completion | DEFERRED_PENDING_QUOTA_RESET |
+| Cancellation | DEFERRED |
 | Credentials exposed | NO |
 
-## Gate results
+## Observed failure
 
-| Gate | Result | Evidence |
-| --- | --- | --- |
-| Auth metadata present | PASS | provider in `auth.json` credentials block |
-| Model in real catalog | PASS | `zai-coding-plan/glm-5.3-flash` (and others) |
-| SHADOW non-invasive | PASS | adapter action `RECORD_ONLY`; session model stayed `null` |
-| ACTIVE selects real model | PASS | adapter action `SWITCH_MODEL`; session A → `zai-coding-plan/glm-5.3-flash` |
-| Second session unchanged | PASS | session B model `null`, cost 0, tokens 0 |
-| Real completion | **BLOCKED** | no assistant turn; `MODEL_UNAVAILABLE` |
-| Fixture unchanged | PASS | `git status --short` empty; `git diff --check` clean |
-| Daemon session accounting | PASS | 1 SHADOW + 1 ACTIVE, both session A; `active_route_count=1` |
-| Cancellation | SKIPPED | provider model does not execute turns; nothing to cancel |
-| Credential leak | NONE | no auth file read/copied/logged |
+The prior runtime attempt produced the sanitized category:
 
-## Blocker (sanitized)
+`MODEL_UNAVAILABLE`
 
-Every authenticated `zai-coding-plan` model fails at turn execution with
-OpenCode's `SessionRunnerModel.ModelUnavailableError`:
+This observation is retained for history. It does **not** establish why provider execution was
+unavailable.
 
-```
-Failed to drain Session
-  cause: SessionRunnerModel.ModelUnavailableError: Model unavailable: zai-coding-plan/<model>
-```
+## Root-cause status
 
-Confirmed across `glm-5.3-flash`, `glm-5.3`, `glm-5.3-highspeed`, `glm-5.2`,
-`glm-4.7`, and `glm-5-turbo` — the credential and the session-scoped switch both
-succeed, but OpenCode cannot resolve/execute any model on this plan for a turn.
+- Possible contributing factor: weekly quota exhausted.
+- Root cause: `NOT_YET_CONFIRMED`.
+- OpenCode defect: `NOT_CONFIRMED`.
+- Provider entitlement defect: `NOT_CONFIRMED`.
+- Credential defect: `NOT_CONFIRMED`.
 
-This is a **provider/plan-side availability blocker**, not a missing credential
-and not an orchestrator/adapter defect. Resolving it requires user action on the
-Z.AI Coding Plan (re-authentication or plan/model entitlement) and is therefore a
-stop condition for this provider; the orchestrator does not attempt to obtain or
-change credentials.
+The earlier wording that characterized this as definitely provider/plan-side is superseded by
+this report.
 
-- Tokens / cost: `UNKNOWN` (no turn executed)
-- Quota remaining: `UNKNOWN`
-- Provider error category: `MODEL_UNAVAILABLE`
+## Required re-test
 
-## What is proven for Z.AI
+After the Z.AI quota resets, repeat the hardened Stage C provider-native completion test using a
+catalog-confirmed model. Until then:
 
-The credential-free daemon → `resolve_adapter_outcome` → session-scoped switch
-path works identically to MiniMax (SHADOW non-invasive, ACTIVE switches the exact
-real model on session A only, session B isolated, fixture clean). Only the final
-provider execution is blocked.
+`ZAI_STAGE_C = DEFERRED_PENDING_QUOTA_RESET`
+
+No credential changes, re-login, or additional quota-consuming calls should be attempted as
+part of PR #17 repair.

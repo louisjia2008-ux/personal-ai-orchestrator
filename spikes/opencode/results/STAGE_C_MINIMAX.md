@@ -1,54 +1,55 @@
-# OpenCode Stage C — MiniMax: PASS
+# OpenCode Stage C — MiniMax: HARDENED_RETEST_REQUIRED
 
-Real provider-native runtime proof against the authenticated MiniMax coding plan.
-Sanitized machine evidence: [`stage_c_minimax_evidence.json`](./stage_c_minimax_evidence.json).
+The previously committed MiniMax Stage C run is retained as **historical pre-hardening
+evidence**. It passed the then-current harness, but that harness accepted any non-empty assistant
+text and the authoritative provider evidence was produced before the exact-PID cleanup repair.
 
-## Identity
+Therefore the prior runtime result is now:
+
+`HISTORICAL_PASS_SUPERSEDED_PENDING_HARDENED_RETEST`
+
+Sanitized historical machine evidence remains at
+[`stage_c_minimax_evidence.json`](./stage_c_minimax_evidence.json); it must not be represented as
+the authoritative result of the repaired harness.
+
+## Historical identity
 
 | Field | Value |
 | --- | --- |
 | Provider display name | MiniMax Token Plan (minimaxi.com) |
 | Provider id | `minimax-cn-coding-plan` |
-| Model id | `MiniMax-M2.5` |
-| Model variant | `default` (OpenCode-normalized) |
+| Model id used historically | `MiniMax-M2.5` |
 | OpenCode | 1.18.23 |
-| Auth present | YES (credential type: api) |
+| Auth metadata | PASS |
 | Credentials exposed | NO |
 
-## Gate results
+## Hardened re-test gate
 
-| Gate | Result | Evidence |
-| --- | --- | --- |
-| Auth metadata present | PASS | provider in `auth.json` credentials block |
-| Model in real catalog | PASS | `minimax-cn-coding-plan/MiniMax-M2.5` |
-| SHADOW non-invasive | PASS | adapter action `RECORD_ONLY`; session model stayed `null` |
-| ACTIVE selects real model | PASS | adapter action `SWITCH_MODEL`; session A → `minimax-cn-coding-plan/MiniMax-M2.5` |
-| Second session unchanged | PASS | session B model `null`, cost 0, tokens 0 |
-| Real completion | PASS | `finish=stop`; text = fixture H1 |
-| Fixture unchanged | PASS | `git status --short` empty; `git diff --check` clean |
-| Daemon session accounting | PASS | 1 SHADOW + 1 ACTIVE, both session A; `active_route_count=1`; B never routed |
-| Cancellation | PASS | in-flight interrupt → `finish=error`, marker `Provider turn interrupted`, server healthy |
-| Credential leak | NONE | no auth file read/copied/logged |
+The next authoritative MiniMax run must use the current OpenCode catalog rather than assuming a
+model ID and must prove all of the following with the repaired harness:
 
-## Real completion
+- auth metadata: PASS;
+- catalog membership: PASS;
+- SHADOW: PASS and no model mutation;
+- ACTIVE: PASS only for the target session;
+- second-session isolation: PASS;
+- disposable README contains a runtime-generated nonce in its H1;
+- the prompt does **not** contain the expected H1;
+- the assistant output equals the host-parsed README H1 exactly;
+- assistant error absent;
+- provider ID and model ID exactly match;
+- `finish == stop`;
+- fixture remains byte-clean and is deleted;
+- DELETE-session is followed by GET verification;
+- exact fake-daemon PID and exact `opencode serve` PID are both gone after cleanup;
+- cancellation is PASS or honestly `CANCELLATION_NOT_PROVEN`;
+- no credential or raw provider response is logged or committed.
 
-- Prompt: "Respond with exactly this line and nothing else, no preamble: # OpenCode Stage C Disposable Fixture"
-- Response text: `# OpenCode Stage C Disposable Fixture` (matches the fixture H1 exactly)
-- `finish`: `stop`
-- Tokens: `input=184, output=31, reasoning=0, cache={read:2727, write:313}`
-- Cost: `0` (subscription/token-plan; OpenCode reported 0)
-- Quota remaining: `UNKNOWN` (OpenCode does not expose plan quota)
-- Provider errors: none
+## Historical run (non-authoritative after hardening)
 
-## Path proven
+The pre-hardening run reported a real MiniMax completion, second-session isolation, cancellation,
+and zero credential exposure. Those facts remain useful historical evidence, but they do not
+satisfy the repaired Stage C acceptance gate until MiniMax is rerun locally with existing
+provider authentication.
 
-```
-fake routing daemon (credential-free)
-  -> RoutingRequest/RoutingDecision
-  -> resolve_adapter_outcome()  ->  SWITCH_MODEL(minimax-cn-coding-plan/MiniMax-M2.5)
-  -> POST /api/session/A/model  (session.next.model.switched)
-  -> POST /api/session/A/prompt -> real MiniMax completion
-  -> session B provably untouched
-```
-
-The orchestrator never received provider credentials; OpenCode owned auth throughout.
+Quota remaining remains `UNKNOWN`; OpenCode Stage C completion evidence is not a quota API.
