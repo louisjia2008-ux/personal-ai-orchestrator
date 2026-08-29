@@ -55,10 +55,14 @@ class TaskProfile(RegistryModel):
     pool: PoolKind = PoolKind.WORKER
     risk: RiskClass = RiskClass.MEDIUM
     required_capabilities: dict[str, float] = Field(default_factory=dict)
+    required_context_tokens: int | None = Field(default=None, ge=1)
+    requires_vision: bool = False
+    required_tools: tuple[str, ...] = ()
+    failure_count: int = Field(default=0, ge=0)
     predicted_quota_fraction_p90: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
-    def validate_capability_floors(self) -> TaskProfile:
+    def validate_requirements(self) -> TaskProfile:
         invalid = {
             key: value
             for key, value in self.required_capabilities.items()
@@ -66,6 +70,8 @@ class TaskProfile(RegistryModel):
         }
         if invalid:
             raise ValueError(f"capability floors must be within [0, 1]: {invalid}")
+        if any(not tool.strip() for tool in self.required_tools):
+            raise ValueError("required_tools must not contain blank names")
         return self
 
 
@@ -73,6 +79,9 @@ class TargetTelemetry(RegistryModel):
     success_prior: float | None = Field(default=None, ge=0.0, le=1.0)
     expected_latency_ms: float | None = Field(default=None, ge=0.0)
     expected_cost_to_green_usd: float | None = Field(default=None, ge=0.0)
+    context_window_tokens: int | None = Field(default=None, ge=1)
+    supports_vision: bool | None = None
+    supported_tools: tuple[str, ...] = ()
 
 
 class RoutingPolicy(RegistryModel):
@@ -81,6 +90,11 @@ class RoutingPolicy(RegistryModel):
     uncertainty_margin_fraction: float = Field(default=0.02, ge=0.0, le=1.0)
     require_burn_estimate_for_subscription: bool = True
     allow_paid_usage: bool = False
+    high_risk_requires_success_prior: bool = True
+    high_risk_min_success_prior: float = Field(default=0.75, ge=0.0, le=1.0)
+    failure_escalation_after: int = Field(default=2, ge=1)
+    failure_escalation_capability: str = Field(default="reasoning", min_length=1)
+    failure_escalation_floor: float = Field(default=0.75, ge=0.0, le=1.0)
 
 
 class CandidateEvaluation(RegistryModel):
@@ -181,20 +195,17 @@ def _score_candidate(
     return round(score, 8)
 
 
-def evaluate_target(
+def _hard_requirement_reasons(
     registry: ModelRegistry,
     *,
     task: TaskProfile,
     target: ExecutionTarget,
-    membership: PoolMembership,
-    now: datetime,
-    known_at: datetime,
     runtime_available: bool,
     telemetry: TargetTelemetry,
     policy: RoutingPolicy,
-) -> CandidateEvaluation:
-    reasons: list[str] = []
+) -> list[str]:
     model = registry.models[target.model_sku_id]
+    reasons: list[str] = []
 
     if not model.enabled:
         reasons.append("model disabled")
@@ -207,6 +218,65 @@ def evaluate_target(
         observed = model.capabilities.scores.get(capability, 0.0)
         if observed < floor:
             reasons.append(f"capability floor failed: {capability} {observed:.3f} < {floor:.3f}")
+
+    if task.required_context_tokens is not None:
+        if telemetry.context_window_tokens is None:
+            reasons.append("context window unknown")
+        elif telemetry.context_window_tokens < task.required_context_tokens:
+            reasons.append(
+                "context window too small: "
+                f"{telemetry.context_window_tokens} < {task.required_context_tokens}"
+            )
+
+    if task.requires_vision and telemetry.supports_vision is not True:
+        reasons.append("required vision capability unavailable or unknown")
+
+    missing_tools = sorted(set(task.required_tools) - set(telemetry.supported_tools))
+    if missing_tools:
+        reasons.append(f"required runtime tools unavailable: {', '.join(missing_tools)}")
+
+    if task.risk is RiskClass.HIGH and policy.high_risk_requires_success_prior:
+        if telemetry.success_prior is None:
+            reasons.append("high-risk task requires an observed success prior")
+        elif telemetry.success_prior < policy.high_risk_min_success_prior:
+            reasons.append(
+                "high-risk success prior below floor: "
+                f"{telemetry.success_prior:.3f} < {policy.high_risk_min_success_prior:.3f}"
+            )
+
+    if task.failure_count >= policy.failure_escalation_after:
+        capability = policy.failure_escalation_capability
+        observed = model.capabilities.scores.get(capability, 0.0)
+        if observed < policy.failure_escalation_floor:
+            reasons.append(
+                "failure escalation floor failed: "
+                f"{capability} {observed:.3f} < {policy.failure_escalation_floor:.3f}"
+            )
+
+    return reasons
+
+
+def evaluate_target(
+    registry: ModelRegistry,
+    *,
+    task: TaskProfile,
+    target: ExecutionTarget,
+    membership: PoolMembership,
+    now: datetime,
+    known_at: datetime,
+    runtime_available: bool,
+    telemetry: TargetTelemetry,
+    policy: RoutingPolicy,
+) -> CandidateEvaluation:
+    reasons = _hard_requirement_reasons(
+        registry,
+        task=task,
+        target=target,
+        runtime_available=runtime_available,
+        telemetry=telemetry,
+        policy=policy,
+    )
+    model = registry.models[target.model_sku_id]
 
     if reasons:
         return CandidateEvaluation(
@@ -264,9 +334,6 @@ def evaluate_target(
         at=now,
         required_window_kinds=pool.required_window_kinds,
     )
-    # The snapshot helpers deliberately retain a diagnostic value when only a subset
-    # of configured kinds is physically present. Scheduler authority is stricter:
-    # missing required kinds make both routing pace and admission headroom UNKNOWN.
     if missing_required:
         pace = None
         remaining = None
@@ -308,9 +375,7 @@ def evaluate_target(
         else max(0.0, remaining - pool.reserve_fraction - policy.uncertainty_margin_fraction)
     )
     if is_metered_subscription and predicted is not None and usable is not None and predicted > usable:
-        reasons.append(
-            f"task burn {predicted:.3f} exceeds usable quota headroom {usable:.3f}"
-        )
+        reasons.append(f"task burn {predicted:.3f} exceeds usable quota headroom {usable:.3f}")
 
     scarcity = DEFAULT_SCARCITY_THRESHOLDS.classify(pace)
     if reasons:
@@ -346,6 +411,11 @@ def evaluate_target(
             f"scarcity {scarcity.value}",
         ]
     )
+    if task.failure_count >= policy.failure_escalation_after:
+        reasons.append(f"failure escalation active after {task.failure_count} prior failures")
+    if task.risk is RiskClass.HIGH:
+        reasons.append("high-risk reliability gate passed")
+
     return CandidateEvaluation(
         execution_target_id=target.id,
         model_sku_id=model.id,
@@ -404,7 +474,11 @@ def route_task(
     evaluations = tuple(
         evaluations_by_target[target_id] for target_id in sorted(evaluations_by_target)
     )
-    admitted = [evaluation for evaluation in evaluations if evaluation.admitted and evaluation.score is not None]
+    admitted = [
+        evaluation
+        for evaluation in evaluations
+        if evaluation.admitted and evaluation.score is not None
+    ]
     if not admitted:
         return SchedulerDecision(
             task_id=task.task_id,
