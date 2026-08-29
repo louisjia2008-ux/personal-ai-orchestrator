@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 
 from personal_ai_orchestrator.activation import ActiveRoutingGate
+from personal_ai_orchestrator.execution_controller import reconcile_workspace_truth
 from personal_ai_orchestrator.local_api import serve
 from personal_ai_orchestrator.policy_snapshot import PolicySnapshotJournal
 from personal_ai_orchestrator.routing_service import RoutingService
@@ -28,6 +29,9 @@ def build_service(
     # A daemon restart destroys live process truth. Reconcile before exposing any routing path so
     # stale RUNNING/WORKER_FINISHED/VERIFYING tasks cannot continue to influence model selection.
     store.reconcile_startup()
+    # Startup blocking is also the point at which stale writer ownership becomes invalid. Clear
+    # those exact persisted locks and fail closed any still-routable task whose worktree vanished.
+    reconcile_workspace_truth(store)
     service = RoutingService(
         registry=config.registry,
         store=store,
