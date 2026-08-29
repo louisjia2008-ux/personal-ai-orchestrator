@@ -10,6 +10,14 @@ function optionString(value: unknown, fallback: string): string {
   return typeof value === "string" && value.length > 0 ? value : fallback
 }
 
+function optionOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined
+}
+
+function optionNonnegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined
+}
+
 function optionMode(value: unknown): RoutingMode {
   return value === "ACTIVE" || value === "BYPASS" || value === "SHADOW" ? value : "SHADOW"
 }
@@ -22,6 +30,8 @@ async function requestRoute(input: {
   location?: string
   agent?: string
   mode: RoutingMode
+  taskID?: string
+  taskStateVersion?: number
 }): Promise<RoutingDecision | undefined> {
   if (input.mode === "BYPASS") return undefined
 
@@ -38,6 +48,8 @@ async function requestRoute(input: {
         location: input.location,
         agent: input.agent,
         mode: input.mode,
+        task_id: input.taskID,
+        task_state_version: input.taskStateVersion,
       }),
       signal: controller.signal,
     })
@@ -56,6 +68,10 @@ export default Plugin.define({
   async setup(ctx) {
     const endpoint = optionString(ctx.options.endpoint, "http://127.0.0.1:8765")
     const mode = optionMode(ctx.options.mode)
+    // Task binding is host-owned plugin configuration, not prompt content. Shadow may run with
+    // just a task ID; production ACTIVE additionally requires an exact state version server-side.
+    const taskID = optionOptionalString(ctx.options.taskID)
+    const taskStateVersion = optionNonnegativeInteger(ctx.options.taskStateVersion)
 
     await ctx.command.transform((draft) => {
       draft.add({
@@ -70,6 +86,8 @@ export default Plugin.define({
             projectID: ctx.location.project?.id,
             location: ctx.location.directory,
             mode,
+            taskID,
+            taskStateVersion,
           })
 
           if (!decision) {
