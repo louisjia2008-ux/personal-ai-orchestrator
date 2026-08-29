@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "as_of": "2026-08-29T00:58:00Z",
+  "providers": [
+    {
+      "provider_id": "minimax",
+      "plan_id": "token-plan",
+      "official_api": true,
+      "endpoint": "https://www.minimax.io/v1/token_plan/remains",
+      "authentication": "Bearer Token Plan subscription key",
+      "existing_opencode_auth_reusable_without_secret_read": false,
+      "requires_independent_credential_surface": true,
+      "automation_allowed": true,
+      "rate_limit": "Dynamic RPM/TPM throttling; provider says throttles typically reset within ~1 minute",
+      "quota_windows": ["5-hour rolling", "weekly"],
+      "scope": "Token Plan shared quota with provider-returned model remains records",
+      "remaining_semantics": "Provider API exposes explicit remaining percentage fields when available",
+      "confidence": "EXACT",
+      "runtime_status": "AUTHENTICATION_INTEGRATION_BLOCKED",
+      "source_uris": [
+        "https://platform.minimax.io/subscribe/token-plan",
+        "https://www.minimax.io/v1/token_plan/remains",
+        "https://github.com/MiniMax-AI/cli",
+        "https://platform.minimax.io/protocol/paid-agreement"
+      ]
+    },
+    {
+      "provider_id": "zai",
+      "plan_id": "coding-plan",
+      "official_api": true,
+      "endpoint": "https://api.z.ai/api/monitor/usage/quota/limit",
+      "authentication": "Authorization token used by provider-published Coding Plan usage tooling",
+      "existing_opencode_auth_reusable_without_secret_read": false,
+      "requires_independent_credential_surface": true,
+      "automation_allowed": null,
+      "rate_limit": null,
+      "quota_windows": ["5-hour", "weekly", "monthly MCP"],
+      "scope": "Coding Plan remote quota/usage",
+      "remaining_semantics": "Official plugin exposes quota percentage but raw remaining-vs-used semantics are not stable enough for an EXACT remaining interpretation",
+      "confidence": "ESTIMATED",
+      "runtime_status": "DEFERRED_PENDING_QUOTA_RESET_OR_AUTH",
+      "source_uris": [
+        "https://zcode.z.ai/en/docs/usage-stats",
+        "https://zcode.z.ai/en/docs/configuration",
+        "https://github.com/zai-org/zai-coding-plugins"
+      ]
+    }
+  ]
+}
