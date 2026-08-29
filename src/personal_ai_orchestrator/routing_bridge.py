@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from hashlib import sha256
-import json
 
+from personal_ai_orchestrator.activation import ActiveRoutingGate
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.opencode_contract import (
     ModelRef,
@@ -44,13 +45,13 @@ def build_routing_decision(
     *,
     catalog_snapshot_id: str,
     policy_snapshot_id: str,
-    production_active_authorized: bool = False,
+    activation_gate: ActiveRoutingGate | None = None,
     decided_at: datetime | None = None,
 ) -> RoutingDecision:
     """Create the adapter-facing immutable decision from one scheduler recommendation.
 
-    Production ACTIVE switching remains fail-closed unless the caller proves the P0/P1/P3.5
-    activation gate separately. SHADOW always records a recommendation without side effects.
+    Production ACTIVE switching remains fail-closed unless the structured activation gate proves
+    P0/P1/adapter/Shadow/BYPASS acceptance. SHADOW always records without side effects.
     """
 
     if not catalog_snapshot_id:
@@ -113,10 +114,16 @@ def build_routing_decision(
             fallback_reason=scheduler.decision_reason,
         )
 
-    switch_requested = request.mode is RoutingMode.ACTIVE and production_active_authorized
+    active_authorized = activation_gate is not None and activation_gate.authorized
+    switch_requested = request.mode is RoutingMode.ACTIVE and active_authorized
     fallback_reason = None
-    if request.mode is RoutingMode.ACTIVE and not production_active_authorized:
-        fallback_reason = "production ACTIVE gate not authorized; recommendation recorded only"
+    if request.mode is RoutingMode.ACTIVE and not active_authorized:
+        blockers = (
+            activation_gate.blocking_reasons()
+            if activation_gate is not None
+            else ("production activation evidence absent",)
+        )
+        fallback_reason = "production ACTIVE gate not authorized: " + "; ".join(blockers)
 
     return RoutingDecision(
         decision_id=decision_id,
