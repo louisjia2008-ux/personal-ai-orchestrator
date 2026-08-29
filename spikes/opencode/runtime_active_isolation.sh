@@ -15,6 +15,8 @@ git -C "$fixture" commit -q -m "fixture: initialize"
 
 cp "$GITHUB_WORKSPACE/integrations/opencode/plugin.ts" \
   "$fixture/plugins/orchestrator.ts"
+cp "$GITHUB_WORKSPACE/integrations/opencode/decision_contract.ts" \
+  "$fixture/plugins/decision_contract.ts"
 cat > "$fixture/package.json" <<'EOF'
 {
   "private": true,
