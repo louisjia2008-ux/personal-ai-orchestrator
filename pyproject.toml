@@ -29,3 +29,7 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Dashboard bridge contains localized user-facing strings; semantic lint remains enabled.
+"dashboard/serve.py" = ["E501"]
