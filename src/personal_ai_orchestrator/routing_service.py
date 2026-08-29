@@ -8,14 +8,14 @@ from datetime import UTC, datetime
 from personal_ai_orchestrator.activation import ActiveRoutingGate
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.opencode_contract import RoutingDecision, RoutingRequest
-from personal_ai_orchestrator.policy_snapshot import PolicySnapshot
+from personal_ai_orchestrator.policy_snapshot import PolicySnapshot, PolicySnapshotJournal
 from personal_ai_orchestrator.routing_bridge import build_routing_decision
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore
 from personal_ai_orchestrator.scheduler import (
+    RoutingPolicy,
     SchedulerDecision,
     TargetTelemetry,
     TaskProfile,
-    RoutingPolicy,
     route_task,
 )
 
@@ -29,6 +29,7 @@ class RoutingService:
     catalog_snapshot_id: str
     policy: RoutingPolicy = field(default_factory=RoutingPolicy)
     activation_gate: ActiveRoutingGate = field(default_factory=ActiveRoutingGate)
+    policy_journal: PolicySnapshotJournal | None = None
     task_profiles: dict[str, TaskProfile] = field(default_factory=dict)
     runtime_availability: dict[str, bool] = field(default_factory=dict)
     telemetry: dict[str, TargetTelemetry] = field(default_factory=dict)
@@ -42,6 +43,10 @@ class RoutingService:
 
     def route(self, request: RoutingRequest, *, now: datetime | None = None) -> RoutingDecision:
         reference = now or datetime.now(UTC)
+        policy_snapshot = self.policy_snapshot
+        if self.policy_journal is not None:
+            self.policy_journal.append(policy_snapshot)
+
         profile = self.task_profiles.get(request.task_id or "")
         if profile is None:
             scheduler = SchedulerDecision(
@@ -67,7 +72,7 @@ class RoutingService:
             scheduler,
             self.registry,
             catalog_snapshot_id=self.catalog_snapshot_id,
-            policy_snapshot_id=self.policy_snapshot.id,
+            policy_snapshot_id=policy_snapshot.id,
             activation_gate=self.activation_gate,
             decided_at=reference,
         )
