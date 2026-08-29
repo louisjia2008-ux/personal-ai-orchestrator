@@ -2,13 +2,13 @@
 
 ## Goal
 
-The macOS experience is an optional control plane for Personal AI Orchestrator. The core scheduler must remain headless and usable without the macOS app, DeskPet, or any specific UI.
+The macOS experience is an optional control plane for Personal AI Orchestrator. The core scheduler remains headless and usable without the macOS app, DeskPet, or any specific UI.
 
 The macOS client should provide three complementary surfaces:
 
-1. **Menu Bar** — live status and quick controls.
+1. **Menu Bar** — live status and quick bounded controls.
 2. **Desktop / Notification Center Widgets** — glanceable quota, routing, and current-run state.
-3. **Full App** — complete model registry, pool, routing, analytics, and configuration UI.
+3. **Full App** — complete model-resource, routing, analytics, and configuration UI.
 
 DeskPet is a separate optional client of the same local orchestrator API.
 
@@ -27,25 +27,29 @@ DeskPet is a separate optional client of the same local orchestrator API.
    MenuBar  Widget   Dashboard
 ```
 
-The macOS client must not become the source of truth for task state, quota state, or routing state.
+The macOS client is never the source of truth for task state, quota truth, activation authority, or routing history.
+
+## Production ACTIVE authority
+
+The UI may display routing modes, but an `ACTIVE` button is only a request to the daemon. The daemon must reject production ACTIVE routing until the Safety Kernel / deterministic verification / Shadow-validation gate is satisfied.
+
+A UI state toggle cannot bypass that gate.
 
 ## Menu Bar
-
-The menu bar is the fastest interactive surface and may update more frequently than widgets.
 
 Recommended information:
 
 - orchestrator running/paused state;
-- current task and selected model SKU;
+- current task and selected model SKU / execution target;
 - current worker role;
 - plan/quota health summary;
 - active routing mode;
 - protected quota pools;
-- warnings and exhausted providers.
+- warnings and unavailable/exhausted targets.
 
 Recommended quick actions:
 
-- Auto / Balanced mode;
+- Balanced;
 - Max Quality;
 - Save Quota;
 - Low Latency;
@@ -65,11 +69,10 @@ Suggested content:
 
 ```text
 ORCHESTRATOR
-Balanced
+Shadow / Balanced
 
-M3       Healthy
-GLM      Conserve
-GPT      Healthy
+MiniMax M3    Healthy
+GLM-5.3       Quota Unknown
 
 Running: M3 / Builder
 ```
@@ -80,42 +83,75 @@ Suggested content:
 
 ```text
 PLAN HEALTH
-MiniMax    39% used / Healthy
-Z.AI       82% used / Conserve
-Codex      61% used / Healthy
+MiniMax    Healthy / EXACT
+Z.AI       Unknown / ESTIMATED
 
 CURRENT TASK
-Swift debugging -> M3
+Swift debugging -> M3 / MiniMax plan
 
-Mode: Balanced
+Mode: Shadow / Balanced
 ```
-
-Quota percentages must be labelled by confidence/source:
-
-- Provider reported
-- Estimated
-- Unknown
 
 ### Large widget
 
 May additionally show:
 
 - task/risk class;
-- selected model and role;
-- selection explanation;
+- selected model + execution target + role;
+- admission/selection explanation;
 - protected reserve state;
-- recent model utilization;
+- recent target utilization;
 - warning conditions.
 
-Example selection explanation:
+Example explanation:
 
 ```text
-Selected M3
-+ strong local Swift debugging history
-+ MiniMax quota healthy
-+ medium-risk task
-- GLM reserve protected
+Selected M3 / MiniMax subscription target
++ capability floor passed
++ predicted burn fits usable headroom
++ quota snapshot fresh
+- GLM target excluded: required quota window unknown
 ```
+
+## Quota evidence language
+
+The UI must keep **confidence** separate from **measurement/source method**.
+
+Confidence:
+
+```text
+EXACT
+ESTIMATED
+UNKNOWN
+```
+
+Measurement/source examples:
+
+```text
+PROVIDER_REPORTED
+LOCALLY_MEASURED
+INFERRED
+MANUAL
+```
+
+Do not create one mixed enum such as `EXACT / LOCALLY_MEASURED / UNKNOWN`. Those are different dimensions.
+
+Examples:
+
+```text
+MiniMax plan
+  Confidence: EXACT
+  Source: PROVIDER_REPORTED
+
+Local spend estimate
+  Confidence: ESTIMATED
+  Method: LOCALLY_MEASURED
+
+Provider X quota
+  Confidence: UNKNOWN
+```
+
+The UI must never imply precision the backend does not possess.
 
 ## Widget interactions
 
@@ -123,67 +159,81 @@ Only bounded, reversible actions belong in widgets.
 
 Good candidates:
 
-- switch routing mode;
+- request a safe routing mode;
 - enable/disable quota protection;
 - pause/resume new task dispatch;
 - open the relevant dashboard page.
 
 Not appropriate for widgets:
 
-- editing arbitrary routing expressions;
-- reordering large model pools;
+- arbitrary routing expressions;
 - credential entry;
 - repository integration/merge actions;
 - complex approval workflows;
-- free-form prompt entry.
+- free-form shell or prompt execution.
 
 ## Full App
 
-The full app owns configuration UX while the daemon owns configuration state.
-
-Recommended sections:
+The full app owns configuration UX while the daemon owns configuration state and validates every write.
 
 ### Dashboard
 
 - current run;
-- current model SKU/role;
+- current model SKU / execution target / role;
 - provider and plan health;
-- scheduler mode;
+- scheduler objective + activation state;
 - alerts;
 - recent routing decisions.
 
-### Providers & Plans
+### Providers, Plans, Quota Pools, and Execution Targets
 
-Hierarchical view:
+The UI must visually preserve both commercial scarcity and logical-model relationships.
+
+Commercial hierarchy:
 
 ```text
 Provider
   Account
     Plan
       Quota Pool
-        Model SKU
-          Runtime Variant
 ```
 
-This hierarchy is mandatory so shared quotas are represented honestly.
+Model/runtime hierarchy:
+
+```text
+Model SKU
+  Execution Target
+    Account / runtime path
+    Quota binding
+    Cost / payment policy
+```
+
+This is more accurate than forcing `QuotaPool -> ModelSKU -> RuntimeVariant`. A single logical model may have subscription and PAYG execution targets, and several model SKUs may consume one shared plan pool.
 
 ### Models
 
-Per-SKU view should include:
+Per-ModelSKU view should include:
 
 - enabled/disabled;
-- provider/account/plan/quota-pool relationship;
-- context/runtime properties;
-- price data where known;
+- capability prior/local posterior;
+- catalog snapshot provenance;
+- supported candidate pools;
+- available execution targets.
+
+Per-ExecutionTarget view should include:
+
+- account/runtime path;
+- current availability;
+- quota-pool binding;
+- consumption rule/multiplier;
+- cost/payment policy;
 - observed latency;
-- capability prior;
-- local performance score;
-- supported pools;
+- target-specific local performance;
 - routing restrictions.
 
 ### Pools
 
-Users can add/remove/reorder concrete model SKUs in:
+Users can add/remove/reorder ModelSKUs or explicit ExecutionTargets in:
 
 - Worker;
 - Reasoning;
@@ -191,23 +241,26 @@ Users can add/remove/reorder concrete model SKUs in:
 - Escalation;
 - Fallback.
 
-Pools are candidate sets; the scheduler still applies quota, risk, cost, and performance constraints.
+Pools only create candidate sets. Hard eligibility and admission still apply.
 
 ### Routing
 
 Expose deterministic rules first.
 
-Examples:
+The UI should make the three-stage scheduler visible:
 
 ```text
-Task risk = high           -> Reasoning pool
-Worker failures >= 2       -> Escalation pool
-Quota usage >= threshold   -> Conservation policy
-Requires vision            -> vision-capable candidates only
-Context requirement high   -> exclude insufficient context variants
+Eligibility
+  -> capability/risk/runtime/payment/quota-truth gates
+
+Admission
+  -> predicted burn vs usable headroom
+
+Ranking
+  -> quality / success / time / cost / latency / temporal scarcity
 ```
 
-Every active rule should be explainable and testable.
+Hard gates are not sliders in a weighted score. A user can configure policy, but the UI must not imply that a large quality weight can override reserve, payment, verification, or unknown hard quota.
 
 ### Runs
 
@@ -215,16 +268,31 @@ Show a timeline such as:
 
 ```text
 Task classified
+-> candidate targets evaluated
+-> GLM target excluded: quota unknown
+-> MiniMax target admitted
 -> M3 selected
 -> worker launched
--> verifier failed
--> M3 repair attempt
--> verifier failed
--> escalation triggered
--> GLM-5.3 selected
+-> worker finished
+-> deterministic verifier failed
+-> repair attempt
 -> verifier passed
 -> review gate
 ```
+
+### Routing decision detail
+
+A decision page should show immutable references:
+
+- task-state version;
+- catalog snapshot ID;
+- policy snapshot ID;
+- quota snapshot IDs;
+- selected execution target;
+- excluded candidates and reasons;
+- admission headroom / predicted burn where available.
+
+Historical screens must render the old decision from its referenced snapshots, not silently recompute it from current quota/provider policy.
 
 ### Analytics
 
@@ -236,43 +304,21 @@ Primary metrics:
 - quota-to-green;
 - cost-to-green;
 - regression rate;
-- model utilization by role/task family;
+- model and execution-target utilization by role/task family;
 - quota consumed by task class;
-- avoidable escalation / low-value premium-model calls.
-
-A useful visualization is a task-specific Pareto frontier of expected quality vs effective cost, with quota health and latency encoded separately.
-
-## UI status language
-
-Quota state should use a small normalized vocabulary:
-
-```text
-Healthy
-Conserve
-Critical
-Exhausted
-Unknown
-```
-
-Do not imply precision the backend does not possess.
-
-Examples:
-
-```text
-Z.AI plan: 82% used (provider reported)
-MiniMax plan: ~39% used (estimated)
-Provider X: remaining quota unknown
-```
+- avoidable escalation / low-value premium calls;
+- handoff penalty.
 
 ## Local API contract
 
-The macOS app should consume typed daemon endpoints/events rather than reading scheduler database files directly.
+The macOS app consumes typed daemon endpoints/events rather than reading scheduler database/cache files directly.
 
 Expected read surfaces:
 
-- orchestrator status;
-- plans/quota pools;
-- model registry;
+- orchestrator/safety status;
+- production ACTIVE eligibility;
+- plans/quota pools and immutable observation references;
+- model registry + execution targets;
 - current runs;
 - routing decisions/explanations;
 - analytics summaries;
@@ -280,14 +326,27 @@ Expected read surfaces:
 
 Expected write surfaces:
 
-- routing mode;
+- requested routing mode/objective;
 - pool membership/order;
-- quota reserve policy;
-- model enable/disable;
+- quota reserve/protection policy;
+- model/target enable/disable;
 - pause/resume dispatch;
 - bounded approval actions defined by the Safety Kernel.
 
-Writes must be audited by the core.
+Writes are validated and audited by the core.
+
+## Local browser bridge rule
+
+Any development dashboard bridge using loopback HTTP must still defend against browser-based confused-deputy requests. At minimum:
+
+- bind to loopback only;
+- validate Host and Origin for API calls;
+- require JSON for state-changing requests;
+- rate-limit billable connection tests;
+- allowlist provider-login actions;
+- never expose credential values.
+
+A production macOS client should prefer typed local IPC / Unix Domain Socket when practical.
 
 ## Open-source requirement
 
@@ -311,6 +370,6 @@ benchmarks/
 docs/
 ```
 
-The exact physical layout can evolve, but dependency direction must remain:
+The exact physical layout can evolve, but dependency direction remains:
 
 `clients -> core API`, never `core -> macOS UI`.
