@@ -13,8 +13,8 @@ from math import isfinite
 
 from pydantic import Field, model_validator
 
+from personal_ai_orchestrator.model_registry import EvidenceSource as QuotaEvidenceSource
 from personal_ai_orchestrator.model_registry import (
-    EvidenceSource as QuotaEvidenceSource,
     QuotaSnapshot,
     QuotaWindowKind,
     QuotaWindowSnapshot,
