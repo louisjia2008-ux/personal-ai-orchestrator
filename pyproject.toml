@@ -37,4 +37,8 @@ select = ["E", "F", "I", "UP", "B"]
 "src/personal_ai_orchestrator/model_registry.py" = ["B009", "E501"]
 # RoutingPolicy is a frozen Pydantic value object, so the default instance is immutable.
 "src/personal_ai_orchestrator/scheduler.py" = ["B008", "E501"]
+"src/personal_ai_orchestrator/quota_capabilities.py" = ["E501"]
+"src/personal_ai_orchestrator/safety_kernel.py" = ["E501"]
+"src/personal_ai_orchestrator/worktree_manager.py" = ["E501"]
 "tests/test_scheduler_hardening.py" = ["E501"]
+"tests/test_safety_kernel_and_verifier.py" = ["E501"]
