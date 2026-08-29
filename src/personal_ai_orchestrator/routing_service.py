@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -41,7 +42,32 @@ class RoutingService:
     def set_task_profile(self, profile: TaskProfile) -> None:
         self.task_profiles[profile.task_id] = profile
 
+    def _existing_decision(self, request: RoutingRequest) -> RoutingDecision | None:
+        """Return the exact durable decision for an idempotent retry.
+
+        Reusing a request ID for a different task or routing mode is invalid. A real retry should
+        receive the original decision byte-for-byte rather than recomputing it with a new
+        ``decided_at`` timestamp or newer quota/policy state.
+        """
+
+        row = self.store.connection.execute(
+            "SELECT task_id,payload_json FROM routing_decisions WHERE request_id=?",
+            (request.request_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        if row["task_id"] != request.task_id:
+            raise ValueError("request_id already belongs to a different routing task")
+        decision = RoutingDecision.model_validate(json.loads(row["payload_json"]))
+        if decision.mode is not request.mode:
+            raise ValueError("request_id already belongs to a different routing mode")
+        return decision
+
     def route(self, request: RoutingRequest, *, now: datetime | None = None) -> RoutingDecision:
+        existing = self._existing_decision(request)
+        if existing is not None:
+            return existing
+
         reference = now or datetime.now(UTC)
         policy_snapshot = self.policy_snapshot
         if self.policy_journal is not None:
