@@ -76,15 +76,20 @@ def build_routing_decision(
         quota_snapshot_ids=quota_snapshot_ids,
     )
 
+    common = {
+        "decision_id": decision_id,
+        "request_id": request.request_id,
+        "mode": request.mode,
+        "task_state_version": request.task_state_version,
+        "catalog_snapshot_id": catalog_snapshot_id,
+        "policy_snapshot_id": policy_snapshot_id,
+        "quota_snapshot_ids": quota_snapshot_ids,
+        "decided_at": decided_at or datetime.now(UTC),
+    }
+
     if request.mode is RoutingMode.BYPASS:
         return RoutingDecision(
-            decision_id=decision_id,
-            request_id=request.request_id,
-            mode=request.mode,
-            catalog_snapshot_id=catalog_snapshot_id,
-            policy_snapshot_id=policy_snapshot_id,
-            quota_snapshot_ids=quota_snapshot_ids,
-            decided_at=decided_at or datetime.now(UTC),
+            **common,
             fallback_reason="adapter requested BYPASS",
         )
 
@@ -101,16 +106,10 @@ def build_routing_decision(
 
     if selected_model is None:
         return RoutingDecision(
-            decision_id=decision_id,
-            request_id=request.request_id,
-            mode=request.mode,
+            **common,
             selected_execution_target_id=None,
             switch_requested=False,
             explanation_ref=f"routing-decisions/{decision_id}.json",
-            catalog_snapshot_id=catalog_snapshot_id,
-            policy_snapshot_id=policy_snapshot_id,
-            quota_snapshot_ids=quota_snapshot_ids,
-            decided_at=decided_at or datetime.now(UTC),
             fallback_reason=scheduler.decision_reason,
         )
 
@@ -126,17 +125,11 @@ def build_routing_decision(
         fallback_reason = "production ACTIVE gate not authorized: " + "; ".join(blockers)
 
     return RoutingDecision(
-        decision_id=decision_id,
-        request_id=request.request_id,
-        mode=request.mode,
+        **common,
         selected_model=selected_model,
         selected_execution_target_id=selected_target_id,
         switch_requested=switch_requested,
         explanation_ref=f"routing-decisions/{decision_id}.json",
-        catalog_snapshot_id=catalog_snapshot_id,
-        policy_snapshot_id=policy_snapshot_id,
-        quota_snapshot_ids=quota_snapshot_ids,
-        decided_at=decided_at or datetime.now(UTC),
         fallback_reason=fallback_reason,
     )
 
