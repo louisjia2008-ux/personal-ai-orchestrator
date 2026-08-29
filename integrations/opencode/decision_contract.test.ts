@@ -13,6 +13,7 @@ function validDecision(overrides: Record<string, unknown> = {}) {
     selected_model: selected,
     selected_execution_target_id: "target-minimax-m3",
     switch_requested: true,
+    task_state_version: 7,
     catalog_snapshot_id: "catalog-1",
     policy_snapshot_id: "policy-1",
     quota_snapshot_ids: ["quota-1"],
@@ -23,6 +24,7 @@ function validDecision(overrides: Record<string, unknown> = {}) {
 test("accepts a matching ACTIVE decision", () => {
   const parsed = parseRoutingDecision(validDecision(), { requestID: "req-1", mode: "ACTIVE" })
   assert.equal(parsed?.decision_id, "dec-1")
+  assert.equal(parsed?.task_state_version, 7)
   assert.deepEqual(parsed?.selected_model, selected)
 })
 
@@ -59,6 +61,26 @@ test("rejects malformed selected model", () => {
 test("rejects switch without a selected model", () => {
   assert.equal(
     parseRoutingDecision(validDecision({ selected_model: null }), {
+      requestID: "req-1",
+      mode: "ACTIVE",
+    }),
+    undefined,
+  )
+})
+
+test("rejects switch without an authoritative task version", () => {
+  assert.equal(
+    parseRoutingDecision(validDecision({ task_state_version: null }), {
+      requestID: "req-1",
+      mode: "ACTIVE",
+    }),
+    undefined,
+  )
+})
+
+test("rejects malformed task state version", () => {
+  assert.equal(
+    parseRoutingDecision(validDecision({ task_state_version: -1 }), {
       requestID: "req-1",
       mode: "ACTIVE",
     }),
