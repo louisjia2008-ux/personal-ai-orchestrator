@@ -18,7 +18,11 @@ from personal_ai_orchestrator.quota_collectors.base import (
 )
 from personal_ai_orchestrator.quota_observability import QuotaSnapshot
 
-CACHE_SCHEMA_VERSION = 1
+# v2 is the first cache format whose normalized QuotaSnapshot has a durable replay ID.
+# Silently loading a v1 cache would generate a new default snapshot ID on every parse,
+# which would make historical RoutingDecision references unstable. Old LKG cache files
+# are therefore intentionally ignored and replaced by the next successful collection.
+CACHE_SCHEMA_VERSION = 2
 _SENSITIVE_KEYS = {
     "api_key",
     "apikey",
