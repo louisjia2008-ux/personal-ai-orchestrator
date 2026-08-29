@@ -4,7 +4,7 @@ import {
   parseRoutingDecision,
   type RoutingDecision,
   type RoutingMode,
-} from "./decision_contract.ts"
+} from "./decision_contract"
 
 function optionString(value: unknown, fallback: string): string {
   return typeof value === "string" && value.length > 0 ? value : fallback
