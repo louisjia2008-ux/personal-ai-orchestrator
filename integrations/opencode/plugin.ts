@@ -21,14 +21,94 @@ type RoutingDecision = {
   fallback_reason?: string | null
 }
 
-type RouteResponse = RoutingDecision
-
 function optionString(value: unknown, fallback: string): string {
   return typeof value === "string" && value.length > 0 ? value : fallback
 }
 
 function optionMode(value: unknown): RoutingMode {
   return value === "ACTIVE" || value === "BYPASS" || value === "SHADOW" ? value : "SHADOW"
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isRoutingMode(value: unknown): value is RoutingMode {
+  return value === "ACTIVE" || value === "BYPASS" || value === "SHADOW"
+}
+
+function parseModelRef(value: unknown): ModelRef | null | undefined {
+  if (value === null || value === undefined) return value
+  if (!isRecord(value)) return undefined
+  if (typeof value.provider_id !== "string" || value.provider_id.length === 0) return undefined
+  if (typeof value.model_id !== "string" || value.model_id.length === 0) return undefined
+  if (
+    value.variant !== undefined &&
+    value.variant !== null &&
+    typeof value.variant !== "string"
+  ) {
+    return undefined
+  }
+  return {
+    provider_id: value.provider_id,
+    model_id: value.model_id,
+    ...(value.variant !== undefined ? { variant: value.variant as string | null } : {}),
+  }
+}
+
+function parseRoutingDecision(
+  value: unknown,
+  *,
+  expectedRequestID: string,
+  expectedMode: RoutingMode,
+): RoutingDecision | undefined {
+  if (!isRecord(value)) return undefined
+  if (typeof value.decision_id !== "string" || value.decision_id.length === 0) return undefined
+  if (value.request_id !== expectedRequestID) return undefined
+  if (!isRoutingMode(value.mode) || value.mode !== expectedMode) return undefined
+  if (typeof value.switch_requested !== "boolean") return undefined
+
+  const selectedModel = parseModelRef(value.selected_model)
+  if (value.selected_model !== undefined && selectedModel === undefined) return undefined
+
+  // Contract parity with the Python boundary: only ACTIVE may request a switch,
+  // and a switch request must carry a concrete model. BYPASS may not select one.
+  if (value.mode !== "ACTIVE" && value.switch_requested) return undefined
+  if (value.switch_requested && !selectedModel) return undefined
+  if (value.mode === "BYPASS" && selectedModel) return undefined
+
+  const optionalStrings = [
+    "explanation_ref",
+    "catalog_snapshot_id",
+    "policy_snapshot_id",
+    "fallback_reason",
+  ] as const
+  for (const key of optionalStrings) {
+    const item = value[key]
+    if (item !== undefined && item !== null && typeof item !== "string") return undefined
+  }
+
+  const quotaSnapshotIDs = value.quota_snapshot_ids
+  if (
+    quotaSnapshotIDs !== undefined &&
+    (!Array.isArray(quotaSnapshotIDs) ||
+      quotaSnapshotIDs.some((item) => typeof item !== "string" || item.length === 0))
+  ) {
+    return undefined
+  }
+
+  return {
+    decision_id: value.decision_id,
+    request_id: expectedRequestID,
+    mode: expectedMode,
+    selected_model: selectedModel,
+    switch_requested: value.switch_requested,
+    explanation_ref: value.explanation_ref as string | null | undefined,
+    catalog_snapshot_id: value.catalog_snapshot_id as string | null | undefined,
+    policy_snapshot_id: value.policy_snapshot_id as string | null | undefined,
+    quota_snapshot_ids: quotaSnapshotIDs as string[] | undefined,
+    fallback_reason: value.fallback_reason as string | null | undefined,
+  }
 }
 
 async function requestRoute(input: {
@@ -39,7 +119,7 @@ async function requestRoute(input: {
   location?: string
   agent?: string
   mode: RoutingMode
-}): Promise<RouteResponse | undefined> {
+}): Promise<RoutingDecision | undefined> {
   if (input.mode === "BYPASS") return undefined
 
   const controller = new AbortController()
@@ -61,7 +141,11 @@ async function requestRoute(input: {
     })
 
     if (!response.ok) return undefined
-    return (await response.json()) as RouteResponse
+    const payload: unknown = await response.json()
+    return parseRoutingDecision(payload, {
+      expectedRequestID: input.requestID,
+      expectedMode: input.mode,
+    })
   } catch {
     return undefined
   } finally {
@@ -94,8 +178,8 @@ export default Plugin.define({
           })
 
           if (!decision) {
-            // Safe bypass: daemon failure never prevents ordinary OpenCode usage.
-            console.warn("[personal-ai-orchestrator] no routing decision; keeping current model")
+            // Invalid, stale, mismatched, or unavailable daemon responses all fail closed.
+            console.warn("[personal-ai-orchestrator] no valid routing decision; keeping current model")
             return
           }
 
