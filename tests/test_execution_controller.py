@@ -1,10 +1,13 @@
 from pathlib import Path
 
+import pytest
+
 from personal_ai_orchestrator.execution_controller import (
     apply_verification_result,
     begin_verification,
     record_worker_exit,
     reconcile_workspace_truth,
+    start_worker_run,
 )
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
 from personal_ai_orchestrator.verifier import VerificationResult
@@ -13,9 +16,23 @@ from personal_ai_orchestrator.verifier import VerificationResult
 def _running_store(tmp_path: Path) -> SafetyKernelStore:
     store = SafetyKernelStore(tmp_path / "state.sqlite3")
     store.submit_task(task_id="t1", request_id="r1", intent="implement")
+    store.register_workspace(
+        task_id="t1",
+        repo_path=str(tmp_path / "repo"),
+        worktree_path=str(tmp_path / "worktree"),
+        branch="task/t1",
+        base_sha="abc",
+    )
+    store.acquire_writer("t1", "writer-1")
     store.transition_task("t1", TaskState.READY)
     store.transition_task("t1", TaskState.RUNNING)
-    store.start_run(run_id="run-1", task_id="t1", worker_id="worker")
+    start_worker_run(
+        store,
+        run_id="run-1",
+        task_id="t1",
+        worker_id="worker",
+        writer_token="writer-1",
+    )
     return store
 
 
@@ -28,6 +45,73 @@ def _finish_worker(store: SafetyKernelStore) -> None:
         worker_result={"status": "finished"},
     )
     begin_verification(store, task_id="t1")
+
+
+def test_worker_run_requires_writer_lock(tmp_path: Path) -> None:
+    store = SafetyKernelStore(tmp_path / "state.sqlite3")
+    store.submit_task(task_id="t1", request_id="r1", intent="implement")
+    store.register_workspace(
+        task_id="t1",
+        repo_path=str(tmp_path / "repo"),
+        worktree_path=str(tmp_path / "worktree"),
+        branch="task/t1",
+        base_sha="abc",
+    )
+    store.transition_task("t1", TaskState.READY)
+    store.transition_task("t1", TaskState.RUNNING)
+    with pytest.raises(RuntimeError, match="writer lock"):
+        start_worker_run(
+            store,
+            run_id="run-1",
+            task_id="t1",
+            worker_id="worker",
+            writer_token="not-owner",
+        )
+
+
+def test_task_cannot_have_two_active_worker_runs(tmp_path: Path) -> None:
+    store = _running_store(tmp_path)
+    with pytest.raises(RuntimeError, match="already has an active worker run"):
+        start_worker_run(
+            store,
+            run_id="run-2",
+            task_id="t1",
+            worker_id="worker-2",
+            writer_token="writer-1",
+        )
+
+
+def test_worker_exit_rejects_run_from_other_task(tmp_path: Path) -> None:
+    store = _running_store(tmp_path)
+    store.submit_task(task_id="t2", request_id="r2", intent="implement")
+    store.register_workspace(
+        task_id="t2",
+        repo_path=str(tmp_path / "repo2"),
+        worktree_path=str(tmp_path / "worktree2"),
+        branch="task/t2",
+        base_sha="def",
+    )
+    store.acquire_writer("t2", "writer-2")
+    store.transition_task("t2", TaskState.READY)
+    store.transition_task("t2", TaskState.RUNNING)
+    start_worker_run(
+        store,
+        run_id="run-2",
+        task_id="t2",
+        worker_id="worker-2",
+        writer_token="writer-2",
+    )
+
+    with pytest.raises(ValueError, match="does not belong"):
+        record_worker_exit(
+            store,
+            task_id="t1",
+            run_id="run-2",
+            exit_code=0,
+            worker_result={"status": "finished"},
+        )
+    assert store.get_task("t1").state is TaskState.RUNNING
+    assert store.get_task("t2").state is TaskState.RUNNING
 
 
 def test_unexpected_worker_exit_blocks_task(tmp_path: Path) -> None:
