@@ -32,6 +32,7 @@ import subprocess
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -302,6 +303,23 @@ def build_providers() -> list[dict]:
 CONNECTABLE = ["anthropic", "openai", "minimax", "zai", "openrouter", "google"]
 
 
+def list_projects() -> list[dict]:
+    try:
+        data = json.loads(run_cli("debug", "scrap", timeout=15) or "[]")
+    except (ValueError, json.JSONDecodeError):
+        return []
+    out = []
+    for p in data if isinstance(data, list) else []:
+        wt = p.get("worktree") or ""
+        if p.get("id") == "global" or not wt or wt == "/":
+            continue
+        # skip disposable temp workspaces (mktemp fixtures)
+        if "/T/tmp." in wt or wt.startswith("/tmp/") or "/var/folders/" in wt:
+            continue
+        out.append({"id": p.get("id"), "path": wt, "name": os.path.basename(wt.rstrip("/")) or wt})
+    return out
+
+
 def available_providers(connected_ids: set[str]) -> list[dict]:
     registry = load_models_json()
     out = []
@@ -380,10 +398,12 @@ def _num(text: str) -> float:
 STRIP_BOX = str.maketrans("", "", "│├─┤┌┐└┘")
 
 
-def parse_model_stats(days: int | None = None) -> list[dict]:
+def parse_model_stats(days: int | None = None, project: str | None = None) -> list[dict]:
     args = ["stats", "--models"]
     if days:
         args += ["--days", str(days)]
+    if project:
+        args += ["--project", project]
     raw = run_cli(*args, timeout=40)
     lines = raw.splitlines()
     try:
@@ -423,13 +443,13 @@ def parse_model_stats(days: int | None = None) -> list[dict]:
     return out
 
 
-def spend_report(days: int | None = None) -> dict:
+def spend_report(days: int | None = None, project: str | None = None) -> dict:
     registry = load_models_json()
     rows = []
     api_actual = 0.0
     plan_saved = 0.0
     by_provider: dict[str, dict] = {}
-    for m in parse_model_stats(days):
+    for m in parse_model_stats(days, project):
         pr = resolve_price(registry, m["provider"], m["model"])
         value = cost_usd(m["tokens"], pr["price"])
         is_plan = pr["plan"]
@@ -450,7 +470,7 @@ def spend_report(days: int | None = None) -> dict:
             agg["actual_usd"] += value
     rows.sort(key=lambda r: r["value_usd"], reverse=True)
     return {
-        "days": days, "rows": rows,
+        "days": days, "project": project, "rows": rows,
         "api_actual_usd": round(api_actual, 2),
         "plan_saved_usd": round(plan_saved, 2),
         "by_provider": {k: {"plan": v["plan"], "value_usd": round(v["value_usd"], 2),
@@ -510,8 +530,15 @@ class Handler(BaseHTTPRequestHandler):
             m = re.search(r"[?&]days=(\d+)", self.path)
             if m:
                 days = int(m.group(1))
+            pm = re.search(r"[?&]project=([^&]+)", self.path)
+            project = urllib.parse.unquote(pm.group(1)) if pm else None
             try:
-                self._json(200, spend_report(days))
+                self._json(200, spend_report(days, project))
+            except Exception as exc:  # noqa: BLE001
+                self._json(500, {"error": sanitize(str(exc))})
+        elif self.path.startswith("/api/projects"):
+            try:
+                self._json(200, {"projects": list_projects()})
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"error": sanitize(str(exc))})
         else:
