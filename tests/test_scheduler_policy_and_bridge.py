@@ -204,6 +204,7 @@ def test_bridge_freezes_snapshot_refs_and_blocks_unapproved_active() -> None:
         session_id="session-1",
         mode=RoutingMode.ACTIVE,
         task_id="task-1",
+        task_state_version=3,
         requested_at=NOW,
     )
     decision = build_routing_decision(
@@ -216,18 +217,20 @@ def test_bridge_freezes_snapshot_refs_and_blocks_unapproved_active() -> None:
     )
     assert decision.selected_execution_target_id == "m3-sub"
     assert decision.selected_model is not None
+    assert decision.task_state_version == 3
     assert decision.quota_snapshot_ids == ("quota-1",)
     assert decision.switch_requested is False
     assert "ACTIVE gate" in (decision.fallback_reason or "")
 
 
-def test_bridge_allows_active_only_with_complete_gate() -> None:
+def test_bridge_allows_active_only_with_complete_gate_and_task_version() -> None:
     registry = _registry()
     request = RoutingRequest(
         request_id="req-active",
         session_id="session-1",
         mode=RoutingMode.ACTIVE,
         task_id="task-1",
+        task_state_version=3,
         requested_at=NOW,
     )
     gate = ActiveRoutingGate(
@@ -248,6 +251,7 @@ def test_bridge_allows_active_only_with_complete_gate() -> None:
         decided_at=NOW,
     )
     assert decision.switch_requested is True
+    assert decision.task_state_version == 3
 
 
 def test_bridge_is_idempotent_for_identical_inputs() -> None:
