@@ -24,6 +24,7 @@ def request(
     session_id: str = "session-a",
     mode: RoutingMode = RoutingMode.SHADOW,
     current_model: ModelRef | None = M3,
+    task_state_version: int = 3,
 ) -> RoutingRequest:
     return RoutingRequest(
         request_id=request_id,
@@ -33,7 +34,7 @@ def request(
         current_model=current_model,
         mode=mode,
         task_id="task-1",
-        task_state_version=3,
+        task_state_version=task_state_version,
         requested_at=NOW,
     )
 
@@ -45,6 +46,7 @@ def decision(
     mode: RoutingMode = RoutingMode.SHADOW,
     selected_model: ModelRef | None = GLM,
     switch_requested: bool = False,
+    task_state_version: int | None = 3,
 ) -> RoutingDecision:
     return RoutingDecision(
         decision_id=decision_id,
@@ -53,6 +55,7 @@ def decision(
         selected_model=selected_model,
         selected_execution_target_id="target-glm",
         switch_requested=switch_requested,
+        task_state_version=task_state_version,
         explanation_ref="explanations/dec-1.json",
         catalog_snapshot_id="catalog-1",
         policy_snapshot_id="policy-1",
@@ -84,6 +87,15 @@ def test_active_mode_keeps_current_model_when_already_selected() -> None:
     )
     assert outcome.action is AdapterAction.KEEP_CURRENT
     assert "already matches" in outcome.reason
+
+
+def test_active_mode_rejects_mismatched_task_state_version() -> None:
+    outcome = resolve_adapter_outcome(
+        request(mode=RoutingMode.ACTIVE, task_state_version=3),
+        decision(mode=RoutingMode.ACTIVE, switch_requested=True, task_state_version=2),
+    )
+    assert outcome.action is AdapterAction.KEEP_CURRENT
+    assert "state version" in outcome.reason
 
 
 def test_daemon_failure_is_safe_bypass() -> None:
@@ -120,6 +132,11 @@ def test_shadow_decision_cannot_request_switch() -> None:
 def test_active_switch_requires_selected_model() -> None:
     with pytest.raises(ValidationError, match="requires selected_model"):
         decision(mode=RoutingMode.ACTIVE, selected_model=None, switch_requested=True)
+
+
+def test_active_switch_requires_task_state_version() -> None:
+    with pytest.raises(ValidationError, match="requires task_state_version"):
+        decision(mode=RoutingMode.ACTIVE, switch_requested=True, task_state_version=None)
 
 
 def test_duplicate_request_id_rejects_conflicting_decision() -> None:
