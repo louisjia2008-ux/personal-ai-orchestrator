@@ -22,6 +22,25 @@ def _service(tmp_path) -> RoutingService:
     )
 
 
+def _start_server(service: RoutingService):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_for(service))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
+def _route_payload(request_id: str) -> bytes:
+    return json.dumps(
+        {
+            "request_id": request_id,
+            "session_id": "session-http",
+            "task_id": "missing-task",
+            "mode": "SHADOW",
+            "requested_at": NOW.isoformat(),
+        }
+    ).encode("utf-8")
+
+
 def test_service_unknown_task_returns_no_switch_and_is_idempotent(tmp_path) -> None:
     service = _service(tmp_path)
     request = RoutingRequest(
@@ -41,23 +60,12 @@ def test_service_unknown_task_returns_no_switch_and_is_idempotent(tmp_path) -> N
 
 def test_loopback_http_route_endpoint_returns_valid_decision(tmp_path) -> None:
     service = _service(tmp_path)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_for(service))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    server, thread = _start_server(service)
     try:
-        payload = json.dumps(
-            {
-                "request_id": "req-http",
-                "session_id": "session-http",
-                "task_id": "missing-task",
-                "mode": "SHADOW",
-                "requested_at": NOW.isoformat(),
-            }
-        ).encode("utf-8")
         request = urllib.request.Request(
             f"http://127.0.0.1:{server.server_port}/v1/opencode/route",
-            data=payload,
-            headers={"content-type": "application/json"},
+            data=_route_payload("req-http"),
+            headers={"content-type": "application/json", "origin": "http://localhost:3000"},
             method="POST",
         )
         with urllib.request.urlopen(request, timeout=3) as response:
@@ -73,9 +81,7 @@ def test_loopback_http_route_endpoint_returns_valid_decision(tmp_path) -> None:
 
 def test_loopback_http_rejects_non_json(tmp_path) -> None:
     service = _service(tmp_path)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_for(service))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    server, thread = _start_server(service)
     try:
         request = urllib.request.Request(
             f"http://127.0.0.1:{server.server_port}/v1/opencode/route",
@@ -88,6 +94,30 @@ def test_loopback_http_rejects_non_json(tmp_path) -> None:
             raise AssertionError("non-JSON request unexpectedly succeeded")
         except urllib.error.HTTPError as error:
             assert error.code == 415
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+def test_loopback_http_rejects_origin_prefix_spoof(tmp_path) -> None:
+    service = _service(tmp_path)
+    server, thread = _start_server(service)
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_port}/v1/opencode/route",
+            data=_route_payload("req-origin-spoof"),
+            headers={
+                "content-type": "application/json",
+                "origin": "http://localhost.evil.invalid",
+            },
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(request, timeout=3)
+            raise AssertionError("spoofed Origin unexpectedly succeeded")
+        except urllib.error.HTTPError as error:
+            assert error.code == 403
     finally:
         server.shutdown()
         server.server_close()
