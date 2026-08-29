@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import type
+from typing import Type
 
 from pydantic import ValidationError
 
@@ -26,12 +26,11 @@ def _host_allowed(value: str | None) -> bool:
     return host in _ALLOWED_HOSTS
 
 
-def handler_for(service: RoutingService) -> type[BaseHTTPRequestHandler]:
+def handler_for(service: RoutingService) -> Type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         server_version = "PersonalAIOrchestrator/0"
 
         def log_message(self, format: str, *args: object) -> None:
-            # Deliberately avoid request-body/provider data in the default HTTP access log.
             return
 
         def _json(self, status: int, payload: object) -> None:
@@ -52,7 +51,8 @@ def handler_for(service: RoutingService) -> type[BaseHTTPRequestHandler]:
                 return
             origin = self.headers.get("origin")
             if origin is not None and not any(
-                origin.startswith(f"http://{host}") for host in ("127.0.0.1", "localhost", "[::1]")
+                origin.startswith(f"http://{host}")
+                for host in ("127.0.0.1", "localhost", "[::1]")
             ):
                 self._json(403, {"error": "invalid_origin"})
                 return
