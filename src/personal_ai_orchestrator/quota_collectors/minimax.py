@@ -79,7 +79,11 @@ def normalize_minimax_quota(
     quota_pool_id: str = "minimax-token-plan",
 ) -> QuotaSnapshot:
     remains = payload.get("model_remains")
-    entries = [item for item in remains if isinstance(item, dict)] if isinstance(remains, list) else []
+    entries = (
+        [item for item in remains if isinstance(item, dict)]
+        if isinstance(remains, list)
+        else []
+    )
 
     def field(name: str) -> list[object]:
         return [entry.get(name) for entry in entries]
