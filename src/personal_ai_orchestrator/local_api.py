@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Type
 
 from pydantic import ValidationError
 
@@ -26,7 +25,7 @@ def _host_allowed(value: str | None) -> bool:
     return host in _ALLOWED_HOSTS
 
 
-def handler_for(service: RoutingService) -> Type[BaseHTTPRequestHandler]:
+def handler_for(service: RoutingService) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         server_version = "PersonalAIOrchestrator/0"
 
