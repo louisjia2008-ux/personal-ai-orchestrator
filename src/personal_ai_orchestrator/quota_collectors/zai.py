@@ -42,8 +42,15 @@ def normalize_zai_quota(
 ) -> QuotaSnapshot:
     data = payload.get("data", payload)
     limits = data.get("limits") if isinstance(data, dict) else None
-    entries = [item for item in limits if isinstance(item, dict)] if isinstance(limits, list) else []
-    token_limit = next((item for item in entries if item.get("type") == "TOKENS_LIMIT"), None)
+    entries = (
+        [item for item in limits if isinstance(item, dict)]
+        if isinstance(limits, list)
+        else []
+    )
+    token_limit = next(
+        (item for item in entries if item.get("type") == "TOKENS_LIMIT"),
+        None,
+    )
 
     remaining_fraction = None
     if token_limit is not None:
