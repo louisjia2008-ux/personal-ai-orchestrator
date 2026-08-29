@@ -53,7 +53,8 @@ def test_authorized_switch_lease_freezes_task_state_until_completed(tmp_path: Pa
         completed=True,
     )
     assert completed.status is SwitchLeaseStatus.COMPLETED
-    assert store.transition_task("t1", TaskState.RUNNING, expected_version=version).state is TaskState.RUNNING
+    transitioned = store.transition_task("t1", TaskState.RUNNING, expected_version=version)
+    assert transitioned.state is TaskState.RUNNING
 
 
 def test_switch_authorization_revalidates_decision_state_version(tmp_path: Path) -> None:
@@ -102,7 +103,8 @@ def test_host_abort_releases_switch_freeze_for_cancellation(tmp_path: Path) -> N
     )
     assert authority.abort_for_task("t1", reason="host cancellation") == (lease.lease_id,)
     assert authority.get(lease.lease_id).status is SwitchLeaseStatus.ABORTED
-    assert store.transition_task("t1", TaskState.CANCELLED, expected_version=version).state is TaskState.CANCELLED
+    cancelled = store.transition_task("t1", TaskState.CANCELLED, expected_version=version)
+    assert cancelled.state is TaskState.CANCELLED
 
 
 def test_non_switch_decision_cannot_receive_lease(tmp_path: Path) -> None:
