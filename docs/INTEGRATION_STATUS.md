@@ -184,9 +184,9 @@ The latest code-bearing integration head verified on GitHub Actions is
 - `git diff --check`: PASS;
 - OpenCode adapter typecheck + contract tests: PASS.
 
-Subsequent commits in this section are documentation-only and must still pass the normal PR CI
-before being treated as the final green PR head. These are Linux CI results and do not replace
-target-Mac acceptance.
+The commits after that green code head only update this status document; the normal PR CI remains
+the authority for the final branch head. These are Linux CI results and do not replace target-Mac
+acceptance.
 
 ## External acceptance still required
 
