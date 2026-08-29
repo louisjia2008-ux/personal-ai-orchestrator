@@ -25,6 +25,9 @@ def build_service(
 ) -> RoutingService:
     runtime_state_root.mkdir(parents=True, exist_ok=True)
     store = SafetyKernelStore(state_db)
+    # A daemon restart destroys live process truth. Reconcile before exposing any routing path so
+    # stale RUNNING/WORKER_FINISHED/VERIFYING tasks cannot continue to influence model selection.
+    store.reconcile_startup()
     service = RoutingService(
         registry=config.registry,
         store=store,
