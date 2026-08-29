@@ -4,58 +4,55 @@
 
 This document defines the model-resource layer of Personal AI Orchestrator.
 
-The scheduler does **not** route by vendor name alone. The atomic schedulable resource is a concrete model SKU attached to an account/plan/quota pool and a runtime profile.
+The scheduler does **not** route by vendor name alone. It reasons about a logical model SKU and the concrete execution path through which that model will run.
 
 The core problem is:
 
-> Select the right model SKU for the current task, at the required quality and risk level, while respecting quota scarcity, monetary cost, latency, context requirements, reliability, and prior observed performance.
+> Select an eligible execution target for the current task, at the required quality and risk level, while respecting quota truth, absolute headroom, reset timing, monetary cost, latency, reliability, and prior observed performance.
 
 This layer is intentionally separate from worker transport and from the Safety Kernel.
 
 ## Design principle
 
-`Provider != Plan != QuotaPool != ModelSKU != RuntimeVariant != WorkerRole`
+The MVP keeps these identities distinct:
 
-A provider may expose multiple plans. A plan may expose one or more quota pools. Multiple models may consume the same quota pool. The same model may exist in multiple runtime variants with different price/latency characteristics.
+```text
+Provider != Account != Plan != QuotaPool != ModelSKU != ExecutionTarget != WorkerRole
+```
+
+A provider may expose multiple accounts or plans. A plan may expose one or more quota pools. Multiple models may consume the same quota pool. The same logical model may be reachable through more than one commercial/runtime path.
 
 Example:
 
 ```text
-MiniMax account
-  -> Coding Plan
-      -> shared quota pool
-          -> M3
-          -> M2.7
-          -> M2.7 high-speed
+GLM-5.3 ModelSKU
+  -> ExecutionTarget: Z.AI Coding Plan via OpenCode
+       -> Z.AI subscription QuotaPool
+  -> ExecutionTarget: Z.AI PAYG API
+       -> Z.AI API wallet / cost policy
 
-Z.AI account
-  -> Coding Plan
-      -> shared/plan-specific quota pool
-          -> GLM-5.3
-          -> GLM-5.2
+MiniMax M3 ModelSKU
+  -> ExecutionTarget: MiniMax Coding Plan via OpenCode
+       -> MiniMax shared Token Plan QuotaPool
 ```
 
-The scheduler must never present model-level remaining quota when the observable truth is only plan-level/shared-pool quota.
+The scheduler must never present plan/shared-pool truth as independent per-model quota.
+
+`RuntimeVariant` is not a required first-class MVP entity. Variant-like runtime metadata may live on `ExecutionTarget` until real evidence justifies a richer abstraction.
 
 ## Domain model
 
 ### Provider
 
-Represents a vendor or local runtime family.
-
-Examples: OpenAI, Anthropic, Z.AI, MiniMax, DeepSeek, Ollama.
+Vendor or local runtime family, for example OpenAI, Anthropic, Z.AI, MiniMax, DeepSeek, or a local runtime family.
 
 ### Account
 
-A concrete authenticated account/credential boundary.
-
-Secrets remain in provider-native stores, environment injection, macOS Keychain, or other approved credential providers. They are not stored in model-registry records.
+Concrete authenticated account/credential boundary. Secrets remain in provider-native stores, environment injection, macOS Keychain, or other approved credential providers. Registry records contain references/identity only, never plaintext credentials.
 
 ### Plan
 
-Represents the commercial entitlement attached to an account.
-
-Examples:
+Commercial entitlement attached to an account, for example:
 
 - subscription coding plan;
 - prepaid API wallet;
@@ -64,17 +61,17 @@ Examples:
 
 ### QuotaPool
 
-Represents the actual shared scarcity boundary.
+The actual shared scarcity boundary.
 
-Required fields should eventually include:
+Important state includes:
 
-- quota state;
-- measured/estimated usage;
-- reset time when known;
-- confidence;
-- source of truth;
+- normalized quota state;
+- immutable latest observation reference;
+- simultaneous quota/reset windows;
+- confidence and provenance;
 - reserve policy;
-- overage policy.
+- required/binding window kinds;
+- overage/payment policy.
 
 Normalized quota states:
 
@@ -89,46 +86,98 @@ UNKNOWN
 Quota confidence:
 
 ```text
-EXACT       provider-reported account/plan truth
-ESTIMATED   derived from local telemetry or incomplete provider signals
-UNKNOWN     no reliable estimate exists
+EXACT       provider-reported truth with clear semantics
+ESTIMATED   derived from incomplete but useful signals
+UNKNOWN     no reliable precise value exists
 ```
 
-Unknown quota must not be rendered as a fake precise percentage.
+Measurement/source method is separate from confidence. A locally measured value is not automatically `EXACT`, and provider-reported data is not automatically exact if the provider field semantics are ambiguous.
 
 ### ModelSKU
 
-A concrete schedulable model identity.
+Logical model identity and capability profile, for example:
 
-Examples:
+- `glm-5.3`;
+- `glm-5.2`;
+- `minimax-m3`;
+- a concrete Codex/GPT model SKU;
+- a concrete local model SKU.
 
-- `glm-5.3`
-- `glm-5.2`
-- `minimax-m3`
-- `minimax-m2.7`
-- a specific GPT/Codex model SKU
-- a specific DeepSeek model SKU
+Model capability belongs here. Commercial/runtime path does not.
 
-A model SKU belongs to a provider/account path and references the quota pool it consumes.
+### ExecutionTarget
 
-### RuntimeVariant
+Concrete path used to execute a ModelSKU.
 
-Optional runtime-specific behavior for the same logical model.
+Minimal identity includes:
 
-Examples:
+- `model_sku_id`;
+- `account_id`;
+- runtime/adapter identity;
+- optional provider/runtime variant metadata;
+- enabled/availability state.
 
-- standard vs high-speed;
-- API vs subscription-backed worker;
-- local quantization variant;
-- different context or reasoning settings.
+`QuotaBinding` and `ConsumptionRule` may be target-specific. This makes subscription-to-PAYG fallback representable without duplicating the logical model identity.
 
-Runtime variants may differ in price, latency, context limits, throughput, and reliability.
+### QuotaBinding
+
+Append-only temporal fact describing which QuotaPool an execution target/model consumes.
+
+It has two time axes:
+
+- provider/business `effective_from` / `effective_until`;
+- orchestrator knowledge time `recorded_at`.
+
+Historical replay considers only facts known at the decision's knowledge time.
+
+### ConsumptionRule
+
+Append-only temporal burn fact for a model/target/quota-pool relationship, including an optional multiplier and native provider unit.
+
+Later corrections use explicit `supersedes_rule_id` rather than rewriting old history.
+
+## Immutable quota observations
+
+Every `QuotaSnapshot` has a stable identity and timestamp/provenance. Successful normalized observations may be appended to an immutable quota journal. The mutable last-known-good cache is only a current-state convenience.
+
+A routing decision records the exact quota snapshot IDs it used. This is required for truthful replay:
+
+```text
+RoutingDecision
+  -> catalog_snapshot_id
+  -> policy_snapshot_id
+  -> quota_snapshot_ids[]
+```
+
+A current registry snapshot is never sufficient evidence for explaining a historical decision.
+
+## Simultaneous quota windows
+
+For a window with reliable remaining quota and time-to-reset:
+
+```text
+pace = remaining_quota_fraction / remaining_time_fraction
+```
+
+For multiple active binding windows, routing is conservative:
+
+```text
+known_min_pace = min(all known active-window paces)   # diagnostic only
+
+effective_routing_pace =
+  UNKNOWN                         if any binding window is unknown
+  min(all binding-window paces)  otherwise
+```
+
+Therefore a healthy 5-hour window cannot hide an unknown weekly window.
+
+Pace answers whether capacity is being consumed faster or slower than the reset clock. It does **not** answer whether enough quota remains to finish the next task.
 
 ## Capability profile
 
-A model must be represented by a task-relevant capability vector rather than a single generic coding score.
+A model is represented by task-relevant capability dimensions rather than one generic coding score.
 
-Candidate dimensions:
+Candidate dimensions include:
 
 - architecture;
 - repository understanding;
@@ -146,18 +195,18 @@ Candidate dimensions:
 - research;
 - vision when relevant.
 
-Scores have two sources:
+Capability evidence has two broad sources:
 
-1. **prior**: public/vendor/third-party benchmark evidence;
-2. **local posterior**: observed performance inside this orchestrator.
+1. **prior** — public/vendor/third-party benchmark evidence;
+2. **local posterior** — observed performance inside this orchestrator.
 
-Public benchmark scores are initialization evidence, not permanent routing truth.
+Public benchmarks initialize beliefs; they are not permanent routing truth.
 
 ## Local performance telemetry
 
-The long-term scheduler should optimize for observed task completion rather than benchmark prestige.
+Long-term routing should optimize verified task outcomes rather than benchmark prestige.
 
-Important metrics:
+Important metrics include:
 
 - Pass@1;
 - attempts-to-green;
@@ -169,15 +218,15 @@ Important metrics:
 - verifier failure rate;
 - cancellation/failure rate;
 - context size at success;
-- latency and time-to-first-useful-action.
+- time-to-first-useful-action.
 
-Results should be segmented by task family, language/framework, repository, risk class, and runtime variant when sample size is sufficient.
+Results should be segmented by task family, language/framework, repository, risk class, model SKU, and execution target when sample size is sufficient.
 
 ## Task profile
 
 Before routing, the host creates a structured task profile.
 
-Candidate fields:
+Example:
 
 ```yaml
 task_type: debugging
@@ -187,76 +236,57 @@ risk: medium
 repo_size: large
 context_requirement: high
 previous_failures: 1
-testability: medium
-requires_vision: false
 requires_long_horizon: true
+required_capabilities:
+  debugging: 0.80
+predicted_quota_fraction_p90: 0.06
 ```
 
 Task classification is advisory. Mechanical safety controls remain authoritative.
 
 ## Pools
 
-Pools are candidate sets, not hard-coded vendor-role assignments.
+Pools are candidate sets, not hard-coded provider-role assignments.
 
 Initial pools:
 
-- Worker
-- Reasoning
-- Review
-- Escalation
-- Fallback
+- Worker;
+- Reasoning;
+- Review;
+- Escalation;
+- Fallback.
 
-A single model SKU may appear in multiple pools with different priority/weight.
+A ModelSKU or explicit ExecutionTarget may appear in multiple pools with different priority/weight.
 
-Example:
+Pool membership only creates a candidate set. It does not bypass eligibility or quota admission.
 
-```text
-Worker
-  1. MiniMax M3
-  2. MiniMax M2.7
-  3. GLM-5.2
+## Routing objectives
 
-Reasoning
-  1. GLM-5.3
-  2. GPT high-reasoning SKU
-  3. MiniMax M3
-
-Escalation
-  1. strongest available high-reasoning SKU
-  2. GLM-5.3
-```
-
-The actual model choice still considers live quota, task profile, historical success, runtime availability, cost, and latency.
-
-## Routing modes
-
-The initial implementation should be deterministic and explainable.
-
-Suggested modes:
+The initial scheduler is deterministic and explainable.
 
 ### Balanced
 
-Optimize quality subject to quota and cost constraints.
+Optimize expected verified usefulness after hard constraints and quota admission.
 
 ### Max Quality
 
-Strongly prioritize expected task success and low regression risk.
+Place more ranking weight on expected success/reliability while still respecting all hard constraints.
 
 ### Save Quota
 
-Protect scarce subscription pools and prefer cheaper/unmetered alternatives.
+Prefer cheaper/unmetered or healthier capacity after minimum quality/risk floors are met.
 
 ### Low Latency
 
-Prefer models with low observed time-to-green when task risk permits.
+Prefer low observed time-to-green when risk permits.
 
 ### Provider Protection
 
-Allow a user to protect a specific quota pool or model family.
+Protection/reserve is a hard constraint, not a negative score that a strong model can overcome.
 
 ## Reserve policy
 
-Quota reserve is a first-class scheduler constraint.
+Quota reserve is a first-class admission constraint.
 
 Example:
 
@@ -264,9 +294,7 @@ Example:
 GLM plan reserve = 15%
 ```
 
-Below the reserve threshold, normal worker/review traffic should be denied from that pool. Only explicitly allowed high-risk escalation classes may consume the protected reserve.
-
-This prevents routine review traffic from exhausting a scarce high-reasoning plan before a true blocker appears.
+Routine traffic may not consume protected reserve. Only policy-authorized escalation classes may do so.
 
 ## Escalation policy
 
@@ -285,65 +313,125 @@ high risk:
   reasoning/escalation pool may be consulted up front
 ```
 
-`GLM -> MiniMax -> GLM -> MiniMax` is not an architectural invariant.
+`GLM -> MiniMax -> GLM -> MiniMax` is not an invariant. Repeated switching carries ownership/handoff cost and must be justified.
 
-The scheduler should favor inexpensive capable workers until task risk, ambiguity, or repeated failure justifies stronger/scarcer resources.
+## Constraint-first scheduling pipeline
 
-## Candidate scoring
-
-The first production scheduler should use an auditable rule/weighted-score engine, not machine learning.
-
-Conceptually:
+The production scheduler must **not** run one weighted score over every model. The pipeline is:
 
 ```text
-utility(model, task) =
-    capability_fit
-  + local_success_prior
-  + context_fit
-  + availability
-  + quota_health
-  - scarcity_penalty
-  - expected_cost
-  - expected_latency
-  - retry_risk
+TaskProfile
+  + immutable registry/catalog facts
+  + fresh quota snapshots
+  + runtime health
+  + routing policy
+        |
+        v
+1. HARD ELIGIBILITY
+        |
+        v
+2. QUOTA / TASK ADMISSION
+        |
+        v
+3. DETERMINISTIC RANKING
+        |
+        v
+RoutingDecision + exclusion reasons + snapshot references
 ```
 
-Weights are task-class specific.
+### Stage 1 — hard eligibility
 
-Architecture tasks may weight reasoning quality heavily. Routine regression-test generation may weight cost, speed, and quota health more heavily.
+Examples of hard exclusion reasons:
 
-Every selection must emit an explanation record describing the decisive factors.
+- model/target disabled;
+- runtime unavailable;
+- context/tool/capability floor not met;
+- risk-policy floor not met;
+- missing or ambiguous temporal binding;
+- stale quota snapshot;
+- exhausted quota;
+- unknown required quota window;
+- protected reserve policy;
+- paid usage not explicitly allowed.
+
+A high capability score cannot compensate for a failed hard constraint.
+
+### Stage 2 — quota/task admission
+
+For metered subscription capacity:
+
+```text
+minimum_remaining_fraction = min(binding-window remaining fractions)
+
+usable_headroom = minimum_remaining_fraction
+                - reserve_fraction
+                - uncertainty_margin
+
+predicted_burn = task_burn_p90
+               * applicable_consumption_multiplier
+
+admit only if predicted_burn <= usable_headroom
+```
+
+If a required binding window has unknown remaining quota, admission is unknown and fails conservatively for normal automated traffic.
+
+This prevents the classic false-HARVEST case:
+
+```text
+1% quota left
+0.1% of reset time left
+pace = 10  -> temporal HARVEST signal
+
+but a task predicted to burn 5% must still be rejected
+```
+
+### Stage 3 — deterministic ranking
+
+Only admitted candidates are scored/ranked.
+
+Ranking may consider:
+
+- capability fit;
+- local success prior;
+- pool priority/weight;
+- temporal surplus/conservation signal;
+- expected time-to-green;
+- expected cost-to-green;
+- latency;
+- retry/handoff risk.
+
+Weights may vary by routing objective/task class, but ranking never overrides the preceding hard gates.
+
+Every selection emits machine-readable reasons for both the selected target and rejected candidates.
 
 Example:
 
 ```text
-SELECT M3
-- strong local Swift debugging history
-- medium-risk task
-- MiniMax quota healthy
-- GLM reserve protected
-- lower expected cost-to-green than escalation models
+SELECT minimax-sub/M3
+- hard capability and runtime gates passed
+- predicted p90 burn fits usable subscription headroom
+- MiniMax quota observation is fresh and binding windows are known
+- GLM subscription target excluded because required quota truth is UNKNOWN
+- no ownership transfer required
 ```
 
 ## Task ownership and anti-thrashing
 
 Dynamic routing must not cause agents to rewrite one another's architecture repeatedly.
 
-The orchestrator therefore separates:
+The orchestrator separates:
 
-- **task owner**: worker responsible for the current implementation attempt;
-- **architecture owner**: source of frozen design decisions where required;
-- **reviewer**: advisory/verification role with no implicit write ownership.
+- **task owner** — worker responsible for the current implementation attempt;
+- **architecture owner** — source of frozen design decisions where required;
+- **reviewer** — advisory/verification role with no implicit write ownership.
 
-Important architectural decisions and invariants must be persisted as host-owned task/project state.
-
-Model switching does not erase those decisions.
+Important architectural decisions and invariants are host-owned state. Model switching does not erase them.
 
 ## Cross-model handoff
 
-When ownership changes, the next model receives a structured handoff rather than an uncontrolled transcript dump.
+When ownership changes, the next worker receives structured state rather than an uncontrolled transcript dump.
 
-Suggested handoff fields:
+Suggested fields:
 
 - objective;
 - current state;
@@ -354,15 +442,11 @@ Suggested handoff fields:
 - rejected hypotheses;
 - frozen invariants;
 - unresolved questions;
-- relevant diff/evidence references.
-
-This reduces context duplication and supports quota-aware switching.
+- diff/evidence references.
 
 ## Gateway relationship
 
-The orchestrator should reuse mature gateway/provider infrastructure where practical instead of reimplementing provider compatibility, retries, or transport normalization from scratch.
-
-The resource scheduler remains above that gateway layer.
+The orchestrator reuses mature provider/gateway infrastructure where practical, but scheduling policy stays above that layer.
 
 ```text
 OpenCode / DeskPet / CLI / other clients
@@ -373,7 +457,7 @@ OpenCode / DeskPet / CLI / other clients
         - task state
         - model registry
         - quota governor
-        - routing scheduler
+        - admission + routing scheduler
         - telemetry
                   |
                   v
@@ -384,9 +468,7 @@ OpenCode / DeskPet / CLI / other clients
 
 ## Safety invariants
 
-Resource optimization must never weaken the existing Safety Kernel.
-
-In particular:
+Resource optimization never weakens the Safety Kernel.
 
 1. model selection cannot bypass worktree isolation;
 2. model selection cannot redefine verifier commands;
@@ -394,25 +476,33 @@ In particular:
 4. routing uncertainty fails conservatively;
 5. automatic paid overage requires explicit policy/approval;
 6. model-reported completion is never host verification;
-7. dynamic fallback preserves task ownership and audit history.
+7. dynamic fallback preserves task ownership and audit history;
+8. a temporal HARVEST signal cannot override absolute quota headroom;
+9. an unknown binding quota window cannot be ignored merely because another window is healthy;
+10. overlapping unsuperseded temporal facts are ambiguous and fail closed.
 
-## Implementation sequence
+## Activation sequence
 
-1. Model Registry and quota-pool schema.
-2. Provider/runtime telemetry normalization.
-3. Static pool configuration and manual routing.
-4. Explainable rule-based automatic routing.
-5. OpenCode adapter integration.
-6. macOS control plane and widgets.
-7. Cost-to-Green analytics.
-8. Adaptive routing only after sufficient real task data exists.
+1. Model Registry + temporal bindings/rules.
+2. Provider quota observability + immutable snapshots.
+3. OpenCode thin adapter + safe BYPASS/SHADOW contract.
+4. Constraint-first recommendation scheduler.
+5. Shadow Mode over real tasks and multiple relevant reset cycles.
+6. Compare manual choice vs recommendation using verified outcomes and quota before/after.
+7. Only then consider ACTIVE routing, and only when P0/P1 Safety Kernel / verification authority is present.
+8. Cost-to-Green analytics.
+9. Adaptive routing only after sufficient real task data exists.
 
 ## Explicit non-goals for the first production version
 
-- reinforcement learning router;
+- reinforcement-learning router;
 - opaque model-selection neural network;
 - distributed cluster scheduler;
 - autonomous paid overage;
 - automatic architecture migration between agents;
 - provider scraping presented as exact quota truth;
-- ranking models by one public benchmark score.
+- ranking models by one public benchmark score;
+- treating `pace` as a complete admission decision;
+- enabling ACTIVE routing before deterministic safety/verification gates exist.
+
+See also [`SCHEDULER_CORRECTNESS.md`](SCHEDULER_CORRECTNESS.md).
