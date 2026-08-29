@@ -2,8 +2,10 @@ import json
 import threading
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.server import ThreadingHTTPServer
+
+import pytest
 
 from personal_ai_orchestrator.local_api import handler_for
 from personal_ai_orchestrator.model_registry import ModelRegistry
@@ -51,11 +53,29 @@ def test_service_unknown_task_returns_no_switch_and_is_idempotent(tmp_path) -> N
         requested_at=NOW,
     )
     first = service.route(request, now=NOW)
-    second = service.route(request, now=NOW)
+    second = service.route(request, now=NOW + timedelta(minutes=5))
     assert first == second
+    assert first.decided_at == NOW
     assert first.switch_requested is False
     assert first.selected_model is None
     assert "no authoritative TaskProfile" in (first.fallback_reason or "")
+
+
+def test_service_rejects_request_id_reuse_for_different_task_or_mode(tmp_path) -> None:
+    service = _service(tmp_path)
+    original = RoutingRequest(
+        request_id="req-reuse",
+        session_id="session-1",
+        task_id="task-a",
+        mode=RoutingMode.SHADOW,
+        requested_at=NOW,
+    )
+    service.route(original, now=NOW)
+
+    with pytest.raises(ValueError, match="different routing task"):
+        service.route(original.model_copy(update={"task_id": "task-b"}), now=NOW)
+    with pytest.raises(ValueError, match="different routing mode"):
+        service.route(original.model_copy(update={"mode": RoutingMode.ACTIVE}), now=NOW)
 
 
 def test_loopback_http_route_endpoint_returns_valid_decision(tmp_path) -> None:
