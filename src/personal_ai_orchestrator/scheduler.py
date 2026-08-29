@@ -27,6 +27,7 @@ from personal_ai_orchestrator.model_registry import (
     PoolKind,
     PoolMembership,
     QuotaState,
+    QuotaWindowKind,
     RegistryModel,
 )
 from personal_ai_orchestrator.quota_observability import (
@@ -136,6 +137,21 @@ def _membership_targets(
     return registry.execution_targets_for_model(membership.model_sku_id)
 
 
+def _missing_required_window_kinds(
+    *,
+    required: tuple[QuotaWindowKind, ...],
+    snapshot,
+    at: datetime,
+) -> tuple[QuotaWindowKind, ...]:
+    if not required:
+        return ()
+    present = {
+        window.window_kind
+        for window in snapshot.active_windows(at=at, required_window_kinds=required)
+    }
+    return tuple(sorted((kind for kind in set(required) if kind not in present), key=str))
+
+
 def _score_candidate(
     *,
     capability_fit: float,
@@ -228,6 +244,15 @@ def evaluate_target(
     if plan.kind is PlanKind.PAY_AS_YOU_GO and not policy.allow_paid_usage:
         reasons.append("paid usage requires explicit policy")
 
+    missing_required = _missing_required_window_kinds(
+        required=pool.required_window_kinds,
+        snapshot=snapshot,
+        at=now,
+    )
+    if missing_required:
+        missing_labels = ", ".join(kind.value for kind in missing_required)
+        reasons.append(f"required quota windows missing or inactive: {missing_labels}")
+
     pace = snapshot.effective_pace(
         at=now,
         required_window_kinds=pool.required_window_kinds,
@@ -236,6 +261,12 @@ def evaluate_target(
         at=now,
         required_window_kinds=pool.required_window_kinds,
     )
+    # The snapshot helpers deliberately retain a diagnostic value when only a subset
+    # of configured kinds is physically present. Scheduler authority is stricter:
+    # missing required kinds make both routing pace and admission headroom UNKNOWN.
+    if missing_required:
+        pace = None
+        remaining = None
 
     is_metered_subscription = plan.kind in {
         PlanKind.SUBSCRIPTION,
