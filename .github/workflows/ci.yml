@@ -31,6 +31,12 @@ jobs:
       - name: Test
         run: python -m pytest -q
 
+      - name: Check Stage C non-credential harness syntax
+        shell: bash
+        run: |
+          bash -n spikes/opencode/runtime_provider_auth_smoke.sh
+          bash -n spikes/opencode/runtime_provider_active_completion.sh
+
   opencode-plugin-typecheck:
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -1,38 +1,21 @@
 """Stage C provider-native runtime driver (real OpenCode + real provider).
 
-Unlike Stage B (which asserts OpenCode state semantics against a deliberately
-fake ``spike-provider/target-model``), Stage C exercises the full path against a
-provider that is already authenticated inside OpenCode:
-
-    fake routing daemon (credential-free orchestrator)
-      -> RoutingRequest / RoutingDecision contract
-      -> resolve_adapter_outcome()  (the committed thin-adapter decision logic)
-      -> session-scoped model switch via OpenCode's documented HTTP API
-      -> one minimal, harmless real completion
-      -> second session provably untouched
-
-The orchestrator/daemon and this driver never read, copy, or transmit provider
-credentials.  OpenCode owns provider authentication; this driver only calls
-OpenCode's supported session HTTP surface (``/api/session/...``) and reports
-sanitized contract metadata plus non-secret token/usage counters.
-
-Runtime note (recorded drift): the pinned Stage A/B pair
-``@opencode-ai/cli@0.0.0-beta-18387`` publishes no ``darwin-arm64`` binary and
-cannot be installed on this Mac, and its plugin command/switch API differs from
-the standalone runtime that actually holds the local provider credentials.  This
-driver therefore realizes the thin adapter as a host-side client over the same
-underlying OpenCode operation (``POST /api/session/{id}/model`` emitting the
-``session.next.model.switched`` durable event) that the beta plugin wrapped.
+Stage C exercises the provider-native OpenCode path without moving credentials into the
+orchestrator.  The driver uses only supported OpenCode session HTTP surfaces and emits
+sanitized evidence.  Completion acceptance is deliberately strict: provider/model identity,
+finish reason, assistant-error state, and exact repository-derived output must all match.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import socket
 import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -45,11 +28,66 @@ from personal_ai_orchestrator.opencode_contract import (
     resolve_adapter_outcome,
 )
 
-ZERO_TOKENS = {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}}
+ZERO_TOKENS = {
+    "input": 0,
+    "output": 0,
+    "reasoning": 0,
+    "cache": {"read": 0, "write": 0},
+}
+REPO_READ_PROMPT = """Read README.md in this repository.
+
+Return only the Markdown H1 heading exactly as written.
+Do not edit any file.
+Do not create files.
+Do not explain."""
 
 
 class StageCError(RuntimeError):
     pass
+
+
+class OpenCodeHTTPError(StageCError):
+    def __init__(self, method: str, path: str, status: int) -> None:
+        self.status = status
+        self.category = http_error_category(status)
+        super().__init__(f"{method} {path} -> {self.category}")
+
+
+def http_error_category(status: int) -> str:
+    if status == 401:
+        return "HTTP_401"
+    if status == 403:
+        return "HTTP_403"
+    if status == 429:
+        return "HTTP_429"
+    return "UNKNOWN_PROVIDER_ERROR"
+
+
+def sanitize_error_category(value: object) -> str | None:
+    """Map unknown provider/runtime text to a bounded non-sensitive category."""
+
+    if value in (None, {}, ""):
+        return None
+    try:
+        text = json.dumps(value, sort_keys=True, default=str).lower()
+    except (TypeError, ValueError):
+        text = str(type(value)).lower()
+
+    if "modelunavailable" in text or "model unavailable" in text:
+        return "MODEL_UNAVAILABLE"
+    if "401" in text:
+        return "HTTP_401"
+    if "403" in text:
+        return "HTTP_403"
+    if "429" in text or "rate limit" in text or "rate_limit" in text:
+        return "HTTP_429"
+    if "unauthorized" in text or "authorization" in text or "forbidden" in text:
+        return "AUTHORIZATION_ERROR"
+    if "timeout" in text or "timed out" in text:
+        return "TIMEOUT"
+    if "unavailable" in text or "connection" in text:
+        return "PROVIDER_UNAVAILABLE"
+    return "UNKNOWN_PROVIDER_ERROR"
 
 
 class OpenCode:
@@ -70,13 +108,21 @@ class OpenCode:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:  # pragma: no cover - network contract
-            raise StageCError(f"{method} {path} -> HTTP {exc.code}: {exc.read()[:200]!r}") from exc
+            # Never read or persist the raw provider/OpenCode response body here.
+            raise OpenCodeHTTPError(method, path, exc.code) from exc
+        except (TimeoutError, socket.timeout) as exc:  # pragma: no cover - network contract
+            raise StageCError(f"{method} {path} -> TIMEOUT") from exc
+        except urllib.error.URLError as exc:  # pragma: no cover - network contract
+            category = "TIMEOUT" if isinstance(exc.reason, TimeoutError) else "PROVIDER_UNAVAILABLE"
+            raise StageCError(f"{method} {path} -> {category}") from exc
+
         if not raw:
             return None
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
-            return raw.decode(errors="replace")
+            # Non-JSON success payloads are not committed to evidence by this driver.
+            return None
         return parsed.get("data", parsed) if isinstance(parsed, dict) else parsed
 
     def create_session(self) -> dict:
@@ -93,7 +139,9 @@ class OpenCode:
 
     def prompt(self, session_id: str, text: str) -> dict:
         return self._request(
-            "POST", f"/api/session/{session_id}/prompt", {"prompt": {"text": text}}
+            "POST",
+            f"/api/session/{session_id}/prompt",
+            {"prompt": {"text": text}},
         )
 
     def messages(self, session_id: str) -> list[dict]:
@@ -103,16 +151,41 @@ class OpenCode:
     def interrupt(self, session_id: str) -> None:
         self._request("POST", f"/api/session/{session_id}/interrupt", {})
 
-    def delete_session(self, session_id: str) -> None:
+    def delete_session(self, session_id: str) -> dict[str, object]:
+        """Attempt deletion, then verify the session is no longer retrievable."""
+
+        result: dict[str, object] = {
+            "session_id": session_id,
+            "attempted": True,
+            "verified": False,
+        }
         try:
             self._request("DELETE", f"/api/session/{session_id}")
-        except StageCError:
-            pass
+        except StageCError as exc:
+            result["error_category"] = sanitize_error_category(str(exc))
+            return result
+
+        try:
+            remaining = self.get_session(session_id)
+        except OpenCodeHTTPError as exc:
+            if exc.status == 404:
+                result["verified"] = True
+            else:
+                result["error_category"] = exc.category
+            return result
+        except StageCError as exc:
+            result["error_category"] = sanitize_error_category(str(exc))
+            return result
+
+        if remaining in (None, {}, False):
+            result["verified"] = True
+        return result
 
     def healthy(self) -> bool:
         try:
-            return bool(self._request("GET", "/api/health").get("healthy"))
-        except Exception:
+            payload = self._request("GET", "/api/health")
+            return bool(isinstance(payload, dict) and payload.get("healthy"))
+        except StageCError:
             return False
 
 
@@ -130,6 +203,7 @@ def ask_daemon(daemon_url: str, request: RoutingRequest) -> RoutingDecision:
 
 def assistant_from(messages: list[dict]) -> dict | None:
     """Return the newest completed assistant message, normalizing message shape."""
+
     best = None
     for msg in messages:
         info = msg.get("info", msg)
@@ -163,7 +237,6 @@ def wait_for_completion(
         latest = assistant_from(oc.messages(session_id))
         if latest and (latest["completed"] or latest.get("finish")):
             return latest
-        # Stop early if the runtime has already logged a fatal provider error.
         if error_probe is not None and error_probe():
             return latest
     return latest
@@ -174,9 +247,47 @@ def require(condition: bool, message: str) -> None:
         raise StageCError(message)
 
 
+def expected_repository_h1(directory: str) -> str:
+    """Host-side oracle: parse the first Markdown H1 from the disposable README."""
+
+    readme = Path(directory) / "README.md"
+    with readme.open(encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.rstrip("\r\n")
+            if line.startswith("# "):
+                return line
+    raise StageCError("disposable fixture README.md does not contain a Markdown H1")
+
+
+def completion_oracle(
+    completion: dict | None,
+    *,
+    expected_text: str,
+    provider: str,
+    model: str,
+) -> tuple[bool, str]:
+    """Strict deterministic completion gate used by Stage C and unit tests."""
+
+    if completion is None:
+        return False, "MISSING_COMPLETION"
+    error_category = sanitize_error_category(completion.get("error"))
+    if error_category is not None:
+        return False, f"ASSISTANT_ERROR:{error_category}"
+    observed_model = completion.get("model") or {}
+    if observed_model.get("providerID") != provider:
+        return False, "PROVIDER_MISMATCH"
+    if observed_model.get("id") != model:
+        return False, "MODEL_MISMATCH"
+    if completion.get("finish") != "stop":
+        return False, "FINISH_NOT_STOP"
+    if completion.get("text", "").strip() != expected_text:
+        return False, "OUTPUT_MISMATCH"
+    return True, "PASS"
+
+
 def provider_error_from_log(log_path: str | None, provider: str, model: str) -> str | None:
-    """Best-effort, sanitized read of a provider/model runtime error from the
-    OpenCode log. Returns a short category string, never raw credentials."""
+    """Return only a bounded error category from the OpenCode runtime log."""
+
     if not log_path:
         return None
     try:
@@ -186,12 +297,21 @@ def provider_error_from_log(log_path: str | None, provider: str, model: str) -> 
         return None
     needle = f"{provider}/{model}"
     for line in reversed(tail):
-        if "ModelUnavailableError" in line and needle in line:
-            return f"MODEL_UNAVAILABLE (SessionRunnerModel.ModelUnavailableError: {needle})"
-        if needle in line and ("Failed to drain Session" in line or "level=ERROR" in line):
-            for token in ("401", "403", "429", "quota", "rate", "unauthorized", "forbidden"):
-                if token.lower() in line.lower():
-                    return f"PROVIDER_ERROR ({token}) for {needle}"
+        if needle not in line:
+            continue
+        if "ModelUnavailableError" in line or "Model unavailable" in line:
+            return "MODEL_UNAVAILABLE"
+        lowered = line.lower()
+        if "401" in lowered:
+            return "HTTP_401"
+        if "403" in lowered or "forbidden" in lowered or "unauthorized" in lowered:
+            return "HTTP_403"
+        if "429" in lowered or "rate limit" in lowered:
+            return "HTTP_429"
+        if "timeout" in lowered:
+            return "TIMEOUT"
+        if "unavailable" in lowered or "failed to drain session" in lowered:
+            return "PROVIDER_UNAVAILABLE"
     return None
 
 
@@ -208,7 +328,6 @@ def run(args: argparse.Namespace) -> dict:
     try:
         require(oc.healthy(), "OpenCode server is not healthy")
 
-        # 1. Two independent disposable sessions, both model-less and usage-free.
         session_a = oc.create_session()["id"]
         created.append(session_a)
         session_b = oc.create_session()["id"]
@@ -219,7 +338,6 @@ def run(args: argparse.Namespace) -> dict:
             require(snap.get("cost") == 0, f"session {label} cost != 0 before use")
             require(snap.get("tokens") == ZERO_TOKENS, f"session {label} tokens != 0 before use")
 
-        # 2. SHADOW: daemon recommends the real model but the adapter must not switch.
         shadow_req = RoutingRequest(
             request_id=str(uuid4()),
             session_id=session_a,
@@ -234,7 +352,7 @@ def run(args: argparse.Namespace) -> dict:
         )
         require(
             shadow_outcome.target_model == real_ref,
-            f"SHADOW recommendation {shadow_outcome.target_model} != real {real_ref}",
+            f"SHADOW recommendation {shadow_outcome.target_model} != real model",
         )
         require(
             oc.get_session(session_a).get("model") is None,
@@ -247,7 +365,6 @@ def run(args: argparse.Namespace) -> dict:
             "result": "PASS",
         }
 
-        # 3. ACTIVE: adapter applies a session-scoped switch to the real model on A only.
         active_req = RoutingRequest(
             request_id=str(uuid4()),
             session_id=session_a,
@@ -264,12 +381,11 @@ def run(args: argparse.Namespace) -> dict:
         oc.switch_model(session_a, active_outcome.target_model)
 
         after_a = oc.get_session(session_a).get("model") or {}
-        require(after_a.get("providerID") == args.provider, f"A provider mismatch: {after_a}")
-        require(after_a.get("id") == args.model, f"A model mismatch: {after_a}")
-        require(after_a.get("variant") in (None, "default"), f"A variant unexpected: {after_a}")
-
+        require(after_a.get("providerID") == args.provider, "session A provider mismatch")
+        require(after_a.get("id") == args.model, "session A model mismatch")
+        require(after_a.get("variant") in (None, "default"), "session A variant unexpected")
         b_model = oc.get_session(session_b).get("model")
-        require(b_model is None, f"session B was disturbed: {b_model}")
+        require(b_model is None, "session B was disturbed by session A ACTIVE switch")
         evidence["active"] = {
             "action": active_outcome.action.value,
             "session_a_model": f"{after_a.get('providerID')}/{after_a.get('id')}",
@@ -278,56 +394,51 @@ def run(args: argparse.Namespace) -> dict:
             "result": "PASS",
         }
 
-        # 4. One minimal, harmless real completion through the routed session.
-        expected = "# OpenCode Stage C Disposable Fixture"
-        oc.prompt(
-            session_a,
-            "Respond with exactly this line and nothing else, no preamble: " + expected,
-        )
+        expected = expected_repository_h1(args.directory)
+        oc.prompt(session_a, REPO_READ_PROMPT)
         completion = wait_for_completion(
             oc,
             session_a,
             timeout_s=args.completion_timeout,
             error_probe=lambda: provider_error_from_log(
-                args.opencode_log, args.provider, args.model
+                args.opencode_log,
+                args.provider,
+                args.model,
             ),
         )
         provider_error = provider_error_from_log(args.opencode_log, args.provider, args.model)
-
-        completion_ok = (
-            completion is not None
-            and completion.get("error") in (None, {})
-            and bool(completion["text"].strip())
-            and (completion.get("model") or {}).get("providerID") == args.provider
-            and (completion.get("model") or {}).get("id") == args.model
+        completion_ok, oracle_result = completion_oracle(
+            completion,
+            expected_text=expected,
+            provider=args.provider,
+            model=args.model,
         )
 
         if completion_ok:
             comp_model = completion.get("model") or {}
             evidence["completion"] = {
                 "result": "PASS",
+                "oracle": oracle_result,
                 "finish": completion.get("finish"),
-                "text": completion["text"].strip(),
-                "text_matches_fixture_h1": completion["text"].strip() == expected,
+                "text": completion.get("text", "").strip(),
+                "text_matches_repository_h1": True,
                 "tokens": completion.get("tokens"),
                 "cost": completion.get("cost"),
                 "model": f"{comp_model.get('providerID')}/{comp_model.get('id')}",
                 "variant": comp_model.get("variant"),
             }
         else:
-            # Auth was present and the session-scoped switch applied, but the
-            # provider did not (or could not) execute a turn. Record the exact
-            # blocker instead of a fabricated pass.
             evidence["completion"] = {
                 "result": "BLOCKED",
-                "reason": "no successful assistant turn from the authenticated provider",
+                "reason": oracle_result,
                 "provider_error": provider_error,
-                "assistant_error": (completion or {}).get("error"),
+                "assistant_error_category": sanitize_error_category(
+                    (completion or {}).get("error")
+                ),
                 "finish": (completion or {}).get("finish"),
             }
             evidence["result"] = "PARTIAL"
 
-        # 5. Post-completion isolation: B stays pristine either way.
         b_after = oc.get_session(session_b)
         require(b_after.get("model") is None, "session B gained a model after A's turn")
         require(b_after.get("cost") == 0, "session B cost changed")
@@ -339,48 +450,49 @@ def run(args: argparse.Namespace) -> dict:
             "result": "PASS",
         }
 
-        # 6. Bounded cancellation smoke -- only meaningful if the provider runs.
         if completion_ok:
             evidence["cancellation"] = cancellation_smoke(oc, real_ref, args, created)
         else:
             evidence["cancellation"] = {
                 "result": "SKIPPED",
-                "reason": "provider model does not execute turns; nothing to cancel",
+                "reason": "provider completion did not clear the deterministic oracle",
             }
 
         require(oc.healthy(), "OpenCode server unhealthy after runtime checks")
         evidence.setdefault("result", "PASS")
     except StageCError as exc:
         evidence.setdefault("result", "FAIL")
-        evidence["error"] = str(exc)
+        evidence["error_category"] = sanitize_error_category(str(exc))
         raise
     finally:
-        for sid in created:
-            oc.delete_session(sid)
-        evidence["sessions_deleted"] = created
+        deletion_results = [oc.delete_session(sid) for sid in created]
+        evidence["sessions_deletion_attempted"] = [
+            item["session_id"] for item in deletion_results if item["attempted"]
+        ]
+        evidence["sessions_deletion_verified"] = [
+            item["session_id"] for item in deletion_results if item["verified"]
+        ]
+        evidence["session_cleanup"] = (
+            "PASS"
+            if deletion_results and all(bool(item["verified"]) for item in deletion_results)
+            else "NOT_PROVEN"
+        )
 
     return evidence
 
 
 def cancellation_smoke(
-    oc: OpenCode, real_ref: ModelRef, args: argparse.Namespace, created: list[str]
+    oc: OpenCode,
+    real_ref: ModelRef,
+    args: argparse.Namespace,
+    created: list[str],
 ) -> dict:
-    """Interrupt one in-flight turn on a dedicated disposable session, precisely.
+    """Interrupt one in-flight turn and emit only sanitized cancellation evidence."""
 
-    Records the honest outcome. If the tiny turn settles before the interrupt is
-    observable, reports CANCELLATION_NOT_PROVEN with the exact reason instead of a
-    fabricated PASS.
-    """
     session_c = oc.create_session()["id"]
     created.append(session_c)
     oc.switch_model(session_c, real_ref)
-    # A longer task so the turn is genuinely in-flight when interrupted.
-    oc.prompt(
-        session_c,
-        "Write a detailed multi-paragraph essay about the history of computing.",
-    )
-    # Interrupt only once the assistant turn is actually generating, so the abort
-    # lands mid-flight and produces a clear marker. Bounded to keep quota minimal.
+    oc.prompt(session_c, "Write a detailed multi-paragraph essay about the history of computing.")
     for _ in range(15):
         time.sleep(0.4)
         current = assistant_from(oc.messages(session_c))
@@ -390,15 +502,15 @@ def cancellation_smoke(
     oc.interrupt(session_c)
     settled = wait_for_completion(oc, session_c, timeout_s=30)
     finish = (settled or {}).get("finish")
-    error = (settled or {}).get("error") or {}
-    error_message = str(error.get("message", "")) if isinstance(error, dict) else str(error)
+    error_category = sanitize_error_category((settled or {}).get("error"))
+    error_value = (settled or {}).get("error")
+    interrupted = finish == "error" and error_value not in (None, {}, "")
     healthy = oc.healthy()
-    interrupted = finish == "error" and "interrupt" in error_message.lower()
     if interrupted:
         return {
             "result": "PASS",
             "finish": finish,
-            "interrupt_marker": error_message,
+            "error_category": error_category,
             "server_healthy_after": healthy,
         }
     if finish == "stop":
@@ -410,8 +522,9 @@ def cancellation_smoke(
         }
     return {
         "result": "CANCELLATION_NOT_PROVEN",
-        "reason": f"no clear interrupt marker (finish={finish!r}, error={error_message!r})",
+        "reason": "no completed interrupt marker was observed",
         "finish": finish,
+        "error_category": error_category,
         "server_healthy_after": healthy,
     }
 
@@ -427,22 +540,26 @@ def main() -> int:
     parser.add_argument(
         "--opencode-log",
         default=None,
-        help="OpenCode log path, scanned (read-only) for sanitized provider errors",
+        help="OpenCode log path, scanned read-only for sanitized provider categories",
     )
     parser.add_argument("--evidence-out", default=None)
     args = parser.parse_args()
 
     try:
         evidence = run(args)
-        status = 0
+        status = 0 if evidence.get("result") == "PASS" else 2
     except StageCError as exc:
-        evidence = {"result": "FAIL", "error": str(exc), "provider_id": args.provider}
+        evidence = {
+            "result": "FAIL",
+            "error_category": sanitize_error_category(str(exc)),
+            "provider_id": args.provider,
+        }
         status = 1
 
     rendered = json.dumps(evidence, indent=2, sort_keys=True)
     print(rendered)
     if args.evidence_out:
-        with open(args.evidence_out, "w") as handle:
+        with open(args.evidence_out, "w", encoding="utf-8") as handle:
             handle.write(rendered + "\n")
     return status
 
