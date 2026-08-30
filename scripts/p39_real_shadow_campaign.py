@@ -44,29 +44,6 @@ CODEX_PROFILE = CampaignWorkerProfile(
     quota_confidence=EvidenceConfidence.UNKNOWN,
 )
 
-CLAUDE_PROFILE = CampaignWorkerProfile(
-    worker_id="claude-code",
-    provider_id="anthropic",
-    provider_display_name="Anthropic",
-    account_id="claude-code-account",
-    plan_id="claude-code-plan",
-    plan_name="Claude Code existing login",
-    model_sku_id="sonnet",
-    model_display_name="Claude Sonnet",
-    execution_target_id="claude-code-sonnet",
-    runtime_id="claude-code",
-    quota_pool_id="claude-code-plan",
-    catalog_snapshot_id="catalog-p39-real-claude",
-    catalog_source="p39-real-shadow-campaign",
-    quota_snapshot_id="quota-p39-claude-unknown",
-    quota_source_reference="claude-code-existing-auth",
-    quota_source_note=(
-        "Claude Code existing authentication is probed without reading secrets; precise "
-        "subscription quota/reset truth remains unavailable."
-    ),
-    quota_confidence=EvidenceConfidence.UNKNOWN,
-)
-
 
 def _unittest_command() -> VerifierCommand:
     return VerifierCommand(
@@ -393,49 +370,6 @@ def _launch_codex_worker(
     )
 
 
-def _launch_claude_worker(
-    repo: Path,
-    case: DeclarativeShadowCase,
-    profile: CampaignWorkerProfile,
-) -> _SubprocessWorkerHandle:
-    claude = shutil.which("claude")
-    if claude is None:
-        raise RuntimeError("claude CLI is not available")
-    prompt = (
-        "You are operating only inside this disposable repository. "
-        f"CASE_ID: {case.case_id}. TASK_FAMILY: {case.task_family}. "
-        f"Expected changed-file scope: {', '.join(case.expected_changed_paths)}. "
-        f"{case.worker_prompt}"
-    )
-    argv = [
-        claude,
-        "-p",
-        "--model",
-        profile.model_sku_id,
-        "--permission-mode",
-        "bypassPermissions",
-        "--no-session-persistence",
-        "--allowedTools=Edit,Bash(python3 *),Bash(git diff *),Bash(git status *)",
-        prompt,
-    ]
-    started_at = datetime.now(UTC)
-    process = subprocess.Popen(
-        argv,
-        cwd=repo,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    return _SubprocessWorkerHandle(
-        process=process,
-        worker_profile=profile,
-        started_at=started_at,
-        timeout_seconds=600,
-    )
-
-
 def _probe_command(argv: list[str], *, cwd: Path, timeout: float = 45.0) -> dict[str, object]:
     try:
         completed = subprocess.run(
@@ -460,7 +394,7 @@ def _probe_command(argv: list[str], *, cwd: Path, timeout: float = 45.0) -> dict
     }
 
 
-def probe_workers(repo_root: Path, *, attempt_claude: bool) -> dict[str, object]:
+def probe_workers(repo_root: Path) -> dict[str, object]:
     probes: dict[str, object] = {}
     codex_path = shutil.which("codex")
     probes["codex"] = {
@@ -470,29 +404,6 @@ def probe_workers(repo_root: Path, *, attempt_claude: bool) -> dict[str, object]
         else _probe_command([codex_path, "--version"], cwd=repo_root),
         "existing_auth_usable": "deferred_to_real_campaign_runs",
     }
-    claude_path = shutil.which("claude")
-    claude: dict[str, object] = {
-        "claude_cli_available": claude_path is not None,
-        "claude_existing_login_usable": "NOT_EXECUTED",
-        "claude_real_execution_safe": False,
-        "claude_actual_execution_target_identifiable": False,
-    }
-    if claude_path is not None:
-        claude["version"] = _probe_command([claude_path, "--version"], cwd=repo_root)
-        if attempt_claude:
-            probe = _probe_command(
-                [claude_path, "--print", "Respond with PAO_CLAUDE_PROBE_OK only."],
-                cwd=repo_root,
-                timeout=90,
-            )
-            claude["auth_probe"] = probe
-            claude["claude_existing_login_usable"] = bool(probe.get("succeeded"))
-            claude["claude_real_execution_safe"] = bool(probe.get("succeeded"))
-            claude["claude_actual_execution_target_identifiable"] = bool(probe.get("succeeded"))
-        else:
-            claude["claude_existing_login_usable"] = "NOT_EXECUTED_BY_FLAG"
-    probes["claude"] = claude
-
     opencode_path = shutil.which("opencode")
     probes["minimax"] = {
         "opencode_cli_available": opencode_path is not None,
@@ -513,8 +424,6 @@ def main() -> int:
     )
     parser.add_argument("--max-observations", type=int, default=4)
     parser.add_argument("--case", action="append", dest="case_ids")
-    parser.add_argument("--attempt-claude-probe", action="store_true")
-    parser.add_argument("--worker", choices=("codex", "claude"), default="codex")
     parser.add_argument("--list-cases", action="store_true")
     args = parser.parse_args()
 
@@ -528,17 +437,15 @@ def main() -> int:
     selected = selected[: args.max_observations]
     repo_root = Path.cwd()
     repo_head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    probes = probe_workers(repo_root, attempt_claude=args.attempt_claude_probe)
-    worker_profile = CODEX_PROFILE if args.worker == "codex" else CLAUDE_PROFILE
-    worker_launcher = _launch_codex_worker if args.worker == "codex" else _launch_claude_worker
+    probes = probe_workers(repo_root)
     results = []
     for case in selected:
         result = run_shadow_case(
             campaign_root=args.campaign_root,
             campaign_id="p39-real-shadow-quality-campaign",
             case=case,
-            worker_profile=worker_profile,
-            worker_launcher=worker_launcher,
+            worker_profile=CODEX_PROFILE,
+            worker_launcher=_launch_codex_worker,
             repo_head=repo_head,
         )
         results.append(result)
