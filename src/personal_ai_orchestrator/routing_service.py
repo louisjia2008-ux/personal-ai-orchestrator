@@ -19,6 +19,7 @@ from personal_ai_orchestrator.scheduler import (
     TaskProfile,
     route_task,
 )
+from personal_ai_orchestrator.shadow_evidence import PendingShadowObservation, ShadowEvidenceJournal
 
 
 _ROUTABLE_TASK_STATES = {TaskState.READY, TaskState.RUNNING}
@@ -37,6 +38,8 @@ class RoutingService:
     task_profiles: dict[str, TaskProfile] = field(default_factory=dict)
     runtime_availability: dict[str, bool] = field(default_factory=dict)
     telemetry: dict[str, TargetTelemetry] = field(default_factory=dict)
+    shadow_journal: ShadowEvidenceJournal | None = None
+    shadow_actual_execution_targets: dict[str, str] = field(default_factory=dict)
 
     @property
     def policy_snapshot(self) -> PolicySnapshot:
@@ -126,6 +129,62 @@ class RoutingService:
             policy=self.policy,
         )
 
+    def _record_pending_shadow(
+        self,
+        *,
+        request: RoutingRequest,
+        decision: RoutingDecision,
+        scheduler: SchedulerDecision,
+        reference: datetime,
+    ) -> None:
+        if self.shadow_journal is None or request.mode is not RoutingMode.SHADOW:
+            return
+        if request.task_id is None:
+            return
+        manual_target_id = self.shadow_actual_execution_targets.get(request.task_id)
+        if manual_target_id is None:
+            return
+
+        selected_target_id = decision.selected_execution_target_id
+        selected_evaluation = next(
+            (
+                evaluation
+                for evaluation in scheduler.evaluations
+                if evaluation.execution_target_id == selected_target_id
+            ),
+            None,
+        )
+        provider_id = None
+        quota_pool_id = None
+        predicted_burn_fraction = None
+        if selected_target_id is not None:
+            target = self.registry.execution_targets[selected_target_id]
+            model = self.registry.models[target.model_sku_id]
+            provider_id = model.provider_id
+        if selected_evaluation is not None:
+            quota_pool_id = selected_evaluation.quota_pool_id
+            predicted_burn_fraction = selected_evaluation.predicted_burn_fraction
+        profile = self.task_profiles.get(request.task_id)
+
+        self.shadow_journal.append_pending(
+            PendingShadowObservation(
+                pending_id=f"pending-{decision.decision_id}",
+                task_id=request.task_id,
+                request_id=request.request_id,
+                decision_id=decision.decision_id,
+                manual_execution_target_id=manual_target_id,
+                scheduler_execution_target_id=selected_target_id,
+                catalog_snapshot_id=decision.catalog_snapshot_id or self.catalog_snapshot_id,
+                policy_snapshot_id=decision.policy_snapshot_id or self.policy_snapshot.id,
+                quota_snapshot_ids=decision.quota_snapshot_ids,
+                provider_id=provider_id,
+                quota_pool_id=quota_pool_id,
+                task_family="unknown" if profile is None else profile.pool.value.lower(),
+                predicted_burn_fraction=predicted_burn_fraction,
+                started_at=reference,
+            )
+        )
+
     def route(self, request: RoutingRequest, *, now: datetime | None = None) -> RoutingDecision:
         existing = self._existing_decision(request)
         if existing is not None:
@@ -158,8 +217,20 @@ class RoutingService:
             # writer wins; the loser returns that exact decision instead of surfacing a 503.
             existing = self._existing_decision(request)
             if existing is not None:
+                self._record_pending_shadow(
+                    request=request,
+                    decision=existing,
+                    scheduler=scheduler,
+                    reference=reference,
+                )
                 return existing
             raise
+        self._record_pending_shadow(
+            request=request,
+            decision=decision,
+            scheduler=scheduler,
+            reference=reference,
+        )
         return decision
 
 
