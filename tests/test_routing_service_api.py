@@ -30,6 +30,7 @@ from personal_ai_orchestrator.model_registry import (
     QuotaWindowSnapshot,
 )
 from personal_ai_orchestrator.opencode_contract import RoutingMode, RoutingRequest
+from personal_ai_orchestrator.quota_collectors.base import QuotaCollectionStatus
 from personal_ai_orchestrator.routing_service import RoutingService
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
 from personal_ai_orchestrator.scheduler import TaskProfile
@@ -126,6 +127,78 @@ def _registry() -> ModelRegistry:
                 pool=PoolKind.WORKER,
                 model_sku_id="m3",
                 execution_target_id="m3-sub",
+            ),
+        ),
+    )
+
+
+def _unknown_quota_registry() -> ModelRegistry:
+    source = EvidenceSource(
+        source_type=EvidenceSourceType.LOCAL_OBSERVATION,
+        observed_at=NOW,
+        confidence=EvidenceConfidence.UNKNOWN,
+    )
+    snapshot = QuotaSnapshot(
+        id="quota-unknown",
+        quota_pool_id="pool",
+        provider_id="openai",
+        observed_at=NOW,
+        state=QuotaState.UNKNOWN,
+        confidence=EvidenceConfidence.UNKNOWN,
+        source=source,
+    )
+    return ModelRegistry(
+        providers={"openai": Provider(id="openai", display_name="OpenAI")},
+        accounts={"account": Account(id="account", provider_id="openai", label="codex-cli")},
+        plans={
+            "plan": Plan(
+                id="plan",
+                account_id="account",
+                name="Codex existing login",
+                kind=PlanKind.SUBSCRIPTION,
+            )
+        },
+        quota_pools={
+            "pool": QuotaPool(
+                id="pool",
+                plan_id="plan",
+                name="unknown subscription quota",
+                snapshot=snapshot,
+            )
+        },
+        models={
+            "gpt-5.5": ModelSKU(
+                id="gpt-5.5",
+                provider_id="openai",
+                display_name="GPT-5.5",
+                capabilities=CapabilityProfile(scores={"implementation": 0.9}),
+            )
+        },
+        execution_targets={
+            "codex-cli-gpt-5.5": ExecutionTarget(
+                id="codex-cli-gpt-5.5",
+                model_sku_id="gpt-5.5",
+                account_id="account",
+                runtime_id="codex-cli",
+            )
+        },
+        quota_bindings=(
+            QuotaBinding(
+                id="binding",
+                model_sku_id="gpt-5.5",
+                execution_target_id="codex-cli-gpt-5.5",
+                quota_pool_id="pool",
+                effective_from=NOW - timedelta(days=1),
+                recorded_at=NOW - timedelta(days=1),
+                confidence=EvidenceConfidence.UNKNOWN,
+                source=source,
+            ),
+        ),
+        pool_memberships=(
+            PoolMembership(
+                pool=PoolKind.WORKER,
+                model_sku_id="gpt-5.5",
+                execution_target_id="codex-cli-gpt-5.5",
             ),
         ),
     )
@@ -286,6 +359,84 @@ def test_shadow_route_writes_pending_observation_when_actual_target_is_known(tmp
     assert pending.provider_id == "minimax"
     assert pending.quota_pool_id == "pool"
     assert pending.predicted_burn_fraction == 0.05
+
+
+def test_shadow_route_without_actual_target_does_not_create_pending_observation(tmp_path) -> None:
+    journal = ShadowEvidenceJournal(tmp_path / "shadow")
+    service = RoutingService(
+        registry=_registry(),
+        store=SafetyKernelStore(tmp_path / "state.sqlite3"),
+        catalog_snapshot_id="catalog-1",
+        runtime_availability={"m3-sub": True},
+        shadow_journal=journal,
+    )
+    service.set_task_profile(
+        TaskProfile(
+            task_id="task-1",
+            required_capabilities={"debugging": 0.8},
+            predicted_quota_fraction_p90=0.05,
+        )
+    )
+    service.store.submit_task(task_id="task-1", request_id="task-submit", intent="implement")
+    ready = service.store.transition_task("task-1", TaskState.READY)
+
+    service.route(
+        RoutingRequest(
+            request_id="req-shadow-no-actual",
+            session_id="session-1",
+            task_id="task-1",
+            task_state_version=ready.state_version,
+            mode=RoutingMode.SHADOW,
+            requested_at=NOW,
+        ),
+        now=NOW,
+    )
+
+    assert journal.load_pending_all() == ()
+
+
+def test_shadow_pending_uses_actual_target_identity_when_quota_blocks_selection(tmp_path) -> None:
+    journal = ShadowEvidenceJournal(tmp_path / "shadow")
+    service = RoutingService(
+        registry=_unknown_quota_registry(),
+        store=SafetyKernelStore(tmp_path / "state.sqlite3"),
+        catalog_snapshot_id="catalog-1",
+        runtime_availability={"codex-cli-gpt-5.5": True},
+        shadow_journal=journal,
+        shadow_actual_execution_targets={"task-1": "codex-cli-gpt-5.5"},
+    )
+    service.set_task_profile(
+        TaskProfile(
+            task_id="task-1",
+            required_capabilities={"implementation": 0.8},
+            predicted_quota_fraction_p90=0.01,
+        )
+    )
+    service.store.submit_task(task_id="task-1", request_id="task-submit", intent="implement")
+    ready = service.store.transition_task("task-1", TaskState.READY)
+
+    decision = service.route(
+        RoutingRequest(
+            request_id="req-shadow-unknown-quota",
+            session_id="session-1",
+            task_id="task-1",
+            task_state_version=ready.state_version,
+            mode=RoutingMode.SHADOW,
+            requested_at=NOW,
+        ),
+        now=NOW,
+    )
+    pending = journal.load_pending(f"pending-{decision.decision_id}")
+
+    assert decision.selected_execution_target_id is None
+    assert decision.quota_snapshot_ids == ("quota-unknown",)
+    assert pending.scheduler_execution_target_id is None
+    assert pending.manual_execution_target_id == "codex-cli-gpt-5.5"
+    assert pending.provider_id == "openai"
+    assert pending.quota_pool_id == "pool"
+    assert pending.quota_confidence is EvidenceConfidence.UNKNOWN
+    assert pending.collector_status is QuotaCollectionStatus.UNKNOWN
+    assert pending.predicted_burn_fraction == 0.01
 
 
 def test_service_rejects_request_id_reuse_for_different_task_or_mode(tmp_path) -> None:
