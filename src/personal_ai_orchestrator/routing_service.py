@@ -185,6 +185,13 @@ class RoutingService:
             if snapshot.confidence.value == "UNKNOWN":
                 collector_status = QuotaCollectionStatus.UNKNOWN
         profile = self.task_profiles.get(request.task_id)
+        task_family = "unknown"
+        if profile is not None:
+            task_family = (
+                profile.pool.value.lower()
+                if profile.task_family == "unknown"
+                else profile.task_family
+            )
 
         self.shadow_journal.append_pending(
             PendingShadowObservation(
@@ -199,7 +206,7 @@ class RoutingService:
                 quota_snapshot_ids=decision.quota_snapshot_ids,
                 provider_id=provider_id,
                 quota_pool_id=quota_pool_id,
-                task_family="unknown" if profile is None else profile.pool.value.lower(),
+                task_family=task_family,
                 quota_confidence=quota_confidence,
                 collector_status=collector_status,
                 predicted_burn_fraction=predicted_burn_fraction,

@@ -53,6 +53,7 @@ class RiskClass(StrEnum):
 class TaskProfile(RegistryModel):
     task_id: str = Field(min_length=1)
     pool: PoolKind = PoolKind.WORKER
+    task_family: str = "unknown"
     risk: RiskClass = RiskClass.MEDIUM
     required_capabilities: dict[str, float] = Field(default_factory=dict)
     required_context_tokens: int | None = Field(default=None, ge=1)
@@ -72,6 +73,8 @@ class TaskProfile(RegistryModel):
             raise ValueError(f"capability floors must be within [0, 1]: {invalid}")
         if any(not tool.strip() for tool in self.required_tools):
             raise ValueError("required_tools must not contain blank names")
+        if not self.task_family.strip():
+            raise ValueError("task_family must not be blank")
         return self
 
 
