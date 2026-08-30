@@ -7,9 +7,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from personal_ai_orchestrator.activation import ActiveRoutingGate
-from personal_ai_orchestrator.model_registry import ModelRegistry
+from personal_ai_orchestrator.model_registry import EvidenceConfidence, ModelRegistry
 from personal_ai_orchestrator.opencode_contract import RoutingDecision, RoutingMode, RoutingRequest
 from personal_ai_orchestrator.policy_snapshot import PolicySnapshot, PolicySnapshotJournal
+from personal_ai_orchestrator.quota_collectors.base import QuotaCollectionStatus
 from personal_ai_orchestrator.routing_bridge import build_routing_decision
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
 from personal_ai_orchestrator.scheduler import (
@@ -146,6 +147,14 @@ class RoutingService:
             return
 
         selected_target_id = decision.selected_execution_target_id
+        actual_evaluation = next(
+            (
+                evaluation
+                for evaluation in scheduler.evaluations
+                if evaluation.execution_target_id == manual_target_id
+            ),
+            None,
+        )
         selected_evaluation = next(
             (
                 evaluation
@@ -157,13 +166,24 @@ class RoutingService:
         provider_id = None
         quota_pool_id = None
         predicted_burn_fraction = None
-        if selected_target_id is not None:
-            target = self.registry.execution_targets[selected_target_id]
+        quota_confidence = EvidenceConfidence.UNKNOWN
+        collector_status = None
+        actual_target = self.registry.execution_targets.get(manual_target_id)
+        if actual_target is not None:
+            target = actual_target
             model = self.registry.models[target.model_sku_id]
             provider_id = model.provider_id
-        if selected_evaluation is not None:
+        if actual_evaluation is not None:
+            quota_pool_id = actual_evaluation.quota_pool_id
+            predicted_burn_fraction = actual_evaluation.predicted_burn_fraction
+        elif selected_evaluation is not None:
             quota_pool_id = selected_evaluation.quota_pool_id
             predicted_burn_fraction = selected_evaluation.predicted_burn_fraction
+        if quota_pool_id is not None:
+            snapshot = self.registry.quota_pools[quota_pool_id].snapshot
+            quota_confidence = snapshot.confidence
+            if snapshot.confidence.value == "UNKNOWN":
+                collector_status = QuotaCollectionStatus.UNKNOWN
         profile = self.task_profiles.get(request.task_id)
 
         self.shadow_journal.append_pending(
@@ -180,6 +200,8 @@ class RoutingService:
                 provider_id=provider_id,
                 quota_pool_id=quota_pool_id,
                 task_family="unknown" if profile is None else profile.pool.value.lower(),
+                quota_confidence=quota_confidence,
+                collector_status=collector_status,
                 predicted_burn_fraction=predicted_burn_fraction,
                 started_at=reference,
             )

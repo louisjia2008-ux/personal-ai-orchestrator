@@ -292,6 +292,25 @@ def test_unknown_and_synthetic_reset_cycles_do_not_count_for_real_acceptance(tmp
     assert summary.review_eligible is False
 
 
+def test_quality_observation_can_finalize_with_unknown_quota_and_no_reset(tmp_path) -> None:
+    journal = ShadowEvidenceJournal(tmp_path)
+    journal.append(
+        observation(
+            reset_cycle_ids=(),
+            quota_confidence=EvidenceConfidence.UNKNOWN,
+            collector_status=QuotaCollectionStatus.UNKNOWN,
+        )
+    )
+
+    summary = journal.summarize(minimum_observations=1, minimum_reset_cycles=2)
+
+    assert summary.observations == 1
+    assert summary.real_reset_cycles_observed == 0
+    assert summary.unknown_reset_observations == 1
+    assert summary.collector_failure_observations == 1
+    assert summary.review_eligible is False
+
+
 def test_campaign_policy_snapshot_controls_review_thresholds(tmp_path) -> None:
     journal = ShadowEvidenceJournal(tmp_path)
     journal.save_campaign_state(

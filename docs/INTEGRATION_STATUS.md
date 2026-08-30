@@ -1,6 +1,6 @@
 # Integration Status
 
-Status: `INTEGRATION_IMPLEMENTED / LOCAL_MAC_ACCEPTED / P3_7_AUTHORITATIVE_SHADOW_READY_REAL_EXECUTION_BLOCKED`
+Status: `INTEGRATION_IMPLEMENTED / LOCAL_MAC_ACCEPTED / P3_8_FIRST_REAL_SHADOW_OBSERVATION_ACCEPTED`
 
 This document records what the `integration/end-to-end-shadow-safety` line implements and what
 still requires evidence that cannot be fabricated on GitHub-hosted runners.
@@ -132,18 +132,64 @@ Implemented:
 Campaign-level `review_eligible` is a summary of scoped cohort evidence, not production ACTIVE
 authorization and not proof that every target/provider path is accepted.
 
+## P3.8 first real end-to-end Shadow observation
+
+P3.8 records the first credential-safe real worker execution through the authoritative Shadow
+observation pipeline. OpenCode/MiniMax was probed first but existing authentication was not usable
+(`401 invalid api key`), so the run used the already-authenticated Codex CLI path without reading,
+copying or displaying credentials.
+
+The accepted observation used a disposable Git repository and a host-owned deterministic verifier:
+
+```text
+SELECTED_REAL_WORKER: codex-cli
+PROVIDER: openai
+ACTUAL_EXECUTION_TARGET: codex-cli-gpt-5.5
+AUTH_REUSED_WITHOUT_SECRET_READ: YES
+DISPOSABLE_REPO: /var/folders/pt/tn46s3216rg366nxx7g7ng940000gn/T/pao-p38-real-shadow-4bvwb7kp
+TASK_ID: p38-real-shadow-7287b7e34d22
+ROUTING_REQUEST_ID: route-9b542f213c1d
+ROUTING_DECISION_ID: route-06cca2f09f28ec0601352846
+WOULD_SELECT_TARGET: none, because quota confidence remained UNKNOWN
+ACTUAL_RETAINED_TARGET: codex-cli-gpt-5.5
+REAL_WORKER_EXECUTION: exit 0
+VERIFIER_RESULT: VERIFIED / verify-2ac646548adbfea20e176981
+CHANGED_FILES: src/tiny_math.py
+FIRST_REAL_SHADOW_OBSERVATION: shadow-79b324d8b775bb0d2e80e221
+QUALITY_OBSERVATIONS: 0 -> 1
+CAMPAIGN_STATUS: BOOTSTRAPPED -> COLLECTING
+QUOTA_CONFIDENCE: UNKNOWN
+RESET_METADATA: UNKNOWN_OR_ABSENT
+REAL_RESET_CYCLES_CONTRIBUTED: 0
+REAL_RESET_CYCLES_TOTAL: 0
+SHADOW_REVIEW_ELIGIBLE: false
+PRODUCTION_ACTIVE: DISABLED_BY_DESIGN
+OWNER_APPROVAL: ABSENT
+```
+
+This proves the real collection path, not the longitudinal production gate. Unknown quota/reset
+metadata can produce quality Shadow observations, but it still contributes zero real reset cycles
+and cannot make a cohort production-ACTIVE eligible.
+
+See
+[`acceptance/P38_FIRST_REAL_SHADOW_OBSERVATION_2026-08-30.md`](acceptance/P38_FIRST_REAL_SHADOW_OBSERVATION_2026-08-30.md).
+
 ## Current CI evidence
 
-Latest code-bearing integration head verified on GitHub Actions:
-`96ee1fcb6c6891909ec873f91dd43fee789747d9`.
+Latest pre-P3.8 integration head verified on GitHub Actions:
+`b7671c5d16391c38195f044866d909c6762ad864`.
+
+Current local P3.8 validation on 2026-08-30:
 
 - Ruff: PASS;
-- pytest: **136 passed**;
+- pytest: **158 passed**;
 - `git diff --check`: PASS;
-- OpenCode adapter typecheck + contract tests: PASS.
+- OpenCode adapter typecheck + contract tests: PASS, 10/10;
+- P3.8 real Shadow execution script: PASS, observation `shadow-79b324d8b775bb0d2e80e221`;
+- target Mac acceptance: `PASS_LOCAL_P0_P1_ROUTING_PROVIDER_AND_LONGITUDINAL_SHADOW_NOT_EXECUTED`.
 
-Subsequent commits only update this status document; the normal PR CI remains the authority for the
-final branch head. These are Linux CI results and do not replace target-Mac acceptance.
+The normal PR CI remains the authority for pushed branch heads. Local Mac acceptance is tracked
+separately because GitHub-hosted runners cannot prove the credential-safe local worker path.
 
 ## External acceptance still required
 
@@ -175,7 +221,7 @@ availability does not prove subscription quota truth, DeepSeek remains PAYG-bala
 safe credential handoff, and local Ollama capacity remains runtime availability rather than provider
 quota.
 
-The local Shadow campaign has been bootstrapped in ignored durable state under
+The P3.6 local Shadow campaign was bootstrapped in ignored durable state under
 `.personal-ai-orchestrator/p36-shadow/` with production ACTIVE disabled. P3.7 clarifies that this is
 `BOOTSTRAPPED`, not `COLLECTING`, until automatic observation wiring is enabled for a real execution
 path. It has 0 quality observations and 0 real reset cycles so far, so Shadow review eligibility
@@ -185,3 +231,5 @@ See
 [`acceptance/LIVE_PROVIDER_SHADOW_ACCEPTANCE_2026-08-30.md`](acceptance/LIVE_PROVIDER_SHADOW_ACCEPTANCE_2026-08-30.md).
 See also
 [`acceptance/P37_AUTHORITATIVE_SHADOW_ACCEPTANCE_2026-08-30.md`](acceptance/P37_AUTHORITATIVE_SHADOW_ACCEPTANCE_2026-08-30.md).
+See also
+[`acceptance/P38_FIRST_REAL_SHADOW_OBSERVATION_2026-08-30.md`](acceptance/P38_FIRST_REAL_SHADOW_OBSERVATION_2026-08-30.md).
