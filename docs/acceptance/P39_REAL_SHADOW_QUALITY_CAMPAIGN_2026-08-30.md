@@ -1,6 +1,6 @@
 # P3.9 Real Shadow Quality Campaign - 2026-08-30
 
-Status: `P3_9_REAL_SHADOW_QUALITY_CAMPAIGN_COLLECTING_PARTIAL_ACCEPTED`
+Status: `P3_9_CODEX_ONLY_REAL_SHADOW_QUALITY_CAMPAIGN_COLLECTING_PARTIAL_ACCEPTED`
 
 Production ACTIVE remains `DISABLED_BY_DESIGN`.
 
@@ -59,16 +59,11 @@ Every case uses a trusted deterministic verifier and changed-file scope checking
 ## Provider And Worker Results
 
 Credential-safe probes and executions were performed without reading, copying or displaying
-credential material.
+credential material. P3.9 intentionally does not add Claude as a model provider.
 
 ```text
 CODEX_CLI_AVAILABLE: true
 CODEX_REAL_EXECUTION_TARGET: codex-cli-gpt-5.5
-CLAUDE_CLI_AVAILABLE: true
-CLAUDE_EXISTING_LOGIN_USABLE: true
-CLAUDE_REAL_EXECUTION_SAFE: true
-CLAUDE_ACTUAL_EXECUTION_TARGET_IDENTIFIABLE: true
-CLAUDE_REAL_EXECUTION_TARGET: claude-code-sonnet
 MINIMAX_OPENCODE_CLI_AVAILABLE: true
 MINIMAX_CATALOG_PROBE: succeeded
 MINIMAX_CREDENTIAL_REPAIR_ATTEMPTED: false
@@ -84,11 +79,11 @@ Durable local campaign state:
 ```text
 CAMPAIGN_ROOT: .personal-ai-orchestrator/p39-shadow
 REPORT: .personal-ai-orchestrator/p39-shadow/p39-real-shadow-quality-campaign-report.json
-QUALITY_OBSERVATIONS: 8
-VERIFIED_COUNT: 7
-FAILED_OR_BLOCKED_COUNT: 1
-TOTAL_REAL_PROVIDERS: 2
-TOTAL_REAL_EXECUTION_TARGETS: 2
+QUALITY_OBSERVATIONS: 6
+VERIFIED_COUNT: 6
+FAILED_OR_BLOCKED_COUNT: 0
+TOTAL_REAL_PROVIDERS: 1
+TOTAL_REAL_EXECUTION_TARGETS: 1
 TOTAL_TASK_FAMILIES: 4
 REAL_RESET_CYCLES: 0
 SHADOW_REVIEW_ELIGIBLE: false
@@ -96,24 +91,19 @@ OWNER_APPROVAL: ABSENT
 PRODUCTION_ACTIVE: DISABLED_BY_DESIGN
 ```
 
-The campaign was run, stopped and re-run. Later invocations appended observations 5 through 8
+The campaign was run, stopped and re-run. Later invocations appended observations 5 through 6
 instead of replacing the first four observations.
 
 ## Negative Observation
 
-The dataset is not success-only. Observation `shadow-332e1595a9a66a5f1f7278d4` records a real
-Claude worker-process failure caused by a CLI invocation argument error:
+The accepted Codex-only P3.9 dataset does not yet include a real negative model/worker outcome.
+The runner and tests prove that worker-process failures and verifier failures finalize as
+`verified=false` Shadow observations instead of being rewritten as successes.
 
 ```text
-ACTUAL_RETAINED_TARGET: claude-code-sonnet
-WORKER_EXIT_CODE: 1
-FINAL_TASK_STATE: BLOCKED
-VERIFIED: false
+REAL_NEGATIVE_OBSERVATION_COLLECTED: false
+STRUCTURAL_NEGATIVE_FINALIZATION_TESTED: true
 ```
-
-The failure remains in the journal and contributes to `FAILED_OR_BLOCKED_COUNT`. It was not
-rewritten as `VERIFIED`. A subsequent corrected Claude run produced verified observation
-`shadow-469afc89dc83bdae7d186380`.
 
 ## WOULD_SELECT Vs Actual
 
@@ -121,7 +111,7 @@ All observations preserve:
 
 ```text
 WOULD_SELECT_TARGET: none
-ACTUAL_RETAINED_TARGET: codex-cli-gpt-5.5 or claude-code-sonnet
+ACTUAL_RETAINED_TARGET: codex-cli-gpt-5.5
 SCHEDULER_REASON: no candidate passed hard eligibility and quota admission gates
 QUOTA_CONFIDENCE: UNKNOWN
 ```
@@ -140,9 +130,8 @@ because each cohort has too few samples for a useful percentile.
 Blocking reasons remain:
 
 ```text
-need at least 20 observations; have 8
+need at least 20 observations; have 6
 need at least 2 real reset cycles; have 0
-not every Shadow observation has a verified outcome
 ```
 
 P3.9 does not satisfy longitudinal reset-cycle acceptance and does not authorize production ACTIVE.
@@ -155,8 +144,8 @@ pytest full repository: 162 passed
 git diff --check: PASS
 OpenCode adapter typecheck + contract tests: PASS, 10/10 in /tmp dependency copy
 P3.9 real Codex observations: 6 collected, 6 verified
-P3.9 real Claude observations: 2 collected, 1 verified, 1 blocked
-Restart append evidence: PASS, observations appended to 8 total
+P3.9 Claude-as-provider support: NOT ADDED
+Restart append evidence: PASS, observations appended to 6 accepted Codex-only total
 ```
 
 No production ACTIVE routing, owner approval, PR merge, ready-for-review transition, force push,
