@@ -330,8 +330,13 @@ def _median(values: list[float]) -> float | None:
     return (ordered[mid - 1] + ordered[mid]) / 2.0
 
 
-def _percentile(values: list[float], percentile: float) -> float | None:
-    if not values:
+def _percentile(
+    values: list[float],
+    percentile: float,
+    *,
+    minimum_samples: int = 10,
+) -> float | None:
+    if len(values) < minimum_samples:
         return None
     ordered = sorted(values)
     index = min(len(ordered) - 1, max(0, int((len(ordered) - 1) * percentile)))

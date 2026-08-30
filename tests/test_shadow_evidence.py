@@ -212,7 +212,7 @@ def test_campaign_summary_groups_reset_cycles_and_provider_metrics(tmp_path) -> 
     assert group.recommendation_disagreements == 1
     assert group.agreement_rate == 0.0
     assert group.attempts_to_green_median == 1.0
-    assert group.time_to_green_p90_seconds == 42.0
+    assert group.time_to_green_p90_seconds is None
     assert group.predicted_burn_fraction_total == 0.05
     assert group.observed_burn_fraction_total == 0.04
     assert group.unknown_quota_observations == 1

@@ -1,6 +1,6 @@
 # Integration Status
 
-Status: `INTEGRATION_IMPLEMENTED / LOCAL_MAC_ACCEPTED / P3_8_FIRST_REAL_SHADOW_OBSERVATION_ACCEPTED`
+Status: `INTEGRATION_IMPLEMENTED / LOCAL_MAC_ACCEPTED / P3_9_REAL_SHADOW_QUALITY_CAMPAIGN_COLLECTING_PARTIAL_ACCEPTED`
 
 This document records what the `integration/end-to-end-shadow-safety` line implements and what
 still requires evidence that cannot be fabricated on GitHub-hosted runners.
@@ -174,18 +174,68 @@ and cannot make a cohort production-ACTIVE eligible.
 See
 [`acceptance/P38_FIRST_REAL_SHADOW_OBSERVATION_2026-08-30.md`](acceptance/P38_FIRST_REAL_SHADOW_OBSERVATION_2026-08-30.md).
 
+## P3.9 real Shadow quality campaign
+
+P3.9 turns the single P3.8 pipeline proof into a reusable declarative campaign runner and a small
+real quality dataset. The runner creates fresh disposable Git repositories, records real SHADOW
+routing decisions, preserves `WOULD_SELECT_TARGET` separately from `ACTUAL_RETAINED_TARGET`, starts
+real worker processes through Safety Kernel run state, applies host-owned deterministic verifier
+profiles and appends immutable Shadow observations to a durable campaign journal.
+
+The first campaign matrix covers four offline task families:
+
+```text
+BUG_FIX
+TEST_ADD
+REFACTOR
+MULTI_FILE_CHANGE
+```
+
+Current local P3.9 campaign evidence on 2026-08-30:
+
+```text
+CAMPAIGN_ROOT: .personal-ai-orchestrator/p39-shadow
+QUALITY_OBSERVATIONS: 8
+VERIFIED_COUNT: 7
+FAILED_OR_BLOCKED_COUNT: 1
+TOTAL_REAL_PROVIDERS: 2
+TOTAL_REAL_EXECUTION_TARGETS: 2
+TOTAL_TASK_FAMILIES: 4
+REAL_RESET_CYCLES: 0
+SHADOW_REVIEW_ELIGIBLE: false
+PRODUCTION_ACTIVE: DISABLED_BY_DESIGN
+OWNER_APPROVAL: ABSENT
+```
+
+Observed real targets:
+
+```text
+codex-cli-gpt-5.5: 6 observations, 6 verified
+claude-code-sonnet: 2 observations, 1 verified, 1 blocked worker-process failure
+```
+
+All current observations have `WOULD_SELECT_TARGET = none` because quota confidence is still
+`UNKNOWN` and the scheduler correctly fails closed. Those observations remain useful quality data
+but contribute zero real reset cycles. Cohort p90 time-to-green is intentionally omitted until
+sample counts are large enough to avoid misleading percentiles.
+
+See
+[`acceptance/P39_REAL_SHADOW_QUALITY_CAMPAIGN_2026-08-30.md`](acceptance/P39_REAL_SHADOW_QUALITY_CAMPAIGN_2026-08-30.md).
+
 ## Current CI evidence
 
 Latest pre-P3.8 integration head verified on GitHub Actions:
 `b7671c5d16391c38195f044866d909c6762ad864`.
 
-Current local P3.8 validation on 2026-08-30:
+Current local P3.9 validation on 2026-08-30:
 
 - Ruff: PASS;
-- pytest: **158 passed**;
+- pytest: **162 passed**;
 - `git diff --check`: PASS;
 - OpenCode adapter typecheck + contract tests: PASS, 10/10;
 - P3.8 real Shadow execution script: PASS, observation `shadow-79b324d8b775bb0d2e80e221`;
+- P3.9 real Shadow campaign runner: PASS, 8 observations across 2 providers, 2 execution
+  targets and 4 task families;
 - target Mac acceptance: `PASS_LOCAL_P0_P1_ROUTING_PROVIDER_AND_LONGITUDINAL_SHADOW_NOT_EXECUTED`.
 
 The normal PR CI remains the authority for pushed branch heads. Local Mac acceptance is tracked
