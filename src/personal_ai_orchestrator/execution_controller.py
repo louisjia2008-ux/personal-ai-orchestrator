@@ -10,6 +10,7 @@ from typing import Any
 
 from personal_ai_orchestrator.process_supervisor import ProcessSupervisor, SupervisedProcess
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
+from personal_ai_orchestrator.shadow_evidence import ShadowEvidenceJournal
 from personal_ai_orchestrator.switch_lease import SwitchLeaseAuthority
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
 from personal_ai_orchestrator.verifier import VerificationResult
@@ -299,6 +300,15 @@ def apply_verification_result(
     task_id: str,
     result: VerificationResult,
     evidence_journal: VerificationEvidenceJournal,
+    shadow_journal: ShadowEvidenceJournal | None = None,
+    shadow_pending_id: str | None = None,
+    shadow_reset_cycle_ids: tuple[str, ...] = (),
+    shadow_quota_after_snapshot_ids: tuple[str, ...] = (),
+    shadow_observed_burn_fraction: float | None = None,
+    shadow_regression_detected: bool = False,
+    shadow_attempts_to_green: int | None = None,
+    shadow_time_to_green_seconds: float | None = None,
+    shadow_handoff_count: int = 0,
 ) -> TaskState:
     """Advance to VERIFIED only when the exact host result is durably journaled.
 
@@ -322,12 +332,26 @@ def apply_verification_result(
         reason = f"deterministic verification passed: {result.evidence_id}"
     else:
         reason = result.failure_reason or "deterministic verification failed"
-    return store.transition_task(
+    next_state = store.transition_task(
         task_id,
         target,
         expected_version=task.state_version,
         reason=reason,
     ).state
+    if shadow_journal is not None and shadow_pending_id is not None:
+        shadow_journal.finalize_pending(
+            shadow_pending_id,
+            reset_cycle_ids=shadow_reset_cycle_ids,
+            quota_after_snapshot_ids=shadow_quota_after_snapshot_ids,
+            observed_burn_fraction=shadow_observed_burn_fraction,
+            verified=has_authoritative_pass,
+            regression_detected=shadow_regression_detected,
+            attempts_to_green=shadow_attempts_to_green,
+            time_to_green_seconds=shadow_time_to_green_seconds,
+            handoff_count=shadow_handoff_count,
+            observed_at=datetime.now(UTC),
+        )
+    return next_state
 
 
 def reconcile_workspace_truth(store: SafetyKernelStore) -> tuple[str, ...]:

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,13 @@ from personal_ai_orchestrator.execution_controller import (
     start_worker_run,
 )
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
+from personal_ai_orchestrator.model_registry import EvidenceConfidence
+from personal_ai_orchestrator.shadow_evidence import (
+    PendingShadowObservation,
+    ResetCycleReference,
+    ResetCycleSource,
+    ShadowEvidenceJournal,
+)
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
 from personal_ai_orchestrator.verifier import VerificationResult
 
@@ -169,6 +177,75 @@ def test_worker_success_requires_matching_persisted_verifier_evidence(tmp_path: 
         )
         is TaskState.VERIFIED
     )
+
+
+def test_verified_execution_finalizes_pending_shadow_observation_once(tmp_path: Path) -> None:
+    store = _running_store(tmp_path)
+    _finish_worker(store)
+    result = VerificationResult(
+        profile="fixture",
+        passed=True,
+        changed_paths=(),
+        unexpected_paths=(),
+        stages=(),
+        evidence_id="verify-shadow",
+    )
+    evidence = VerificationEvidenceJournal(tmp_path / "runtime-state")
+    evidence.append(result)
+    shadow = ShadowEvidenceJournal(tmp_path / "shadow")
+    shadow.append_pending(
+        PendingShadowObservation(
+            pending_id="pending-shadow",
+            task_id="t1",
+            request_id="route-1",
+            decision_id="decision-1",
+            manual_execution_target_id="m3-sub",
+            scheduler_execution_target_id="m3-sub",
+            catalog_snapshot_id="catalog-1",
+            policy_snapshot_id="policy-1",
+            quota_snapshot_ids=("quota-before",),
+            provider_id="minimax",
+            quota_pool_id="minimax-token-plan-cn",
+            task_family="implementation",
+            predicted_burn_fraction=0.05,
+            started_at=datetime(2026, 8, 30, tzinfo=UTC),
+        )
+    )
+    shadow.append_reset_cycle(
+        ResetCycleReference(
+            reset_cycle_id="minimax-week-1",
+            provider_id="minimax",
+            quota_pool_id="minimax-token-plan-cn",
+            quota_snapshot_id="quota-before",
+            reset_at=datetime(2026, 8, 30, tzinfo=UTC),
+            confidence=EvidenceConfidence.EXACT,
+            source=ResetCycleSource.PROVIDER_EXACT,
+            source_method="fixture-provider-reset-metadata",
+            observed_at=datetime(2026, 8, 30, tzinfo=UTC),
+        )
+    )
+
+    state = apply_verification_result(
+        store,
+        task_id="t1",
+        result=result,
+        evidence_journal=evidence,
+        shadow_journal=shadow,
+        shadow_pending_id="pending-shadow",
+        shadow_reset_cycle_ids=("minimax-week-1",),
+        shadow_quota_after_snapshot_ids=("quota-after",),
+        shadow_observed_burn_fraction=0.04,
+        shadow_attempts_to_green=1,
+        shadow_time_to_green_seconds=42.0,
+    )
+
+    observations = shadow.load_all()
+    assert state is TaskState.VERIFIED
+    assert len(observations) == 1
+    assert observations[0].verified is True
+    assert observations[0].recommendation_followed is True
+    assert observations[0].reset_cycle_ids == ("minimax-week-1",)
+    assert observations[0].observed_burn_fraction == 0.04
 
 
 def test_forged_non_null_evidence_id_blocks_claimed_pass(tmp_path: Path) -> None:

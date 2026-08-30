@@ -5,8 +5,14 @@ import pytest
 
 from personal_ai_orchestrator.activation_authority import build_active_gate
 from personal_ai_orchestrator.approval import ApprovalAuthority, ApprovalKind, ApprovalStatus
+from personal_ai_orchestrator.model_registry import EvidenceConfidence
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore
-from personal_ai_orchestrator.shadow_evidence import ShadowEvidenceJournal, ShadowObservation
+from personal_ai_orchestrator.shadow_evidence import (
+    ResetCycleReference,
+    ResetCycleSource,
+    ShadowEvidenceJournal,
+    ShadowObservation,
+)
 from personal_ai_orchestrator.verification_evidence import (
     RetryPolicy,
     VerificationEvidenceJournal,
@@ -40,6 +46,20 @@ def _shadow_observation(
         policy_snapshot_id="policy-1",
         quota_snapshot_ids=("quota-before",),
         verified=True,
+        observed_at=datetime(2026, 8, 30, tzinfo=UTC),
+    )
+
+
+def _reset_ref(reset_cycle_id: str) -> ResetCycleReference:
+    return ResetCycleReference(
+        reset_cycle_id=reset_cycle_id,
+        provider_id="minimax",
+        quota_pool_id="minimax-token-plan-cn",
+        quota_snapshot_id=f"quota-{reset_cycle_id}",
+        reset_at=datetime(2026, 8, 30, tzinfo=UTC),
+        confidence=EvidenceConfidence.EXACT,
+        source=ResetCycleSource.PROVIDER_EXACT,
+        source_method="fixture-provider-reset-metadata",
         observed_at=datetime(2026, 8, 30, tzinfo=UTC),
     )
 
@@ -93,6 +113,8 @@ def test_active_gate_requires_persisted_owner_approval(tmp_path: Path) -> None:
 def test_shadow_review_eligibility_cannot_create_active_owner_approval(tmp_path: Path) -> None:
     authority = ApprovalAuthority(_store(tmp_path))
     journal = ShadowEvidenceJournal(tmp_path / "shadow")
+    journal.append_reset_cycle(_reset_ref("minimax-week-1"))
+    journal.append_reset_cycle(_reset_ref("minimax-week-2"))
     journal.append(
         _shadow_observation(
             task_id="task-1",
