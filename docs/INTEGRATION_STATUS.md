@@ -1,6 +1,6 @@
 # Integration Status
 
-Status: `INTEGRATION_IMPLEMENTED / LOCAL_MAC_ACCEPTED / P3_6_SHADOW_BOOTSTRAPPED`
+Status: `INTEGRATION_IMPLEMENTED / LOCAL_MAC_ACCEPTED / P3_7_AUTHORITATIVE_SHADOW_READY_REAL_EXECUTION_BLOCKED`
 
 This document records what the `integration/end-to-end-shadow-safety` line implements and what
 still requires evidence that cannot be fabricated on GitHub-hosted runners.
@@ -103,6 +103,35 @@ catalog/policy/quota refs, before/after quota refs, predicted/observed burn, ver
 regressions, attempts/time-to-green/handoffs, reset-cycle accounting and conservative
 `review_eligible` summary. `review_eligible` is not ACTIVE authorization.
 
+## P3.7 authoritative Shadow evidence hardening
+
+P3.6 bootstrapped provider-surface discovery and local Shadow campaign state, but it did not
+automatically collect verified task observations. P3.7 repairs the evidence authority before any
+real longitudinal Shadow time can count toward production ACTIVE.
+
+Implemented:
+
+- append-only persisted `ResetCycleReference` records under the Shadow journal;
+- observation append validation requiring every referenced reset cycle to exist and match the
+  observation provider/quota pool;
+- explicit reset-cycle source semantics: synthetic tests, exact provider metadata, estimated
+  provider metadata, local inference and unknown;
+- real longitudinal reset counting only for provider-exact, exact-confidence reset references with
+  a known reset time;
+- quality Shadow observations can still be collected when quota/reset evidence is unknown, but
+  unknown or synthetic reset evidence cannot satisfy the quota-reset production gate;
+- durable pending Shadow correlations written after SHADOW routing decisions when the host knows the
+  retained actual execution target;
+- verifier-result finalization hooks that create immutable observations only from host-owned
+  Safety Kernel and deterministic verifier truth;
+- cohort-scoped review eligibility by provider, quota pool, actual execution target and task
+  family;
+- campaign acceptance policy snapshots persisted with the campaign, so later threshold edits do not
+  rewrite historical acceptance.
+
+Campaign-level `review_eligible` is a summary of scoped cohort evidence, not production ACTIVE
+authorization and not proof that every target/provider path is accepted.
+
 ## Current CI evidence
 
 Latest code-bearing integration head verified on GitHub Actions:
@@ -147,8 +176,12 @@ safe credential handoff, and local Ollama capacity remains runtime availability 
 quota.
 
 The local Shadow campaign has been bootstrapped in ignored durable state under
-`.personal-ai-orchestrator/p36-shadow/` with production ACTIVE disabled. It has 0 observations and
-0 reset cycles so far, so Shadow review eligibility remains false.
+`.personal-ai-orchestrator/p36-shadow/` with production ACTIVE disabled. P3.7 clarifies that this is
+`BOOTSTRAPPED`, not `COLLECTING`, until automatic observation wiring is enabled for a real execution
+path. It has 0 quality observations and 0 real reset cycles so far, so Shadow review eligibility
+remains false.
 
 See
 [`acceptance/LIVE_PROVIDER_SHADOW_ACCEPTANCE_2026-08-30.md`](acceptance/LIVE_PROVIDER_SHADOW_ACCEPTANCE_2026-08-30.md).
+See also
+[`acceptance/P37_AUTHORITATIVE_SHADOW_ACCEPTANCE_2026-08-30.md`](acceptance/P37_AUTHORITATIVE_SHADOW_ACCEPTANCE_2026-08-30.md).

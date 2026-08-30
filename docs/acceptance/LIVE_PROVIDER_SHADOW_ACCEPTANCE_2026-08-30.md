@@ -1,6 +1,6 @@
 # P3.6 Live Provider And Shadow Acceptance - 2026-08-30
 
-Status: `PROVIDER_SURFACES_UNKNOWN_SHADOW_CAMPAIGN_BOOTSTRAPPED`
+Status: `PROVIDER_SURFACES_UNKNOWN_SHADOW_CAMPAIGN_BOOTSTRAPPED_P37_HARDENED`
 
 Production ACTIVE remains `DISABLED_BY_DESIGN`.
 
@@ -79,21 +79,26 @@ LIMIT: local capacity is runtime availability, not provider quota
 ```text
 CAMPAIGN_ID: recorded in .personal-ai-orchestrator/p36-shadow/shadow-campaign.json
 CAMPAIGN_STARTED_AT: recorded in .personal-ai-orchestrator/p36-shadow/shadow-campaign.json
+CAMPAIGN_STATUS: BOOTSTRAPPED
 RESET_CYCLES_REQUIRED: 2
-RESET_CYCLES_OBSERVED: 0
+QUALITY_OBSERVATIONS: 0
+REAL_RESET_CYCLES_OBSERVED: 0
+SYNTHETIC_RESET_CYCLES: 0
+UNKNOWN_RESET_OBSERVATIONS: 0
 SHADOW_REVIEW_ELIGIBLE: false
 ```
 
-The campaign state is active and resumable with:
+The campaign state is bootstrapped and resumable with:
 
 ```text
 .venv/bin/python scripts/p36_shadow_campaign.py
 ```
 
-No real Shadow observations were synthesized. Review eligibility remains blocked by:
+No real Shadow observations were synthesized. P3.7 corrected the terminology: a campaign is not
+`COLLECTING` merely because this state file exists. Review eligibility remains blocked by:
 
 - need at least 20 observations; have 0
-- need at least 2 reset cycles; have 0
+- need at least 2 real reset cycles; have 0
 
 ## Acceptance Boundary
 
@@ -109,7 +114,16 @@ Implemented in this phase:
 
 Still pending:
 
+- automatic Shadow observation wiring must be enabled on a real execution path before the campaign
+  can move from `BOOTSTRAPPED` to `COLLECTING`;
 - supported credential handoff for MiniMax Token Plan quota API;
 - supported credential handoff or local provider setup for Z.AI / GLM quota API;
 - real Shadow observations across at least two reset cycles;
 - explicit production ACTIVE owner approval, which must not be created by the campaign.
+
+## P3.7 correction
+
+P3.6 evidence must not be silently reinterpreted. P3.6 created provider-surface evidence and a
+durable campaign bootstrap, but it did not prove automatic verified-task observation collection and
+did not make reset-cycle IDs authoritative. P3.7 hardens those paths in code and tests; this
+document remains a record of the original live-provider boundary.

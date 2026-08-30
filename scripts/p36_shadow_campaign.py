@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bootstrap and summarize a P3.6 Shadow campaign without enabling ACTIVE."""
+"""Bootstrap and summarize a Shadow campaign without claiming collection is active."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from personal_ai_orchestrator.provider_acceptance import (
     assert_sanitized,
 )
 from personal_ai_orchestrator.shadow_evidence import (
+    ShadowAcceptancePolicy,
     ShadowCampaignState,
     ShadowCampaignStatus,
     ShadowEvidenceJournal,
@@ -159,7 +160,7 @@ def _provider_evidence(observed_at: datetime) -> tuple[ProviderSurfaceEvidence, 
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Bootstrap P3.6 Shadow campaign state")
+    parser = argparse.ArgumentParser(description="Bootstrap Shadow campaign state")
     parser.add_argument(
         "--state-root",
         type=Path,
@@ -167,6 +168,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--catalog-snapshot-id", default="catalog-p36-local")
     parser.add_argument("--policy-snapshot-id", default="policy-p36-local")
+    parser.add_argument("--minimum-observations", type=int, default=20)
+    parser.add_argument("--minimum-real-reset-cycles", type=int, default=2)
     args = parser.parse_args(argv)
 
     observed_at = datetime.now(UTC)
@@ -175,14 +178,18 @@ def main(argv: list[str] | None = None) -> int:
     if campaign is None:
         campaign = ShadowCampaignState(
             campaign_id=f"shadow-{observed_at.strftime('%Y%m%dT%H%M%SZ')}",
-            status=ShadowCampaignStatus.ACTIVE,
+            status=ShadowCampaignStatus.BOOTSTRAPPED,
             started_at=observed_at,
             head=_git_head(),
             catalog_snapshot_id=args.catalog_snapshot_id,
             policy_snapshot_id=args.policy_snapshot_id,
             providers_enabled=("minimax", "openai", "anthropic", "local"),
             providers_unknown=("zai", "deepseek"),
-            reset_cycles_required=2,
+            reset_cycles_required=args.minimum_real_reset_cycles,
+            acceptance_policy=ShadowAcceptancePolicy(
+                minimum_observations=args.minimum_observations,
+                minimum_real_reset_cycles=args.minimum_real_reset_cycles,
+            ),
         )
         journal.save_campaign_state(campaign)
 
@@ -198,6 +205,10 @@ def main(argv: list[str] | None = None) -> int:
         "provider_evidence": provider_payload,
         "summary": summary.model_dump(mode="json"),
         "production_active": "DISABLED_BY_DESIGN",
+        "campaign_state_semantics": (
+            "BOOTSTRAPPED means durable state/report exist; COLLECTING requires automatic "
+            "ShadowObservation wiring to feed this evidence path"
+        ),
     }
     assert_sanitized(report)
     args.state_root.mkdir(parents=True, exist_ok=True)
@@ -205,7 +216,8 @@ def main(argv: list[str] | None = None) -> int:
     target.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(target)
     print(campaign.campaign_id)
-    print(summary.reset_cycles_observed)
+    print(summary.quality_observations)
+    print(summary.real_reset_cycles_observed)
     print(summary.review_eligible)
     return 0
 
