@@ -239,13 +239,16 @@ and
 
 ## Current CI evidence
 
-Current pushed P3.9.1 integration head verified on GitHub Actions:
+P3.9.1 code-bearing integration head verified on GitHub Actions:
 `9fadfbc657a2c0c36bc6e8a858af1ad1cb45410c`.
 
 ```text
 test: PASS
 opencode-adapter: PASS
 ```
+
+The PR check rollup remains the authority for the latest pushed branch head, including docs-only
+follow-up commits.
 
 Current local P3.9.1 validation on 2026-08-30:
 
