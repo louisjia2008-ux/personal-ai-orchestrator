@@ -33,6 +33,13 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
         self.counts = WidgetTaskCounts(dashboard?.counts)
         self.providers = (dashboard?.providers.providers ?? []).map(WidgetProviderSnapshot.init(provider:))
     }
+
+    public func isStale(referenceDate: Date = Date(), maxAgeSeconds: TimeInterval = 300) -> Bool {
+        guard let generated = ISO8601DateFormatter().date(from: generatedAt) else {
+            return true
+        }
+        return referenceDate.timeIntervalSince(generated) > maxAgeSeconds
+    }
 }
 
 public struct WidgetTaskCounts: Codable, Equatable, Sendable {

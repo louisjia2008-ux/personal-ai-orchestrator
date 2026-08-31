@@ -25,11 +25,25 @@ public enum DaemonLifecycleStatus: Equatable, Sendable {
         case .versionMismatch: return "DAEMON_VERSION_MISMATCH"
         }
     }
+
+    public var logValue: String {
+        switch self {
+        case .failed(let reason): return "DAEMON_FAILED:\(reason)"
+        case .exited(let status): return "DAEMON_EXITED:\(status)"
+        case .versionMismatch(let version): return "DAEMON_VERSION_MISMATCH:\(version)"
+        default: return displayValue
+        }
+    }
 }
 
 @MainActor
 public final class DaemonLifecycleController: ObservableObject {
-    @Published public private(set) var status: DaemonLifecycleStatus = .unknown
+    @Published public private(set) var status: DaemonLifecycleStatus = .unknown {
+        didSet {
+            guard oldValue.logValue != status.logValue else { return }
+            ClientLog.operation("daemon_lifecycle", outcome: status.logValue)
+        }
+    }
 
     private let configuration: DaemonLaunchConfiguration
     private let client: PAOControlClient
@@ -43,8 +57,8 @@ public final class DaemonLifecycleController: ObservableObject {
 
     public func ensureStarted() {
         guard startupTask == nil else { return }
-        startupTask = Task { [weak self] in
-            await self?.startIfNeeded()
+        startupTask = Task {
+            await startIfNeeded()
         }
     }
 
@@ -147,7 +161,7 @@ public final class DaemonLifecycleController: ObservableObject {
         let fd = open(path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
         guard fd >= 0 else { throw LifecycleError.lockUnavailable }
         defer { close(fd) }
-        guard flock(fd, LOCK_EX) == 0 else { throw LifecycleError.lockUnavailable }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { throw LifecycleError.lockUnavailable }
         defer { flock(fd, LOCK_UN) }
         return try await operation()
     }

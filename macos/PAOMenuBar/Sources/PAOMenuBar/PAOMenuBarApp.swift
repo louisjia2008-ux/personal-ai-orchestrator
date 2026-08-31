@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 @main
 struct PAOMenuBarApp: App {
+    static let widgetAppGroup = "group.com.personal-ai-orchestrator.dashboard"
+
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store: OrchestratorStore
 
@@ -20,11 +22,14 @@ struct PAOMenuBarApp: App {
         } ?? NSHomeDirectory()
         let layout = AppSupportLayout.resolve(homeDirectory: home)
         let path = SocketDiscovery.resolve(defaultLayout: layout)
+        let widgetBridge = WidgetSnapshotBridge.sharedContainer(
+            appGroupIdentifier: Self.widgetAppGroup
+        ) ?? .appOwned(layout: layout)
         _store = StateObject(
             wrappedValue: OrchestratorStore(
                 socketPath: path,
                 daemonConfiguration: DaemonLaunchConfiguration(layout: layout),
-                widgetSnapshotBridge: .appOwned(layout: layout)
+                widgetSnapshotBridge: widgetBridge
             )
         )
         // Acceptance evidence: which localization the bundle machinery resolved
