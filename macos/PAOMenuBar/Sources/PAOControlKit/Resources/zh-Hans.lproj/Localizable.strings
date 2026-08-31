@@ -50,3 +50,35 @@
 
 "help.taskCounts" = "运行中 / 就绪+已提交 / 已阻塞 / 已验证+已完成";
 "help.cancel" = "通过 POST /v1/tasks/{id}/cancel 取消；RUNNING 任务失败关闭（409）。";
+
+"app.dashboard" = "总览面板";
+"action.openDashboard" = "打开总览面板";
+"dashboard.overview" = "总览";
+"dashboard.tasks" = "任务";
+"dashboard.agents" = "Agents / 执行目标";
+"dashboard.providers" = "提供商";
+"dashboard.quota" = "额度";
+"dashboard.routing" = "调度决策";
+"dashboard.verification" = "验证";
+"dashboard.history" = "历史";
+"dashboard.settings" = "设置";
+"label.connection" = "连接";
+"label.systemHealth" = "系统健康";
+"label.blockers" = "阻塞项";
+"label.events" = "事件";
+"label.search" = "搜索";
+"label.stateFilter" = "状态";
+"label.allStates" = "全部状态";
+"label.taskDetail" = "任务详情";
+"label.routingExplanation" = "调度说明";
+"label.actualExecutionTarget" = "实际执行目标";
+"label.wouldSelect" = "Shadow WOULD_SELECT";
+"label.verification" = "验证";
+"label.history" = "历史";
+"label.daemonLifecycle" = "守护进程生命周期";
+"label.socket" = "套接字";
+"label.runtimeConfig" = "运行配置";
+"label.autoStartDaemon" = "自动启动守护进程";
+"label.launchAtLogin" = "登录时启动";
+"empty.unsupported" = "当前守护进程 API 尚未提供。";
+"empty.selectTask" = "选择任务以查看权威详情。";

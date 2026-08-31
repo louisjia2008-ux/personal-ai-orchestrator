@@ -207,6 +207,53 @@ Authority rules:
 The daemon gains an optional `--control-socket` flag; both surfaces can run side by side
 against the same durable state.
 
+## P4.2 native dashboard read models
+
+P4.2 adds dashboard-oriented read views without changing authority ownership:
+
+```text
+Personal AI Orchestrator.app
+        |
+MenuBarExtra + Dashboard Window + Settings Scene
+        |
+Shared OrchestratorStore
+        |
+PAOControlClient
+        |
+/v1/dashboard and /v1/tasks/<id>/detail
+        |
+ControlPlaneService projections over Safety Kernel truth
+```
+
+`/v1/dashboard` composes health, task counts, recent tasks, provider/quota health,
+Production ACTIVE status, blockers, and recent audit events. `/v1/tasks/<id>/detail`
+composes the task, run history, latest routing decision, verification report, approvals,
+workspace metadata, and task audit events. Both are read-only, sanitized view models; they
+do not expose credential references, API keys, raw logs, database internals, or mutation
+handles.
+
+The dashboard makes Shadow semantics explicit. `WOULD_SELECT` presentation stays distinct
+from the actual execution target, and `UNKNOWN` quota never renders as a numeric remaining
+percentage. Production ACTIVE remains `DISABLED_BY_DESIGN` unless the daemon activation
+authority reports otherwise; the app has no enable, force, or override button.
+
+Runtime bootstrap now has a macOS application-support layout:
+
+```text
+~/Library/Application Support/Personal AI Orchestrator/
+  runtime.json
+  state.sqlite3
+  runtime-state/
+  logs/
+
+~/Library/Caches/Personal AI Orchestrator/control.sock
+```
+
+The socket lives under Caches to keep the AF_UNIX path below macOS limits. Runtime config
+bootstrap validates schema versioning, writes atomically, and rejects static config that
+contains `credential_ref` values. This is a foundation for app-owned daemon lifecycle; it
+does not yet make the Python daemon self-contained or signed.
+
 ## P4.1 native macOS menu bar client
 
 The menu-bar app (`macos/PAOMenuBar/`, SwiftPM) is a control-plane CLIENT, never the
@@ -237,6 +284,6 @@ Client-side rules:
   `SOCKET_PATH_TOO_LONG`, `ACCESS_DENIED`, `API_VERSION_MISMATCH`, `MALFORMED_RESPONSE`)
   with exponential backoff (2 s → 60 s) while disconnected;
 - socket discovery is deterministic (UserDefaults `controlSocketPath` → `PAO_CONTROL_SOCKET`
-  → `~/.personal-ai-orchestrator/control.sock`); no filesystem scanning;
+  → `~/Library/Caches/Personal AI Orchestrator/control.sock`); no filesystem scanning;
 - logging is privacy-conscious: connection transitions, operation categories and sanitized
   codes only (`PAO_MENUBAR_STDERR_LOG=1` mirrors them to stderr for acceptance evidence).

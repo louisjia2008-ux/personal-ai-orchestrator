@@ -28,8 +28,16 @@ public struct PAOControlClient: Sendable {
         return try await get(path)
     }
 
+    public func dashboard() async throws -> DashboardSummaryView {
+        try await get("/v1/dashboard")
+    }
+
     public func getTask(_ taskId: String) async throws -> TaskView {
         try await get("/v1/tasks/\(taskId)")
+    }
+
+    public func taskDetail(_ taskId: String) async throws -> TaskDetailView {
+        try await get("/v1/tasks/\(taskId)/detail")
     }
 
     public func runs(taskId: String) async throws -> RunListView {
@@ -69,6 +77,10 @@ public struct PAOControlClient: Sendable {
 
     public func activeStatus() async throws -> ActiveStatusView {
         try await get("/v1/active-status")
+    }
+
+    public func approvals(taskId: String) async throws -> ApprovalListView {
+        try await get("/v1/tasks/\(taskId)/approvals")
     }
 
     // MARK: - Transport

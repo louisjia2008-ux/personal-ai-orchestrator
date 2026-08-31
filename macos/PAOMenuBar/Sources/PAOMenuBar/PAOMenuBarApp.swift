@@ -2,8 +2,16 @@ import SwiftUI
 
 import PAOControlKit
 
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
 @main
 struct PAOMenuBarApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store: OrchestratorStore
 
     init() {
@@ -15,6 +23,12 @@ struct PAOMenuBarApp: App {
     }
 
     var body: some Scene {
+        WindowGroup(L10n.dashboardTitle, id: "dashboard") {
+            DashboardView()
+                .environmentObject(store)
+        }
+        .defaultSize(width: 1100, height: 720)
+
         MenuBarExtra {
             MenuBarContentView()
                 .environmentObject(store)
@@ -23,5 +37,11 @@ struct PAOMenuBarApp: App {
             Image(systemName: store.statusSummary.systemImage)
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            ClientSettingsDashboard()
+                .environmentObject(store)
+                .frame(width: 520)
+        }
     }
 }

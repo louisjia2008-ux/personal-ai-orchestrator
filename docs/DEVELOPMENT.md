@@ -89,12 +89,13 @@ python -m personal_ai_orchestrator.daemon \
   --config runtime.json \
   --state-db state.sqlite3 \
   --runtime-state-root runtime-state \
-  --control-socket ~/.personal-ai-orchestrator/control.sock
+  --control-socket ~/Library/Caches/Personal\ AI\ Orchestrator/control.sock
 ```
 
 The `pao` console script (or `python -m personal_ai_orchestrator.cli`) submits structured
 requests only; CLI arguments never become shell commands. Socket resolution order:
-`--socket`, then `PAO_CONTROL_SOCKET`, then `~/.personal-ai-orchestrator/control.sock`.
+`--socket`, then `PAO_CONTROL_SOCKET`, then
+`~/Library/Caches/Personal AI Orchestrator/control.sock`.
 
 ```bash
 pao submit --task-id T1 --request-id R1 --intent "natural-language intent"
@@ -128,10 +129,46 @@ PAO_CONTROL_SOCKET=/path/to/c.sock .build/release/PAOMenuBar
 - Deployment target: macOS 13 (SwiftUI `MenuBarExtra`); built and tested on macOS 26.5 /
   Swift 6.3.
 - Socket resolution: `defaults write PAOMenuBar controlSocketPath /abs/path.sock`
-  (app domain), then `PAO_CONTROL_SOCKET`, then `~/.personal-ai-orchestrator/control.sock`.
+  (app domain), then `PAO_CONTROL_SOCKET`, then
+  `~/Library/Caches/Personal AI Orchestrator/control.sock`.
 - `PAO_MENUBAR_STDERR_LOG=1` mirrors sanitized connection/op logs to stderr for acceptance
   evidence.
 - Refresh: 2 s while the menu is open, 15 s in background, exponential backoff (2 s → 60 s)
   while disconnected. No high-frequency polling.
 - The app requests no entitlements and no Accessibility/Screen/Full-Disk permissions; it is
   a plain (unsigned, local) SwiftPM executable talking to one UDS endpoint.
+
+## Native macOS dashboard bundle (P4.2)
+
+```bash
+cd macos/PAOMenuBar
+swift test
+bash scripts/build_app_bundle.sh
+open "dist/Personal AI Orchestrator.app"
+```
+
+The bundle script performs a SwiftPM release build and assembles
+`dist/Personal AI Orchestrator.app`. The executable is still the SwiftUI client; the daemon
+remains external and authoritative. P4.2 also adds `/v1/dashboard` and
+`/v1/tasks/<id>/detail`, so the shared store can refresh one aggregate dashboard view rather
+than polling each screen independently.
+
+Runtime state for product launches should be bootstrapped outside source worktrees:
+
+```text
+~/Library/Application Support/Personal AI Orchestrator/runtime.json
+~/Library/Application Support/Personal AI Orchestrator/state.sqlite3
+~/Library/Application Support/Personal AI Orchestrator/runtime-state/
+~/Library/Caches/Personal AI Orchestrator/control.sock
+```
+
+`bootstrap_application_support()` writes `runtime.json` atomically and fails if the static
+runtime config contains provider credential references. Static config still cannot enable
+Production ACTIVE.
+
+Current P4.2 limitations:
+
+- app-owned daemon autostart is designed but not yet wired to `Process`/LaunchAgent;
+- Python runtime packaging is not self-contained yet;
+- WidgetKit requires an Xcode app-extension target or equivalent project migration, plus a
+  sanitized shared snapshot bridge. Do not treat the SwiftPM dashboard as WidgetKit support.

@@ -187,8 +187,10 @@ A spike may exercise session-scoped `ACTIVE` switching in disposable fixtures; t
 
 ## P4 — Clients / macOS Control Plane
 
-Status: `P4_1_MACOS_MENUBAR_TECHNICAL_COMPLETE_HUMAN_ACCEPTANCE_REQUIRED` (2026-08-31);
-P4.0 accepted 2026-08-31. Dashboard/WidgetKit and DeskPet/Telegram remain future work.
+Status: `P4_2_DASHBOARD_FOUNDATION_WIDGETKIT_BLOCKED` (2026-08-31);
+P4.0 accepted 2026-08-31 and P4.1 merged. A native dashboard foundation now exists;
+app-owned daemon lifecycle, self-contained Python packaging, WidgetKit, and human visual
+acceptance remain open P4.2 gates.
 
 ### Objective
 Expose the same orchestrator state safely to multiple front ends while keeping the core headless.
@@ -207,6 +209,25 @@ Expose the same orchestrator state safely to multiple front ends while keeping t
 
 ### Safety rule
 Natural-language client messages never become direct shell commands. Client writes are audited by the core. A UI control labelled ACTIVE cannot bypass the daemon's production activation gate.
+
+### P4.2 dashboard foundation
+
+Completed foundation:
+
+- read-only `/v1/dashboard` and `/v1/tasks/<id>/detail` projections;
+- shared Swift `OrchestratorStore` refresh for menu bar and dashboard;
+- native `NavigationSplitView` dashboard sections;
+- read-only ACTIVE display and no ACTIVE mutation surface;
+- quota rendering that keeps `EXACT`, `ESTIMATED`, and `UNKNOWN` visibly distinct;
+- app-support runtime layout and credential-free runtime config bootstrap;
+- local app-bundle assembly script for `Personal AI Orchestrator.app`.
+
+Remaining before full P4.2 acceptance:
+
+- app-owned daemon lifecycle without manual Terminal bootstrap;
+- credible bundled Python/runtime distribution strategy implemented, not only documented;
+- WidgetKit read-only snapshot bridge through an app-extension-capable project structure;
+- real target-Mac visual/runtime acceptance.
 
 ---
 

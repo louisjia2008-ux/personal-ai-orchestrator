@@ -119,6 +119,51 @@ class RoutingDecisionView(_ViewModel):
     decision: dict[str, Any]
 
 
+class DashboardCountsView(_ViewModel):
+    running: int
+    ready: int
+    blocked: int
+    verified: int
+    completed: int
+    total: int
+
+
+class ActivityEventView(_ViewModel):
+    event_type: str
+    task_id: str | None
+    created_at: str
+    summary: str
+
+
+class DashboardSummaryView(_ViewModel):
+    connection: HealthView
+    counts: DashboardCountsView
+    recent_tasks: tuple[TaskView, ...]
+    providers: ProviderHealthListView
+    active_status: ActiveStatusView
+    important_blockers: tuple[str, ...]
+    recent_events: tuple[ActivityEventView, ...]
+
+
+class WorkspaceView(_ViewModel):
+    task_id: str
+    repo_path: str
+    worktree_path: str
+    branch: str
+    base_sha: str
+    writer_locked: bool
+
+
+class TaskDetailView(_ViewModel):
+    task: TaskView
+    runs: tuple[RunView, ...]
+    routing: RoutingDecisionView | None = None
+    verification: VerificationReportView
+    approvals: ApprovalListView
+    workspace: WorkspaceView | None = None
+    events: tuple[ActivityEventView, ...]
+
+
 class SanitizedEvidenceSourceView(_ViewModel):
     source_type: str
     observed_at: str | None = None
@@ -400,6 +445,149 @@ class ControlPlaneService:
             request_id=row["request_id"],
             created_at=row["created_at"],
             decision=json.loads(row["payload_json"]),
+        )
+
+    @staticmethod
+    def _event_summary(event_type: str, payload: dict[str, Any]) -> str:
+        if event_type == "TASK_SUBMITTED":
+            return "task submitted"
+        if event_type == "TASK_STATE_CHANGED":
+            before = payload.get("from", "UNKNOWN")
+            after = payload.get("to", "UNKNOWN")
+            reason = payload.get("reason")
+            suffix = f": {reason}" if isinstance(reason, str) and reason else ""
+            return f"{before} -> {after}{suffix}"
+        if event_type == "ROUTING_DECISION_RECORDED":
+            return f"routing decision {payload.get('decision_id', 'UNKNOWN')} recorded"
+        if event_type == "RUN_STARTED":
+            return f"worker {payload.get('worker_id', 'UNKNOWN')} started"
+        if event_type == "RUN_FINISHED":
+            run_id = payload.get("run_id", "UNKNOWN")
+            status = payload.get("status", "UNKNOWN")
+            return f"run {run_id} finished as {status}"
+        if event_type == "WORKSPACE_REGISTERED":
+            return "workspace registered"
+        if event_type == "WRITER_ACQUIRED":
+            return "writer lock acquired"
+        if event_type == "WRITER_RELEASED":
+            return "writer lock released"
+        return event_type.lower().replace("_", " ")
+
+    def _activity_events(
+        self,
+        *,
+        task_id: str | None = None,
+        limit: int = 50,
+    ) -> tuple[ActivityEventView, ...]:
+        bounded = max(1, min(limit, MAX_LIST_LIMIT))
+        if task_id is None:
+            rows = self.store.connection.execute(
+                """
+                SELECT task_id,event_type,payload_json,created_at
+                FROM audit_events
+                ORDER BY audit_id DESC
+                LIMIT ?
+                """,
+                (bounded,),
+            ).fetchall()
+        else:
+            rows = self.store.connection.execute(
+                """
+                SELECT task_id,event_type,payload_json,created_at
+                FROM audit_events
+                WHERE task_id=?
+                ORDER BY audit_id
+                LIMIT ?
+                """,
+                (task_id, bounded),
+            ).fetchall()
+        events: list[ActivityEventView] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            events.append(
+                ActivityEventView(
+                    event_type=row["event_type"],
+                    task_id=row["task_id"],
+                    created_at=row["created_at"],
+                    summary=self._event_summary(row["event_type"], payload),
+                )
+            )
+        return tuple(events)
+
+    def dashboard_summary(self) -> DashboardSummaryView:
+        task_rows = self.store.connection.execute(
+            "SELECT state, COUNT(*) AS n FROM tasks GROUP BY state"
+        ).fetchall()
+        by_state = {row["state"]: row["n"] for row in task_rows}
+        blockers = list(self.active_status().blocking_reasons)
+        blocked_count = int(by_state.get(TaskState.BLOCKED.value, 0))
+        if blocked_count:
+            blockers.insert(0, f"{blocked_count} task(s) blocked")
+        providers = self.providers()
+        for provider in providers.providers:
+            if not provider.quota_pools and not provider.execution_targets:
+                continue
+            unknown_pools = [
+                pool.name for pool in provider.quota_pools if pool.confidence == "UNKNOWN"
+            ]
+            if unknown_pools:
+                blockers.append(f"{provider.display_name} quota UNKNOWN")
+        return DashboardSummaryView(
+            connection=self.health(),
+            counts=DashboardCountsView(
+                running=int(by_state.get(TaskState.RUNNING.value, 0)),
+                ready=int(
+                    by_state.get(TaskState.READY.value, 0)
+                    + by_state.get(TaskState.SUBMITTED.value, 0)
+                ),
+                blocked=blocked_count,
+                verified=int(by_state.get(TaskState.VERIFIED.value, 0)),
+                completed=int(by_state.get(TaskState.COMPLETED.value, 0)),
+                total=sum(int(value) for value in by_state.values()),
+            ),
+            recent_tasks=self.list_tasks(limit=10).tasks,
+            providers=providers,
+            active_status=self.active_status(),
+            important_blockers=tuple(blockers),
+            recent_events=self._activity_events(limit=20),
+        )
+
+    def _workspace_view(self, task_id: str) -> WorkspaceView | None:
+        row = self.store.connection.execute(
+            "SELECT * FROM workspaces WHERE task_id=?", (task_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return WorkspaceView(
+            task_id=row["task_id"],
+            repo_path=row["repo_path"],
+            worktree_path=row["worktree_path"],
+            branch=row["branch"],
+            base_sha=row["base_sha"],
+            writer_locked=row["writer_token"] is not None,
+        )
+
+    def task_detail(self, task_id: str) -> TaskDetailView:
+        task = self.get_task(task_id)
+        try:
+            routing = self.routing_decision(task_id)
+        except ControlPlaneError as error:
+            if error.status != 404:
+                raise
+            routing = None
+        return TaskDetailView(
+            task=task,
+            runs=self.task_runs(task_id).runs,
+            routing=routing,
+            verification=self.verification_report(task_id),
+            approvals=self.approvals_for_task(task_id),
+            workspace=self._workspace_view(task_id),
+            events=self._activity_events(task_id=task_id, limit=100),
         )
 
     def _quota_pool_view(self, pool) -> QuotaPoolHealthView:
@@ -708,6 +896,9 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                 if count == 3 and sub == "approvals" and method == "GET":
                     self._view(200, request_service.approvals_for_task(task_id))
                     return
+                if count == 3 and sub == "detail" and method == "GET":
+                    self._view(200, request_service.task_detail(task_id))
+                    return
                 self._json(404, {"error": "not_found"})
                 return
 
@@ -738,6 +929,13 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                     self._json(405, {"error": "method_not_allowed"})
                     return
                 self._view(200, request_service.active_status())
+                return
+
+            if rest == ("dashboard",):
+                if method != "GET":
+                    self._json(405, {"error": "method_not_allowed"})
+                    return
+                self._view(200, request_service.dashboard_summary())
                 return
 
             self._json(404, {"error": "not_found"})

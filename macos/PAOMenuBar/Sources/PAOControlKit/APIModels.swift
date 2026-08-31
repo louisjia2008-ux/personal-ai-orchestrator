@@ -84,6 +84,30 @@ public struct RunListView: Decodable, Equatable, Sendable {
     public let runs: [RunView]
 }
 
+public struct ApprovalView: Decodable, Equatable, Identifiable, Sendable {
+    public let approvalId: String
+    public let taskId: String
+    public let kind: String
+    public let status: String
+    public let createdAt: String
+    public let resolvedAt: String?
+
+    public var id: String { approvalId }
+
+    enum CodingKeys: String, CodingKey {
+        case approvalId = "approval_id"
+        case taskId = "task_id"
+        case kind
+        case status
+        case createdAt = "created_at"
+        case resolvedAt = "resolved_at"
+    }
+}
+
+public struct ApprovalListView: Decodable, Equatable, Sendable {
+    public let approvals: [ApprovalView]
+}
+
 public struct ObservedAvailabilityView: Codable, Equatable, Sendable {
     public let state: String
     public let observedAt: String
@@ -214,6 +238,51 @@ public struct VerificationReportView: Decodable, Equatable, Sendable {
     }
 }
 
+public struct ActivityEventView: Decodable, Equatable, Identifiable, Sendable {
+    public let eventType: String
+    public let taskId: String?
+    public let createdAt: String
+    public let summary: String
+
+    public var id: String { "\(createdAt)-\(eventType)-\(taskId ?? "system")" }
+
+    enum CodingKeys: String, CodingKey {
+        case eventType = "event_type"
+        case taskId = "task_id"
+        case createdAt = "created_at"
+        case summary
+    }
+}
+
+public struct DashboardCountsView: Decodable, Equatable, Sendable {
+    public let running: Int
+    public let ready: Int
+    public let blocked: Int
+    public let verified: Int
+    public let completed: Int
+    public let total: Int
+}
+
+public struct DashboardSummaryView: Decodable, Equatable, Sendable {
+    public let connection: HealthView
+    public let counts: DashboardCountsView
+    public let recentTasks: [TaskView]
+    public let providers: ProviderHealthListView
+    public let activeStatus: ActiveStatusView
+    public let importantBlockers: [String]
+    public let recentEvents: [ActivityEventView]
+
+    enum CodingKeys: String, CodingKey {
+        case connection
+        case counts
+        case recentTasks = "recent_tasks"
+        case providers
+        case activeStatus = "active_status"
+        case importantBlockers = "important_blockers"
+        case recentEvents = "recent_events"
+    }
+}
+
 public struct RoutingDecisionView: Decodable, Equatable, Sendable {
     public let taskId: String?
     public let decisionId: String
@@ -249,6 +318,34 @@ public struct RoutingDecisionView: Decodable, Equatable, Sendable {
         decision["selected_execution_target_id"]?.value
     }
     public var fallbackReason: String? { decision["fallback_reason"]?.value }
+}
+
+public struct WorkspaceView: Decodable, Equatable, Sendable {
+    public let taskId: String
+    public let repoPath: String
+    public let worktreePath: String
+    public let branch: String
+    public let baseSha: String
+    public let writerLocked: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case taskId = "task_id"
+        case repoPath = "repo_path"
+        case worktreePath = "worktree_path"
+        case branch
+        case baseSha = "base_sha"
+        case writerLocked = "writer_locked"
+    }
+}
+
+public struct TaskDetailView: Decodable, Equatable, Sendable {
+    public let task: TaskView
+    public let runs: [RunView]
+    public let routing: RoutingDecisionView?
+    public let verification: VerificationReportView
+    public let approvals: ApprovalListView
+    public let workspace: WorkspaceView?
+    public let events: [ActivityEventView]
 }
 
 public struct SubmitRequest: Encodable, Equatable, Sendable {
