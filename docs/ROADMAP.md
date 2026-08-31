@@ -187,6 +187,9 @@ A spike may exercise session-scoped `ACTIVE` switching in disposable fixtures; t
 
 ## P4 — Clients / macOS Control Plane
 
+Status: `P4_0_TYPED_LOCAL_API_AND_CLI_IMPLEMENTED / ACCEPTANCE_RECORDED` (2026-08-31);
+menu bar, dashboard and DeskPet/Telegram clients remain future work.
+
 ### Objective
 Expose the same orchestrator state safely to multiple front ends while keeping the core headless.
 
