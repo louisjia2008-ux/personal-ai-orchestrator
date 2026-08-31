@@ -44,7 +44,7 @@ struct PAOMenuBarApp: App {
             DashboardView()
                 .environmentObject(store)
         }
-        .defaultSize(width: 1100, height: 720)
+        .defaultSize(width: 1180, height: 740)
 
         MenuBarExtra {
             MenuBarContentView()
