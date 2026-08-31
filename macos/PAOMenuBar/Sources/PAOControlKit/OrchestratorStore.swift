@@ -36,6 +36,7 @@ public final class OrchestratorStore: ObservableObject {
     @Published public var menuVisible: Bool = false
     @Published public var dashboardVisible: Bool = false
     @Published public private(set) var isRefreshing: Bool = false
+    @Published public var selectedTaskId: String?
 
     public let socketPath: String
     public let daemonLifecycle: DaemonLifecycleController
@@ -285,6 +286,36 @@ public final class OrchestratorStore: ObservableObject {
             lastError = .malformedResponse
             ClientLog.operation("task-detail", outcome: "malformed")
         }
+    }
+
+    /// Convenience: returns the cached task list (does not refresh).
+    public var cachedTasks: [TaskView] {
+        tasks?.tasks ?? []
+    }
+
+    /// Move `selectedTaskId` to the neighbour of the current selection in the
+    /// supplied list (filtered/searched scope). Returns the new selection or
+    /// `nil` when there is nothing navigable. Pure presentation navigation:
+    /// authoritative state is never mutated.
+    @discardableResult
+    public func navigateToNeighbour(current: String?, in scope: [TaskView], offset: Int) -> String? {
+        guard !scope.isEmpty else { return current }
+        let ids = scope.map(\.taskId)
+        let next: String?
+        if let current, let idx = ids.firstIndex(of: current) {
+            let count = ids.count
+            let target = ((idx + offset) % count + count) % count
+            next = ids[target]
+        } else {
+            next = offset >= 0 ? ids.first : ids.last
+        }
+        selectedTaskId = next
+        if let next {
+            Task { await loadTaskDetail(taskId: next) }
+        } else {
+            selectedTaskDetail = nil
+        }
+        return next
     }
 }
 
