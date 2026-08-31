@@ -50,3 +50,35 @@
 
 "help.taskCounts" = "Running / Ready+Submitted / Blocked / Verified+Completed";
 "help.cancel" = "Cancel via POST /v1/tasks/{id}/cancel; RUNNING tasks fail closed (409).";
+
+"app.dashboard" = "Dashboard";
+"action.openDashboard" = "Open Dashboard";
+"dashboard.overview" = "Overview";
+"dashboard.tasks" = "Tasks";
+"dashboard.agents" = "Agents / execution targets";
+"dashboard.providers" = "Providers";
+"dashboard.quota" = "Quota";
+"dashboard.routing" = "Routing";
+"dashboard.verification" = "Verification";
+"dashboard.history" = "History";
+"dashboard.settings" = "Settings";
+"label.connection" = "Connection";
+"label.systemHealth" = "System health";
+"label.blockers" = "Blockers";
+"label.events" = "Events";
+"label.search" = "Search";
+"label.stateFilter" = "State";
+"label.allStates" = "All states";
+"label.taskDetail" = "Task detail";
+"label.routingExplanation" = "Routing explanation";
+"label.actualExecutionTarget" = "Actual execution target";
+"label.wouldSelect" = "Shadow WOULD_SELECT";
+"label.verification" = "Verification";
+"label.history" = "History";
+"label.daemonLifecycle" = "Daemon lifecycle";
+"label.socket" = "Socket";
+"label.runtimeConfig" = "Runtime config";
+"label.autoStartDaemon" = "Auto-start daemon";
+"label.launchAtLogin" = "Launch at login";
+"empty.unsupported" = "Unavailable from the current daemon API.";
+"empty.selectTask" = "Select a task to inspect authoritative detail.";

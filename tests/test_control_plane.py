@@ -486,6 +486,78 @@ def test_routing_decision_view(harness):
     assert view.decision["fallback_reason"] == "quota confidence remained UNKNOWN"
 
 
+def test_dashboard_summary_composes_sanitized_authoritative_state(harness):
+    harness.store.submit_task(task_id="task-dash", request_id="req-dash", intent="dashboard")
+    harness.store.transition_task("task-dash", TaskState.READY)
+    harness.store.transition_task("task-dash", TaskState.RUNNING)
+
+    view = harness.client.dashboard()
+    assert view.connection.status == "ok"
+    assert view.counts.running == 1
+    assert view.counts.total == 1
+    assert view.recent_tasks[0].task_id == "task-dash"
+    assert view.active_status.production_active == "DISABLED_BY_DESIGN"
+    assert "explicit owner approval missing" in view.important_blockers
+    assert any(event.event_type == "TASK_STATE_CHANGED" for event in view.recent_events)
+
+    raw = view.model_dump_json().lower()
+    assert SECRET_MARKER not in raw
+    assert "credential_ref" not in raw
+
+
+def test_dashboard_summary_is_read_only(harness):
+    status, body = _raw_request(
+        harness.socket_path,
+        "POST",
+        "/v1/dashboard",
+        headers={"content-type": "application/json"},
+        body=b"{}",
+    )
+    assert status == 405
+    assert json.loads(body) == {"error": "method_not_allowed"}
+
+
+def test_task_detail_composes_runs_routing_verification_approvals_and_events(harness):
+    harness.store.submit_task(task_id="task-detail", request_id="req-detail", intent="detail")
+    harness.store.register_workspace(
+        task_id="task-detail",
+        repo_path="/repo",
+        worktree_path="/repo-worktree",
+        branch="codex/task-detail",
+        base_sha="abc123",
+    )
+    harness.store.record_routing_decision(
+        decision_id="route-detail",
+        request_id="route-req-detail",
+        task_id="task-detail",
+        payload={
+            "mode": "SHADOW",
+            "selected_execution_target_id": None,
+            "fallback_reason": "quota confidence remained UNKNOWN",
+        },
+    )
+    harness.store.transition_task("task-detail", TaskState.READY)
+    harness.store.transition_task("task-detail", TaskState.RUNNING)
+    harness.store.start_run(run_id="run-detail", task_id="task-detail", worker_id="m3-sub")
+    authority = ApprovalAuthority(harness.store)
+    authority.request(
+        approval_id="approval-detail",
+        task_id="task-detail",
+        kind=ApprovalKind.HIGH_RISK_EXECUTION,
+    )
+
+    view = harness.client.task_detail("task-detail")
+    assert view.task.task_id == "task-detail"
+    assert view.runs[0].run_id == "run-detail"
+    assert view.routing is not None
+    assert view.routing.decision_id == "route-detail"
+    assert view.verification.status == "NOT_VERIFIED"
+    assert view.approvals.approvals[0].approval_id == "approval-detail"
+    assert view.workspace is not None
+    assert view.workspace.writer_locked is False
+    assert [event.event_type for event in view.events][0] == "TASK_SUBMITTED"
+
+
 def test_routing_decision_missing_404(harness):
     _submit(harness)
     with pytest.raises(ControlPlaneError) as error:

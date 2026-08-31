@@ -25,6 +25,8 @@ public enum CancelNotice: Equatable, Sendable {
 public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var connection: ConnectionState = .disconnected(reason: .daemonNotRunning)
     @Published public private(set) var tasks: TaskListView?
+    @Published public private(set) var dashboard: DashboardSummaryView?
+    @Published public private(set) var selectedTaskDetail: TaskDetailView?
     @Published public private(set) var providers: ProviderHealthListView?
     @Published public private(set) var activeStatus: ActiveStatusView?
     @Published public private(set) var lastError: PAOClientError?
@@ -32,6 +34,7 @@ public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var submitNotice: SubmitNotice?
     @Published public private(set) var cancellationNotice: CancelNotice?
     @Published public var menuVisible: Bool = false
+    @Published public var dashboardVisible: Bool = false
 
     public let socketPath: String
     private let client: PAOControlClient
@@ -88,7 +91,7 @@ public final class OrchestratorStore: ObservableObject {
     private func nextInterval() -> TimeInterval {
         if connection.isConnected {
             backoffSeconds = 2.0
-            return menuVisible ? Self.menuOpenInterval : Self.backgroundInterval
+            return (menuVisible || dashboardVisible) ? Self.menuOpenInterval : Self.backgroundInterval
         }
         let current = backoffSeconds
         backoffSeconds = min(backoffSeconds * 2, Self.maximumBackoff)
@@ -118,12 +121,11 @@ public final class OrchestratorStore: ObservableObject {
                 return
             }
             transition(.connected)
-            async let tasks = client.listTasks(limit: 20)
-            async let providers = client.providers()
-            async let active = client.activeStatus()
-            self.tasks = try await tasks
-            self.providers = try await providers
-            self.activeStatus = try await active
+            let dashboard = try await client.dashboard()
+            self.dashboard = dashboard
+            self.tasks = TaskListView(tasks: dashboard.recentTasks, total: dashboard.counts.total)
+            self.providers = dashboard.providers
+            self.activeStatus = dashboard.activeStatus
             self.lastError = nil
             let counts = taskCounts()
             ClientLog.taskCounts(running: counts.running, ready: counts.ready,
@@ -158,6 +160,8 @@ public final class OrchestratorStore: ObservableObject {
         }
         if !newState.isConnected {
             tasks = nil
+            dashboard = nil
+            selectedTaskDetail = nil
             providers = nil
             activeStatus = nil
             // Ephemeral operation success state claims daemon authority; once the
@@ -222,6 +226,19 @@ public final class OrchestratorStore: ObservableObject {
         } catch {
             cancellationNotice = .malformedResponse
             ClientLog.operation("cancel", outcome: "malformed")
+        }
+    }
+
+    public func loadTaskDetail(taskId: String) async {
+        do {
+            selectedTaskDetail = try await client.taskDetail(taskId)
+            lastError = nil
+        } catch let error as PAOClientError {
+            lastError = error
+            ClientLog.operation("task-detail", outcome: error.logCode)
+        } catch {
+            lastError = .malformedResponse
+            ClientLog.operation("task-detail", outcome: "malformed")
         }
     }
 }

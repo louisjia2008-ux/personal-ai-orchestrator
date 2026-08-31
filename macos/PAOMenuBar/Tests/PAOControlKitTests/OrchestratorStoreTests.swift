@@ -88,6 +88,7 @@ final class OrchestratorStoreTests: XCTestCase {
         await store.refreshNow()
         XCTAssertEqual(store.connection, .connected)
         XCTAssertEqual(store.tasks?.total, 2)
+        XCTAssertEqual(store.dashboard?.counts.running, 1)
         XCTAssertEqual(store.activeStatus?.productionActive, "DISABLED_BY_DESIGN")
         XCTAssertNotNil(store.providers)
         XCTAssertEqual(store.statusSummary, .blocked)
@@ -114,6 +115,8 @@ final class OrchestratorStoreTests: XCTestCase {
         XCTAssertFalse(store.connection.isConnected)
         // Assumptions are discarded: no stale task/provider/ACTIVE data remains.
         XCTAssertNil(store.tasks)
+        XCTAssertNil(store.dashboard)
+        XCTAssertNil(store.selectedTaskDetail)
         XCTAssertNil(store.providers)
         XCTAssertNil(store.activeStatus)
         XCTAssertEqual(store.statusSummary, .disconnected(.daemonNotRunning))
@@ -145,12 +148,27 @@ final class OrchestratorStoreTests: XCTestCase {
         XCTAssertEqual(store.statusSummary, .disconnected(.socketInvalid))
         // Authoritative task cache discarded...
         XCTAssertNil(store.tasks)
+        XCTAssertNil(store.dashboard)
+        XCTAssertNil(store.selectedTaskDetail)
         XCTAssertNil(store.providers)
         XCTAssertNil(store.activeStatus)
         // ...and the ephemeral success banner no longer presented as current state.
         XCTAssertNil(store.lastSubmittedTaskId)
         XCTAssertNil(store.submitNotice)
         XCTAssertNil(store.cancellationNotice)
+    }
+
+    func testTaskDetailLoadsThroughSharedStore() async throws {
+        let daemon = TestDaemon()
+        registerStandardRoutes(daemon)
+        let path = temporarySocketPath("detail")
+        try daemon.start(socketPath: path)
+        defer { daemon.stop() }
+
+        let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
+        await store.loadTaskDetail(taskId: "t-1")
+        XCTAssertEqual(store.selectedTaskDetail?.task.taskId, "t-1")
+        XCTAssertEqual(store.selectedTaskDetail?.routing?.fallbackReason, "quota confidence remained UNKNOWN")
     }
 
     func testAPIVersionMismatchIsAConnectionState() async throws {

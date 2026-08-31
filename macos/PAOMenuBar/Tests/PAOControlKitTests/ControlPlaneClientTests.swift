@@ -103,6 +103,16 @@ final class ControlPlaneClientTests: XCTestCase {
         XCTAssertEqual(tasks.total, 2)
         XCTAssertEqual(tasks.tasks.first?.state, "RUNNING")
 
+        let dashboard = try await client.dashboard()
+        XCTAssertEqual(dashboard.counts.running, 1)
+        XCTAssertEqual(dashboard.activeStatus.productionActive, "DISABLED_BY_DESIGN")
+        XCTAssertEqual(dashboard.recentEvents.first?.eventType, "TASK_SUBMITTED")
+
+        let detail = try await client.taskDetail("t-1")
+        XCTAssertEqual(detail.task.taskId, "t-1")
+        XCTAssertEqual(detail.routing?.mode, "SHADOW")
+        XCTAssertEqual(detail.verification.status, "NOT_VERIFIED")
+
         let providers = try await client.providers()
         XCTAssertEqual(providers.providers.first?.displayName, "MiniMax CN")
 

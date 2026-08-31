@@ -27,6 +27,15 @@ public enum L10n {
         "notice.cancelFailed", "notice.cancelMalformed", "quota.unknown",
         "quota.unknownConfidence", "quota.confidence", "quota.source", "provider.target",
         "provider.accounts", "help.taskCounts", "help.cancel",
+        "app.dashboard", "action.openDashboard", "dashboard.overview", "dashboard.tasks",
+        "dashboard.agents", "dashboard.providers", "dashboard.quota", "dashboard.routing",
+        "dashboard.verification", "dashboard.history", "dashboard.settings",
+        "label.connection", "label.systemHealth", "label.blockers", "label.events",
+        "label.search", "label.stateFilter", "label.allStates", "label.taskDetail",
+        "label.routingExplanation", "label.actualExecutionTarget", "label.wouldSelect",
+        "label.verification", "label.history", "label.daemonLifecycle", "label.socket",
+        "label.runtimeConfig", "label.autoStartDaemon", "label.launchAtLogin",
+        "empty.unsupported", "empty.selectTask",
     ]
 
     /// English is the guaranteed fallback (`defaultLocalization` in Package.swift).
@@ -160,6 +169,32 @@ public enum L10n {
     public static var submitPlaceholder: String { tr("submit.placeholder") }
     public static var taskCountsHelp: String { tr("help.taskCounts") }
     public static var cancelHelp: String { tr("help.cancel") }
+    public static var dashboardTitle: String { tr("app.dashboard") }
+    public static var openDashboard: String { tr("action.openDashboard") }
+    public static var connectionLabel: String { tr("label.connection") }
+    public static var systemHealth: String { tr("label.systemHealth") }
+    public static var blockers: String { tr("label.blockers") }
+    public static var events: String { tr("label.events") }
+    public static var search: String { tr("label.search") }
+    public static var stateFilter: String { tr("label.stateFilter") }
+    public static var allStates: String { tr("label.allStates") }
+    public static var taskDetail: String { tr("label.taskDetail") }
+    public static var routingExplanation: String { tr("label.routingExplanation") }
+    public static var actualExecutionTarget: String { tr("label.actualExecutionTarget") }
+    public static var wouldSelect: String { tr("label.wouldSelect") }
+    public static var verification: String { tr("label.verification") }
+    public static var history: String { tr("label.history") }
+    public static var daemonLifecycle: String { tr("label.daemonLifecycle") }
+    public static var socket: String { tr("label.socket") }
+    public static var runtimeConfig: String { tr("label.runtimeConfig") }
+    public static var autoStartDaemon: String { tr("label.autoStartDaemon") }
+    public static var launchAtLogin: String { tr("label.launchAtLogin") }
+    public static var unsupportedEmptyState: String { tr("empty.unsupported") }
+    public static var selectTaskEmptyState: String { tr("empty.selectTask") }
+
+    public static func dashboardSection(_ rawValue: String) -> String {
+        tr("dashboard.\(rawValue)")
+    }
 
     public static func authoritativeTaskId(_ taskId: String) -> String {
         tr("submit.authoritativeId", [taskId])

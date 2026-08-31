@@ -146,10 +146,20 @@ let submitResponseBody = """
 {"task_id":"menubar-abc","request_id":"menubar-req-abc","intent":"demo","state":"SUBMITTED","state_version":0,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:00:00Z"}
 """
 
+let dashboardBody = """
+{"connection":{"status":"ok","api_version":"v1"},"counts":{"running":1,"ready":0,"blocked":1,"verified":0,"completed":0,"total":2},"recent_tasks":[{"task_id":"t-1","request_id":"r-1","intent":"fix bug","state":"RUNNING","state_version":2,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:01:00Z"},{"task_id":"t-2","request_id":"r-2","intent":"add test","state":"BLOCKED","state_version":3,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:02:00Z"}],"providers":{"providers":[{"provider_id":"minimax","display_name":"MiniMax CN","account_count":1,"quota_pools":[{"quota_pool_id":"pool","name":"shared","plan_id":"plan","state":"AVAILABLE","confidence":"ESTIMATED","measurement_source_type":"PROVIDER_API","observed_at":"2026-08-31T00:00:00Z","windows":[{"window_id":"5h","window_kind":"FIVE_HOUR","state":"AVAILABLE","confidence":"ESTIMATED","remaining_fraction":0.8,"reset_at":null}]}],"execution_targets":[{"execution_target_id":"m3-sub","model_sku_id":"m3","runtime_id":"opencode","enabled":true,"runtime_available":true,"observed_availability":{"state":"EXHAUSTED_OBSERVED","observed_at":"2026-08-31T00:00:00Z","measurement_source":"LOCALLY_MEASURED","confidence":"ESTIMATED","sanitized_reason_code":"USAGE_LIMIT"}}]}]},"active_status":{"production_active":"DISABLED_BY_DESIGN","authorized":false,"blocking_reasons":["explicit owner approval missing","P3.5 Shadow evidence not accepted"],"gate":{"owner_approved":false}},"important_blockers":["explicit owner approval missing"],"recent_events":[{"event_type":"TASK_SUBMITTED","task_id":"t-1","created_at":"2026-08-31T00:00:00Z","summary":"task submitted"}]}
+"""
+
+let taskDetailBody = """
+{"task":{"task_id":"t-1","request_id":"r-1","intent":"fix bug","state":"RUNNING","state_version":2,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:01:00Z"},"runs":[{"run_id":"run-1","task_id":"t-1","worker_id":"m3-sub","pid":123,"status":"RUNNING","started_at":"2026-08-31T00:00:30Z","finished_at":null}],"routing":{"task_id":"t-1","decision_id":"route-1","request_id":"r-1","created_at":"2026-08-31T00:00:15Z","decision":{"mode":"SHADOW","selected_execution_target_id":null,"fallback_reason":"quota confidence remained UNKNOWN"}},"verification":{"task_id":"t-1","task_state":"RUNNING","status":"NOT_VERIFIED","evidence_id":null,"failure_reason":null},"approvals":{"approvals":[]},"workspace":{"task_id":"t-1","repo_path":"/repo","worktree_path":"/repo-wt","branch":"codex/t-1","base_sha":"abc123","writer_locked":false},"events":[{"event_type":"TASK_SUBMITTED","task_id":"t-1","created_at":"2026-08-31T00:00:00Z","summary":"task submitted"}]}
+"""
+
 func registerStandardRoutes(_ daemon: TestDaemon) {
     daemon.route("GET", "/v1/health", body: healthBody)
+    daemon.route("GET", "/v1/dashboard", body: dashboardBody)
     daemon.route("GET", "/v1/tasks?limit=20", body: tasksBody)
     daemon.route("GET", "/v1/tasks", body: tasksBody)
+    daemon.route("GET", "/v1/tasks/t-1/detail", body: taskDetailBody)
     daemon.route("GET", "/v1/providers", body: providersBody)
     daemon.route("GET", "/v1/quota", body: providersBody)
     daemon.route("GET", "/v1/active-status", body: activeStatusBody)

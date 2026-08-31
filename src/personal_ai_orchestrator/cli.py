@@ -20,8 +20,9 @@ from personal_ai_orchestrator.control_client import (
     ControlPlaneError,
     ControlPlaneUnavailable,
 )
+from personal_ai_orchestrator.runtime_config import default_application_support_layout
 
-DEFAULT_SOCKET = Path.home() / ".personal-ai-orchestrator" / "control.sock"
+DEFAULT_SOCKET = default_application_support_layout().socket_path
 
 
 def _socket_path(args: argparse.Namespace) -> Path:

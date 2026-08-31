@@ -21,11 +21,13 @@ from personal_ai_orchestrator.control_api import (
     ApprovalView,
     CancelView,
     ControlPlaneError,
+    DashboardSummaryView,
     HealthView,
     ProviderHealthListView,
     RoutingDecisionView,
     RunListView,
     RunView,
+    TaskDetailView,
     TaskListView,
     TaskSubmitRequest,
     TaskView,
@@ -115,6 +117,12 @@ class ControlPlaneClient:
     def list_tasks(self, *, limit: int | None = None) -> TaskListView:
         path = "/v1/tasks" if limit is None else f"/v1/tasks?limit={int(limit)}"
         return self._get(path, TaskListView)  # type: ignore[return-value]
+
+    def dashboard(self) -> DashboardSummaryView:
+        return self._get("/v1/dashboard", DashboardSummaryView)  # type: ignore[return-value]
+
+    def task_detail(self, task_id: str) -> TaskDetailView:
+        return self._get(f"/v1/tasks/{task_id}/detail", TaskDetailView)  # type: ignore[return-value]
 
     def task_runs(self, task_id: str) -> RunListView:
         return self._get(f"/v1/tasks/{task_id}/runs", RunListView)  # type: ignore[return-value]

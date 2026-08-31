@@ -99,10 +99,47 @@ final class ModelAndStatusTests: XCTestCase {
                                              environment: [SocketDiscovery.environmentKey: "/tmp/env.sock"])
         XCTAssertEqual(fromEnv, "/tmp/env.sock")
         let fallback = SocketDiscovery.resolve(userDefaults: defaults, environment: [:])
-        XCTAssertTrue(fallback.hasSuffix(".personal-ai-orchestrator/control.sock"))
+        XCTAssertTrue(fallback.hasSuffix("Library/Caches/Personal AI Orchestrator/control.sock"))
         defaults.set("/tmp/configured.sock", forKey: SocketDiscovery.userDefaultsKey)
         XCTAssertEqual(SocketDiscovery.resolve(userDefaults: defaults, environment: [:]), "/tmp/configured.sock")
         defaults.removeObject(forKey: SocketDiscovery.userDefaultsKey)
+    }
+
+    func testApplicationSupportLayoutMatchesProductRuntimeContract() {
+        let layout = AppSupportLayout.resolve(homeDirectory: "/Users/example")
+        XCTAssertEqual(
+            layout.runtimeConfigPath,
+            "/Users/example/Library/Application Support/Personal AI Orchestrator/runtime.json"
+        )
+        XCTAssertEqual(
+            layout.stateDatabasePath,
+            "/Users/example/Library/Application Support/Personal AI Orchestrator/state.sqlite3"
+        )
+        XCTAssertEqual(
+            layout.socketPath,
+            "/Users/example/Library/Caches/Personal AI Orchestrator/control.sock"
+        )
+        XCTAssertEqual(SocketDiscovery.validate(path: layout.socketPath), .valid)
+    }
+
+    func testDaemonLaunchConfigurationUsesFixedDaemonArguments() {
+        let layout = AppSupportLayout.resolve(homeDirectory: "/Users/example")
+        let config = DaemonLaunchConfiguration(layout: layout)
+        XCTAssertEqual(config.pythonExecutable, "/usr/bin/env")
+        XCTAssertEqual(config.socketValidation, .valid)
+        XCTAssertEqual(
+            config.arguments,
+            [
+                "python",
+                "-m", "personal_ai_orchestrator.daemon",
+                "--config", layout.runtimeConfigPath,
+                "--state-db", layout.stateDatabasePath,
+                "--runtime-state-root", layout.runtimeStateRoot,
+                "--control-socket", layout.socketPath,
+                "--host", "127.0.0.1",
+                "--port", "8765",
+            ]
+        )
     }
 
     func testRunningCancelConflictIdentification() {
