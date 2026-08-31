@@ -198,11 +198,17 @@ enum PAOSocket {
         var tv = timeval(tv_sec: Int(timeoutSeconds), tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        // A peer closing mid-write must surface as an error, never as a fatal SIGPIPE.
+        var noSigPipe: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
 
         try request.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             var sent = 0
             while sent < raw.count {
                 let written = write(fd, raw.baseAddress!.advanced(by: sent), raw.count - sent)
+                if written < 0 && errno == EINTR {
+                    continue
+                }
                 if written <= 0 {
                     throw PAOClientError.transportFailure
                 }
@@ -214,6 +220,9 @@ enum PAOSocket {
         var buffer = [UInt8](repeating: 0, count: 65536)
         while true {
             let readCount = read(fd, &buffer, buffer.count)
+            if readCount < 0 && errno == EINTR {
+                continue
+            }
             if readCount < 0 {
                 throw PAOClientError.transportFailure
             }

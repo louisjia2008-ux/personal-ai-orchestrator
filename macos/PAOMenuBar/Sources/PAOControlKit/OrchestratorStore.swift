@@ -60,6 +60,7 @@ public final class OrchestratorStore: ObservableObject {
         refreshTask = Task { [weak self] in
             while let self, !Task.isCancelled {
                 await self.refreshOnce()
+                if Task.isCancelled { break }
                 let interval = self.nextInterval()
                 try? await Task.sleep(for: .seconds(interval))
             }
