@@ -2,85 +2,109 @@ import SwiftUI
 
 import PAOControlKit
 
-enum DashboardSection: String, CaseIterable, Identifiable {
-    case overview
-    case tasks
-    case agents
-    case providers
-    case quota
-    case routing
-    case verification
-    case history
-    case settings
-
-    var id: String { rawValue }
-
-    var title: String { L10n.dashboardSection(rawValue) }
-
-    var symbol: String {
-        switch self {
-        case .overview: return "gauge.with.dots.needle.67percent"
-        case .tasks: return "checklist"
-        case .agents: return "cpu"
-        case .providers: return "network"
-        case .quota: return "chart.pie"
-        case .routing: return "point.topleft.down.curvedto.point.bottomright.up"
-        case .verification: return "checkmark.seal"
-        case .history: return "clock.arrow.circlepath"
-        case .settings: return "gearshape"
-        }
-    }
-}
-
 struct DashboardView: View {
     @EnvironmentObject private var store: OrchestratorStore
-    @SceneStorage("dashboard.selection") private var selectedRaw = DashboardSection.overview.rawValue
+    @SceneStorage("dashboard.selection") private var storedSelection = DashboardSection.overview.rawValue
+    @State private var section: DashboardSection?
     @State private var selectedTaskId: String?
     @State private var query = ""
     @State private var stateFilter = ""
+    @State private var showsNewTaskSheet = false
 
-    private var selection: Binding<DashboardSection> {
-        Binding(
-            get: { DashboardSection(rawValue: selectedRaw) ?? .overview },
-            set: { selectedRaw = $0.rawValue }
-        )
+    private var activeSection: DashboardSection {
+        section ?? DashboardSection(rawValue: storedSelection) ?? .overview
     }
 
     var body: some View {
         NavigationSplitView {
-            List(DashboardSection.allCases, selection: selection) { section in
-                Label(section.title, systemImage: section.symbol)
-            }
-            .navigationSplitViewColumnWidth(min: 210, ideal: 230)
+            sidebar
+                .navigationSplitViewColumnWidth(min: 210, ideal: 230)
         } detail: {
-            detail
-                .navigationTitle(selection.wrappedValue.title)
-                .toolbar {
-                    ToolbarItem {
-                        Button {
-                            Task { await store.refreshNow() }
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .help(L10n.refresh)
-                    }
-                }
+            detail(for: activeSection)
+                .navigationTitle(activeSection.title)
+                .toolbar { toolbarContent }
         }
         .frame(minWidth: 960, minHeight: 620)
+        .sheet(isPresented: $showsNewTaskSheet) {
+            NewTaskSheet { submittedTaskId in
+                showsNewTaskSheet = false
+                stateFilter = ""
+                query = ""
+                selectedTaskId = submittedTaskId
+                section = .tasks
+                Task { await store.loadTaskDetail(taskId: submittedTaskId) }
+            }
+            .environmentObject(store)
+            .frame(minWidth: 520, minHeight: 300)
+        }
         .onAppear {
             store.dashboardVisible = true
+            if section == nil {
+                section = DashboardSection(rawValue: storedSelection) ?? .overview
+            }
             Task { await store.refreshNow() }
         }
         .onDisappear { store.dashboardVisible = false }
+        .onChange(of: section) { newValue in
+            storedSelection = (newValue ?? .overview).rawValue
+        }
+    }
+
+    private var sidebar: some View {
+        List(selection: Binding(
+            get: { activeSection },
+            set: { section = $0 ?? .overview }
+        )) {
+            ForEach(DashboardSection.allCases) { candidate in
+                Label(candidate.title, systemImage: candidate.symbol)
+                    .tag(candidate)
+            }
+        }
+        .listStyle(.sidebar)
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                showsNewTaskSheet = true
+            } label: {
+                Label(L10n.newTask, systemImage: "plus.rectangle")
+            }
+            .keyboardShortcut("n", modifiers: .command)
+            .help(L10n.newTaskHelp)
+        }
+        ToolbarItem {
+            Button {
+                Task { await store.refreshNow() }
+            } label: {
+                if store.isRefreshing {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                }
+            }
+            .disabled(store.isRefreshing)
+            .help(L10n.refresh)
+        }
     }
 
     @ViewBuilder
-    private var detail: some View {
-        switch selection.wrappedValue {
+    private func detail(for section: DashboardSection) -> some View {
+        switch section {
         case .overview:
-            OverviewDashboard()
+            OverviewDashboard(
+                section: $section,
+                stateFilter: $stateFilter
+            )
         case .tasks:
-            TasksDashboard(query: $query, stateFilter: $stateFilter, selectedTaskId: $selectedTaskId)
+            TasksDashboard(
+                query: $query,
+                stateFilter: $stateFilter,
+                selectedTaskId: $selectedTaskId,
+                onNewTask: { showsNewTaskSheet = true }
+            )
         case .agents:
             ExecutionTargetsDashboard()
         case .providers:
@@ -88,9 +112,9 @@ struct DashboardView: View {
         case .quota:
             QuotaDashboard()
         case .routing:
-            SelectedTaskDetailDashboard(selectedTaskId: $selectedTaskId, mode: .routing)
+            SelectedTaskDetailDashboard(selectedTaskId: $selectedTaskId, mode: .routing, onNewTask: { showsNewTaskSheet = true })
         case .verification:
-            SelectedTaskDetailDashboard(selectedTaskId: $selectedTaskId, mode: .verification)
+            SelectedTaskDetailDashboard(selectedTaskId: $selectedTaskId, mode: .verification, onNewTask: { showsNewTaskSheet = true })
         case .history:
             HistoryDashboard()
         case .settings:
@@ -99,8 +123,66 @@ struct DashboardView: View {
     }
 }
 
+// MARK: - New task sheet
+
+private struct NewTaskSheet: View {
+    @EnvironmentObject private var store: OrchestratorStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var intent: String = ""
+    @State private var submitting: Bool = false
+    let onSubmitted: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(L10n.newTaskTitle)
+                .font(.headline)
+            Text(L10n.newTaskSubtitle)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            TextEditor(text: $intent)
+                .font(.body)
+                .frame(minHeight: 110)
+                .border(Color(nsColor: .separatorColor), width: 1)
+                .scrollContentBackground(.hidden)
+                .background(Color(nsColor: .textBackgroundColor))
+            if let notice = store.submitNotice, case .failed = notice {
+                Text(L10n.submitNotice(notice))
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            HStack {
+                Spacer()
+                Button(L10n.cancel, role: .cancel) {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+                Button(submitting ? L10n.submitting : L10n.submit, action: submit)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(submitting || intent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(18)
+    }
+
+    private func submit() {
+        let value = intent
+        submitting = true
+        Task {
+            await store.quickSubmit(intent: value)
+            submitting = false
+            if let taskId = store.lastSubmittedTaskId {
+                onSubmitted(taskId)
+            }
+        }
+    }
+}
+
+// MARK: - Overview
+
 private struct OverviewDashboard: View {
     @EnvironmentObject private var store: OrchestratorStore
+    @Binding var section: DashboardSection?
+    @Binding var stateFilter: String
 
     var body: some View {
         ScrollView {
@@ -121,18 +203,31 @@ private struct OverviewDashboard: View {
 
                 let counts = store.dashboard?.counts
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 5), spacing: 12) {
-                    MetricTile("RUNNING", counts?.running ?? 0, symbol: "gearshape.2")
-                    MetricTile("READY", counts?.ready ?? 0, symbol: "tray")
-                    MetricTile("BLOCKED", counts?.blocked ?? 0, symbol: "exclamationmark.octagon")
-                    MetricTile("VERIFIED", counts?.verified ?? 0, symbol: "checkmark.seal")
-                    MetricTile("COMPLETED", counts?.completed ?? 0, symbol: "checkmark.circle")
+                    MetricTile("RUNNING", counts?.running ?? 0, symbol: "gearshape.2") {
+                        navigateToTasks(filter: "RUNNING")
+                    }
+                    MetricTile("READY", counts?.ready ?? 0, symbol: "tray") {
+                        navigateToTasks(filter: "READY")
+                    }
+                    MetricTile("BLOCKED", counts?.blocked ?? 0, symbol: "exclamationmark.octagon") {
+                        navigateToTasks(filter: "BLOCKED")
+                    }
+                    MetricTile("VERIFIED", counts?.verified ?? 0, symbol: "checkmark.seal") {
+                        navigateToTasks(filter: "VERIFIED")
+                    }
+                    MetricTile("COMPLETED", counts?.completed ?? 0, symbol: "checkmark.circle") {
+                        navigateToTasks(filter: "VERIFIED")
+                    }
                 }
+                Text(L10n.metricTileHelp)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
 
                 DashboardCard(title: L10n.blockers, symbol: "exclamationmark.triangle") {
                     if let blockers = store.dashboard?.importantBlockers, !blockers.isEmpty {
                         ForEach(blockers, id: \.self) { Text($0).foregroundStyle(.secondary) }
                     } else {
-                        Text(L10n.unsupportedEmptyState).foregroundStyle(.secondary)
+                        Text(L10n.noBlockers).foregroundStyle(.secondary)
                     }
                     StatusBadge(text: store.activeStatus?.productionActive ?? "UNKNOWN", kind: .neutral)
                 }
@@ -145,6 +240,13 @@ private struct OverviewDashboard: View {
         }
     }
 
+    /// Navigation only: opens the tasks list filtered to a state. Never mutates
+    /// authoritative task state.
+    private func navigateToTasks(filter: String) {
+        stateFilter = filter
+        section = .tasks
+    }
+
     private var disconnectedText: String {
         if case .disconnected(let reason) = store.connection {
             return L10n.disconnectionReason(reason)
@@ -153,25 +255,31 @@ private struct OverviewDashboard: View {
     }
 }
 
+// MARK: - Tasks
+
 private struct TasksDashboard: View {
     @EnvironmentObject private var store: OrchestratorStore
     @Binding var query: String
     @Binding var stateFilter: String
     @Binding var selectedTaskId: String?
+    let onNewTask: () -> Void
+
+    private var allTasks: [TaskView] {
+        store.tasks?.tasks ?? []
+    }
 
     private var tasks: [TaskView] {
-        let source = store.tasks?.tasks ?? []
-        return source.filter { task in
+        allTasks.filter { task in
             let matchesQuery = query.isEmpty
                 || task.taskId.localizedCaseInsensitiveContains(query)
                 || task.intent.localizedCaseInsensitiveContains(query)
-            let matchesState = stateFilter.isEmpty || task.state == stateFilter
+            let matchesState = MetricsFilter.matches(state: task.state, filter: stateFilter)
             return matchesQuery && matchesState
         }
     }
 
     private var states: [String] {
-        Array(Set((store.tasks?.tasks ?? []).map(\.state))).sorted()
+        Array(Set(allTasks.map(\.state))).sorted()
     }
 
     var body: some View {
@@ -189,27 +297,10 @@ private struct TasksDashboard: View {
                 }
                 .padding()
 
-                List(tasks, selection: $selectedTaskId) { task in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(task.taskId)
-                                .font(.system(.body, design: .monospaced))
-                                .lineLimit(1)
-                            Spacer()
-                            StatusBadge(text: task.state, kind: task.state == "BLOCKED" ? .bad : .neutral)
-                        }
-                        Text(task.intent)
-                            .lineLimit(2)
-                            .foregroundStyle(.secondary)
-                        Text(task.updatedAt)
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(.vertical, 4)
-                }
-                .onChange(of: selectedTaskId) { taskId in
-                    guard let taskId else { return }
-                    Task { await store.loadTaskDetail(taskId: taskId) }
+                if allTasks.isEmpty {
+                    tasksEmptyState
+                } else {
+                    taskList
                 }
             }
             .frame(minWidth: 420)
@@ -218,7 +309,67 @@ private struct TasksDashboard: View {
                 .frame(minWidth: 430)
         }
     }
+
+    private var taskList: some View {
+        List(selection: $selectedTaskId) {
+            if tasks.isEmpty {
+                Text(L10n.tasksNoMatch)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(tasks) { task in
+                    TaskRow(task: task)
+                        .tag(task.taskId)
+                        .padding(.vertical, 2)
+                }
+            }
+        }
+        .onChange(of: selectedTaskId) { taskId in
+            guard let taskId else { return }
+            Task { await store.loadTaskDetail(taskId: taskId) }
+        }
+    }
+
+    private var tasksEmptyState: some View {
+        VStack(spacing: 12) {
+            if store.connection.isConnected {
+                EmptyStateView(title: L10n.noTasks, symbol: "checklist", message: L10n.noTasksHint) {
+                    Button(L10n.newTask, action: onNewTask)
+                }
+            } else {
+                EmptyStateView(
+                    title: L10n.disconnectedLabel,
+                    symbol: "bolt.slash",
+                    message: L10n.tasksDisconnectedHint
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 }
+
+private struct TaskRow: View {
+    let task: TaskView
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(task.taskId)
+                    .font(.system(.body, design: .monospaced))
+                    .lineLimit(1)
+                Spacer()
+                StatusBadge(text: task.state, kind: task.state == "BLOCKED" ? .bad : .neutral)
+            }
+            Text(task.intent)
+                .lineLimit(2)
+                .foregroundStyle(.secondary)
+            Text(task.updatedAt)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+}
+
+// MARK: - Routing / verification sections
 
 private enum DetailMode {
     case routing
@@ -229,10 +380,17 @@ private struct SelectedTaskDetailDashboard: View {
     @EnvironmentObject private var store: OrchestratorStore
     @Binding var selectedTaskId: String?
     let mode: DetailMode
+    let onNewTask: () -> Void
+
+    private var tasks: [TaskView] {
+        store.tasks?.tasks ?? []
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                taskPicker
+
                 if let detail = store.selectedTaskDetail {
                     if mode == .routing {
                         RoutingPanel(detail: detail)
@@ -240,8 +398,7 @@ private struct SelectedTaskDetailDashboard: View {
                         VerificationPanel(detail: detail)
                     }
                 } else {
-                    EmptyStateView(title: L10n.taskDetail, symbol: "sidebar.left",
-                                   message: L10n.selectTaskEmptyState)
+                    noSelectionState
                 }
             }
             .padding(20)
@@ -251,8 +408,51 @@ private struct SelectedTaskDetailDashboard: View {
                 Task { await store.loadTaskDetail(taskId: selectedTaskId) }
             }
         }
+        .onChange(of: selectedTaskId) { taskId in
+            guard let taskId else { return }
+            Task { await store.loadTaskDetail(taskId: taskId) }
+        }
+    }
+
+    private var taskPicker: some View {
+        DashboardCard(title: L10n.taskContext, symbol: "sidebar.left") {
+            Picker(L10n.taskContext, selection: $selectedTaskId) {
+                Text(L10n.pickerNoSelection).tag(String?.none)
+                ForEach(tasks) { task in
+                    Text("\(task.taskId) · \(task.state)")
+                        .tag(String?.some(task.taskId))
+                }
+            }
+            .pickerStyle(.menu)
+            if let selectedTaskId {
+                Text(L10n.pickerChangeHint)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var noSelectionState: some View {
+        if tasks.isEmpty {
+            EmptyStateView(
+                title: mode == .routing ? L10n.routingTitle : L10n.verificationTitle,
+                symbol: mode == .routing ? "point.topleft.down.curvedto.point.bottomright.up" : "checkmark.seal",
+                message: mode == .routing ? L10n.routingNeedsTask : L10n.verificationNeedsTask
+            ) {
+                Button(L10n.newTask, action: onNewTask)
+            }
+        } else {
+            EmptyStateView(
+                title: mode == .routing ? L10n.routingTitle : L10n.verificationTitle,
+                symbol: "sidebar.left",
+                message: mode == .routing ? L10n.routingNoSelection : L10n.verificationNoSelection
+            )
+        }
     }
 }
+
+// MARK: - Agents / execution targets
 
 private struct ExecutionTargetsDashboard: View {
     @EnvironmentObject private var store: OrchestratorStore
@@ -260,23 +460,18 @@ private struct ExecutionTargetsDashboard: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
-                ForEach(store.providers?.providers ?? []) { provider in
-                    DashboardCard(title: provider.displayName, symbol: "cpu") {
-                        ForEach(provider.executionTargets) { target in
-                            VStack(alignment: .leading, spacing: 5) {
-                                HStack {
-                                    Text(target.executionTargetId).font(.system(.body, design: .monospaced))
-                                    Spacer()
-                                    StatusBadge(text: target.enabled ? "ENABLED" : "DISABLED", kind: target.enabled ? .good : .neutral)
-                                }
-                                Label(target.modelSkuId, systemImage: "shippingbox")
-                                Label(target.runtimeId, systemImage: "terminal")
-                                if let observed = target.observedAvailability {
-                                    Text("\(observed.state) | \(observed.measurementSource) | \(observed.confidence)")
-                                        .foregroundStyle(.secondary)
-                                } else {
-                                    Text("availability UNKNOWN").foregroundStyle(.secondary)
-                                }
+                let providers = store.providers?.providers ?? []
+                if providers.isEmpty {
+                    EmptyStateView(
+                        title: L10n.agentsTitle,
+                        symbol: "cpu",
+                        message: L10n.noProvidersHint
+                    )
+                } else {
+                    ForEach(providers) { provider in
+                        DashboardCard(title: provider.displayName, symbol: "cpu") {
+                            ForEach(provider.executionTargets) { target in
+                                ExecutionTargetDisclosure(target: target)
                             }
                         }
                     }
@@ -287,28 +482,110 @@ private struct ExecutionTargetsDashboard: View {
     }
 }
 
+private struct ExecutionTargetDisclosure: View {
+    let target: ExecutionTargetHealthView
+    @State private var expanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 6) {
+                LabeledContent(L10n.modelSku, value: target.modelSkuId)
+                LabeledContent(L10n.runtimeIdLabel, value: target.runtimeId)
+                if let runtimeAvailable = target.runtimeAvailable {
+                    LabeledContent(
+                        L10n.runtimeAvailability,
+                        value: runtimeAvailable ? "AVAILABLE" : "UNAVAILABLE"
+                    )
+                }
+                if let observed = target.observedAvailability {
+                    LabeledContent(L10n.observedState, value: observed.state)
+                    LabeledContent(L10n.measurementSource, value: observed.measurementSource)
+                    LabeledContent(L10n.confidenceLabel, value: observed.confidence)
+                    LabeledContent(L10n.observedAt, value: observed.observedAt)
+                    if let reason = observed.sanitizedReasonCode {
+                        LabeledContent(L10n.reasonCode, value: reason)
+                    }
+                } else {
+                    Text(L10n.availabilityUnknown)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.top, 4)
+            .padding(.leading, 4)
+        } label: {
+            HStack {
+                Text(target.executionTargetId)
+                    .font(.system(.body, design: .monospaced))
+                Spacer()
+                StatusBadge(text: target.enabled ? "ENABLED" : "DISABLED", kind: target.enabled ? .good : .neutral)
+            }
+        }
+    }
+}
+
+// MARK: - Providers
+
 private struct ProvidersDashboard: View {
     @EnvironmentObject private var store: OrchestratorStore
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                ForEach(store.providers?.providers ?? []) { provider in
-                    DashboardCard(title: provider.displayName, symbol: "network") {
-                        Text("\(provider.providerId) | \(L10n.accountsCount(provider.accountCount))")
-                            .foregroundStyle(.secondary)
-                        ForEach(provider.quotaPools) { pool in
-                            Text("\(pool.name): \(pool.state) | \(pool.confidence) | \(pool.measurementSourceType)")
-                        }
-                        ForEach(provider.executionTargets) { target in
-                            Text("\(L10n.providerTargetLabel) \(target.executionTargetId)")
-                                .font(.system(.caption, design: .monospaced))
+                let providers = store.providers?.providers ?? []
+                if providers.isEmpty {
+                    EmptyStateView(
+                        title: L10n.providersTitle,
+                        symbol: "network",
+                        message: L10n.noProvidersHint
+                    )
+                } else {
+                    ForEach(providers) { provider in
+                        DashboardCard(title: provider.displayName, symbol: "network") {
+                            Text("\(provider.providerId) | \(L10n.accountsCount(provider.accountCount))")
                                 .foregroundStyle(.secondary)
+                            ForEach(provider.quotaPools) { pool in
+                                QuotaPoolDisclosure(pool: pool)
+                            }
+                            ForEach(provider.executionTargets) { target in
+                                Text("\(L10n.providerTargetLabel) \(target.executionTargetId)")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
             }
             .padding(20)
+        }
+    }
+}
+
+// MARK: - Quota
+
+private struct QuotaPoolDisclosure: View {
+    let pool: QuotaPoolHealthView
+    @State private var expanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(L10n.quotaConfidenceExplanation(pool.confidence))
+                    .foregroundStyle(.secondary)
+                Text(L10n.quotaSourceExplanation(pool.measurementSourceType))
+                    .foregroundStyle(.secondary)
+                if let observedAt = pool.observedAt {
+                    Text(L10n.quotaObservedAt(observedAt))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.leading, 4)
+        } label: {
+            HStack {
+                Text("\(pool.name): \(pool.state)")
+                Spacer()
+                StatusBadge(text: pool.confidence, kind: pool.confidence == "EXACT" ? .good : .neutral)
+            }
         }
     }
 }
@@ -319,29 +596,17 @@ private struct QuotaDashboard: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                ForEach(store.providers?.providers ?? []) { provider in
-                    ForEach(provider.quotaPools) { pool in
-                        DashboardCard(title: "\(provider.displayName) / \(pool.name)", symbol: "chart.pie") {
-                            HStack {
-                                StatusBadge(text: pool.confidence, kind: pool.confidence == "EXACT" ? .good : .neutral)
-                                StatusBadge(text: pool.measurementSourceType, kind: .neutral)
-                                StatusBadge(text: pool.state, kind: pool.state == "UNKNOWN" ? .warn : .good)
-                            }
-                            ForEach(pool.windows, id: \.windowId) { window in
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("\(window.windowKind) / \(window.state)")
-                                    if window.confidence == "EXACT", let fraction = window.remainingFraction {
-                                        ProgressView(value: fraction)
-                                        Text(L10n.quotaRemaining(fraction: fraction, confidence: window.confidence))
-                                    } else {
-                                        Text(L10n.quotaRemaining(fraction: window.remainingFraction, confidence: window.confidence))
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Text(window.resetAt ?? "reset UNKNOWN")
-                                        .font(.caption)
-                                        .foregroundStyle(.tertiary)
-                                }
-                            }
+                let providers = store.providers?.providers ?? []
+                if providers.isEmpty {
+                    EmptyStateView(
+                        title: L10n.quotaTitle,
+                        symbol: "chart.pie",
+                        message: L10n.noProvidersHint
+                    )
+                } else {
+                    ForEach(providers) { provider in
+                        ForEach(provider.quotaPools) { pool in
+                            QuotaPoolCard(providerName: provider.displayName, pool: pool)
                         }
                     }
                 }
@@ -350,6 +615,88 @@ private struct QuotaDashboard: View {
         }
     }
 }
+
+private struct QuotaPoolCard: View {
+    let providerName: String
+    let pool: QuotaPoolHealthView
+
+    var body: some View {
+        DashboardCard(title: "\(providerName) / \(pool.name)", symbol: "chart.pie") {
+            HStack {
+                StatusBadge(text: pool.confidence, kind: pool.confidence == "EXACT" ? .good : .neutral)
+                StatusBadge(text: pool.measurementSourceType, kind: .neutral)
+                StatusBadge(text: pool.state, kind: badgeKind(for: pool.state))
+            }
+            QuotaExplanation(pool: pool)
+            ForEach(pool.windows, id: \.windowId) { window in
+                QuotaWindowDisclosure(window: window)
+            }
+        }
+    }
+
+    private func badgeKind(for state: String) -> BadgeKind {
+        switch state {
+        case "EXHAUSTED": return .bad
+        case "RECOVERED": return .good
+        default: return .warn
+        }
+    }
+}
+
+/// Human-readable explanation of quota confidence/measurement semantics.
+/// UNKNOWN never renders a fabricated numeric percentage.
+private struct QuotaExplanation: View {
+    let pool: QuotaPoolHealthView
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label(L10n.quotaConfidenceExplanation(pool.confidence), systemImage: "info.circle")
+                .foregroundStyle(.secondary)
+            Label(L10n.quotaSourceExplanation(pool.measurementSourceType), systemImage: "dot.radiowaves.left.and.right")
+                .foregroundStyle(.secondary)
+            Label(L10n.quotaStateNote(pool.state), systemImage: L10n.quotaStateSymbol(pool.state))
+                .foregroundStyle(pool.state == "EXHAUSTED" ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+            if let observedAt = pool.observedAt {
+                Label(L10n.quotaObservedAt(observedAt), systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+}
+
+private struct QuotaWindowDisclosure: View {
+    let window: QuotaWindowHealthView
+    @State private var expanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 6) {
+                LabeledContent(L10n.quotaConfidenceLabel, value: window.confidence)
+                LabeledContent(L10n.quotaSourceLabel, value: window.windowKind)
+                if window.confidence == "EXACT", let fraction = window.remainingFraction {
+                    ProgressView(value: fraction)
+                    Text(L10n.quotaRemaining(fraction: fraction, confidence: window.confidence))
+                } else {
+                    Text(L10n.quotaRemaining(fraction: window.remainingFraction, confidence: window.confidence))
+                        .foregroundStyle(.secondary)
+                }
+                Text(window.resetAt ?? L10n.quotaResetUnknown)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.leading, 4)
+        } label: {
+            HStack {
+                Text("\(window.windowKind) / \(window.state)")
+                Spacer()
+                StatusBadge(text: window.confidence, kind: window.confidence == "EXACT" ? .good : .neutral)
+            }
+        }
+    }
+}
+
+// MARK: - History
 
 private struct HistoryDashboard: View {
     @EnvironmentObject private var store: OrchestratorStore
@@ -364,6 +711,8 @@ private struct HistoryDashboard: View {
     }
 }
 
+// MARK: - Settings
+
 struct ClientSettingsDashboard: View {
     @AppStorage("pao.launchAtLogin") private var launchAtLogin = false
     @AppStorage("pao.autoStartDaemon") private var autoStartDaemon = true
@@ -374,14 +723,26 @@ struct ClientSettingsDashboard: View {
         Form {
             Section(L10n.daemonLifecycle) {
                 Toggle(L10n.launchAtLogin, isOn: $launchAtLogin)
+                Text(L10n.launchAtLoginFooter)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Toggle(L10n.autoStartDaemon, isOn: $autoStartDaemon)
+                Text(L10n.autoStartDaemonFooter)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 LabeledContent(L10n.socket, value: store.socketPath)
                 LabeledContent(L10n.runtimeConfig, value: layout.runtimeConfigPath)
                 DaemonLifecycleLabel(lifecycle: store.daemonLifecycle)
             }
             Section(L10n.productionActive) {
                 LabeledContent("ACTIVE", value: store.activeStatus?.productionActive ?? "UNKNOWN")
-                Text("ACTIVE is read-only in P4.2.")
+                if let reasons = store.activeStatus?.blockingReasons, !reasons.isEmpty {
+                    ForEach(reasons, id: \.self) { reason in
+                        Label(reason, systemImage: "lock")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text(L10n.activeReadOnlyNote)
                     .foregroundStyle(.secondary)
             }
         }
@@ -389,6 +750,8 @@ struct ClientSettingsDashboard: View {
         .padding(20)
     }
 }
+
+// MARK: - Shared presentation components
 
 private struct DaemonLifecycleLabel: View {
     @ObservedObject var lifecycle: DaemonLifecycleController
@@ -442,7 +805,8 @@ private struct RoutingPanel: View {
                     Text(reason).foregroundStyle(.secondary)
                 }
             } else {
-                Text(L10n.unsupportedEmptyState).foregroundStyle(.secondary)
+                Label(L10n.routingNotYetDecided, systemImage: "clock")
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -455,7 +819,7 @@ private struct VerificationPanel: View {
         DashboardCard(title: L10n.verification, symbol: "checkmark.seal") {
             StatusBadge(text: detail.verification.status, kind: detail.verification.status == "VERIFIED" ? .good : .neutral)
             LabeledContent("task", value: detail.verification.taskId)
-            LabeledContent("evidence", value: detail.verification.evidenceId ?? "none")
+            LabeledContent(L10n.evidenceLabel, value: detail.verification.evidenceId ?? "none")
             if let failure = detail.verification.failureReason {
                 Text(failure).foregroundStyle(.red)
             }
@@ -471,7 +835,8 @@ private struct EventList: View {
 
     var body: some View {
         if events.isEmpty {
-            Text(L10n.unsupportedEmptyState).foregroundStyle(.secondary)
+            Label(L10n.noEvents, systemImage: "tray")
+                .foregroundStyle(.secondary)
         } else {
             ForEach(events) { event in
                 VStack(alignment: .leading, spacing: 3) {
@@ -523,18 +888,30 @@ private struct MetricTile: View {
     let label: String
     let value: Int
     let symbol: String
+    let action: () -> Void
+    @State private var hovering = false
 
-    init(_ label: String, _ value: Int, symbol: String) {
+    init(_ label: String, _ value: Int, symbol: String, action: @escaping () -> Void) {
         self.label = label
         self.value = value
         self.symbol = symbol
+        self.action = action
     }
 
     var body: some View {
-        DashboardCard(title: label, symbol: symbol) {
-            Text("\(value)")
-                .font(.system(size: 28, weight: .semibold, design: .rounded))
+        Button(action: action) {
+            DashboardCard(title: label, symbol: symbol) {
+                Text("\(value)")
+                    .font(.system(size: 28, weight: .semibold, design: .rounded))
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(hovering ? Color.accentColor.opacity(0.10) : .clear)
+            )
         }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(L10n.metricTileHelp)
     }
 }
 
@@ -542,6 +919,14 @@ private struct EmptyStateView: View {
     let title: String
     let symbol: String
     let message: String
+    var action: (() -> Void)? = nil
+
+    init(title: String, symbol: String, message: String, action: (() -> Void)? = nil) {
+        self.title = title
+        self.symbol = symbol
+        self.message = message
+        self.action = action
+    }
 
     var body: some View {
         VStack(spacing: 10) {
@@ -552,6 +937,10 @@ private struct EmptyStateView: View {
             Text(message)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+            if let action {
+                Button(L10n.newTask, action: action)
+                    .padding(.top, 4)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(30)

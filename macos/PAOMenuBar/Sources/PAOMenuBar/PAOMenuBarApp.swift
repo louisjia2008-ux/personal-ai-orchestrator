@@ -25,11 +25,13 @@ struct PAOMenuBarApp: App {
         let widgetBridge = WidgetSnapshotBridge.sharedContainer(
             appGroupIdentifier: Self.widgetAppGroup
         ) ?? .appOwned(layout: layout)
+        let autoStartDaemon = UserDefaults.standard.object(forKey: "pao.autoStartDaemon") as? Bool ?? true
         _store = StateObject(
             wrappedValue: OrchestratorStore(
                 socketPath: path,
                 daemonConfiguration: DaemonLaunchConfiguration(layout: layout),
-                widgetSnapshotBridge: widgetBridge
+                widgetSnapshotBridge: widgetBridge,
+                autoStartDaemon: autoStartDaemon
             )
         )
         // Acceptance evidence: which localization the bundle machinery resolved
