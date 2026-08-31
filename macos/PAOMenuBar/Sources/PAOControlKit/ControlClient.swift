@@ -1,0 +1,243 @@
+import Foundation
+
+#if canImport(Glibc)
+import Glibc
+#endif
+
+/// Deterministic HTTP/1.1-over-Unix-Domain-Socket transport for the P4 control API.
+///
+/// The daemon answers with `Connection: close` semantics (HTTP/1.0-style), so one request
+/// per connection with read-until-EOF is the complete and safe framing model.
+public struct PAOControlClient: Sendable {
+    public let socketPath: String
+    public let timeoutSeconds: Double
+
+    public init(socketPath: String, timeoutSeconds: Double = 10.0) {
+        self.socketPath = socketPath
+        self.timeoutSeconds = timeoutSeconds
+    }
+
+    // MARK: - Typed API surface
+
+    public func health() async throws -> HealthView {
+        try await get("/v1/health")
+    }
+
+    public func listTasks(limit: Int? = nil) async throws -> TaskListView {
+        let path = limit.map { "/v1/tasks?limit=\($0)" } ?? "/v1/tasks"
+        return try await get(path)
+    }
+
+    public func getTask(_ taskId: String) async throws -> TaskView {
+        try await get("/v1/tasks/\(taskId)")
+    }
+
+    public func runs(taskId: String) async throws -> RunListView {
+        try await get("/v1/tasks/\(taskId)/runs")
+    }
+
+    public func verificationReport(taskId: String) async throws -> VerificationReportView {
+        try await get("/v1/tasks/\(taskId)/verification")
+    }
+
+    public func routingDecision(taskId: String) async throws -> RoutingDecisionView {
+        try await get("/v1/tasks/\(taskId)/routing")
+    }
+
+    public func submit(_ request: SubmitRequest) async throws -> TaskView {
+        try await post("/v1/tasks", body: request)
+    }
+
+    public func cancel(taskId: String, requestId: String? = nil) async throws -> CancelView {
+        struct CancelBody: Encodable {
+            let requestId: String?
+
+            enum CodingKeys: String, CodingKey {
+                case requestId = "request_id"
+            }
+        }
+        return try await post("/v1/tasks/\(taskId)/cancel", body: CancelBody(requestId: requestId))
+    }
+
+    public func providers() async throws -> ProviderHealthListView {
+        try await get("/v1/providers")
+    }
+
+    public func quota() async throws -> ProviderHealthListView {
+        try await get("/v1/quota")
+    }
+
+    public func activeStatus() async throws -> ActiveStatusView {
+        try await get("/v1/active-status")
+    }
+
+    // MARK: - Transport
+
+    private func get<T: Decodable>(_ path: String) async throws -> T {
+        try await perform(method: "GET", path: path, encodedBody: nil)
+    }
+
+    private func post<B: Encodable, T: Decodable>(_ path: String, body: B) async throws -> T {
+        try await perform(method: "POST", path: path, encodedBody: JSONEncoder().encode(body))
+    }
+
+    public func perform<T: Decodable>(
+        method: String,
+        path: String,
+        encodedBody: Data?
+    ) async throws -> T {
+        let data = try await rawRequest(method: method, path: path, body: encodedBody ?? Data())
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            throw PAOClientError.malformedResponse
+        }
+    }
+
+    public func rawRequest(method: String, path: String, body: Data) async throws -> Data {
+        let request = PAOHTTP.encodeRequest(method: method, path: path, body: body)
+        let responseData = try await PAOSocket.send(socketPath: socketPath, request: request,
+                                                    timeoutSeconds: timeoutSeconds)
+        guard let response = PAOHTTP.parseResponse(responseData) else {
+            throw PAOClientError.malformedResponse
+        }
+        guard let code = response.errorCode else {
+            if response.status >= 400 {
+                throw PAOClientError.httpError(status: response.status, code: "error")
+            }
+            return response.body
+        }
+        throw PAOClientError.httpError(status: response.status, code: code)
+    }
+}
+
+public enum PAOHTTP {
+    public static func encodeRequest(method: String, path: String, body: Data) -> Data {
+        var request = "\(method) \(path) HTTP/1.1\r\n"
+        request += "Host: localhost\r\n"
+        request += "Content-Type: application/json\r\n"
+        request += "Content-Length: \(body.count)\r\n"
+        request += "Connection: close\r\n"
+        request += "\r\n"
+        var data = Data(request.utf8)
+        data.append(body)
+        return data
+    }
+
+    public struct ParsedResponse {
+        public let status: Int
+        public let body: Data
+        public let errorCode: String?
+    }
+
+    public static func parseResponse(_ data: Data) -> ParsedResponse? {
+        guard let headerEnd = data.range(of: Data("\r\n\r\n".utf8)) else { return nil }
+        let headerData = data[..<headerEnd.lowerBound]
+        guard let headerText = String(data: headerData, encoding: .utf8) else { return nil }
+        let lines = headerText.components(separatedBy: "\r\n")
+        guard let statusLine = lines.first else { return nil }
+        let parts = statusLine.split(separator: " ")
+        guard parts.count >= 2, let status = Int(parts[1]) else { return nil }
+        var errorCode: String?
+        if let bodyText = String(data: data[headerEnd.upperBound...], encoding: .utf8),
+           let payload = try? JSONSerialization.jsonObject(with: Data(bodyText.utf8)) as? [String: Any],
+           let code = payload["error"] as? String {
+            errorCode = code
+        }
+        return ParsedResponse(status: status, body: data[headerEnd.upperBound...], errorCode: errorCode)
+    }
+}
+
+enum PAOSocket {
+    static func send(socketPath: String, request: Data, timeoutSeconds: Double) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let data = try sendSync(socketPath: socketPath, request: request,
+                                            timeoutSeconds: timeoutSeconds)
+                    continuation.resume(returning: data)
+                } catch let error as PAOClientError {
+                    continuation.resume(throwing: error)
+                } catch {
+                    continuation.resume(throwing: PAOClientError.malformedResponse)
+                }
+            }
+        }
+    }
+
+    static func sendSync(socketPath: String, request: Data, timeoutSeconds: Double) throws -> Data {
+        let bytes = socketPath.utf8
+        guard bytes.count <= 104 else {
+            throw PAOClientError.socketPathTooLong(bytes.count)
+        }
+        guard socketPath.hasPrefix("/") else {
+            throw PAOClientError.invalidSocketPath
+        }
+
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw PAOClientError.malformedResponse
+        }
+        defer { close(fd) }
+
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(bytes)
+        withUnsafeMutableBytes(of: &address.sun_path) { destination in
+            destination.copyBytes(from: pathBytes)
+        }
+        let connectResult = withUnsafePointer(to: &address) { pointer -> Int32 in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                connect(fd, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard connectResult == 0 else {
+            throw mapConnectError(errno)
+        }
+
+        var tv = timeval(tv_sec: Int(timeoutSeconds), tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+
+        try request.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            var sent = 0
+            while sent < raw.count {
+                let written = write(fd, raw.baseAddress!.advanced(by: sent), raw.count - sent)
+                if written <= 0 {
+                    throw PAOClientError.transportFailure
+                }
+                sent += written
+            }
+        }
+
+        var response = Data()
+        var buffer = [UInt8](repeating: 0, count: 65536)
+        while true {
+            let readCount = read(fd, &buffer, buffer.count)
+            if readCount < 0 {
+                throw PAOClientError.transportFailure
+            }
+            if readCount == 0 {
+                break
+            }
+            response.append(contentsOf: buffer[..<readCount])
+            if response.count > 8 * 1024 * 1024 {
+                throw PAOClientError.malformedResponse
+            }
+        }
+        return response
+    }
+
+    static func mapConnectError(_ err: Int32) -> PAOClientError {
+        switch err {
+        case ENOENT:
+            return .daemonNotRunning
+        case ECONNREFUSED:
+            return .staleSocket
+        case EACCES, EPERM:
+            return .accessDenied
+        default:
+            return .transportFailure
+        }
+    }
+}

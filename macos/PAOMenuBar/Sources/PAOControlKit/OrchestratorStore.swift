@@ -1,0 +1,220 @@
+import Foundation
+import SwiftUI
+
+/// Client-side display state. Authoritative state is always reloaded from the daemon;
+/// this store keeps no durable task database of its own.
+@MainActor
+public final class OrchestratorStore: ObservableObject {
+    @Published public private(set) var connection: ConnectionState = .disconnected(reason: .daemonNotRunning)
+    @Published public private(set) var tasks: TaskListView?
+    @Published public private(set) var providers: ProviderHealthListView?
+    @Published public private(set) var activeStatus: ActiveStatusView?
+    @Published public private(set) var lastError: PAOClientError?
+    @Published public private(set) var lastSubmittedTaskId: String?
+    @Published public private(set) var submitNotice: String?
+    @Published public private(set) var cancellationNotice: String?
+    @Published public var menuVisible: Bool = false
+
+    public let socketPath: String
+    private let client: PAOControlClient
+    private var refreshTask: Task<Void, Never>?
+    private var backoffSeconds: Double = 2.0
+    private var lastSubmit: (intent: String, at: Date)?
+    private let idFactory: () -> String
+
+    public static let menuOpenInterval: TimeInterval = 2.0
+    public static let backgroundInterval: TimeInterval = 15.0
+    public static let maximumBackoff: TimeInterval = 60.0
+    public static let duplicateSubmitWindow: TimeInterval = 5.0
+
+    public init(socketPath: String,
+                idFactory: @escaping () -> String = { UUID().uuidString.prefix(12).lowercased() }) {
+        self.socketPath = socketPath
+        self.client = PAOControlClient(socketPath: socketPath)
+        self.idFactory = idFactory
+        startRefreshing()
+    }
+
+    deinit {
+        refreshTask?.cancel()
+    }
+
+    public var statusSummary: StatusSummary {
+        StatusSummary.derive(connection: connection, tasks: tasks?.tasks ?? [], providers: providers)
+    }
+
+    public func taskCounts() -> (running: Int, ready: Int, blocked: Int, verified: Int) {
+        let states = (tasks?.tasks ?? []).map(\.state)
+        return (
+            running: states.filter { $0 == "RUNNING" }.count,
+            ready: states.filter { $0 == "READY" || $0 == "SUBMITTED" }.count,
+            blocked: states.filter { $0 == "BLOCKED" }.count,
+            verified: states.filter { $0 == "VERIFIED" || $0 == "COMPLETED" }.count
+        )
+    }
+
+    // MARK: - Refresh policy
+
+    private func startRefreshing() {
+        refreshTask?.cancel()
+        refreshTask = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                await self.refreshOnce()
+                let interval = self.nextInterval()
+                try? await Task.sleep(for: .seconds(interval))
+            }
+        }
+    }
+
+    private func nextInterval() -> TimeInterval {
+        if connection.isConnected {
+            backoffSeconds = 2.0
+            return menuVisible ? Self.menuOpenInterval : Self.backgroundInterval
+        }
+        let current = backoffSeconds
+        backoffSeconds = min(backoffSeconds * 2, Self.maximumBackoff)
+        return current
+    }
+
+    public func refreshNow() async {
+        await refreshOnce()
+    }
+
+    private func refreshOnce() async {
+        switch SocketDiscovery.validate(path: socketPath) {
+        case .tooLong(let length):
+            transition(.disconnected(reason: .socketPathTooLong(length: length)))
+            return
+        case .notAbsolute:
+            transition(.disconnected(reason: .socketInvalid))
+            return
+        case .valid:
+            break
+        }
+
+        do {
+            let health = try await client.health()
+            guard health.isCompatible else {
+                transition(.disconnected(reason: .apiVersionMismatch(version: health.apiVersion)))
+                return
+            }
+            transition(.connected)
+            async let tasks = client.listTasks(limit: 20)
+            async let providers = client.providers()
+            async let active = client.activeStatus()
+            self.tasks = try await tasks
+            self.providers = try await providers
+            self.activeStatus = try await active
+            self.lastError = nil
+            let counts = taskCounts()
+            ClientLog.taskCounts(running: counts.running, ready: counts.ready,
+                                 blocked: counts.blocked, verified: counts.verified)
+        } catch let error as PAOClientError {
+            self.lastError = error
+            transition(.disconnected(reason: Self.disconnectionReason(for: error)))
+            ClientLog.operation("refresh", outcome: error.logCode)
+        } catch {
+            transition(.disconnected(reason: .malformedResponse))
+            ClientLog.operation("refresh", outcome: "malformed")
+        }
+    }
+
+    private static func disconnectionReason(for error: PAOClientError) -> ConnectionState.DisconnectionReason {
+        switch error {
+        case .daemonNotRunning: return .daemonNotRunning
+        case .staleSocket, .invalidSocketPath: return .socketInvalid
+        case .socketPathTooLong(let length): return .socketPathTooLong(length: length)
+        case .accessDenied: return .accessDenied
+        case .apiVersionMismatch(let version): return .apiVersionMismatch(version: version)
+        case .malformedResponse: return .malformedResponse
+        case .httpError, .transportFailure: return .transportFailure
+        }
+    }
+
+    private func transition(_ newState: ConnectionState) {
+        let changed = newState != connection
+        connection = newState
+        if changed {
+            ClientLog.connection(newState)
+        }
+        if !newState.isConnected {
+            tasks = nil
+            providers = nil
+            activeStatus = nil
+        }
+    }
+
+    // MARK: - Operations
+
+    /// Quick submit: input becomes a structured task intent through POST /v1/tasks.
+    /// It is never interpreted as a shell command.
+    public func quickSubmit(intent: String) async {
+        let trimmed = intent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let last = lastSubmit,
+           last.intent == trimmed,
+           Date().timeIntervalSince(last.at) < Self.duplicateSubmitWindow {
+            submitNotice = "Duplicate submission blocked (same intent within \(Int(Self.duplicateSubmitWindow))s)."
+            return
+        }
+        let suffix = idFactory()
+        let request = SubmitRequest(
+            taskId: "menubar-\(suffix)",
+            requestId: "menubar-req-\(suffix)",
+            intent: trimmed
+        )
+        do {
+            let task = try await client.submit(request)
+            lastSubmit = (trimmed, Date())
+            lastSubmittedTaskId = task.taskId
+            submitNotice = "Submitted task \(task.taskId) (state \(task.state))."
+            ClientLog.operation("submit", outcome: "ok")
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            submitNotice = "Submit failed: \(error.displayDetail)"
+            ClientLog.operation("submit", outcome: error.logCode)
+        } catch {
+            submitNotice = "Submit failed: malformed response."
+            ClientLog.operation("submit", outcome: "malformed")
+        }
+    }
+
+    /// Cancel respects daemon semantics exactly; RUNNING conflicts surface verbatim.
+    public func cancel(taskId: String) async {
+        do {
+            let result = try await client.cancel(taskId: taskId)
+            cancellationNotice = result.cancelledNow
+                ? "Task \(taskId) cancelled."
+                : "Task \(taskId) was already cancelled."
+            ClientLog.operation("cancel", outcome: "ok")
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            if error.isRunningCancelConflict {
+                cancellationNotice =
+                    "Task \(taskId) is RUNNING: cancellation requires the host execution supervisor (409)."
+            } else {
+                cancellationNotice = "Cancel failed: \(error.displayDetail)"
+            }
+            ClientLog.operation("cancel", outcome: error.logCode)
+        } catch {
+            cancellationNotice = "Cancel failed: malformed response."
+            ClientLog.operation("cancel", outcome: "malformed")
+        }
+    }
+}
+
+extension PAOClientError {
+    var logCode: String {
+        switch self {
+        case .socketPathTooLong(let length): return "socket_path_too_long(\(length))"
+        case .daemonNotRunning: return "daemon_not_running"
+        case .staleSocket: return "stale_socket"
+        case .accessDenied: return "access_denied"
+        case .apiVersionMismatch(let version): return "api_version_mismatch(\(version))"
+        case .httpError(let status, let code): return "http_\(status)_\(code)"
+        case .malformedResponse: return "malformed_response"
+        case .invalidSocketPath: return "invalid_socket_path"
+        case .transportFailure: return "transport_failure"
+        }
+    }
+}
