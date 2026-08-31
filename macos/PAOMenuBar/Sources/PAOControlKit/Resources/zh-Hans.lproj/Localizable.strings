@@ -1,0 +1,52 @@
+/* 简体中文呈现文案。协议枚举（EXACT、DISABLED_BY_DESIGN 等）保持原样，不做翻译。 */
+
+"status.healthy" = "正常";
+"status.working" = "运行中";
+"status.blocked" = "已阻塞";
+"status.quotaLimited" = "额度受限";
+"status.disconnected" = "未连接";
+
+"connection.connected" = "已连接";
+
+"reason.daemonNotRunning" = "守护进程未运行";
+"reason.socketInvalid" = "套接字无效";
+"reason.socketPathTooLong" = "套接字路径过长（%d 字节）";
+"reason.accessDenied" = "权限不足";
+"reason.apiVersionMismatch" = "API 版本不匹配（%@）";
+"reason.malformedResponse" = "响应格式错误";
+"reason.transportFailure" = "传输失败";
+
+"section.recentTasks" = "最近任务";
+"section.noTasks" = "暂无任务";
+"section.quickSubmit" = "快速提交";
+"section.providersQuota" = "提供商 / 额度";
+"section.noProviders" = "尚未注册提供商";
+"section.productionActive" = "生产 ACTIVE";
+
+"action.submit" = "提交";
+"action.cancel" = "取消";
+"action.refresh" = "刷新";
+"action.quit" = "退出";
+
+"submit.placeholder" = "任务意图（仅存储为意图，绝不执行）";
+"submit.authoritativeId" = "权威任务 ID：%@";
+
+"notice.submitted" = "已提交任务 %@（状态 %@）。";
+"notice.duplicateBlocked" = "已阻止重复提交（%d 秒内意图相同）。";
+"notice.submitFailed" = "提交失败：%@";
+"notice.submitMalformed" = "提交失败：响应格式错误。";
+"notice.cancelled" = "任务 %@ 已取消。";
+"notice.alreadyCancelled" = "任务 %@ 此前已被取消。";
+"notice.runningConflict" = "任务 %@ 正在运行：取消需要宿主执行监督器（409）。";
+"notice.cancelFailed" = "取消失败：%@";
+"notice.cancelMalformed" = "取消失败：响应格式错误。";
+
+"quota.unknown" = "未知";
+"quota.unknownConfidence" = "未知（置信度：%@）";
+"quota.confidence" = "置信度";
+"quota.source" = "来源";
+"provider.target" = "目标";
+"provider.accounts" = "%d 个账户";
+
+"help.taskCounts" = "运行中 / 就绪+已提交 / 已阻塞 / 已验证+已完成";
+"help.cancel" = "通过 POST /v1/tasks/{id}/cancel 取消；RUNNING 任务失败关闭（409）。";

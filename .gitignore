@@ -14,3 +14,6 @@ build/
 .coverage
 htmlcov/
 .personal-ai-orchestrator/
+
+# SwiftPM build artifacts
+macos/PAOMenuBar/.build/
