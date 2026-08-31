@@ -152,3 +152,67 @@ P0/P1/P3/P4.0 AUTHORITY: UNCHANGED
 - Owner visual acceptance of the menu-bar UI.
 - Deferred: owner-gated approval mutations, daemon lifecycle integration, RUNNING-task
   cancellation via execution supervisor surfacing.
+
+## Addendum: human-acceptance repair pass (2026-08-31, later same day)
+
+The owner performed real visual acceptance and found three polish issues; all were fixed
+on `feat/p4-macos-menubar` (PR #23, commits `6a619eb`, `84cb608`) without touching any
+authority boundary.
+
+### 1. Native localization (zh-Hans + en fallback)
+
+- Standard `.lproj`/`Localizable.strings` catalogs (en + zh-Hans) bundled via SwiftPM
+  resources in `PAOControlKit`; `defaultLocalization: "en"`. Per-lproj `.copy` is used
+  because `.process` lowercases `zh-Hans.lproj` → `zh-hans.lproj`, which CFBundle then
+  fails to match on case-sensitive volumes.
+- Language selection follows macOS preferred languages (`Locale.preferredLanguages`,
+  e.g. `zh-Hans-CN` → `zh-Hans`) with deterministic canonical/script/bare-code matching
+  and English fallback; selection is explicit because CFBundle's automatic matching for
+  SwiftPM library bundles launched as plain executables misresolves to `en`.
+- Presentation layer (`L10n`) maps status titles, connection reasons, sections, actions,
+  notices and quota wording; machine protocol enums (`EXACT`, `ESTIMATED`, `UNKNOWN`,
+  `DISABLED_BY_DESIGN`, `EXHAUSTED_OBSERVED`, `COOLDOWN`, task states, blocking reasons)
+  stay verbatim per API contract. EXACT-only percentage rule preserved when localized.
+- Notices became structured enums (`SubmitNotice`/`CancelNotice`) so daemon values stay
+  raw until presentation; both catalogs are coverage-tested, and raw enums are asserted
+  absent from both catalogs.
+
+### 2. Ephemeral success state cleared on disconnect
+
+`OrchestratorStore.transition` now clears `lastSubmittedTaskId`, `submitNotice` and
+`cancellationNotice` whenever the connection leaves `CONNECTED`, alongside the existing
+authoritative-cache discard. A stale green "authoritative task id" banner can no longer
+visually coexist with a disconnected UI. Durable daemon state is untouched (UI-only).
+Regression: `testDisconnectAfterSuccessfulSubmitClearsEphemeralSuccessState`.
+
+### 3. Graceful daemon Ctrl-C
+
+`daemon.main` catches `KeyboardInterrupt` around `serve()` and returns `0`; the `finally`
+block still stops the control plane and closes the store. Unexpected exceptions keep
+propagating. Regression: `tests/test_daemon_shutdown.py` launches the real daemon, sends
+SIGINT, asserts exit 0, no traceback, socket cleaned.
+
+### Repair verification
+
+- Swift: `swift build` + `swift test` → **32/32 passed** (25 previous + 1 disconnect
+  regression + 6 localization tests). Release build OK.
+- Python: ruff PASS; `pytest -p no:cacheprovider` → **219 passed** (217 + 2 shutdown);
+  `git diff --check` PASS; adapter untouched (CI).
+- MiniMax CN read-only review of the repair: **ACCEPT** on localization, disconnect UX
+  and SIGINT change; no authority/credential/concurrency findings; remaining notes are
+  documented design choices (raw enums per contract, capped backoff for invalid paths).
+- Live recheck on this Mac (system languages `zh-Hans-CN`, `en-CN`), same app process
+  throughout:
+  - `ui_language=zh-Hans` at startup; separate binary probe through the same build
+    rendered 正常/已连接/未连接/守护进程未运行/最近任务/暂无任务/快速提交/提供商 / 额度/
+    尚未注册提供商/生产 ACTIVE/提交/取消/刷新/退出, submit notice
+    `已提交任务 menubar-abc（状态 SUBMITTED）。`, quota `未知（置信度：ESTIMATED）`.
+  - submit → task counts updated; SIGINT daemon → exit clean, **0 traceback lines**,
+    socket cleaned; app → `DISCONNECTED:DAEMON_NOT_RUNNING`; daemon restart → app
+    reconnected and reloaded authoritative state; no application restart.
+  - Banner clearing is store-level (regression-tested); its visual confirmation belongs
+    to the repeated human acceptance.
+
+HUMAN_ACCEPTANCE_REQUIRED (repeat): visual confirmation of zh-Hans rendering in the menu
+bar panel, localized success banner after submit, and the banner disappearing on daemon
+stop.
