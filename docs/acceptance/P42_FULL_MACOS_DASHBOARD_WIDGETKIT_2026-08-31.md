@@ -1,8 +1,80 @@
 # P4.2 Full macOS Dashboard + WidgetKit Acceptance
 
-Date: 2026-08-31 (takeover completion 2026-08-31 evening session)
+Date: 2026-08-31 (takeover completion 2026-08-31 evening session; interactive
+dashboard repair P4.2.3 same evening)
 
-Status: `P4_2_FULL_MACOS_DASHBOARD_WIDGETKIT_TECHNICAL_COMPLETE_HUMAN_ACCEPTANCE_REQUIRED`
+Status: `P4_2_INTERACTIVE_DASHBOARD_TECHNICAL_COMPLETE_HUMAN_RECHECK_REQUIRED`
+
+Owner acceptance history:
+- First human pass: `FAILED_NEEDS_UX_REPAIR` — dashboard visually present but
+  sidebar navigation appeared non-functional and screens were too passive.
+- P4.2.3 repair landed (below); a fresh owner interaction pass is required.
+
+## P4.2.3 Interactive Dashboard Repair
+
+- SIDEBAR_FIXED: the sidebar now uses a canonical `NavigationSplitView` +
+  `List(selection:)` with an explicit `ForEach` + `.tag(DashboardSection)`
+  per row (no reliance on implicit data-driven selection). Selection persists
+  through `SceneStorage`, and `DashboardSection` moved into `PAOControlKit`
+  with regression coverage.
+- OVERVIEW_METRICS_CLICKABLE: RUNNING/READY/BLOCKED/VERIFIED/COMPLETED tiles
+  navigate to the Tasks list filtered to the matching state(s).
+  Navigation only — authoritative state is never mutated. `MetricsFilter`
+  encodes the composite-counter semantics (READY includes SUBMITTED;
+  VERIFIED includes COMPLETED) with unit tests.
+- DASHBOARD_NEW_TASK: prominent `新建任务` toolbar action (⌘N) opens a sheet
+  that submits through the existing typed P4 control API with request-id
+  idempotency and duplicate guard; on success it navigates to Tasks with the
+  authoritative task selected and its detail loaded.
+- TASK_ROW_SELECTION: explicit `.tag(task.taskId)` rows; selection loads the
+  detail pane; search and state filter operate on composite semantics.
+- ROUTING/VERIFICATION_INTERACTION: direct entry now presents a task picker
+  (retaining last selection); with no tasks the sections show actionable empty
+  states with a `新建任务` entry point instead of dead panels.
+- PROVIDER_DRILLDOWN: execution-target cards expand (DisclosureGroup) to show
+  normalized health: observed state, measurement source, confidence, observed
+  time, sanitized reason code, runtime availability.
+- QUOTA_DRILLDOWN: quota cards explain confidence (EXACT / ESTIMATED /
+  UNKNOWN), measurement source (PROVIDER_EXACT / LOCALLY_MEASURED /
+  LOCALLY_INFERRED), pool state (EXHAUSTED / RECOVERED / UNKNOWN with a
+  scheduling-impact note), and last observation time. UNKNOWN never renders a
+  fabricated percentage (unit-tested).
+- SETTINGS_REALITY_CHECK: `Launch at Login` is labeled preference-only (footer
+  states the system login item is not wired up in P4.2); `Auto Start Daemon`
+  is real — the app reads the preference at launch and skips daemon startup
+  when off (verified by a unit test). ACTIVE remains read-only with blocking
+  reasons listed.
+- REFRESH_INTERACTION: the toolbar refresh shows a progress state, coalesces
+  repeated clicks through an `isRefreshing` guard (unit-tested), and recovers
+  from daemon unavailability.
+- EMPTY_STATES: tasks/no-match/no-events/no-providers/no-routing/no-verification
+  states carry context-sensitive copy and safe actions; no fabricated data.
+- ACTIVE_MUTATION_SURFACE: none added. Clickable means navigate/inspect/
+  expand/filter/refresh only.
+
+### P4.2.3 verification evidence
+
+- `swift test`: 46 tests PASS (6 new interactive-dashboard regressions).
+- Python: `ruff` clean; `pytest` 229 PASS (one transient timing flake in
+  `test_no_client_path_can_mark_verified` passed on immediate rerun; no
+  Python sources were touched in this phase).
+- Xcode: host + widget extension Release build PASS with the new
+  `PAODashboardUITests` target compiled (XCUITest suite covering sidebar
+  navigation, metric navigation, task creation through the sheet, and empty
+  states).
+- Real packaged app: `/Applications/Personal AI Orchestrator.app` launched
+  via LaunchServices; daemon healthy; a task created through the daemon API
+  appeared in the app's refreshed dashboard data within one refresh cycle
+  (total 0 → 1, CONNECTED), evidencing the live refresh pipeline.
+- Automated UI clicking on this Mac is currently blocked by TCC (osascript
+  assistive access denied; XCUITest automation mode timed out; screencapture
+  denied). Granting those permissions requires owner action in System
+  Settings (no sudo was used). The XCUITest suite is ready to run once the
+  owner grants automation permissions; until then the real click matrix is
+  the owner's recheck list:
+  click 任务 / Agents / 提供商 / 额度 / 调度决策 / 验证 / 历史 / 设置 →
+  page changes; overview metric → filtered tasks; 新建任务 → task created;
+  task click → detail pane; refresh works; settings labeled honestly.
 
 Baseline
 
@@ -151,4 +223,9 @@ Baseline
 
 1. Owner restarts macOS (clears the local App Group authorization stall), relaunches
    the app, and confirms the group snapshot resumes (widget heals automatically).
-2. Owner performs human visual acceptance and adds the widget in Notification Center.
+2. Owner repeats interactive acceptance per the P4.2.3 recheck list: sidebar
+   sections change pages, metric tiles navigate to filtered tasks, 新建任务
+   creates an authoritative task, task clicks load detail, routing/verification
+   offer task pickers, quota cards explain themselves, settings are labeled
+   honestly, refresh works.
+3. Owner adds the widget in Notification Center and performs visual acceptance.
