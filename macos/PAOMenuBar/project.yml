@@ -64,6 +64,17 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.personal-ai-orchestrator.dashboard.PAOWidgetExtension
         PRODUCT_NAME: PAOWidgetExtension
+  PAODashboardUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: UITests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        PRODUCT_BUNDLE_IDENTIFIER: com.personal-ai-orchestrator.dashboard.uitests
+    dependencies:
+      - target: Personal AI Orchestrator
 schemes:
   Personal AI Orchestrator:
     build:
@@ -72,3 +83,7 @@ schemes:
         PAOWidgetExtension: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - PAODashboardUITests
