@@ -23,7 +23,7 @@ struct DashboardView: View {
                 .navigationTitle(activeSection.title)
                 .toolbar { toolbarContent }
         }
-        .frame(minWidth: 960, minHeight: 620)
+        .frame(minWidth: 1080, minHeight: 640)
         .sheet(isPresented: $showsNewTaskSheet) {
             NewTaskSheet { submittedTaskId in
                 showsNewTaskSheet = false
@@ -288,7 +288,7 @@ private struct TasksDashboard: View {
     }
 
     var body: some View {
-        HSplitView {
+        NavigationSplitView {
             VStack(spacing: 0) {
                 HStack {
                     TextField(L10n.search, text: $query)
@@ -309,8 +309,8 @@ private struct TasksDashboard: View {
                     taskList
                 }
             }
-            .frame(minWidth: 420)
-
+            .navigationSplitViewColumnWidth(min: 260, ideal: 320)
+        } detail: {
             TaskDetailPanel(
                 detail: store.selectedTaskDetail,
                 selectedTaskId: selectedTaskId,
@@ -321,7 +321,7 @@ private struct TasksDashboard: View {
                     }
                 }
             )
-            .frame(minWidth: 430)
+            .navigationSplitViewColumnWidth(min: 320, ideal: 540)
         }
         .background(hiddenCommands)
     }
