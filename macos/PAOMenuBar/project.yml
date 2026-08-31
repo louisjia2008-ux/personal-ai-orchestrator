@@ -1,0 +1,74 @@
+name: PAOMenuBar
+options:
+  deploymentTarget:
+    macOS: "13.0"
+  developmentLanguage: en
+packages:
+  PAOMenuBarPackage:
+    path: .
+settings:
+  base:
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS: "NO"
+    DEVELOPMENT_TEAM: ""
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+targets:
+  Personal AI Orchestrator:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/PAOMenuBar
+    dependencies:
+      - package: PAOMenuBarPackage
+        product: PAOControlKit
+      - target: PAOWidgetExtension
+        embed: true
+    info:
+      path: Config/PersonalAIOrchestrator-Info.plist
+      properties:
+        LSMinimumSystemVersion: "13.0"
+        PAOWidgetAppGroup: group.com.personal-ai-orchestrator.dashboard
+    entitlements:
+      path: Config/PersonalAIOrchestrator.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.personal-ai-orchestrator.dashboard
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.personal-ai-orchestrator.dashboard
+        PRODUCT_NAME: Personal AI Orchestrator
+  PAOWidgetExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Sources/PAOWidgetExtension
+    dependencies:
+      - package: PAOMenuBarPackage
+        product: PAOControlKit
+    info:
+      path: Config/PAOWidgetExtension-Info.plist
+      properties:
+        CFBundleDisplayName: Personal AI Status
+        LSMinimumSystemVersion: "13.0"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+        PAOWidgetAppGroup: group.com.personal-ai-orchestrator.dashboard
+    entitlements:
+      path: Config/PAOWidgetExtension.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups:
+          - group.com.personal-ai-orchestrator.dashboard
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.personal-ai-orchestrator.dashboard.PAOWidgetExtension
+        PRODUCT_NAME: PAOWidgetExtension
+schemes:
+  Personal AI Orchestrator:
+    build:
+      targets:
+        Personal AI Orchestrator: all
+        PAOWidgetExtension: all
+    run:
+      config: Debug
