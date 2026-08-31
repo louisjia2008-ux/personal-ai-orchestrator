@@ -82,3 +82,68 @@
 "label.launchAtLogin" = "登录时启动";
 "empty.unsupported" = "当前守护进程 API 尚未提供。";
 "empty.selectTask" = "选择任务以查看权威详情。";
+
+/* P4.2.3 交互式总览面板。 */
+
+"action.newTask" = "新建任务";
+"action.newTask.help" = "创建新的结构化任务（⌘N）";
+"action.newTask.title" = "新建任务";
+"action.newTask.subtitle" = "输入将成为结构化任务意图，通过类型化 API 提交，绝不会作为 shell 命令执行。";
+"action.submitting" = "提交中…";
+
+"help.metricTile" = "点击指标可查看对应状态的任务（仅导航，不改变权威状态）。";
+"empty.noBlockers" = "当前没有重要阻塞项。";
+"empty.noEvents" = "暂无事件。";
+
+"empty.noTasks" = "暂无任务";
+"empty.noTasks.hint" = "创建第一个任务后，这里会显示权威任务列表。";
+"empty.tasksNoMatch" = "没有匹配当前搜索或状态过滤的任务。";
+"empty.disconnectedTitle" = "未连接";
+"empty.tasksDisconnected.hint" = "守护进程不可用；连接恢复后任务列表会自动刷新。";
+
+"label.taskContext" = "任务";
+"label.pickerNoSelection" = "未选择";
+"label.pickerChangeHint" = "切换上方选择器可查看其他任务的对应信息。";
+"label.routingTitle" = "调度决策";
+"label.verificationTitle" = "验证";
+"empty.routingNeedsTask" = "需要先创建任务并等待调度，才会产生调度决策。";
+"empty.verificationNeedsTask" = "需要先创建任务并由宿主运行验证，才会出现验证结果。";
+"empty.routingNoSelection" = "从上方选择一个任务，即可查看它的调度决策。";
+"empty.verificationNoSelection" = "从上方选择一个任务，即可查看它的验证状态。";
+"empty.routingNotYetDecided" = "该任务尚未产生调度决策；被调度后会显示决策详情。";
+
+"label.agentsTitle" = "Agents / 执行目标";
+"label.providersTitle" = "提供商";
+"label.quotaTitle" = "额度";
+"empty.noProviders.hint" = "尚未注册提供商；守护进程配置提供商后此处会显示健康状态。";
+
+"label.modelSku" = "模型 SKU";
+"label.runtimeId" = "运行时";
+"label.runtimeAvailability" = "运行时可用性";
+"label.observedState" = "观察状态";
+"label.measurementSource" = "测量来源";
+"label.confidence" = "置信度";
+"label.observedAt" = "观察时间";
+"label.reasonCode" = "原因码";
+"empty.availabilityUnknown" = "可用性未知（尚未观测）。";
+"label.evidence" = "证据";
+
+"settings.launchAtLogin.footer" = "偏好已记录；系统登录项尚未接入（P4.2 阶段仅保存设置，不改变系统行为）。";
+"settings.autoStartDaemon.footer" = "更改在下次启动应用时生效：关闭后应用不再拉起守护进程（已运行的守护进程不受影响）。";
+"settings.activeReadOnly" = "ACTIVE 为只读；P4.2 不提供启用、强制或覆盖入口。";
+
+"quota.resetUnknown" = "重置时间未知";
+"quota.observedAt" = "最近观察：%@";
+
+"quota.explain.exact" = "提供商回报了精确的剩余额度。";
+"quota.explain.estimated" = "剩余额度由本地测量或推断得出，可能与实际值有偏差。";
+"quota.explain.unknown" = "没有可靠的剩余额度数字；系统不会显示虚假百分比。";
+
+"quota.source.providerExact" = "证据来源：提供商精确回报。";
+"quota.source.locallyMeasured" = "证据来源：本地实测。";
+"quota.source.locallyInferred" = "证据来源：本地推断。";
+"quota.source.unknown" = "证据来源未知。";
+
+"quota.state.exhausted" = "该额度池已耗尽，调度可能被阻塞。";
+"quota.state.recovered" = "额度已恢复。";
+"quota.state.unknown" = "额度池状态未知，调度将谨慎对待。";
