@@ -206,3 +206,37 @@ Authority rules:
 
 The daemon gains an optional `--control-socket` flag; both surfaces can run side by side
 against the same durable state.
+
+## P4.1 native macOS menu bar client
+
+The menu-bar app (`macos/PAOMenuBar/`, SwiftPM) is a control-plane CLIENT, never the
+orchestrator. SwiftUI `MenuBarExtra` (deployment target macOS 13) renders a compact control
+surface; `PAOControlKit` holds the typed UDS HTTP client, `/v1` decoding models, connection
+state machine and display store.
+
+```text
+MenuBarExtra (SwiftUI, read-mostly UI)
+        |
+OrchestratorStore (@MainActor display state, no durable local database)
+        |
+PAOControlClient (HTTP/1.1 over 0600 UDS, Connection: close framing)
+        |
+P4.0 /v1 control API (unchanged; sole backend)
+```
+
+Client-side rules:
+
+- authority stays with the daemon: submit/cancel go through the API; RUNNING-task
+  cancellation surfaces the daemon's `409` verbatim; the app never signals or spawns
+  processes and never reads Safety Kernel SQLite directly;
+- Production ACTIVE is a read-only label with daemon-reported blocking reasons — no toggle
+  exists anywhere in the client;
+- quota confidence semantics are preserved: only `EXACT` renders as a percentage;
+  `ESTIMATED`/`UNKNOWN` render as "unknown (confidence: ...)";
+- connection states are explicit (`CONNECTED`, `DAEMON_NOT_RUNNING`, `SOCKET_INVALID`,
+  `SOCKET_PATH_TOO_LONG`, `ACCESS_DENIED`, `API_VERSION_MISMATCH`, `MALFORMED_RESPONSE`)
+  with exponential backoff (2 s → 60 s) while disconnected;
+- socket discovery is deterministic (UserDefaults `controlSocketPath` → `PAO_CONTROL_SOCKET`
+  → `~/.personal-ai-orchestrator/control.sock`); no filesystem scanning;
+- logging is privacy-conscious: connection transitions, operation categories and sanitized
+  codes only (`PAO_MENUBAR_STDERR_LOG=1` mirrors them to stderr for acceptance evidence).
