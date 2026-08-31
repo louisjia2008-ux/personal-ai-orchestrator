@@ -104,6 +104,11 @@ def main(argv: list[str] | None = None) -> int:
         control_server.start_background()
     try:
         serve(service, host=args.host, port=args.port)
+    except KeyboardInterrupt:
+        # An intentional SIGINT/Ctrl-C is a planned shutdown: exit cleanly without a
+        # traceback. The finally block still stops the control plane and closes the
+        # durable store; unexpected exceptions keep propagating untouched.
+        return 0
     finally:
         if control_server is not None:
             control_server.stop()
