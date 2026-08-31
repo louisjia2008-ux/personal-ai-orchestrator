@@ -47,11 +47,17 @@ struct PAOStatusWidgetView: View {
                 Text(snapshot.connectionState)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Text(snapshot.isStale(referenceDate: entry.date) ? "STALE" : "UPDATED")
+                    .font(.caption2)
+                    .foregroundStyle(snapshot.isStale(referenceDate: entry.date) ? .orange : .secondary)
                 HStack {
                     count("RUN", snapshot.counts.running)
                     count("BLK", snapshot.counts.blocked)
                     count("OK", snapshot.counts.verified + snapshot.counts.completed)
                 }
+                Text(quotaSummary(snapshot))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 Text(snapshot.productionActive)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -73,6 +79,13 @@ struct PAOStatusWidgetView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func quotaSummary(_ snapshot: WidgetSnapshot) -> String {
+        guard let provider = snapshot.providers.first else {
+            return "QUOTA UNKNOWN"
+        }
+        return "\(provider.quotaState) / \(provider.quotaConfidence)"
     }
 }
 
