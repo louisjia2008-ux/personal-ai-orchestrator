@@ -59,6 +59,11 @@ public enum L10n {
         "quota.source.providerExact", "quota.source.locallyMeasured",
         "quota.source.locallyInferred", "quota.source.unknown",
         "quota.state.exhausted", "quota.state.recovered", "quota.state.unknown",
+        "action.copyTaskId", "action.copyTaskId.help", "action.reload",
+        "action.reload.help", "empty.tasksHint", "empty.taskContextHint",
+        "empty.taskDetailHint", "settings.activeAuthorized",
+        "settings.activeNotAuthorized", "settings.activeGateLabel",
+        "settings.activeGate.open", "settings.activeGate.closed",
     ]
 
     /// English is the guaranteed fallback (`defaultLocalization` in Package.swift).
@@ -362,4 +367,19 @@ public enum L10n {
         default: return "questionmark.circle"
         }
     }
+
+    // MARK: - P4.2.3 polish
+
+    public static var copyTaskId: String { tr("action.copyTaskId") }
+    public static var copyTaskIdHint: String { tr("action.copyTaskId.help") }
+    public static var reload: String { tr("action.reload") }
+    public static var reloadHint: String { tr("action.reload.help") }
+    public static var tasksEmptyHint: String { tr("empty.tasksHint") }
+    public static var taskContextEmptyHint: String { tr("empty.taskContextHint") }
+    public static var taskDetailEmptyHint: String { tr("empty.taskDetailHint") }
+    public static var activeAuthorized: String { tr("settings.activeAuthorized") }
+    public static var activeNotAuthorized: String { tr("settings.activeNotAuthorized") }
+    public static var activeGateLabel: String { tr("settings.activeGateLabel") }
+    public static var activeGateOpen: String { tr("settings.activeGate.open") }
+    public static var activeGateClosed: String { tr("settings.activeGate.closed") }
 }
