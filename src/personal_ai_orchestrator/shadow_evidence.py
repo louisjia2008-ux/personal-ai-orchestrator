@@ -35,6 +35,39 @@ class ResetCycleSource(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class ShadowFailureClass(StrEnum):
+    NONE = "NONE"
+    MODEL_TASK_FAILURE = "MODEL_TASK_FAILURE"
+    VERIFIER_FAILURE = "VERIFIER_FAILURE"
+    WORKER_INVOCATION_FAILURE = "WORKER_INVOCATION_FAILURE"
+    WORKER_PROCESS_FAILURE = "WORKER_PROCESS_FAILURE"
+    AUTH_FAILURE = "AUTH_FAILURE"
+    TIMEOUT = "TIMEOUT"
+    INFRA_FAILURE = "INFRA_FAILURE"
+    POLICY_BLOCK = "POLICY_BLOCK"
+    CANCELLED = "CANCELLED"
+    UNKNOWN_FAILURE = "UNKNOWN_FAILURE"
+
+
+class ShadowFailureStage(StrEnum):
+    NONE = "NONE"
+    ROUTING = "ROUTING"
+    AUTH = "AUTH"
+    INVOCATION = "INVOCATION"
+    EXECUTION = "EXECUTION"
+    VERIFICATION = "VERIFICATION"
+    INFRASTRUCTURE = "INFRASTRUCTURE"
+
+
+class ShadowQualityOutcome(StrEnum):
+    VERIFIED = "VERIFIED"
+    MODEL_QUALITY_FAILED = "MODEL_QUALITY_FAILED"
+    OPERATIONAL_FAILED = "OPERATIONAL_FAILED"
+    POLICY_BLOCKED = "POLICY_BLOCKED"
+    CANCELLED = "CANCELLED"
+    UNKNOWN = "UNKNOWN"
+
+
 class ResetCycleReference(FrozenModel):
     reset_cycle_id: str = Field(min_length=1)
     provider_id: str = Field(min_length=1)
@@ -163,6 +196,11 @@ class ShadowObservation(FrozenModel):
     collector_status: QuotaCollectionStatus | None = None
     predicted_burn_fraction: float | None = Field(default=None, ge=0.0, le=1.0)
     observed_burn_fraction: float | None = Field(default=None, ge=0.0, le=1.0)
+    execution_success: bool = True
+    verification_success: bool = False
+    quality_outcome: ShadowQualityOutcome = ShadowQualityOutcome.UNKNOWN
+    failure_class: ShadowFailureClass = ShadowFailureClass.UNKNOWN_FAILURE
+    failure_stage: ShadowFailureStage = ShadowFailureStage.NONE
     verified: bool
     regression_detected: bool = False
     attempts_to_green: int | None = Field(default=None, ge=1)
@@ -170,6 +208,33 @@ class ShadowObservation(FrozenModel):
     handoff_count: int = Field(default=0, ge=0)
     recommendation_followed: bool
     observed_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_failure_taxonomy(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        migrated = dict(value)
+        verified = bool(migrated.get("verified", False))
+        migrated.setdefault("execution_success", True)
+        migrated.setdefault("verification_success", verified)
+        migrated.setdefault(
+            "quality_outcome",
+            ShadowQualityOutcome.VERIFIED.value if verified else ShadowQualityOutcome.UNKNOWN.value,
+        )
+        migrated.setdefault(
+            "failure_class",
+            ShadowFailureClass.NONE.value
+            if verified
+            else ShadowFailureClass.UNKNOWN_FAILURE.value,
+        )
+        migrated.setdefault(
+            "failure_stage",
+            ShadowFailureStage.NONE.value
+            if verified
+            else ShadowFailureStage.INFRASTRUCTURE.value,
+        )
+        return migrated
 
     @model_validator(mode="after")
     def validate_recommendation_followed(self) -> ShadowObservation:
@@ -180,6 +245,12 @@ class ShadowObservation(FrozenModel):
             raise ValueError("recommendation_followed conflicts with target identities")
         if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
             raise ValueError("observed_at must be timezone-aware")
+        if self.verified and self.quality_outcome is not ShadowQualityOutcome.VERIFIED:
+            raise ValueError("verified observations must carry VERIFIED quality_outcome")
+        if self.verified and self.failure_class is not ShadowFailureClass.NONE:
+            raise ValueError("verified observations must not carry a failure_class")
+        if self.failure_class is ShadowFailureClass.NONE and self.failure_stage is not ShadowFailureStage.NONE:
+            raise ValueError("NONE failure class must use NONE failure stage")
         return self
 
     @classmethod
@@ -203,6 +274,11 @@ class ShadowObservation(FrozenModel):
         collector_status: QuotaCollectionStatus | None = None,
         predicted_burn_fraction: float | None = None,
         observed_burn_fraction: float | None = None,
+        execution_success: bool = True,
+        verification_success: bool | None = None,
+        quality_outcome: ShadowQualityOutcome | None = None,
+        failure_class: ShadowFailureClass | None = None,
+        failure_stage: ShadowFailureStage | None = None,
         verified: bool,
         regression_detected: bool = False,
         attempts_to_green: int | None = None,
@@ -214,6 +290,15 @@ class ShadowObservation(FrozenModel):
             scheduler_execution_target_id is not None
             and scheduler_execution_target_id == manual_execution_target_id
         )
+        verification_success = verified if verification_success is None else verification_success
+        if quality_outcome is None:
+            quality_outcome = (
+                ShadowQualityOutcome.VERIFIED if verified else ShadowQualityOutcome.UNKNOWN
+            )
+        if failure_class is None:
+            failure_class = ShadowFailureClass.NONE if verified else ShadowFailureClass.UNKNOWN_FAILURE
+        if failure_stage is None:
+            failure_stage = ShadowFailureStage.NONE if verified else ShadowFailureStage.INFRASTRUCTURE
         identity_payload = {
             "task_id": task_id,
             "request_id": request_id,
@@ -245,6 +330,11 @@ class ShadowObservation(FrozenModel):
             collector_status=collector_status,
             predicted_burn_fraction=predicted_burn_fraction,
             observed_burn_fraction=observed_burn_fraction,
+            execution_success=execution_success,
+            verification_success=verification_success,
+            quality_outcome=quality_outcome,
+            failure_class=failure_class,
+            failure_stage=failure_stage,
             verified=verified,
             regression_detected=regression_detected,
             attempts_to_green=attempts_to_green,
@@ -262,7 +352,12 @@ class ShadowEvidenceSummary(FrozenModel):
     synthetic_reset_cycles: int
     unknown_reset_observations: int
     collector_failure_observations: int
+    quality_eligible_observations: int
     verified_observations: int
+    model_task_failures: int
+    verifier_failures: int
+    operational_failures: int
+    policy_blocks: int
     regressions: int
     recommendation_matches: int
     review_eligible: bool
@@ -276,6 +371,11 @@ class ShadowGroupSummary(FrozenModel):
     execution_target_id: str
     observations: int
     verified_observations: int
+    quality_eligible_observations: int
+    model_task_failures: int
+    verifier_failures: int
+    operational_failures: int
+    policy_blocks: int
     reset_cycles: int
     real_reset_cycles_observed: int
     review_eligible: bool
@@ -313,7 +413,12 @@ class ShadowCampaignSummary(FrozenModel):
     synthetic_reset_cycles: int
     unknown_reset_observations: int
     collector_failure_observations: int
+    quality_eligible_observations: int
     review_eligible: bool
+    model_task_failures: int
+    verifier_failures: int
+    operational_failures: int
+    policy_blocks: int
     active_eligible_cohorts: tuple[str, ...] = ()
     production_active_authorized: bool = False
     groups: tuple[ShadowGroupSummary, ...]
@@ -489,6 +594,11 @@ class ShadowEvidenceJournal:
         reset_cycle_ids: tuple[str, ...] = (),
         quota_after_snapshot_ids: tuple[str, ...] = (),
         observed_burn_fraction: float | None = None,
+        execution_success: bool = True,
+        verification_success: bool | None = None,
+        quality_outcome: ShadowQualityOutcome | None = None,
+        failure_class: ShadowFailureClass | None = None,
+        failure_stage: ShadowFailureStage | None = None,
         verified: bool,
         regression_detected: bool = False,
         attempts_to_green: int | None = None,
@@ -515,6 +625,11 @@ class ShadowEvidenceJournal:
             collector_status=pending.collector_status,
             predicted_burn_fraction=pending.predicted_burn_fraction,
             observed_burn_fraction=observed_burn_fraction,
+            execution_success=execution_success,
+            verification_success=verification_success,
+            quality_outcome=quality_outcome,
+            failure_class=failure_class,
+            failure_stage=failure_stage,
             verified=verified,
             regression_detected=regression_detected,
             attempts_to_green=attempts_to_green,
@@ -565,6 +680,43 @@ class ShadowEvidenceJournal:
                 QuotaCollectionStatus.RATE_LIMITED,
                 QuotaCollectionStatus.PROVIDER_ERROR,
                 QuotaCollectionStatus.UNKNOWN,
+            }
+            for item in items
+        )
+
+    @staticmethod
+    def _model_task_failures(items: list[ShadowObservation]) -> int:
+        return sum(item.failure_class is ShadowFailureClass.MODEL_TASK_FAILURE for item in items)
+
+    @staticmethod
+    def _verifier_failures(items: list[ShadowObservation]) -> int:
+        return sum(item.failure_class is ShadowFailureClass.VERIFIER_FAILURE for item in items)
+
+    @staticmethod
+    def _operational_failures(items: list[ShadowObservation]) -> int:
+        operational = {
+            ShadowFailureClass.WORKER_INVOCATION_FAILURE,
+            ShadowFailureClass.WORKER_PROCESS_FAILURE,
+            ShadowFailureClass.AUTH_FAILURE,
+            ShadowFailureClass.TIMEOUT,
+            ShadowFailureClass.INFRA_FAILURE,
+            ShadowFailureClass.CANCELLED,
+            ShadowFailureClass.UNKNOWN_FAILURE,
+        }
+        return sum(item.failure_class in operational for item in items)
+
+    @staticmethod
+    def _policy_blocks(items: list[ShadowObservation]) -> int:
+        return sum(item.failure_class is ShadowFailureClass.POLICY_BLOCK for item in items)
+
+    @staticmethod
+    def _quality_eligible_observations(items: list[ShadowObservation]) -> int:
+        return sum(
+            item.failure_class
+            in {
+                ShadowFailureClass.NONE,
+                ShadowFailureClass.MODEL_TASK_FAILURE,
+                ShadowFailureClass.VERIFIER_FAILURE,
             }
             for item in items
         )
@@ -621,7 +773,12 @@ class ShadowEvidenceJournal:
             synthetic_reset_cycles=len(synthetic_reset_cycles),
             unknown_reset_observations=unknown_quota,
             collector_failure_observations=self._collector_failure_observations(observations),
+            quality_eligible_observations=self._quality_eligible_observations(observations),
             verified_observations=verified,
+            model_task_failures=self._model_task_failures(observations),
+            verifier_failures=self._verifier_failures(observations),
+            operational_failures=self._operational_failures(observations),
+            policy_blocks=self._policy_blocks(observations),
             regressions=regressions,
             recommendation_matches=matches,
             review_eligible=not blockers,
@@ -729,6 +886,11 @@ class ShadowEvidenceJournal:
                     execution_target_id=execution_target_id,
                     observations=len(items),
                     verified_observations=verified,
+                    quality_eligible_observations=self._quality_eligible_observations(items),
+                    model_task_failures=self._model_task_failures(items),
+                    verifier_failures=self._verifier_failures(items),
+                    operational_failures=self._operational_failures(items),
+                    policy_blocks=self._policy_blocks(items),
                     reset_cycles=len(reset_cycles),
                     real_reset_cycles_observed=len(real_reset_cycles),
                     review_eligible=not group_blockers,
@@ -778,7 +940,12 @@ class ShadowEvidenceJournal:
             synthetic_reset_cycles=base.synthetic_reset_cycles,
             unknown_reset_observations=base.unknown_reset_observations,
             collector_failure_observations=base.collector_failure_observations,
+            quality_eligible_observations=base.quality_eligible_observations,
             review_eligible=bool(groups) and all(group.review_eligible for group in groups),
+            model_task_failures=base.model_task_failures,
+            verifier_failures=base.verifier_failures,
+            operational_failures=base.operational_failures,
+            policy_blocks=base.policy_blocks,
             active_eligible_cohorts=tuple(active_eligible_cohorts),
             production_active_authorized=False,
             groups=tuple(groups),
@@ -796,6 +963,9 @@ __all__ = [
     "ShadowCampaignSummary",
     "ShadowEvidenceJournal",
     "ShadowEvidenceSummary",
+    "ShadowFailureClass",
+    "ShadowFailureStage",
     "ShadowGroupSummary",
     "ShadowObservation",
+    "ShadowQualityOutcome",
 ]

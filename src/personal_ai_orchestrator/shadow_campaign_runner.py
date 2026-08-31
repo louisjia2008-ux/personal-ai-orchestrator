@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
+from collections import Counter
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -51,6 +52,9 @@ from personal_ai_orchestrator.shadow_evidence import (
     ShadowCampaignState,
     ShadowCampaignStatus,
     ShadowEvidenceJournal,
+    ShadowFailureClass,
+    ShadowFailureStage,
+    ShadowQualityOutcome,
 )
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
 from personal_ai_orchestrator.verifier import DeterministicVerifier, VerifierProfile
@@ -104,6 +108,7 @@ class WorkerExecutionResult(RegistryModel):
     exit_code: int
     stdout_tail: str = ""
     stderr_tail: str = ""
+    timed_out: bool = False
 
     @property
     def reported_state(self) -> str:
@@ -132,6 +137,11 @@ class ShadowCaseResult(RegistryModel):
     verifier_evidence_id: str | None = None
     final_task_state: str
     verified: bool
+    execution_success: bool
+    verification_success: bool
+    quality_outcome: ShadowQualityOutcome
+    failure_class: ShadowFailureClass
+    failure_stage: ShadowFailureStage
     changed_paths: tuple[str, ...] = ()
     unexpected_paths: tuple[str, ...] = ()
     failure_reason: str | None = None
@@ -151,6 +161,14 @@ class WorkerHandle(Protocol):
 WorkerLauncher = Callable[[Path, DeclarativeShadowCase, CampaignWorkerProfile], WorkerHandle]
 
 
+class FailureClassification(RegistryModel):
+    execution_success: bool
+    verification_success: bool
+    quality_outcome: ShadowQualityOutcome
+    failure_class: ShadowFailureClass
+    failure_stage: ShadowFailureStage
+
+
 def _run(
     argv: Sequence[str],
     *,
@@ -164,6 +182,80 @@ def _run(
         capture_output=True,
         text=True,
         timeout=timeout,
+    )
+
+
+def _median(values: Sequence[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def _percentile(
+    values: Sequence[float],
+    percentile: float,
+    *,
+    minimum_samples: int = 10,
+) -> float | None:
+    if len(values) < minimum_samples:
+        return None
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, int((len(ordered) - 1) * percentile)))
+    return ordered[index]
+
+
+def _successful_classification() -> FailureClassification:
+    return FailureClassification(
+        execution_success=True,
+        verification_success=True,
+        quality_outcome=ShadowQualityOutcome.VERIFIED,
+        failure_class=ShadowFailureClass.NONE,
+        failure_stage=ShadowFailureStage.NONE,
+    )
+
+
+def _model_task_failure_classification() -> FailureClassification:
+    return FailureClassification(
+        execution_success=True,
+        verification_success=False,
+        quality_outcome=ShadowQualityOutcome.MODEL_QUALITY_FAILED,
+        failure_class=ShadowFailureClass.MODEL_TASK_FAILURE,
+        failure_stage=ShadowFailureStage.VERIFICATION,
+    )
+
+
+def _worker_failure_classification(worker: WorkerExecutionResult) -> FailureClassification:
+    text = f"{worker.stdout_tail}\n{worker.stderr_tail}".lower()
+    if worker.timed_out:
+        failure_class = ShadowFailureClass.TIMEOUT
+        failure_stage = ShadowFailureStage.EXECUTION
+        quality_outcome = ShadowQualityOutcome.OPERATIONAL_FAILED
+    elif any(marker in text for marker in ("usage limit", "quota", "rate limit")):
+        failure_class = ShadowFailureClass.POLICY_BLOCK
+        failure_stage = ShadowFailureStage.INVOCATION
+        quality_outcome = ShadowQualityOutcome.POLICY_BLOCKED
+    elif any(marker in text for marker in ("login", "auth", "unauthorized", "401")):
+        failure_class = ShadowFailureClass.AUTH_FAILURE
+        failure_stage = ShadowFailureStage.AUTH
+        quality_outcome = ShadowQualityOutcome.OPERATIONAL_FAILED
+    elif any(marker in text for marker in ("not found", "not available", "no such file")):
+        failure_class = ShadowFailureClass.WORKER_INVOCATION_FAILURE
+        failure_stage = ShadowFailureStage.INVOCATION
+        quality_outcome = ShadowQualityOutcome.OPERATIONAL_FAILED
+    else:
+        failure_class = ShadowFailureClass.WORKER_PROCESS_FAILURE
+        failure_stage = ShadowFailureStage.EXECUTION
+        quality_outcome = ShadowQualityOutcome.OPERATIONAL_FAILED
+    return FailureClassification(
+        execution_success=False,
+        verification_success=False,
+        quality_outcome=quality_outcome,
+        failure_class=failure_class,
+        failure_stage=failure_stage,
     )
 
 
@@ -410,6 +502,7 @@ def run_shadow_case(
         pid=worker_handle.pid,
     )
     worker_result = worker_handle.wait()
+    failure_classification: FailureClassification | None = None
     next_state = record_worker_exit(
         store,
         task_id=task_id,
@@ -421,6 +514,7 @@ def run_shadow_case(
             "execution_target_id": worker_profile.execution_target_id,
             "stdout_tail": worker_result.stdout_tail,
             "stderr_tail": worker_result.stderr_tail,
+            "timed_out": worker_result.timed_out,
         },
     )
 
@@ -446,6 +540,11 @@ def run_shadow_case(
         unexpected_paths = verifier_result.unexpected_paths
         failure_reason = verifier_result.failure_reason
         time_to_green_seconds = monotonic() - started
+        failure_classification = (
+            _successful_classification()
+            if verifier_result.passed
+            else _model_task_failure_classification()
+        )
         final_state = apply_verification_result(
             store,
             task_id=task_id,
@@ -456,14 +555,25 @@ def run_shadow_case(
             shadow_reset_cycle_ids=(),
             shadow_quota_after_snapshot_ids=(),
             shadow_observed_burn_fraction=None,
+            shadow_execution_success=True,
+            shadow_verification_success=verifier_result.passed,
+            shadow_quality_outcome=failure_classification.quality_outcome,
+            shadow_failure_class=failure_classification.failure_class,
+            shadow_failure_stage=failure_classification.failure_stage,
             shadow_attempts_to_green=1 if verifier_result.passed else None,
             shadow_time_to_green_seconds=time_to_green_seconds if verifier_result.passed else None,
         )
         verified = final_state is TaskState.VERIFIED
     else:
         failure_reason = f"worker exited with code {worker_result.exit_code}"
+        failure_classification = _worker_failure_classification(worker_result)
         shadow_journal.finalize_pending(
             pending_id,
+            execution_success=failure_classification.execution_success,
+            verification_success=failure_classification.verification_success,
+            quality_outcome=failure_classification.quality_outcome,
+            failure_class=failure_classification.failure_class,
+            failure_stage=failure_classification.failure_stage,
             verified=False,
             observed_at=datetime.now(UTC),
         )
@@ -479,6 +589,11 @@ def run_shadow_case(
     _mark_collecting_after_observation(shadow_journal)
     summary = shadow_journal.summarize_campaign()
 
+    result_classification = (
+        _successful_classification()
+        if verified
+        else failure_classification or _model_task_failure_classification()
+    )
     return ShadowCaseResult(
         case_id=case.case_id,
         task_family=case.task_family,
@@ -501,6 +616,11 @@ def run_shadow_case(
         verifier_evidence_id=verifier_evidence_id,
         final_task_state=final_state.value,
         verified=verified,
+        execution_success=result_classification.execution_success,
+        verification_success=result_classification.verification_success,
+        quality_outcome=result_classification.quality_outcome,
+        failure_class=result_classification.failure_class,
+        failure_stage=result_classification.failure_stage,
         changed_paths=changed_paths,
         unexpected_paths=unexpected_paths,
         failure_reason=failure_reason,
@@ -522,27 +642,55 @@ def write_campaign_report(
     journal = ShadowEvidenceJournal(campaign_root / "shadow-runtime")
     summary = journal.summarize_campaign()
     observations = journal.load_all()
+    verified_count = sum(item.verified for item in observations)
+    time_to_green_values = [
+        item.time_to_green_seconds
+        for item in observations
+        if item.time_to_green_seconds is not None and item.verified
+    ]
+    observed_task_families = sorted({item.task_family for item in observations})
+    selected_case_variants = sorted({result.case_id for result in results})
     payload = {
         "generated_at": datetime.now(UTC).isoformat(),
         "campaign_root": str(campaign_root),
         "provider_probe_results": provider_probe_results,
+        "case_catalog": {
+            "selected_case_variants": selected_case_variants,
+            "selected_task_families": sorted({result.task_family for result in results}),
+            "selected_variant_count": len(selected_case_variants),
+        },
         "cases": [result.model_dump(mode="json") for result in results],
         "readiness": {
             "total_real_quality_observations": summary.quality_observations,
+            "total_quality_eligible_observations": summary.quality_eligible_observations,
             "total_real_providers": len(
                 {item.provider_id for item in observations if item.provider_id}
             ),
             "total_real_execution_targets": len(
                 {item.manual_execution_target_id for item in observations}
             ),
-            "total_task_families": len({item.task_family for item in observations}),
-            "verified_count": summary.quality_observations
-            - sum(not item.verified for item in observations),
+            "total_task_families": len(observed_task_families),
+            "observed_task_families": observed_task_families,
+            "verified_count": verified_count,
             "failed_or_blocked_count": sum(not item.verified for item in observations),
+            "model_task_failures": summary.model_task_failures,
+            "verifier_failures": summary.verifier_failures,
+            "operational_failures": summary.operational_failures,
+            "policy_blocks": summary.policy_blocks,
             "real_reset_cycles": summary.real_reset_cycles_observed,
             "shadow_review_eligible": summary.review_eligible,
             "production_active": "DISABLED_BY_DESIGN",
             "owner_approval": "ABSENT",
+        },
+        "quality_metrics": {
+            "time_to_green_p50_seconds": _median(time_to_green_values),
+            "time_to_green_p90_seconds": _percentile(time_to_green_values, 0.9),
+            "failure_class_counts": dict(
+                sorted(Counter(item.failure_class.value for item in observations).items())
+            ),
+            "quality_outcome_counts": dict(
+                sorted(Counter(item.quality_outcome.value for item in observations).items())
+            ),
         },
         "cohorts": [group.model_dump(mode="json") for group in summary.groups],
         "blocking_reasons": summary.blocking_reasons,

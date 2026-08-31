@@ -1,6 +1,6 @@
 # Integration Status
 
-Status: `INTEGRATION_IMPLEMENTED / LOCAL_MAC_ACCEPTED / P3_9_CODEX_ONLY_REAL_SHADOW_QUALITY_CAMPAIGN_COLLECTING_PARTIAL_ACCEPTED`
+Status: `INTEGRATION_IMPLEMENTED / LOCAL_MAC_ACCEPTED / P3_9_1_CODEX_ONLY_REAL_SHADOW_QUALITY_CAMPAIGN_RUNTIME_BLOCKED_PARTIAL_ACCEPTED`
 
 This document records what the `integration/end-to-end-shadow-safety` line implements and what
 still requires evidence that cannot be fabricated on GitHub-hosted runners.
@@ -191,13 +191,22 @@ REFACTOR
 MULTI_FILE_CHANGE
 ```
 
-Current local P3.9 campaign evidence on 2026-08-30:
+Current local P3.9/P3.9.1 campaign evidence on 2026-08-30:
 
 ```text
-CAMPAIGN_ROOT: .personal-ai-orchestrator/p39-shadow
-QUALITY_OBSERVATIONS: 6
-VERIFIED_COUNT: 6
-FAILED_OR_BLOCKED_COUNT: 0
+P3.9_CAMPAIGN_ROOT: .personal-ai-orchestrator/p39-shadow
+P3.9_QUALITY_OBSERVATIONS: 6
+P3.9_VERIFIED_COUNT: 6
+P3.9_FAILED_OR_BLOCKED_COUNT: 0
+
+P3.9.1_CAMPAIGN_ROOT: .personal-ai-orchestrator/p391-codex-shadow
+P3.9.1_REPORT: .personal-ai-orchestrator/p391-codex-shadow/p39-real-shadow-quality-campaign-report.json
+P3.9.1_SELECTED_VARIANTS: 20
+P3.9.1_QUALITY_OBSERVATIONS: 20
+P3.9.1_QUALITY_ELIGIBLE_OBSERVATIONS: 8
+P3.9.1_VERIFIED_COUNT: 8
+P3.9.1_FAILED_OR_BLOCKED_COUNT: 12
+P3.9.1_BLOCKED_ROOT_CAUSE: Codex CLI usage limit
 TOTAL_REAL_PROVIDERS: 1
 TOTAL_REAL_EXECUTION_TARGETS: 1
 TOTAL_TASK_FAMILIES: 4
@@ -210,32 +219,42 @@ OWNER_APPROVAL: ABSENT
 Observed real targets:
 
 ```text
-codex-cli-gpt-5.5: 6 observations, 6 verified
+codex-cli-gpt-5.5: 20 P3.9.1 observations, 8 verified, 12 usage-limit blocked
 ```
 
-P3.9 intentionally does not add Claude as a model provider. All accepted P3.9 observations have
-`WOULD_SELECT_TARGET = none` because quota confidence is still
-`UNKNOWN` and the scheduler correctly fails closed. Those observations remain useful quality data
-but contribute zero real reset cycles. Cohort p90 time-to-green is intentionally omitted until
-sample counts are large enough to avoid misleading percentiles.
+P3.9 intentionally does not add Claude as a model provider. All P3.9/P3.9.1 observations have
+`WOULD_SELECT_TARGET = none` because quota confidence is still `UNKNOWN` and the scheduler
+correctly fails closed. Verified observations remain useful quality data but contribute zero real
+reset cycles. P3.9.1 also proves that Codex subscription usage-limit exhaustion can stop the
+quality campaign before the 20-observation accepted threshold is reached.
+
+Unsupported exact subscription quota/reset surfaces are now analyzed separately. The recommended
+policy keeps production ACTIVE exact-only while allowing locally measured or user-declared quota
+windows only as explicitly labeled non-production scheduling hints.
 
 See
-[`acceptance/P39_REAL_SHADOW_QUALITY_CAMPAIGN_2026-08-30.md`](acceptance/P39_REAL_SHADOW_QUALITY_CAMPAIGN_2026-08-30.md).
+[`acceptance/P39_REAL_SHADOW_QUALITY_CAMPAIGN_2026-08-30.md`](acceptance/P39_REAL_SHADOW_QUALITY_CAMPAIGN_2026-08-30.md)
+and
+[`acceptance/P391_UNSUPPORTED_QUOTA_POLICY_ANALYSIS_2026-08-30.md`](acceptance/P391_UNSUPPORTED_QUOTA_POLICY_ANALYSIS_2026-08-30.md).
 
 ## Current CI evidence
 
 Latest pre-P3.8 integration head verified on GitHub Actions:
 `b7671c5d16391c38195f044866d909c6762ad864`.
 
-Current local P3.9 validation on 2026-08-30:
+Current local P3.9.1 validation on 2026-08-30:
 
 - Ruff: PASS;
-- pytest: **162 passed**;
+- targeted pytest: **41 passed**, 1 pytest-asyncio deprecation warning;
+- full pytest: **170 passed**, 28 pytest-asyncio deprecation warnings after sandbox-external
+  loopback HTTP rerun;
 - `git diff --check`: PASS;
-- OpenCode adapter typecheck + contract tests: PASS, 10/10;
 - P3.8 real Shadow execution script: PASS, observation `shadow-79b324d8b775bb0d2e80e221`;
 - P3.9 real Shadow campaign runner: PASS, 6 Codex-only observations across 1 provider, 1
   execution target and 4 task families;
+- P3.9.1 real Shadow campaign: 20 Codex-only observations across 4 task families and 20 variants,
+  with 8 verified and 12 blocked by Codex CLI usage limit;
+- unsupported quota policy analysis: COMPLETE, production ACTIVE remains exact-only;
 - target Mac acceptance: `PASS_LOCAL_P0_P1_ROUTING_PROVIDER_AND_LONGITUDINAL_SHADOW_NOT_EXECUTED`.
 
 The normal PR CI remains the authority for pushed branch heads. Local Mac acceptance is tracked

@@ -10,7 +10,12 @@ from typing import Any
 
 from personal_ai_orchestrator.process_supervisor import ProcessSupervisor, SupervisedProcess
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
-from personal_ai_orchestrator.shadow_evidence import ShadowEvidenceJournal
+from personal_ai_orchestrator.shadow_evidence import (
+    ShadowEvidenceJournal,
+    ShadowFailureClass,
+    ShadowFailureStage,
+    ShadowQualityOutcome,
+)
 from personal_ai_orchestrator.switch_lease import SwitchLeaseAuthority
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
 from personal_ai_orchestrator.verifier import VerificationResult
@@ -305,6 +310,11 @@ def apply_verification_result(
     shadow_reset_cycle_ids: tuple[str, ...] = (),
     shadow_quota_after_snapshot_ids: tuple[str, ...] = (),
     shadow_observed_burn_fraction: float | None = None,
+    shadow_execution_success: bool = True,
+    shadow_verification_success: bool | None = None,
+    shadow_quality_outcome: ShadowQualityOutcome | None = None,
+    shadow_failure_class: ShadowFailureClass | None = None,
+    shadow_failure_stage: ShadowFailureStage | None = None,
     shadow_regression_detected: bool = False,
     shadow_attempts_to_green: int | None = None,
     shadow_time_to_green_seconds: float | None = None,
@@ -344,6 +354,11 @@ def apply_verification_result(
             reset_cycle_ids=shadow_reset_cycle_ids,
             quota_after_snapshot_ids=shadow_quota_after_snapshot_ids,
             observed_burn_fraction=shadow_observed_burn_fraction,
+            execution_success=shadow_execution_success,
+            verification_success=shadow_verification_success,
+            quality_outcome=shadow_quality_outcome,
+            failure_class=shadow_failure_class,
+            failure_stage=shadow_failure_stage,
             verified=has_authoritative_pass,
             regression_detected=shadow_regression_detected,
             attempts_to_green=shadow_attempts_to_green,

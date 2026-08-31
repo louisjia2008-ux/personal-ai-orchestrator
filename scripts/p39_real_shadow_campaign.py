@@ -67,7 +67,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
         "from pathlib import Path\n"
         "sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))\n\n"
     )
-    return (
+    cases: list[DeclarativeShadowCase] = [
         DeclarativeShadowCase(
             case_id="bug_fix_rounding",
             task_family="BUG_FIX",
@@ -110,6 +110,169 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 "python3 -B -m unittest discover -s tests before finishing."
             ),
             task_intent="repair deterministic rounding behavior",
+        ),
+        DeclarativeShadowCase(
+            case_id="bug_fix_discount",
+            task_family="BUG_FIX",
+            difficulty_class="small_deterministic",
+            required_capabilities={"implementation": 0.8},
+            fixture_files=(
+                CampaignFile(
+                    path="src/pricing.py",
+                    content=(
+                        "def discounted_cents(cents: int, percent_off: int) -> int:\n"
+                        "    return cents - (cents * percent_off // 1000)\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="tests/test_pricing.py",
+                    content=(
+                        common_import
+                        + "import unittest\n\n"
+                        "from pricing import discounted_cents\n\n\n"
+                        "class PricingTests(unittest.TestCase):\n"
+                        "    def test_applies_percent_discount(self) -> None:\n"
+                        "        self.assertEqual(discounted_cents(2000, 25), 1500)\n\n\n"
+                        "if __name__ == '__main__':\n"
+                        "    unittest.main()\n"
+                    ),
+                ),
+            ),
+            expected_changed_paths=("src/pricing.py",),
+            verifier_profile=VerifierProfile(
+                name="p39-bug-discount-unittest",
+                allowed_paths=("src/pricing.py",),
+                commands=(_unittest_command(),),
+            ),
+            worker_prompt=(
+                "Fix discounted_cents in src/pricing.py only. percent_off is a normal "
+                "percentage, so 25 percent off 2000 cents returns 1500. Do not edit tests. "
+                "Run python3 -B -m unittest discover -s tests."
+            ),
+            task_intent="repair deterministic discount behavior",
+        ),
+        DeclarativeShadowCase(
+            case_id="bug_fix_parse_bool",
+            task_family="BUG_FIX",
+            difficulty_class="small_deterministic",
+            required_capabilities={"implementation": 0.78},
+            fixture_files=(
+                CampaignFile(
+                    path="src/flags.py",
+                    content=(
+                        "def parse_enabled(value: str) -> bool:\n"
+                        "    return value.strip().lower() in {'true', '1'}\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="tests/test_flags.py",
+                    content=(
+                        common_import
+                        + "import unittest\n\n"
+                        "from flags import parse_enabled\n\n\n"
+                        "class FlagTests(unittest.TestCase):\n"
+                        "    def test_accepts_yes(self) -> None:\n"
+                        "        self.assertTrue(parse_enabled(' yes '))\n\n"
+                        "    def test_rejects_no(self) -> None:\n"
+                        "        self.assertFalse(parse_enabled('no'))\n\n\n"
+                        "if __name__ == '__main__':\n"
+                        "    unittest.main()\n"
+                    ),
+                ),
+            ),
+            expected_changed_paths=("src/flags.py",),
+            verifier_profile=VerifierProfile(
+                name="p39-bug-parse-bool-unittest",
+                allowed_paths=("src/flags.py",),
+                commands=(_unittest_command(),),
+            ),
+            worker_prompt=(
+                "Fix parse_enabled in src/flags.py only so yes/y/true/1/on are true and "
+                "no/false/0/off are false. Keep the function deterministic and do not edit tests."
+            ),
+            task_intent="repair boolean parsing behavior",
+        ),
+        DeclarativeShadowCase(
+            case_id="bug_fix_median",
+            task_family="BUG_FIX",
+            difficulty_class="small_deterministic",
+            required_capabilities={"implementation": 0.82},
+            fixture_files=(
+                CampaignFile(
+                    path="src/stats.py",
+                    content=(
+                        "def median(values: list[int]) -> float:\n"
+                        "    ordered = values\n"
+                        "    mid = len(ordered) // 2\n"
+                        "    if len(ordered) % 2:\n"
+                        "        return float(ordered[mid])\n"
+                        "    return (ordered[mid - 1] + ordered[mid]) / 2\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="tests/test_stats.py",
+                    content=(
+                        common_import
+                        + "import unittest\n\n"
+                        "from stats import median\n\n\n"
+                        "class StatsTests(unittest.TestCase):\n"
+                        "    def test_sorts_before_median(self) -> None:\n"
+                        "        self.assertEqual(median([9, 1, 3]), 3.0)\n\n\n"
+                        "if __name__ == '__main__':\n"
+                        "    unittest.main()\n"
+                    ),
+                ),
+            ),
+            expected_changed_paths=("src/stats.py",),
+            verifier_profile=VerifierProfile(
+                name="p39-bug-median-unittest",
+                allowed_paths=("src/stats.py",),
+                commands=(_unittest_command(),),
+            ),
+            worker_prompt=(
+                "Fix median in src/stats.py only so it sorts a copy of the input before "
+                "computing the median. Do not edit tests."
+            ),
+            task_intent="repair median sorting behavior",
+        ),
+        DeclarativeShadowCase(
+            case_id="bug_fix_date_label",
+            task_family="BUG_FIX",
+            difficulty_class="small_deterministic",
+            required_capabilities={"implementation": 0.76},
+            fixture_files=(
+                CampaignFile(
+                    path="src/dates.py",
+                    content=(
+                        "def date_label(year: int, month: int, day: int) -> str:\n"
+                        "    return f'{year}-{month}-{day}'\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="tests/test_dates.py",
+                    content=(
+                        common_import
+                        + "import unittest\n\n"
+                        "from dates import date_label\n\n\n"
+                        "class DateTests(unittest.TestCase):\n"
+                        "    def test_zero_pads_month_and_day(self) -> None:\n"
+                        "        self.assertEqual(date_label(2026, 8, 3), '2026-08-03')\n\n\n"
+                        "if __name__ == '__main__':\n"
+                        "    unittest.main()\n"
+                    ),
+                ),
+            ),
+            expected_changed_paths=("src/dates.py",),
+            verifier_profile=VerifierProfile(
+                name="p39-bug-date-label-unittest",
+                allowed_paths=("src/dates.py",),
+                commands=(_unittest_command(),),
+            ),
+            worker_prompt=(
+                "Fix date_label in src/dates.py only so month and day are two-digit "
+                "zero-padded fields. Do not edit tests."
+            ),
+            task_intent="repair date label formatting behavior",
         ),
         DeclarativeShadowCase(
             case_id="test_add_clamp",
@@ -161,6 +324,206 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 "python3 -B -m unittest discover -s tests before finishing."
             ),
             task_intent="add missing clamp regression test",
+        ),
+        DeclarativeShadowCase(
+            case_id="test_add_slug_whitespace",
+            task_family="TEST_ADD",
+            difficulty_class="small_regression_test",
+            required_capabilities={"testing": 0.75},
+            fixture_files=(
+                CampaignFile(
+                    path="src/slugs.py",
+                    content=(
+                        "def slugify(value: str) -> str:\n"
+                        "    return '-'.join(value.strip().lower().split())\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="tests/test_slugs.py",
+                    content=(
+                        common_import
+                        + "import unittest\n\n"
+                        "from slugs import slugify\n\n\n"
+                        "class SlugTests(unittest.TestCase):\n"
+                        "    def test_lowercases_words(self) -> None:\n"
+                        "        self.assertEqual(slugify('Hello World'), 'hello-world')\n\n\n"
+                        "if __name__ == '__main__':\n"
+                        "    unittest.main()\n"
+                    ),
+                ),
+            ),
+            expected_changed_paths=("tests/test_slugs.py",),
+            verifier_profile=VerifierProfile(
+                name="p39-test-slug-whitespace-unittest",
+                allowed_paths=("tests/test_slugs.py",),
+                commands=(
+                    _python_check(
+                        "whitespace-regression-test-present",
+                        (
+                            "from pathlib import Path\n"
+                            "text = Path('tests/test_slugs.py').read_text()\n"
+                            "assert 'test_collapses_repeated_whitespace' in text\n"
+                        ),
+                    ),
+                    _unittest_command(),
+                ),
+            ),
+            worker_prompt=(
+                "The implementation is already correct. Add only a unittest named "
+                "test_collapses_repeated_whitespace proving slugify('  A   B  ') == 'a-b'. "
+                "Do not edit src/slugs.py."
+            ),
+            task_intent="add missing slug whitespace regression test",
+        ),
+        DeclarativeShadowCase(
+            case_id="test_add_percent_bounds",
+            task_family="TEST_ADD",
+            difficulty_class="small_regression_test",
+            required_capabilities={"testing": 0.75},
+            fixture_files=(
+                CampaignFile(
+                    path="src/percent.py",
+                    content=(
+                        "def bounded_percent(value: int) -> int:\n"
+                        "    return max(0, min(value, 100))\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="tests/test_percent.py",
+                    content=(
+                        common_import
+                        + "import unittest\n\n"
+                        "from percent import bounded_percent\n\n\n"
+                        "class PercentTests(unittest.TestCase):\n"
+                        "    def test_clamps_negative(self) -> None:\n"
+                        "        self.assertEqual(bounded_percent(-3), 0)\n\n\n"
+                        "if __name__ == '__main__':\n"
+                        "    unittest.main()\n"
+                    ),
+                ),
+            ),
+            expected_changed_paths=("tests/test_percent.py",),
+            verifier_profile=VerifierProfile(
+                name="p39-test-percent-bounds-unittest",
+                allowed_paths=("tests/test_percent.py",),
+                commands=(
+                    _python_check(
+                        "upper-bound-percent-test-present",
+                        (
+                            "from pathlib import Path\n"
+                            "text = Path('tests/test_percent.py').read_text()\n"
+                            "assert 'test_clamps_above_one_hundred' in text\n"
+                        ),
+                    ),
+                    _unittest_command(),
+                ),
+            ),
+            worker_prompt=(
+                "The implementation is already correct. Add only a unittest named "
+                "test_clamps_above_one_hundred proving bounded_percent(104) == 100. "
+                "Do not edit src/percent.py."
+            ),
+            task_intent="add missing percent upper-bound regression test",
+        ),
+        DeclarativeShadowCase(
+            case_id="test_add_default_none",
+            task_family="TEST_ADD",
+            difficulty_class="small_regression_test",
+            required_capabilities={"testing": 0.75},
+            fixture_files=(
+                CampaignFile(
+                    path="src/defaults.py",
+                    content=(
+                        "def default_if_none(value: str | None, fallback: str) -> str:\n"
+                        "    return fallback if value is None else value\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="tests/test_defaults.py",
+                    content=(
+                        common_import
+                        + "import unittest\n\n"
+                        "from defaults import default_if_none\n\n\n"
+                        "class DefaultTests(unittest.TestCase):\n"
+                        "    def test_keeps_non_none_value(self) -> None:\n"
+                        "        self.assertEqual(default_if_none('x', 'fallback'), 'x')\n\n\n"
+                        "if __name__ == '__main__':\n"
+                        "    unittest.main()\n"
+                    ),
+                ),
+            ),
+            expected_changed_paths=("tests/test_defaults.py",),
+            verifier_profile=VerifierProfile(
+                name="p39-test-default-none-unittest",
+                allowed_paths=("tests/test_defaults.py",),
+                commands=(
+                    _python_check(
+                        "none-regression-test-present",
+                        (
+                            "from pathlib import Path\n"
+                            "text = Path('tests/test_defaults.py').read_text()\n"
+                            "assert 'test_uses_fallback_for_none' in text\n"
+                        ),
+                    ),
+                    _unittest_command(),
+                ),
+            ),
+            worker_prompt=(
+                "The implementation is already correct. Add only a unittest named "
+                "test_uses_fallback_for_none proving default_if_none(None, 'fallback') "
+                "returns 'fallback'. Do not edit src/defaults.py."
+            ),
+            task_intent="add missing default-none regression test",
+        ),
+        DeclarativeShadowCase(
+            case_id="test_add_dedupe_order",
+            task_family="TEST_ADD",
+            difficulty_class="small_regression_test",
+            required_capabilities={"testing": 0.75},
+            fixture_files=(
+                CampaignFile(
+                    path="src/dedupe.py",
+                    content=(
+                        "def dedupe(values: list[str]) -> list[str]:\n"
+                        "    return list(dict.fromkeys(values))\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="tests/test_dedupe.py",
+                    content=(
+                        common_import
+                        + "import unittest\n\n"
+                        "from dedupe import dedupe\n\n\n"
+                        "class DedupeTests(unittest.TestCase):\n"
+                        "    def test_removes_duplicates(self) -> None:\n"
+                        "        self.assertEqual(dedupe(['a', 'a']), ['a'])\n\n\n"
+                        "if __name__ == '__main__':\n"
+                        "    unittest.main()\n"
+                    ),
+                ),
+            ),
+            expected_changed_paths=("tests/test_dedupe.py",),
+            verifier_profile=VerifierProfile(
+                name="p39-test-dedupe-order-unittest",
+                allowed_paths=("tests/test_dedupe.py",),
+                commands=(
+                    _python_check(
+                        "order-regression-test-present",
+                        (
+                            "from pathlib import Path\n"
+                            "text = Path('tests/test_dedupe.py').read_text()\n"
+                            "assert 'test_preserves_first_seen_order' in text\n"
+                        ),
+                    ),
+                    _unittest_command(),
+                ),
+            ),
+            worker_prompt=(
+                "The implementation is already correct. Add only a unittest named "
+                "test_preserves_first_seen_order proving dedupe(['b', 'a', 'b']) "
+                "returns ['b', 'a']. Do not edit src/dedupe.py."
+            ),
+            task_intent="add missing dedupe order regression test",
         ),
         DeclarativeShadowCase(
             case_id="refactor_text_stats",
@@ -217,6 +580,227 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 "or add dependencies. Run python3 -B -m unittest discover -s tests."
             ),
             task_intent="perform bounded behavior-preserving refactor",
+        ),
+        DeclarativeShadowCase(
+            case_id="refactor_average",
+            task_family="REFACTOR",
+            difficulty_class="behavior_preserving_structure",
+            required_capabilities={"implementation": 0.78, "testing": 0.65},
+            fixture_files=(
+                CampaignFile(
+                    path="src/average.py",
+                    content=(
+                        "def average(values: list[int]) -> float:\n"
+                        "    cleaned = [value for value in values if value is not None]\n"
+                        "    return sum(cleaned) / len(cleaned)\n\n\n"
+                        "def count_values(values: list[int]) -> int:\n"
+                        "    cleaned = [value for value in values if value is not None]\n"
+                        "    return len(cleaned)\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="tests/test_average.py",
+                    content=(
+                        common_import
+                        + "import unittest\n\n"
+                        "from average import average, count_values\n\n\n"
+                        "class AverageTests(unittest.TestCase):\n"
+                        "    def test_average_ignores_none(self) -> None:\n"
+                        "        self.assertEqual(average([2, None, 4]), 3)\n\n"
+                        "    def test_count_ignores_none(self) -> None:\n"
+                        "        self.assertEqual(count_values([2, None, 4]), 2)\n\n\n"
+                        "if __name__ == '__main__':\n"
+                        "    unittest.main()\n"
+                    ),
+                ),
+            ),
+            expected_changed_paths=("src/average.py",),
+            verifier_profile=VerifierProfile(
+                name="p39-refactor-average-unittest",
+                allowed_paths=("src/average.py",),
+                commands=(
+                    _python_check(
+                        "average-helper-present",
+                        (
+                            "from pathlib import Path\n"
+                            "text = Path('src/average.py').read_text()\n"
+                            "assert 'def _non_empty_values' in text\n"
+                        ),
+                    ),
+                    _unittest_command(),
+                ),
+            ),
+            worker_prompt=(
+                "Refactor src/average.py only so filtering non-None values is shared "
+                "through a helper named _non_empty_values. Preserve behavior and do not edit tests."
+            ),
+            task_intent="perform bounded average refactor",
+        ),
+        DeclarativeShadowCase(
+            case_id="refactor_names",
+            task_family="REFACTOR",
+            difficulty_class="behavior_preserving_structure",
+            required_capabilities={"implementation": 0.78, "testing": 0.65},
+            fixture_files=(
+                CampaignFile(
+                    path="src/names.py",
+                    content=(
+                        "def display_name(first: str, last: str) -> str:\n"
+                        "    return f'{first.strip()} {last.strip()}'\n\n\n"
+                        "def initials(first: str, last: str) -> str:\n"
+                        "    return f'{first.strip()[0]}{last.strip()[0]}'.upper()\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="tests/test_names.py",
+                    content=(
+                        common_import
+                        + "import unittest\n\n"
+                        "from names import display_name, initials\n\n\n"
+                        "class NameTests(unittest.TestCase):\n"
+                        "    def test_display_name_strips_parts(self) -> None:\n"
+                        "        self.assertEqual(\n"
+                        "            display_name(' Ada ', ' Lovelace '),\n"
+                        "            'Ada Lovelace',\n"
+                        "        )\n\n"
+                        "    def test_initials_uppercase(self) -> None:\n"
+                        "        self.assertEqual(initials(' ada ', ' lovelace '), 'AL')\n\n\n"
+                        "if __name__ == '__main__':\n"
+                        "    unittest.main()\n"
+                    ),
+                ),
+            ),
+            expected_changed_paths=("src/names.py",),
+            verifier_profile=VerifierProfile(
+                name="p39-refactor-names-unittest",
+                allowed_paths=("src/names.py",),
+                commands=(
+                    _python_check(
+                        "name-helper-present",
+                        (
+                            "from pathlib import Path\n"
+                            "text = Path('src/names.py').read_text()\n"
+                            "assert 'def _clean_name' in text\n"
+                        ),
+                    ),
+                    _unittest_command(),
+                ),
+            ),
+            worker_prompt=(
+                "Refactor src/names.py only so stripping names is shared through a helper "
+                "named _clean_name. Preserve behavior and do not edit tests."
+            ),
+            task_intent="perform bounded names refactor",
+        ),
+        DeclarativeShadowCase(
+            case_id="refactor_query",
+            task_family="REFACTOR",
+            difficulty_class="behavior_preserving_structure",
+            required_capabilities={"implementation": 0.78, "testing": 0.65},
+            fixture_files=(
+                CampaignFile(
+                    path="src/query.py",
+                    content=(
+                        "from urllib.parse import urlencode\n\n\n"
+                        "def search_url(term: str, page: int) -> str:\n"
+                        "    return '/search?' + urlencode({'q': term, 'page': page})\n\n\n"
+                        "def export_url(term: str, page: int) -> str:\n"
+                        "    return '/export?' + urlencode({'q': term, 'page': page})\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="tests/test_query.py",
+                    content=(
+                        common_import
+                        + "import unittest\n\n"
+                        "from query import export_url, search_url\n\n\n"
+                        "class QueryTests(unittest.TestCase):\n"
+                        "    def test_search_url(self) -> None:\n"
+                        "        self.assertEqual(search_url('a b', 2), '/search?q=a+b&page=2')\n\n"
+                        "    def test_export_url(self) -> None:\n"
+                        "        self.assertEqual(\n"
+                        "            export_url('a b', 2),\n"
+                        "            '/export?q=a+b&page=2',\n"
+                        "        )\n\n\n"
+                        "if __name__ == '__main__':\n"
+                        "    unittest.main()\n"
+                    ),
+                ),
+            ),
+            expected_changed_paths=("src/query.py",),
+            verifier_profile=VerifierProfile(
+                name="p39-refactor-query-unittest",
+                allowed_paths=("src/query.py",),
+                commands=(
+                    _python_check(
+                        "query-helper-present",
+                        (
+                            "from pathlib import Path\n"
+                            "text = Path('src/query.py').read_text()\n"
+                            "assert 'def _encoded_pairs' in text\n"
+                        ),
+                    ),
+                    _unittest_command(),
+                ),
+            ),
+            worker_prompt=(
+                "Refactor src/query.py only so query string encoding is shared through a "
+                "helper named _encoded_pairs. Preserve behavior and do not edit tests."
+            ),
+            task_intent="perform bounded query refactor",
+        ),
+        DeclarativeShadowCase(
+            case_id="refactor_inventory",
+            task_family="REFACTOR",
+            difficulty_class="behavior_preserving_structure",
+            required_capabilities={"implementation": 0.78, "testing": 0.65},
+            fixture_files=(
+                CampaignFile(
+                    path="src/inventory.py",
+                    content=(
+                        "def order_total(lines: list[dict[str, int]]) -> int:\n"
+                        "    return sum(line['qty'] * line['price'] for line in lines)\n\n\n"
+                        "def order_tax(lines: list[dict[str, int]]) -> int:\n"
+                        "    return sum(line['qty'] * line['price'] for line in lines) // 10\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="tests/test_inventory.py",
+                    content=(
+                        common_import
+                        + "import unittest\n\n"
+                        "from inventory import order_tax, order_total\n\n\n"
+                        "class InventoryTests(unittest.TestCase):\n"
+                        "    def test_total(self) -> None:\n"
+                        "        self.assertEqual(order_total([{'qty': 2, 'price': 300}]), 600)\n\n"
+                        "    def test_tax(self) -> None:\n"
+                        "        self.assertEqual(order_tax([{'qty': 2, 'price': 300}]), 60)\n\n\n"
+                        "if __name__ == '__main__':\n"
+                        "    unittest.main()\n"
+                    ),
+                ),
+            ),
+            expected_changed_paths=("src/inventory.py",),
+            verifier_profile=VerifierProfile(
+                name="p39-refactor-inventory-unittest",
+                allowed_paths=("src/inventory.py",),
+                commands=(
+                    _python_check(
+                        "line-total-helper-present",
+                        (
+                            "from pathlib import Path\n"
+                            "text = Path('src/inventory.py').read_text()\n"
+                            "assert 'def _line_total' in text\n"
+                        ),
+                    ),
+                    _unittest_command(),
+                ),
+            ),
+            worker_prompt=(
+                "Refactor src/inventory.py only so line total calculation is shared through "
+                "a helper named _line_total. Preserve behavior and do not edit tests."
+            ),
+            task_intent="perform bounded inventory refactor",
         ),
         DeclarativeShadowCase(
             case_id="multi_file_labels",
@@ -284,7 +868,247 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
             ),
             task_intent="make bounded multi-file report label change",
         ),
-    )
+        DeclarativeShadowCase(
+            case_id="multi_file_checkout_tax",
+            task_family="MULTI_FILE_CHANGE",
+            difficulty_class="small_two_file_feature",
+            required_capabilities={"implementation": 0.82, "testing": 0.65},
+            fixture_files=(
+                CampaignFile(path="src/tax.py", content="TAX_RATE = 0.1\n"),
+                CampaignFile(
+                    path="src/checkout.py",
+                    content=(
+                        "from tax import TAX_RATE\n\n\n"
+                        "def total_with_tax(cents: int) -> int:\n"
+                        "    return cents + int(cents * TAX_RATE)\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="tests/test_checkout.py",
+                    content=(
+                        common_import
+                        + "import unittest\n\n"
+                        "from checkout import total_with_tax\n\n\n"
+                        "class CheckoutTests(unittest.TestCase):\n"
+                        "    def test_total_uses_new_tax_rate(self) -> None:\n"
+                        "        self.assertEqual(total_with_tax(1000), 1120)\n\n\n"
+                        "if __name__ == '__main__':\n"
+                        "    unittest.main()\n"
+                    ),
+                ),
+            ),
+            expected_changed_paths=("src/tax.py", "src/checkout.py"),
+            verifier_profile=VerifierProfile(
+                name="p39-multi-checkout-tax-unittest",
+                allowed_paths=("src/tax.py", "src/checkout.py"),
+                commands=(
+                    _python_check(
+                        "tax-and-checkout-changed",
+                        (
+                            "import subprocess\n"
+                            "paths = set(\n"
+                            "    subprocess.check_output(\n"
+                            "        ['git', 'diff', '--name-only', 'HEAD']\n"
+                            "    ).decode().split()\n"
+                            ")\n"
+                            "assert {'src/tax.py', 'src/checkout.py'} <= paths\n"
+                        ),
+                    ),
+                    _unittest_command(),
+                ),
+            ),
+            worker_prompt=(
+                "Make total_with_tax use a 12 percent tax rate as a bounded two-file "
+                "change: update the reusable rate in src/tax.py and adjust src/checkout.py "
+                "so the behavior is explicit. Do not edit tests."
+            ),
+            task_intent="make bounded multi-file checkout tax change",
+        ),
+        DeclarativeShadowCase(
+            case_id="multi_file_config_title",
+            task_family="MULTI_FILE_CHANGE",
+            difficulty_class="small_two_file_feature",
+            required_capabilities={"implementation": 0.82, "testing": 0.65},
+            fixture_files=(
+                CampaignFile(path="src/config.py", content="DEFAULT_TITLE = 'Untitled'\n"),
+                CampaignFile(
+                    path="src/render.py",
+                    content=(
+                        "from config import DEFAULT_TITLE\n\n\n"
+                        "def page_title(value: str | None) -> str:\n"
+                        "    return value or DEFAULT_TITLE\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="tests/test_render.py",
+                    content=(
+                        common_import
+                        + "import unittest\n\n"
+                        "from render import page_title\n\n\n"
+                        "class RenderTests(unittest.TestCase):\n"
+                        "    def test_default_title_has_prefix(self) -> None:\n"
+                        "        self.assertEqual(page_title(None), 'PAO: Untitled')\n\n\n"
+                        "if __name__ == '__main__':\n"
+                        "    unittest.main()\n"
+                    ),
+                ),
+            ),
+            expected_changed_paths=("src/config.py", "src/render.py"),
+            verifier_profile=VerifierProfile(
+                name="p39-multi-config-title-unittest",
+                allowed_paths=("src/config.py", "src/render.py"),
+                commands=(
+                    _python_check(
+                        "config-and-render-changed",
+                        (
+                            "import subprocess\n"
+                            "paths = set(\n"
+                            "    subprocess.check_output(\n"
+                            "        ['git', 'diff', '--name-only', 'HEAD']\n"
+                            "    ).decode().split()\n"
+                            ")\n"
+                            "assert {'src/config.py', 'src/render.py'} <= paths\n"
+                        ),
+                    ),
+                    _unittest_command(),
+                ),
+            ),
+            worker_prompt=(
+                "Make the default title include a PAO: prefix as a bounded two-file change: "
+                "put the reusable prefix/default data in src/config.py and consume it from "
+                "src/render.py. Do not edit tests."
+            ),
+            task_intent="make bounded multi-file default title change",
+        ),
+        DeclarativeShadowCase(
+            case_id="multi_file_routes",
+            task_family="MULTI_FILE_CHANGE",
+            difficulty_class="small_two_file_feature",
+            required_capabilities={"implementation": 0.82, "testing": 0.65},
+            fixture_files=(
+                CampaignFile(
+                    path="src/slugger.py",
+                    content=(
+                        "def slug(value: str) -> str:\n"
+                        "    return value.strip().lower().replace(' ', '-')\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="src/routes.py",
+                    content=(
+                        "from slugger import slug\n\n\n"
+                        "def article_path(title: str) -> str:\n"
+                        "    return '/' + slug(title)\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="tests/test_routes.py",
+                    content=(
+                        common_import
+                        + "import unittest\n\n"
+                        "from routes import article_path\n\n\n"
+                        "class RouteTests(unittest.TestCase):\n"
+                        "    def test_article_path_has_articles_prefix(self) -> None:\n"
+                        "        self.assertEqual(\n"
+                        "            article_path('Hello World'),\n"
+                        "            '/articles/hello-world',\n"
+                        "        )\n\n\n"
+                        "if __name__ == '__main__':\n"
+                        "    unittest.main()\n"
+                    ),
+                ),
+            ),
+            expected_changed_paths=("src/slugger.py", "src/routes.py"),
+            verifier_profile=VerifierProfile(
+                name="p39-multi-routes-unittest",
+                allowed_paths=("src/slugger.py", "src/routes.py"),
+                commands=(
+                    _python_check(
+                        "slugger-and-routes-changed",
+                        (
+                            "import subprocess\n"
+                            "paths = set(\n"
+                            "    subprocess.check_output(\n"
+                            "        ['git', 'diff', '--name-only', 'HEAD']\n"
+                            "    ).decode().split()\n"
+                            ")\n"
+                            "assert {'src/slugger.py', 'src/routes.py'} <= paths\n"
+                        ),
+                    ),
+                    _unittest_command(),
+                ),
+            ),
+            worker_prompt=(
+                "Make article_path return /articles/<slug> as a bounded two-file change: "
+                "add reusable path-segment behavior in src/slugger.py and use it in "
+                "src/routes.py. Do not edit tests."
+            ),
+            task_intent="make bounded multi-file article route change",
+        ),
+        DeclarativeShadowCase(
+            case_id="multi_file_metrics_report",
+            task_family="MULTI_FILE_CHANGE",
+            difficulty_class="small_two_file_feature",
+            required_capabilities={"implementation": 0.82, "testing": 0.65},
+            fixture_files=(
+                CampaignFile(
+                    path="src/metrics.py",
+                    content=(
+                        "def rate(successes: int, attempts: int) -> float:\n"
+                        "    return successes / attempts\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="src/summary.py",
+                    content=(
+                        "from metrics import rate\n\n\n"
+                        "def pass_rate_label(successes: int, attempts: int) -> str:\n"
+                        "    return f'{rate(successes, attempts):.2f}'\n"
+                    ),
+                ),
+                CampaignFile(
+                    path="tests/test_summary.py",
+                    content=(
+                        common_import
+                        + "import unittest\n\n"
+                        "from summary import pass_rate_label\n\n\n"
+                        "class SummaryTests(unittest.TestCase):\n"
+                        "    def test_pass_rate_label_is_percent(self) -> None:\n"
+                        "        self.assertEqual(pass_rate_label(3, 4), '75%')\n\n\n"
+                        "if __name__ == '__main__':\n"
+                        "    unittest.main()\n"
+                    ),
+                ),
+            ),
+            expected_changed_paths=("src/metrics.py", "src/summary.py"),
+            verifier_profile=VerifierProfile(
+                name="p39-multi-metrics-report-unittest",
+                allowed_paths=("src/metrics.py", "src/summary.py"),
+                commands=(
+                    _python_check(
+                        "metrics-and-summary-changed",
+                        (
+                            "import subprocess\n"
+                            "paths = set(\n"
+                            "    subprocess.check_output(\n"
+                            "        ['git', 'diff', '--name-only', 'HEAD']\n"
+                            "    ).decode().split()\n"
+                            ")\n"
+                            "assert {'src/metrics.py', 'src/summary.py'} <= paths\n"
+                        ),
+                    ),
+                    _unittest_command(),
+                ),
+            ),
+            worker_prompt=(
+                "Make pass_rate_label return a whole-number percent like 75% as a bounded "
+                "two-file change: put reusable percent conversion in src/metrics.py and use "
+                "it from src/summary.py. Do not edit tests."
+            ),
+            task_intent="make bounded multi-file metrics report change",
+        ),
+    ]
+    return tuple(cases)
 
 
 class _SubprocessWorkerHandle:
@@ -303,10 +1127,20 @@ class _SubprocessWorkerHandle:
         self.timeout_seconds = timeout_seconds
 
     def wait(self) -> WorkerExecutionResult:
-        stdout, stderr = self.process.communicate(timeout=self.timeout_seconds)
+        timed_out = False
+        try:
+            stdout, stderr = self.process.communicate(timeout=self.timeout_seconds)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            self.process.kill()
+            stdout, stderr = self.process.communicate()
         finished_at = datetime.now(UTC)
         exit_code = self.process.returncode
         stderr_tail = stderr[-4000:]
+        if timed_out:
+            stderr_tail = (
+                f"WORKER_TIMEOUT after {self.timeout_seconds} seconds\n" + stderr_tail
+            )[-4000:]
         if exit_code == 0 and len(stderr) > 2000:
             stderr_tail = "OMITTED_SUCCESSFUL_CODEX_CLI_DIAGNOSTICS"
         return WorkerExecutionResult(
@@ -319,6 +1153,7 @@ class _SubprocessWorkerHandle:
             exit_code=exit_code,
             stdout_tail=stdout[-12000:],
             stderr_tail=stderr_tail,
+            timed_out=timed_out,
         )
 
 
@@ -422,7 +1257,7 @@ def main() -> int:
         type=Path,
         default=Path(".personal-ai-orchestrator/p39-shadow"),
     )
-    parser.add_argument("--max-observations", type=int, default=4)
+    parser.add_argument("--max-observations", type=int, default=20)
     parser.add_argument("--case", action="append", dest="case_ids")
     parser.add_argument("--list-cases", action="store_true")
     args = parser.parse_args()
