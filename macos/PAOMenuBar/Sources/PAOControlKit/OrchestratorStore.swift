@@ -1,6 +1,24 @@
 import Foundation
 import SwiftUI
 
+/// Structured quick-submit outcome. Daemon values (task id, state, sanitized detail)
+/// are kept verbatim; the presentation layer turns them into localized text.
+public enum SubmitNotice: Equatable, Sendable {
+    case submitted(taskId: String, state: String)
+    case duplicateBlocked(windowSeconds: Int)
+    case failed(detail: String)
+    case malformedResponse
+}
+
+/// Structured cancellation outcome with daemon semantics preserved verbatim.
+public enum CancelNotice: Equatable, Sendable {
+    case cancelled(taskId: String)
+    case alreadyCancelled(taskId: String)
+    case runningConflict(taskId: String)
+    case failed(detail: String)
+    case malformedResponse
+}
+
 /// Client-side display state. Authoritative state is always reloaded from the daemon;
 /// this store keeps no durable task database of its own.
 @MainActor
@@ -11,8 +29,8 @@ public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var activeStatus: ActiveStatusView?
     @Published public private(set) var lastError: PAOClientError?
     @Published public private(set) var lastSubmittedTaskId: String?
-    @Published public private(set) var submitNotice: String?
-    @Published public private(set) var cancellationNotice: String?
+    @Published public private(set) var submitNotice: SubmitNotice?
+    @Published public private(set) var cancellationNotice: CancelNotice?
     @Published public var menuVisible: Bool = false
 
     public let socketPath: String
@@ -142,6 +160,11 @@ public final class OrchestratorStore: ObservableObject {
             tasks = nil
             providers = nil
             activeStatus = nil
+            // Ephemeral operation success state claims daemon authority; once the
+            // connection is gone it must not linger as if still authoritative.
+            lastSubmittedTaskId = nil
+            submitNotice = nil
+            cancellationNotice = nil
         }
     }
 
@@ -155,7 +178,7 @@ public final class OrchestratorStore: ObservableObject {
         if let last = lastSubmit,
            last.intent == trimmed,
            Date().timeIntervalSince(last.at) < Self.duplicateSubmitWindow {
-            submitNotice = "Duplicate submission blocked (same intent within \(Int(Self.duplicateSubmitWindow))s)."
+            submitNotice = .duplicateBlocked(windowSeconds: Int(Self.duplicateSubmitWindow))
             return
         }
         let suffix = idFactory()
@@ -168,14 +191,14 @@ public final class OrchestratorStore: ObservableObject {
             let task = try await client.submit(request)
             lastSubmit = (trimmed, Date())
             lastSubmittedTaskId = task.taskId
-            submitNotice = "Submitted task \(task.taskId) (state \(task.state))."
+            submitNotice = .submitted(taskId: task.taskId, state: task.state)
             ClientLog.operation("submit", outcome: "ok")
             await refreshOnce()
         } catch let error as PAOClientError {
-            submitNotice = "Submit failed: \(error.displayDetail)"
+            submitNotice = .failed(detail: error.displayDetail)
             ClientLog.operation("submit", outcome: error.logCode)
         } catch {
-            submitNotice = "Submit failed: malformed response."
+            submitNotice = .malformedResponse
             ClientLog.operation("submit", outcome: "malformed")
         }
     }
@@ -185,20 +208,19 @@ public final class OrchestratorStore: ObservableObject {
         do {
             let result = try await client.cancel(taskId: taskId)
             cancellationNotice = result.cancelledNow
-                ? "Task \(taskId) cancelled."
-                : "Task \(taskId) was already cancelled."
+                ? .cancelled(taskId: taskId)
+                : .alreadyCancelled(taskId: taskId)
             ClientLog.operation("cancel", outcome: "ok")
             await refreshOnce()
         } catch let error as PAOClientError {
             if error.isRunningCancelConflict {
-                cancellationNotice =
-                    "Task \(taskId) is RUNNING: cancellation requires the host execution supervisor (409)."
+                cancellationNotice = .runningConflict(taskId: taskId)
             } else {
-                cancellationNotice = "Cancel failed: \(error.displayDetail)"
+                cancellationNotice = .failed(detail: error.displayDetail)
             }
             ClientLog.operation("cancel", outcome: error.logCode)
         } catch {
-            cancellationNotice = "Cancel failed: malformed response."
+            cancellationNotice = .malformedResponse
             ClientLog.operation("cancel", outcome: "malformed")
         }
     }

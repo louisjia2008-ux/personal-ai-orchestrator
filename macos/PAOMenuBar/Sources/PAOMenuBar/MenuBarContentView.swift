@@ -28,11 +28,11 @@ struct MenuBarContentView: View {
     private var header: some View {
         HStack {
             Image(systemName: store.statusSummary.systemImage)
-            Text(store.statusSummary.title)
+            Text(L10n.statusTitle(store.statusSummary))
                 .font(.headline)
             Spacer()
             if store.connection.isConnected {
-                Text("connected")
+                Text(L10n.connectedLabel)
                     .foregroundStyle(.secondary)
                     .font(.caption)
             } else {
@@ -45,21 +45,9 @@ struct MenuBarContentView: View {
 
     private var disconnectionText: String {
         if case .disconnected(let reason) = store.connection {
-            return reasonDisplay(reason)
+            return L10n.disconnectionReason(reason)
         }
         return ""
-    }
-
-    private func reasonDisplay(_ reason: ConnectionState.DisconnectionReason) -> String {
-        switch reason {
-        case .daemonNotRunning: return "daemon not running"
-        case .socketInvalid: return "socket invalid"
-        case .socketPathTooLong(let length): return "socket path too long (\(length) bytes)"
-        case .accessDenied: return "permission denied"
-        case .apiVersionMismatch(let version): return "API version mismatch (\(version))"
-        case .malformedResponse: return "malformed response"
-        case .transportFailure: return "transport failure"
-        }
     }
 
     private var taskCountsSection: some View {
@@ -71,12 +59,12 @@ struct MenuBarContentView: View {
             Label("\(counts.verified)", systemImage: "checkmark.seal")
         }
         .font(.callout)
-        .help("Running / Ready+Submitted / Blocked / Verified+Completed")
+        .help(L10n.taskCountsHelp)
     }
 
     private var recentTasksSection: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Recent tasks").font(.subheadline).foregroundStyle(.secondary)
+            Text(L10n.recentTasks).font(.subheadline).foregroundStyle(.secondary)
             if let tasks = store.tasks?.tasks, !tasks.isEmpty {
                 ForEach(tasks.prefix(10)) { task in
                     HStack {
@@ -87,42 +75,42 @@ struct MenuBarContentView: View {
                         Text(task.state)
                             .font(.caption)
                             .foregroundStyle(task.state == "BLOCKED" ? Color.red : Color.secondary)
-                        Button("Cancel") {
+                        Button(L10n.cancel) {
                             Task { await store.cancel(taskId: task.taskId) }
                         }
                         .controlSize(.mini)
                         .disabled(task.state == "CANCELLED" || task.state == "COMPLETED"
                                   || task.state == "FAILED")
-                        .help("Cancel via POST /v1/tasks/{id}/cancel; RUNNING tasks fail closed (409).")
+                        .help(L10n.cancelHelp)
                     }
                 }
             } else {
-                Text("No tasks").font(.caption).foregroundStyle(.secondary)
+                Text(L10n.noTasks).font(.caption).foregroundStyle(.secondary)
             }
             if let notice = store.cancellationNotice {
-                Text(notice).font(.caption2).foregroundStyle(.orange)
+                Text(L10n.cancelNotice(notice)).font(.caption2).foregroundStyle(.orange)
             }
         }
     }
 
     private var providerSection: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Providers / quota").font(.subheadline).foregroundStyle(.secondary)
+            Text(L10n.providersQuota).font(.subheadline).foregroundStyle(.secondary)
             if let providers = store.providers?.providers, !providers.isEmpty {
                 ForEach(providers) { provider in
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("\(provider.displayName) (\(provider.accountCount) account\(provider.accountCount == 1 ? "" : "s"))")
+                        Text("\(provider.displayName) (\(L10n.accountsCount(provider.accountCount)))")
                             .font(.callout)
                         ForEach(provider.quotaPools) { pool in
                             Text(
                                 "  \(pool.name): \(pool.state.lowercased())"
-                                    + " · confidence \(QuotaRendering.confidenceBadge(pool.confidence))"
-                                    + " · source \(pool.measurementSourceType)"
+                                    + " · \(L10n.quotaConfidenceLabel) \(QuotaRendering.confidenceBadge(pool.confidence))"
+                                    + " · \(L10n.quotaSourceLabel) \(pool.measurementSourceType)"
                             )
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             ForEach(pool.windows, id: \.windowId) { window in
-                                let remaining = QuotaRendering.remainingText(
+                                let remaining = L10n.quotaRemaining(
                                     fraction: window.remainingFraction,
                                     confidence: window.confidence
                                 )
@@ -133,18 +121,18 @@ struct MenuBarContentView: View {
                         }
                         ForEach(provider.executionTargets) { target in
                             let observed = target.observedAvailability.map { "\($0.state)" } ?? "NONE"
-                            Text("  target \(target.executionTargetId): \(observed)")
+                            Text("  \(L10n.providerTargetLabel) \(target.executionTargetId): \(observed)")
                                 .font(.caption2)
                                 .foregroundStyle(
                                     (target.observedAvailability?.state == "EXHAUSTED_OBSERVED"
-                                     || target.observedAvailability?.state == "COOLDOWN")
+                                      || target.observedAvailability?.state == "COOLDOWN")
                                         ? Color.orange : Color.secondary
                                 )
                         }
                     }
                 }
             } else if store.connection.isConnected {
-                Text("No providers registered").font(.caption).foregroundStyle(.secondary)
+                Text(L10n.noProviders).font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -152,7 +140,7 @@ struct MenuBarContentView: View {
     private var activeStatusSection: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack {
-                Text("Production ACTIVE").font(.subheadline).foregroundStyle(.secondary)
+                Text(L10n.productionActive).font(.subheadline).foregroundStyle(.secondary)
                 Spacer()
                 Text(store.activeStatus?.productionActive ?? "UNKNOWN")
                     .font(.callout.bold())
@@ -174,11 +162,11 @@ struct MenuBarContentView: View {
                 .truncationMode(.middle)
                 .foregroundStyle(.tertiary)
             Spacer()
-            Button("Refresh") {
+            Button(L10n.refresh) {
                 Task { await store.refreshNow() }
             }
             .controlSize(.mini)
-            Button("Quit") {
+            Button(L10n.quit) {
                 NSApplication.shared.terminate(nil)
             }
             .controlSize(.mini)

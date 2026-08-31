@@ -3,11 +3,18 @@ import PackageDescription
 
 let package = Package(
     name: "PAOMenuBar",
+    defaultLocalization: "en",
     platforms: [.macOS(.v13)],
     targets: [
         .target(
             name: "PAOControlKit",
-            path: "Sources/PAOControlKit"
+            path: "Sources/PAOControlKit",
+            resources: [
+                // .copy preserves the canonical "zh-Hans.lproj" casing; .process
+                // lowercases it, which CFBundle then fails to match case-sensitively.
+                .copy("Resources/en.lproj"),
+                .copy("Resources/zh-Hans.lproj"),
+            ]
         ),
         .executableTarget(
             name: "PAOMenuBar",

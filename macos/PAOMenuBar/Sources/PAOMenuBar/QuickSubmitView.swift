@@ -9,21 +9,21 @@ struct QuickSubmitView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("Quick submit").font(.subheadline).foregroundStyle(.secondary)
+            Text(L10n.quickSubmit).font(.subheadline).foregroundStyle(.secondary)
             HStack {
-                TextField("Task intent (stored as intent, never executed)", text: $intent)
+                TextField(L10n.submitPlaceholder, text: $intent)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(submit)
-                Button(submitting ? "…" : "Submit", action: submit)
+                Button(submitting ? "…" : L10n.submit, action: submit)
                     .disabled(submitting || intent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             if let taskId = store.lastSubmittedTaskId {
-                Text("Authoritative task id: \(taskId)")
+                Text(L10n.authoritativeTaskId(taskId))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.green)
             }
             if let notice = store.submitNotice {
-                Text(notice).font(.caption2).foregroundStyle(.secondary)
+                Text(L10n.submitNotice(notice)).font(.caption2).foregroundStyle(.secondary)
             }
         }
     }

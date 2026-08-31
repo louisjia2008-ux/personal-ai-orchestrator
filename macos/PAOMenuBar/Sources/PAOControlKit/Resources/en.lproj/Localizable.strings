@@ -1,0 +1,52 @@
+/* Presentation strings (English fallback). Raw protocol enums are NOT localized. */
+
+"status.healthy" = "Healthy";
+"status.working" = "Working";
+"status.blocked" = "Blocked";
+"status.quotaLimited" = "Quota limited";
+"status.disconnected" = "Disconnected";
+
+"connection.connected" = "connected";
+
+"reason.daemonNotRunning" = "daemon not running";
+"reason.socketInvalid" = "socket invalid";
+"reason.socketPathTooLong" = "socket path too long (%d bytes)";
+"reason.accessDenied" = "permission denied";
+"reason.apiVersionMismatch" = "API version mismatch (%@)";
+"reason.malformedResponse" = "malformed response";
+"reason.transportFailure" = "transport failure";
+
+"section.recentTasks" = "Recent tasks";
+"section.noTasks" = "No tasks";
+"section.quickSubmit" = "Quick submit";
+"section.providersQuota" = "Providers / quota";
+"section.noProviders" = "No providers registered";
+"section.productionActive" = "Production ACTIVE";
+
+"action.submit" = "Submit";
+"action.cancel" = "Cancel";
+"action.refresh" = "Refresh";
+"action.quit" = "Quit";
+
+"submit.placeholder" = "Task intent (stored as intent, never executed)";
+"submit.authoritativeId" = "Authoritative task id: %@";
+
+"notice.submitted" = "Submitted task %@ (state %@).";
+"notice.duplicateBlocked" = "Duplicate submission blocked (same intent within %d s).";
+"notice.submitFailed" = "Submit failed: %@";
+"notice.submitMalformed" = "Submit failed: malformed response.";
+"notice.cancelled" = "Task %@ cancelled.";
+"notice.alreadyCancelled" = "Task %@ was already cancelled.";
+"notice.runningConflict" = "Task %@ is RUNNING: cancellation requires the host execution supervisor (409).";
+"notice.cancelFailed" = "Cancel failed: %@";
+"notice.cancelMalformed" = "Cancel failed: malformed response.";
+
+"quota.unknown" = "unknown";
+"quota.unknownConfidence" = "unknown (confidence: %@)";
+"quota.confidence" = "confidence";
+"quota.source" = "source";
+"provider.target" = "target";
+"provider.accounts" = "%d accounts";
+
+"help.taskCounts" = "Running / Ready+Submitted / Blocked / Verified+Completed";
+"help.cancel" = "Cancel via POST /v1/tasks/{id}/cancel; RUNNING tasks fail closed (409).";
