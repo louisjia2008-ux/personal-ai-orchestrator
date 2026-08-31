@@ -202,7 +202,9 @@ RAW_FAILURE_ROOT_CAUSE: Codex CLI usage limit
 The report was generated before the final policy-block classifier hardening in this branch, so the
 existing local report preserves the generic append-only `WORKER_PROCESS_FAILURE` classification for
 the 12 usage-limit exits. The raw stderr establishes the root cause, and future matching exits are
-classified as `POLICY_BLOCK`.
+classified as `POLICY_BLOCK`. P3.9.2 adds the observed exhaustion/recovery governor and circuit
+breaker for this case; see
+[`P392_OBSERVED_EXHAUSTION_RECOVERY_GOVERNOR_2026-08-31.md`](P392_OBSERVED_EXHAUSTION_RECOVERY_GOVERNOR_2026-08-31.md).
 
 Blocking reasons remain:
 

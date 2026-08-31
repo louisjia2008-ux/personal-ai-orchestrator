@@ -11,7 +11,10 @@ from personal_ai_orchestrator.shadow_evidence import (
     ShadowCampaignState,
     ShadowCampaignStatus,
     ShadowEvidenceJournal,
+    ShadowFailureClass,
+    ShadowFailureStage,
     ShadowObservation,
+    ShadowQualityOutcome,
 )
 
 NOW = datetime(2026, 8, 30, tzinfo=UTC)
@@ -32,6 +35,9 @@ def observation(
     task_family: str = "implementation",
     quota_confidence: EvidenceConfidence = EvidenceConfidence.EXACT,
     collector_status: QuotaCollectionStatus | None = QuotaCollectionStatus.SUCCESS,
+    failure_class: ShadowFailureClass | None = None,
+    failure_stage: ShadowFailureStage | None = None,
+    quality_outcome: ShadowQualityOutcome | None = None,
 ) -> ShadowObservation:
     return ShadowObservation.build(
         task_id=task_id,
@@ -49,6 +55,11 @@ def observation(
         task_family=task_family,
         quota_confidence=quota_confidence,
         collector_status=collector_status,
+        execution_success=failure_class not in {ShadowFailureClass.POLICY_BLOCK},
+        verification_success=verified,
+        quality_outcome=quality_outcome,
+        failure_class=failure_class,
+        failure_stage=failure_stage,
         predicted_burn_fraction=0.05,
         observed_burn_fraction=0.04,
         verified=verified,
@@ -347,7 +358,10 @@ def test_campaign_policy_snapshot_controls_review_thresholds(tmp_path) -> None:
 
     assert summary.reset_cycles_required == 3
     assert summary.review_eligible is False
-    assert any("need at least 3 observations" in reason for reason in summary.blocking_reasons)
+    assert any(
+        "need at least 3 quality-eligible observations" in reason
+        for reason in summary.blocking_reasons
+    )
 
 
 def test_cohort_scoped_review_eligibility_isolated_by_target_and_pool(tmp_path) -> None:
@@ -414,3 +428,48 @@ def test_regression_blocks_shadow_review_eligibility(tmp_path) -> None:
     summary = journal.summarize(minimum_observations=1, minimum_reset_cycles=1)
     assert summary.review_eligible is False
     assert any("regression" in reason for reason in summary.blocking_reasons)
+
+
+def test_shadow_readiness_uses_quality_eligible_not_total_operational_attempts(
+    tmp_path,
+) -> None:
+    journal = ShadowEvidenceJournal(tmp_path)
+    for index in range(8):
+        append_with_refs(
+            journal,
+            observation(
+                task_id=f"verified-{index}",
+                request_id=f"req-v-{index}",
+                decision_id=f"dec-v-{index}",
+                reset_cycle_ids=(f"week-v-{index}",),
+            ),
+        )
+    for index in range(12):
+        journal.append(
+            observation(
+                task_id=f"blocked-{index}",
+                request_id=f"req-b-{index}",
+                decision_id=f"dec-b-{index}",
+                reset_cycle_ids=(),
+                verified=False,
+                quota_confidence=EvidenceConfidence.UNKNOWN,
+                collector_status=QuotaCollectionStatus.UNKNOWN,
+                failure_class=ShadowFailureClass.POLICY_BLOCK,
+                failure_stage=ShadowFailureStage.INVOCATION,
+                quality_outcome=ShadowQualityOutcome.POLICY_BLOCKED,
+            )
+        )
+
+    summary = journal.summarize(minimum_observations=20, minimum_reset_cycles=2)
+
+    assert summary.real_attempt_count == 20
+    assert summary.observations == 20
+    assert summary.quality_eligible_observations == 8
+    assert summary.verified_observations == 8
+    assert summary.policy_blocks == 12
+    assert summary.review_eligible is False
+    assert any(
+        "quality-eligible observations; have 8" in reason
+        for reason in summary.blocking_reasons
+    )
+    assert all("have 20" not in reason for reason in summary.blocking_reasons)

@@ -44,9 +44,21 @@ from personal_ai_orchestrator.model_registry import (
 )
 from personal_ai_orchestrator.opencode_contract import RoutingMode, RoutingRequest
 from personal_ai_orchestrator.policy_snapshot import PolicySnapshotJournal
+from personal_ai_orchestrator.quota_availability import (
+    QuotaAvailabilityEvidence,
+    QuotaAvailabilityJournal,
+    QuotaAvailabilityState,
+    observe_exhaustion,
+    observe_success,
+)
 from personal_ai_orchestrator.routing_service import RoutingService
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
 from personal_ai_orchestrator.scheduler import TaskProfile
+from personal_ai_orchestrator.shadow_campaign_queue import (
+    CampaignCaseState,
+    CampaignQueueJournal,
+    CampaignQueueSnapshot,
+)
 from personal_ai_orchestrator.shadow_evidence import (
     ShadowAcceptancePolicy,
     ShadowCampaignState,
@@ -150,6 +162,13 @@ class ShadowCaseResult(RegistryModel):
     real_reset_cycles_total: int
     shadow_review_eligible: bool
     time_to_green_seconds: float | None = None
+
+
+class ShadowCampaignRunResult(RegistryModel):
+    results: tuple[ShadowCaseResult, ...]
+    deferred_case_ids: tuple[str, ...]
+    availability: QuotaAvailabilityEvidence | None = None
+    queue: CampaignQueueSnapshot | None = None
 
 
 class WorkerHandle(Protocol):
@@ -257,6 +276,16 @@ def _worker_failure_classification(worker: WorkerExecutionResult) -> FailureClas
         failure_class=failure_class,
         failure_stage=failure_stage,
     )
+
+
+def _availability_reason_for(failure_class: ShadowFailureClass) -> str:
+    if failure_class is ShadowFailureClass.POLICY_BLOCK:
+        return "USAGE_LIMIT"
+    if failure_class is ShadowFailureClass.AUTH_FAILURE:
+        return "AUTH_FAILURE"
+    if failure_class is ShadowFailureClass.TIMEOUT:
+        return "TIMEOUT"
+    return failure_class.value
 
 
 def _safe_child_path(root: Path, relative: str) -> Path:
@@ -632,6 +661,122 @@ def run_shadow_case(
     )
 
 
+def run_shadow_campaign(
+    *,
+    campaign_root: Path,
+    campaign_id: str,
+    cases: Sequence[DeclarativeShadowCase],
+    worker_profile: CampaignWorkerProfile,
+    worker_launcher: WorkerLauncher,
+    repo_head: str,
+    now: datetime | None = None,
+    resume_deferred: bool = False,
+    minimum_cooldown_seconds: float = 3600.0,
+) -> ShadowCampaignRunResult:
+    reference_time = now or datetime.now(UTC)
+    queue_journal = CampaignQueueJournal(campaign_root)
+    availability_journal = QuotaAvailabilityJournal(campaign_root)
+    queue = queue_journal.ensure(
+        campaign_id=campaign_id,
+        execution_target_id=worker_profile.execution_target_id,
+        cases=cases,
+        now=reference_time,
+    )
+    availability = availability_journal.load(worker_profile.execution_target_id)
+    if (
+        resume_deferred
+        and availability is not None
+        and availability.state_at(now=reference_time)
+        in {
+            QuotaAvailabilityState.RECOVERY_PROBE_DUE,
+            QuotaAvailabilityState.AVAILABLE_OBSERVED,
+            QuotaAvailabilityState.RECOVERED_OBSERVED,
+        }
+    ):
+        queue = queue_journal.resume_deferred(now=reference_time)
+
+    case_by_id = {case.case_id: case for case in cases}
+    results: list[ShadowCaseResult] = []
+    deferred_case_ids: tuple[str, ...] = ()
+    for record in queue.cases:
+        if record.case_id not in case_by_id:
+            continue
+        if record.state in {
+            CampaignCaseState.VERIFIED,
+            CampaignCaseState.FAILED,
+            CampaignCaseState.DEFERRED_QUOTA,
+            CampaignCaseState.CANCELLED,
+        }:
+            continue
+        availability = availability_journal.load(worker_profile.execution_target_id)
+        if availability is not None and availability.blocks_quota_billable_launch(
+            now=reference_time
+        ):
+            queue = queue_journal.defer_unfinished_due_to_quota(
+                reason_code=availability.sanitized_reason_code or "OBSERVED_EXHAUSTION",
+                now=reference_time,
+            )
+            deferred_case_ids = queue.deferred_case_ids
+            break
+
+        queue_journal.mark_running(
+            record.case_id,
+            execution_target_id=worker_profile.execution_target_id,
+            now=datetime.now(UTC),
+        )
+        result = run_shadow_case(
+            campaign_root=campaign_root,
+            campaign_id=campaign_id,
+            case=case_by_id[record.case_id],
+            worker_profile=worker_profile,
+            worker_launcher=worker_launcher,
+            repo_head=repo_head,
+        )
+        results.append(result)
+        queue = queue_journal.mark_result(
+            record.case_id,
+            verified=result.verified,
+            failure_class=result.failure_class,
+            observation_id=result.observation_id,
+            now=datetime.now(UTC),
+        )
+
+        previous_availability = availability_journal.load(worker_profile.execution_target_id)
+        if result.failure_class is ShadowFailureClass.POLICY_BLOCK:
+            availability = observe_exhaustion(
+                previous_availability,
+                execution_target_id=worker_profile.execution_target_id,
+                provider_id=worker_profile.provider_id,
+                quota_pool_id=worker_profile.quota_pool_id,
+                observed_at=result.worker.finished_at,
+                sanitized_reason_code=_availability_reason_for(result.failure_class),
+                minimum_cooldown_seconds=minimum_cooldown_seconds,
+            )
+            availability_journal.save(availability)
+            queue = queue_journal.defer_unfinished_due_to_quota(
+                reason_code=availability.sanitized_reason_code or "USAGE_LIMIT",
+                now=datetime.now(UTC),
+            )
+            deferred_case_ids = queue.deferred_case_ids
+            break
+        if result.verified:
+            availability = observe_success(
+                previous_availability,
+                execution_target_id=worker_profile.execution_target_id,
+                provider_id=worker_profile.provider_id,
+                quota_pool_id=worker_profile.quota_pool_id,
+                observed_at=result.worker.finished_at,
+            )
+            availability_journal.save(availability)
+
+    return ShadowCampaignRunResult(
+        results=tuple(results),
+        deferred_case_ids=deferred_case_ids,
+        availability=availability_journal.load(worker_profile.execution_target_id),
+        queue=queue_journal.load(),
+    )
+
+
 def write_campaign_report(
     *,
     campaign_root: Path,
@@ -642,6 +787,17 @@ def write_campaign_report(
     journal = ShadowEvidenceJournal(campaign_root / "shadow-runtime")
     summary = journal.summarize_campaign()
     observations = journal.load_all()
+    queue = CampaignQueueJournal(campaign_root).load()
+    availability_target_id = (
+        observations[-1].manual_execution_target_id
+        if observations
+        else None if queue is None else queue.execution_target_id
+    )
+    availability = (
+        None
+        if availability_target_id is None
+        else QuotaAvailabilityJournal(campaign_root).load(availability_target_id)
+    )
     verified_count = sum(item.verified for item in observations)
     time_to_green_values = [
         item.time_to_green_seconds
@@ -661,6 +817,12 @@ def write_campaign_report(
         },
         "cases": [result.model_dump(mode="json") for result in results],
         "readiness": {
+            "real_attempt_count": summary.real_attempt_count,
+            "quality_eligible_attempt_count": summary.quality_eligible_observations,
+            "verified_outcome_count": verified_count,
+            "policy_block_count": summary.policy_blocks,
+            "model_task_failure_count": summary.model_task_failures,
+            "operational_failure_count": summary.operational_failures,
             "total_real_quality_observations": summary.quality_observations,
             "total_quality_eligible_observations": summary.quality_eligible_observations,
             "total_real_providers": len(
@@ -681,6 +843,17 @@ def write_campaign_report(
             "shadow_review_eligible": summary.review_eligible,
             "production_active": "DISABLED_BY_DESIGN",
             "owner_approval": "ABSENT",
+        },
+        "operational_metrics": {
+            "real_attempt_count": summary.real_attempt_count,
+            "policy_block_count": summary.policy_blocks,
+            "operational_failure_count": summary.operational_failures,
+            "quota_deferred_cases": 0 if queue is None else queue.quota_deferred_cases,
+            "circuit_breaker_trips": 0 if queue is None else queue.circuit_breaker_trips,
+            "availability_state": None if availability is None else availability.state.value,
+            "availability_reason_code": None
+            if availability is None
+            else availability.sanitized_reason_code,
         },
         "quality_metrics": {
             "time_to_green_p50_seconds": _median(time_to_green_values),
@@ -708,6 +881,7 @@ __all__ = [
     "WorkerExecutionResult",
     "create_disposable_repo",
     "run_shadow_case",
+    "run_shadow_campaign",
     "worker_registry",
     "write_campaign_report",
 ]

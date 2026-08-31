@@ -347,6 +347,7 @@ class ShadowObservation(FrozenModel):
 
 class ShadowEvidenceSummary(FrozenModel):
     observations: int
+    real_attempt_count: int
     reset_cycles: int
     real_reset_cycles_observed: int
     synthetic_reset_cycles: int
@@ -370,6 +371,7 @@ class ShadowGroupSummary(FrozenModel):
     task_family: str
     execution_target_id: str
     observations: int
+    real_attempt_count: int
     verified_observations: int
     quality_eligible_observations: int
     model_task_failures: int
@@ -409,6 +411,7 @@ class ShadowCampaignSummary(FrozenModel):
     reset_cycles_required: int
     reset_cycles_observed: int
     real_reset_cycles_observed: int
+    real_attempt_count: int
     quality_observations: int
     synthetic_reset_cycles: int
     unknown_reset_observations: int
@@ -729,18 +732,31 @@ class ShadowEvidenceJournal:
         minimum_real_reset_cycles: int,
         require_zero_regressions: bool,
     ) -> list[str]:
-        verified = sum(item.verified for item in items)
+        quality_eligible = self._quality_eligible_observations(items)
+        quality_verified = sum(
+            item.verified
+            for item in items
+            if item.failure_class
+            in {
+                ShadowFailureClass.NONE,
+                ShadowFailureClass.MODEL_TASK_FAILURE,
+                ShadowFailureClass.VERIFIER_FAILURE,
+            }
+        )
         regressions = sum(item.regression_detected for item in items)
         real_reset_cycles = len(self._real_reset_ids_for_items(items))
         blockers: list[str] = []
-        if len(items) < minimum_observations:
-            blockers.append(f"need at least {minimum_observations} observations; have {len(items)}")
+        if quality_eligible < minimum_observations:
+            blockers.append(
+                f"need at least {minimum_observations} quality-eligible observations; "
+                f"have {quality_eligible}"
+            )
         if real_reset_cycles < minimum_real_reset_cycles:
             blockers.append(
                 f"need at least {minimum_real_reset_cycles} real reset cycles; have {real_reset_cycles}"
             )
-        if verified != len(items):
-            blockers.append("not every Shadow observation has a verified outcome")
+        if quality_verified != quality_eligible:
+            blockers.append("not every quality-eligible Shadow observation has a verified outcome")
         if require_zero_regressions and regressions:
             blockers.append(f"{regressions} verified regression(s) observed")
         return blockers
@@ -768,6 +784,7 @@ class ShadowEvidenceJournal:
         )
         return ShadowEvidenceSummary(
             observations=len(observations),
+            real_attempt_count=len(observations),
             reset_cycles=len(reset_cycles),
             real_reset_cycles_observed=len(real_reset_cycles),
             synthetic_reset_cycles=len(synthetic_reset_cycles),
@@ -885,6 +902,7 @@ class ShadowEvidenceJournal:
                     task_family=task_family,
                     execution_target_id=execution_target_id,
                     observations=len(items),
+                    real_attempt_count=len(items),
                     verified_observations=verified,
                     quality_eligible_observations=self._quality_eligible_observations(items),
                     model_task_failures=self._model_task_failures(items),
@@ -936,7 +954,8 @@ class ShadowEvidenceJournal:
             reset_cycles_required=required,
             reset_cycles_observed=base.reset_cycles,
             real_reset_cycles_observed=base.real_reset_cycles_observed,
-            quality_observations=base.observations,
+            real_attempt_count=base.real_attempt_count,
+            quality_observations=base.quality_eligible_observations,
             synthetic_reset_cycles=base.synthetic_reset_cycles,
             unknown_reset_observations=base.unknown_reset_observations,
             collector_failure_observations=base.collector_failure_observations,

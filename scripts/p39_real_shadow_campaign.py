@@ -16,7 +16,7 @@ from personal_ai_orchestrator.shadow_campaign_runner import (
     CampaignWorkerProfile,
     DeclarativeShadowCase,
     WorkerExecutionResult,
-    run_shadow_case,
+    run_shadow_campaign,
     write_campaign_report,
 )
 from personal_ai_orchestrator.verifier import VerifierCommand, VerifierProfile
@@ -1260,6 +1260,7 @@ def main() -> int:
     parser.add_argument("--max-observations", type=int, default=20)
     parser.add_argument("--case", action="append", dest="case_ids")
     parser.add_argument("--list-cases", action="store_true")
+    parser.add_argument("--resume-deferred", action="store_true")
     args = parser.parse_args()
 
     cases = campaign_cases()
@@ -1273,17 +1274,17 @@ def main() -> int:
     repo_root = Path.cwd()
     repo_head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     probes = probe_workers(repo_root)
-    results = []
-    for case in selected:
-        result = run_shadow_case(
-            campaign_root=args.campaign_root,
-            campaign_id="p39-real-shadow-quality-campaign",
-            case=case,
-            worker_profile=CODEX_PROFILE,
-            worker_launcher=_launch_codex_worker,
-            repo_head=repo_head,
-        )
-        results.append(result)
+    campaign = run_shadow_campaign(
+        campaign_root=args.campaign_root,
+        campaign_id="p39-real-shadow-quality-campaign",
+        cases=selected,
+        worker_profile=CODEX_PROFILE,
+        worker_launcher=_launch_codex_worker,
+        repo_head=repo_head,
+        resume_deferred=args.resume_deferred,
+    )
+    results = list(campaign.results)
+    for result in results:
         print(
             "\t".join(
                 (
@@ -1295,6 +1296,8 @@ def main() -> int:
                 )
             )
         )
+    for case_id in campaign.deferred_case_ids:
+        print(f"{case_id}\tDEFERRED_QUOTA\tNO_MODEL_EXECUTION\tNone\tNone")
 
     report_path = write_campaign_report(
         campaign_root=args.campaign_root,
@@ -1303,7 +1306,7 @@ def main() -> int:
         provider_probe_results=probes,
     )
     print(report_path)
-    return 0 if results else 2
+    return 0 if results or campaign.deferred_case_ids else 2
 
 
 if __name__ == "__main__":
