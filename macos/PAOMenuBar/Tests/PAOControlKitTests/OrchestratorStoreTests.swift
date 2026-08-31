@@ -21,7 +21,7 @@ final class OrchestratorStoreTests: XCTestCase {
         })
         await store.quickSubmit(intent: "demo intent")
         XCTAssertEqual(store.lastSubmittedTaskId, "menubar-abc")
-        XCTAssertEqual(store.submitNotice?.contains("Submitted task menubar-abc"), true)
+        XCTAssertEqual(store.submitNotice, .submitted(taskId: "menubar-abc", state: "SUBMITTED"))
 
         // Duplicate guard: identical intent inside the window must not hit the daemon again.
         let postsBefore = daemon.receivedRequests.filter { $0.method == "POST" && $0.path == "/v1/tasks" }.count
@@ -29,7 +29,7 @@ final class OrchestratorStoreTests: XCTestCase {
         let postsAfter = daemon.receivedRequests.filter { $0.method == "POST" && $0.path == "/v1/tasks" }.count
         XCTAssertEqual(postsBefore, postsAfter)
         XCTAssertEqual(postsAfter, 1)
-        XCTAssertTrue(store.submitNotice?.contains("Duplicate submission blocked") ?? false)
+        XCTAssertEqual(store.submitNotice, .duplicateBlocked(windowSeconds: 5))
 
         // A different intent submits again with a fresh idempotent request pair.
         await store.quickSubmit(intent: "another intent")
@@ -56,10 +56,7 @@ final class OrchestratorStoreTests: XCTestCase {
 
         let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
         await store.cancel(taskId: "t-1")
-        XCTAssertEqual(
-            store.cancellationNotice,
-            "Task t-1 is RUNNING: cancellation requires the host execution supervisor (409)."
-        )
+        XCTAssertEqual(store.cancellationNotice, .runningConflict(taskId: "t-1"))
     }
 
     func testCancelSuccessRefreshesFromAuthoritativeState() async throws {
@@ -77,7 +74,7 @@ final class OrchestratorStoreTests: XCTestCase {
 
         let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
         await store.cancel(taskId: "t-2")
-        XCTAssertEqual(store.cancellationNotice, "Task t-2 cancelled.")
+        XCTAssertEqual(store.cancellationNotice, .cancelled(taskId: "t-2"))
     }
 
     func testRefreshTransitionsConnectionAndLoadsAuthoritativeState() async throws {
@@ -120,6 +117,40 @@ final class OrchestratorStoreTests: XCTestCase {
         XCTAssertNil(store.providers)
         XCTAssertNil(store.activeStatus)
         XCTAssertEqual(store.statusSummary, .disconnected(.daemonNotRunning))
+    }
+
+    /// Regression (human acceptance): after a successful quick submit, losing the
+    /// daemon must ALSO discard the ephemeral success presentation. A stale green
+    /// "authoritative task id" banner must never coexist with a disconnected UI.
+    func testDisconnectAfterSuccessfulSubmitClearsEphemeralSuccessState() async throws {
+        let daemon = TestDaemon()
+        registerStandardRoutes(daemon)
+        daemon.route("POST", "/v1/tasks", status: 201, body: submitResponseBody)
+        let path = temporarySocketPath("submit-outage")
+        try daemon.start(socketPath: path)
+
+        let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
+        await store.quickSubmit(intent: "acceptance intent")
+
+        // Banner is current and authoritative while connected.
+        XCTAssertEqual(store.connection, .connected)
+        XCTAssertEqual(store.lastSubmittedTaskId, "menubar-abc")
+        XCTAssertEqual(store.submitNotice, .submitted(taskId: "menubar-abc", state: "SUBMITTED"))
+        XCTAssertNotNil(store.tasks)
+
+        // Daemon goes away; the socket file lingering maps to staleSocket.
+        daemon.stop()
+        await store.refreshNow()
+        XCTAssertFalse(store.connection.isConnected)
+        XCTAssertEqual(store.statusSummary, .disconnected(.socketInvalid))
+        // Authoritative task cache discarded...
+        XCTAssertNil(store.tasks)
+        XCTAssertNil(store.providers)
+        XCTAssertNil(store.activeStatus)
+        // ...and the ephemeral success banner no longer presented as current state.
+        XCTAssertNil(store.lastSubmittedTaskId)
+        XCTAssertNil(store.submitNotice)
+        XCTAssertNil(store.cancellationNotice)
     }
 
     func testAPIVersionMismatchIsAConnectionState() async throws {

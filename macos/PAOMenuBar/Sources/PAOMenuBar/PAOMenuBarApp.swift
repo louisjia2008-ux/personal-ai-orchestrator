@@ -9,6 +9,9 @@ struct PAOMenuBarApp: App {
     init() {
         let path = SocketDiscovery.resolve()
         _store = StateObject(wrappedValue: OrchestratorStore(socketPath: path))
+        // Acceptance evidence: which localization the bundle machinery resolved
+        // for this launch (follows macOS preferred languages automatically).
+        ClientLog.operation("startup", outcome: "ui_language=\(L10n.resolvedLanguageCode)")
     }
 
     var body: some Scene {
