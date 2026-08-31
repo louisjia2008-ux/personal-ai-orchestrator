@@ -114,3 +114,24 @@ pao active-status        # Production ACTIVE gate (read-only)
 accepts bounded JSON only, validates Host/Origin where present, and returns sanitized error
 codes. macOS limits socket paths to 104 bytes; keep the socket near the filesystem root of
 its state directory.
+
+## Native macOS menu bar client (P4.1)
+
+```bash
+cd macos/PAOMenuBar
+swift build          # debug build
+swift test           # XCTest suite (real UDS round-trips against an in-test daemon)
+swift build -c release
+PAO_CONTROL_SOCKET=/path/to/c.sock .build/release/PAOMenuBar
+```
+
+- Deployment target: macOS 13 (SwiftUI `MenuBarExtra`); built and tested on macOS 26.5 /
+  Swift 6.3.
+- Socket resolution: `defaults write PAOMenuBar controlSocketPath /abs/path.sock`
+  (app domain), then `PAO_CONTROL_SOCKET`, then `~/.personal-ai-orchestrator/control.sock`.
+- `PAO_MENUBAR_STDERR_LOG=1` mirrors sanitized connection/op logs to stderr for acceptance
+  evidence.
+- Refresh: 2 s while the menu is open, 15 s in background, exponential backoff (2 s → 60 s)
+  while disconnected. No high-frequency polling.
+- The app requests no entitlements and no Accessibility/Screen/Full-Disk permissions; it is
+  a plain (unsigned, local) SwiftPM executable talking to one UDS endpoint.
