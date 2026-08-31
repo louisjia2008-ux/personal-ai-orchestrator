@@ -111,4 +111,43 @@ final class InteractiveDashboardTests: XCTestCase {
             XCTAssertNotNil(L10n.catalogString(key: key, language: "zh-Hans"), "missing zh-Hans: \(key)")
         }
     }
+
+    func testNavigateToNeighbourCyclesAndPreservesNothing() async throws {
+        let daemon = TestDaemon()
+        registerStandardRoutes(daemon)
+        let path = temporarySocketPath("navigate")
+        try daemon.start(socketPath: path)
+        defer { daemon.stop() }
+
+        let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
+        await store.refreshNow()
+        let scope = store.cachedTasks
+        XCTAssertFalse(scope.isEmpty, "standard routes should produce tasks")
+
+        // Walk forward through the entire list and assert we wrap back to start.
+        var seen: [String] = []
+        for _ in 0..<scope.count {
+            let next = store.navigateToNeighbour(current: store.selectedTaskId, in: scope, offset: 1)
+            XCTAssertNotNil(next)
+            seen.append(next!)
+        }
+        XCTAssertEqual(seen, scope.map(\.taskId))
+
+        // Walking backward wraps from the first item to the last.
+        let wrapBack = store.navigateToNeighbour(current: scope.first?.taskId, in: scope, offset: -1)
+        XCTAssertEqual(wrapBack, scope.last?.taskId)
+
+        // An empty scope keeps the previous value without mutating anything.
+        let sentinel = "preserve-me"
+        store.selectedTaskId = sentinel
+        let result = store.navigateToNeighbour(current: sentinel, in: [], offset: 1)
+        XCTAssertEqual(result, sentinel)
+        XCTAssertEqual(store.selectedTaskId, sentinel)
+        XCTAssertNil(store.selectedTaskDetail, "an empty scope must not leave a stale detail")
+
+        // An unknown current selection falls back to the first/last according to direction.
+        store.selectedTaskId = "ghost"
+        let next = store.navigateToNeighbour(current: store.selectedTaskId, in: scope, offset: 1)
+        XCTAssertEqual(next, scope.first?.taskId)
+    }
 }
