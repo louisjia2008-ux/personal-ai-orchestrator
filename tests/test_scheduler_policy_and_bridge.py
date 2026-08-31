@@ -23,6 +23,7 @@ from personal_ai_orchestrator.model_registry import (
     QuotaWindowSnapshot,
 )
 from personal_ai_orchestrator.opencode_contract import RoutingMode, RoutingRequest
+from personal_ai_orchestrator.quota_availability import observe_exhaustion, observe_success
 from personal_ai_orchestrator.routing_bridge import build_routing_decision
 from personal_ai_orchestrator.scheduler import RiskClass, TargetTelemetry, TaskProfile, route_task
 
@@ -279,3 +280,81 @@ def test_bridge_is_idempotent_for_identical_inputs() -> None:
         decided_at=NOW,
     )
     assert first.decision_id == second.decision_id
+
+
+def test_weak_negative_observed_exhaustion_removes_candidate() -> None:
+    exhausted = observe_exhaustion(
+        None,
+        execution_target_id="m3-sub",
+        provider_id="minimax",
+        quota_pool_id="pool",
+        observed_at=NOW,
+        sanitized_reason_code="USAGE_LIMIT",
+    )
+
+    decision = route_task(
+        _registry(),
+        task=_task(),
+        now=NOW,
+        known_at=NOW,
+        runtime_availability={"m3-sub": True},
+        observed_availability={"m3-sub": exhausted},
+    )
+
+    candidate = decision.evaluations[0]
+    assert candidate.admitted is False
+    assert candidate.observed_availability_state == "COOLDOWN"
+    assert any(
+        "observed quota availability blocks target" in reason
+        for reason in candidate.reasons
+    )
+    assert decision.selected_execution_target_id is None
+
+
+def test_weak_positive_observed_success_does_not_authorize_unknown_subscription_quota() -> None:
+    registry = _registry()
+    unknown_source = EvidenceSource(
+        source_type=EvidenceSourceType.LOCAL_OBSERVATION,
+        observed_at=NOW,
+        reference="local://observed-success",
+        confidence=EvidenceConfidence.UNKNOWN,
+    )
+    unknown_snapshot = QuotaSnapshot(
+        id="quota-unknown",
+        quota_pool_id="pool",
+        observed_at=NOW,
+        state=QuotaState.UNKNOWN,
+        confidence=EvidenceConfidence.UNKNOWN,
+        source=unknown_source,
+    )
+    registry = registry.model_copy(
+        update={
+            "quota_pools": {
+                "pool": registry.quota_pools["pool"].model_copy(
+                    update={"snapshot": unknown_snapshot}
+                )
+            }
+        }
+    )
+    available = observe_success(
+        None,
+        execution_target_id="m3-sub",
+        provider_id="minimax",
+        quota_pool_id="pool",
+        observed_at=NOW,
+    )
+
+    decision = route_task(
+        registry,
+        task=_task(),
+        now=NOW,
+        known_at=NOW,
+        runtime_availability={"m3-sub": True},
+        observed_availability={"m3-sub": available},
+    )
+
+    candidate = decision.evaluations[0]
+    assert candidate.admitted is False
+    assert candidate.observed_availability_state == "AVAILABLE_OBSERVED"
+    assert any("quota confidence unknown" in reason for reason in candidate.reasons)
+    assert decision.selected_execution_target_id is None

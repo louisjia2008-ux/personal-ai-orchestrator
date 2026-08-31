@@ -1,6 +1,6 @@
 # Integration Status
 
-Status: `INTEGRATION_IMPLEMENTED / LOCAL_MAC_ACCEPTED / P3_9_1_CODEX_ONLY_REAL_SHADOW_QUALITY_CAMPAIGN_RUNTIME_BLOCKED_PARTIAL_ACCEPTED`
+Status: `INTEGRATION_IMPLEMENTED / LOCAL_MAC_ACCEPTED / P3_9_2_OBSERVED_EXHAUSTION_RECOVERY_GOVERNOR_PARTIAL_ACCEPTED`
 
 This document records what the `integration/end-to-end-shadow-safety` line implements and what
 still requires evidence that cannot be fabricated on GitHub-hosted runners.
@@ -232,10 +232,40 @@ Unsupported exact subscription quota/reset surfaces are now analyzed separately.
 policy keeps production ACTIVE exact-only while allowing locally measured or user-declared quota
 windows only as explicitly labeled non-production scheduling hints.
 
+P3.9.2 turns observed provider exhaustion into host-owned admission/backoff state:
+
+```text
+OBSERVED_AVAILABILITY_STATES: UNKNOWN, AVAILABLE_OBSERVED, EXHAUSTED_OBSERVED, COOLDOWN, RECOVERY_PROBE_DUE, RECOVERED_OBSERVED
+WEAK_NEGATIVE_EVIDENCE: may remove an execution target
+WEAK_POSITIVE_EVIDENCE: cannot satisfy exact quota admission or production ACTIVE
+QUALITY_READINESS_COUNTER: quality_eligible_observations, not total operational observations
+```
+
+P3.9.2 seeded sanitized availability from the P3.9.1 usage-limit evidence without rewriting
+historical observations, then ran a bounded Codex-only recovery probe:
+
+```text
+P3.9.2_CAMPAIGN_ROOT: .personal-ai-orchestrator/p392-codex-governor
+P3.9.2_REAL_ATTEMPT_COUNT: 2
+P3.9.2_QUALITY_ELIGIBLE_ATTEMPT_COUNT: 2
+P3.9.2_VERIFIED_OUTCOME_COUNT: 2
+P3.9.2_POLICY_BLOCK_COUNT: 0
+P3.9.2_AVAILABILITY_STATE: RECOVERED_OBSERVED
+P3.9.2_EXHAUSTION_OBSERVED_AT_UTC: 2026-08-30T14:08:24.526784Z
+P3.9.2_RECOVERY_OBSERVED_AT_UTC: 2026-08-31T01:00:28.841398Z
+P3.9.2_EXHAUSTION_TO_RECOVERY_SECONDS: 39124.314614
+P3.9.2_MEASUREMENT_SOURCE: LOCALLY_MEASURED
+P3.9.2_CONFIDENCE: ESTIMATED
+P3.9.2_RESET_CYCLE_SOURCE: LOCALLY_INFERRED
+P3.9.2_REAL_PROVIDER_EXACT_RESET_CYCLES: 0
+```
+
 See
 [`acceptance/P39_REAL_SHADOW_QUALITY_CAMPAIGN_2026-08-30.md`](acceptance/P39_REAL_SHADOW_QUALITY_CAMPAIGN_2026-08-30.md)
 and
 [`acceptance/P391_UNSUPPORTED_QUOTA_POLICY_ANALYSIS_2026-08-30.md`](acceptance/P391_UNSUPPORTED_QUOTA_POLICY_ANALYSIS_2026-08-30.md).
+See also
+[`acceptance/P392_OBSERVED_EXHAUSTION_RECOVERY_GOVERNOR_2026-08-31.md`](acceptance/P392_OBSERVED_EXHAUSTION_RECOVERY_GOVERNOR_2026-08-31.md).
 
 ## Current CI evidence
 
@@ -250,19 +280,22 @@ opencode-adapter: PASS
 The PR check rollup remains the authority for the latest pushed branch head, including docs-only
 follow-up commits.
 
-Current local P3.9.1 validation on 2026-08-30:
+Current local P3.9.2 validation on 2026-08-31:
 
 - Ruff: PASS;
-- targeted pytest: **41 passed**, 1 pytest-asyncio deprecation warning;
-- full pytest: **170 passed**, 28 pytest-asyncio deprecation warnings after sandbox-external
+- targeted pytest: **43 passed**, 1 pytest-asyncio deprecation warning;
+- full pytest: **180 passed**, 28 pytest-asyncio deprecation warnings after sandbox-external
   loopback HTTP rerun;
 - `git diff --check`: PASS;
+- OpenCode adapter typecheck + contract tests: PASS, 10/10 in a `/private/tmp` dependency copy;
 - P3.8 real Shadow execution script: PASS, observation `shadow-79b324d8b775bb0d2e80e221`;
 - P3.9 real Shadow campaign runner: PASS, 6 Codex-only observations across 1 provider, 1
   execution target and 4 task families;
 - P3.9.1 real Shadow campaign: 20 Codex-only observations across 4 task families and 20 variants,
   with 8 verified and 12 blocked by Codex CLI usage limit;
 - unsupported quota policy analysis: COMPLETE, production ACTIVE remains exact-only;
+- P3.9.2 recovery probe: 2 Codex-only real attempts, 2 verified, recovered availability observed,
+  0 provider-exact reset cycles;
 - target Mac acceptance: `PASS_LOCAL_P0_P1_ROUTING_PROVIDER_AND_LONGITUDINAL_SHADOW_NOT_EXECUTED`.
 
 The normal PR CI remains the authority for pushed branch heads. Local Mac acceptance is tracked

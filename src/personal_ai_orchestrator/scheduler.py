@@ -31,6 +31,7 @@ from personal_ai_orchestrator.model_registry import (
     QuotaWindowKind,
     RegistryModel,
 )
+from personal_ai_orchestrator.quota_availability import QuotaAvailabilityEvidence
 from personal_ai_orchestrator.quota_observability import (
     DEFAULT_SCARCITY_THRESHOLDS,
     ScarcityClass,
@@ -114,6 +115,7 @@ class CandidateEvaluation(RegistryModel):
     minimum_remaining_fraction: float | None = None
     usable_headroom_fraction: float | None = None
     predicted_burn_fraction: float | None = None
+    observed_availability_state: str | None = None
 
 
 class SchedulerDecision(RegistryModel):
@@ -270,6 +272,7 @@ def evaluate_target(
     runtime_available: bool,
     telemetry: TargetTelemetry,
     policy: RoutingPolicy,
+    observed_availability: QuotaAvailabilityEvidence | None = None,
 ) -> CandidateEvaluation:
     reasons = _hard_requirement_reasons(
         registry,
@@ -317,6 +320,10 @@ def evaluate_target(
         reasons.append("quota snapshot stale")
     if snapshot.state is QuotaState.EXHAUSTED:
         reasons.append("quota exhausted")
+    if observed_availability is not None:
+        observed_state = observed_availability.state_at(now=now)
+        if observed_availability.blocks_quota_billable_launch(now=now):
+            reasons.append(f"observed quota availability blocks target: {observed_state.value}")
     if plan.kind is PlanKind.PAY_AS_YOU_GO and not policy.allow_paid_usage:
         reasons.append("paid usage requires explicit policy")
 
@@ -395,6 +402,9 @@ def evaluate_target(
             minimum_remaining_fraction=remaining,
             usable_headroom_fraction=usable,
             predicted_burn_fraction=predicted,
+            observed_availability_state=observed_availability.state_at(now=now).value
+            if observed_availability is not None
+            else None,
         )
 
     capability_fit = _capability_fit(registry, task, model.id)
@@ -433,6 +443,9 @@ def evaluate_target(
         minimum_remaining_fraction=remaining,
         usable_headroom_fraction=usable,
         predicted_burn_fraction=predicted,
+        observed_availability_state=observed_availability.state_at(now=now).value
+        if observed_availability is not None
+        else None,
     )
 
 
@@ -444,11 +457,13 @@ def route_task(
     known_at: datetime,
     runtime_availability: dict[str, bool],
     telemetry: dict[str, TargetTelemetry] | None = None,
+    observed_availability: dict[str, QuotaAvailabilityEvidence] | None = None,
     policy: RoutingPolicy | None = None,
 ) -> SchedulerDecision:
     """Return one deterministic recommendation without applying any runtime switch."""
 
     telemetry = telemetry or {}
+    observed_availability = observed_availability or {}
     policy = policy or RoutingPolicy()
     evaluations_by_target: dict[str, CandidateEvaluation] = {}
     membership_by_target: dict[str, PoolMembership] = {}
@@ -471,6 +486,7 @@ def route_task(
                 known_at=known_at,
                 runtime_available=runtime_availability.get(target.id, False),
                 telemetry=telemetry.get(target.id, TargetTelemetry()),
+                observed_availability=observed_availability.get(target.id),
                 policy=policy,
             )
 

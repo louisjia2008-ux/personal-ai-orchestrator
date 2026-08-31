@@ -5,11 +5,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from personal_ai_orchestrator.model_registry import EvidenceConfidence
+from personal_ai_orchestrator.quota_availability import (
+    QuotaAvailabilityJournal,
+    QuotaAvailabilityState,
+    mark_recovery_probe_due,
+    observe_exhaustion,
+)
+from personal_ai_orchestrator.shadow_campaign_queue import CampaignCaseState, CampaignQueueJournal
 from personal_ai_orchestrator.shadow_campaign_runner import (
     CampaignFile,
     CampaignWorkerProfile,
     DeclarativeShadowCase,
     WorkerExecutionResult,
+    run_shadow_campaign,
     run_shadow_case,
     write_campaign_report,
 )
@@ -202,6 +210,9 @@ def test_campaign_report_includes_quality_and_failure_taxonomy(tmp_path: Path) -
     )
     payload = json.loads(report_path.read_text(encoding="utf-8"))
 
+    assert payload["readiness"]["real_attempt_count"] == 1
+    assert payload["readiness"]["quality_eligible_attempt_count"] == 1
+    assert payload["readiness"]["verified_outcome_count"] == 1
     assert payload["readiness"]["total_quality_eligible_observations"] == 1
     assert payload["readiness"]["verified_count"] == 1
     assert payload["readiness"]["operational_failures"] == 0
@@ -287,6 +298,146 @@ def test_runner_classifies_usage_limit_as_policy_block(tmp_path: Path) -> None:
     summary = ShadowEvidenceJournal(tmp_path / "campaign" / "shadow-runtime").summarize()
     assert summary.policy_blocks == 1
     assert summary.operational_failures == 0
+
+
+def test_campaign_circuit_breaker_defers_remaining_cases_after_usage_limit(
+    tmp_path: Path,
+) -> None:
+    cases = tuple(passing_case(f"case-{index}") for index in range(3))
+    launches = 0
+
+    def launch(repo: Path, _case: DeclarativeShadowCase, _profile: CampaignWorkerProfile):
+        nonlocal launches
+        launches += 1
+        return FixtureWorkerHandle(
+            repo,
+            exit_code=1,
+            stderr_tail="ERROR: You've hit your usage limit. Try again later.",
+        )
+
+    campaign = run_shadow_campaign(
+        campaign_root=tmp_path / "campaign",
+        campaign_id="p39-fixture",
+        cases=cases,
+        worker_profile=worker_profile(),
+        worker_launcher=launch,
+        repo_head="abc123",
+        now=NOW,
+        minimum_cooldown_seconds=600,
+    )
+
+    journal = ShadowEvidenceJournal(tmp_path / "campaign" / "shadow-runtime")
+    queue = CampaignQueueJournal(tmp_path / "campaign").load()
+    availability = QuotaAvailabilityJournal(tmp_path / "campaign").load("fixture-worker-target")
+
+    assert launches == 1
+    assert len(journal.load_all()) == 1
+    assert campaign.deferred_case_ids == ("case-0", "case-1", "case-2")
+    assert queue is not None
+    assert [item.state for item in queue.cases] == [
+        CampaignCaseState.DEFERRED_QUOTA,
+        CampaignCaseState.DEFERRED_QUOTA,
+        CampaignCaseState.DEFERRED_QUOTA,
+    ]
+    assert queue.circuit_breaker_trips == 1
+    assert availability is not None
+    assert availability.state is QuotaAvailabilityState.COOLDOWN
+    assert availability.remaining_fraction is None
+    assert availability.reset_at is None
+
+
+def test_campaign_report_includes_preexisting_cooldown_without_fake_observation(
+    tmp_path: Path,
+) -> None:
+    campaign_root = tmp_path / "campaign"
+    profile = worker_profile()
+    cases = tuple(passing_case(f"case-{index}") for index in range(2))
+    QuotaAvailabilityJournal(campaign_root).save(
+        observe_exhaustion(
+            None,
+            execution_target_id=profile.execution_target_id,
+            provider_id=profile.provider_id,
+            quota_pool_id=profile.quota_pool_id,
+            observed_at=NOW,
+            sanitized_reason_code="USAGE_LIMIT",
+        )
+    )
+
+    campaign = run_shadow_campaign(
+        campaign_root=campaign_root,
+        campaign_id="p39-fixture",
+        cases=cases,
+        worker_profile=profile,
+        worker_launcher=lambda _repo, _case, _profile: (_ for _ in ()).throw(
+            AssertionError("worker must not launch during observed cooldown")
+        ),
+        repo_head="abc123",
+        now=NOW,
+    )
+    report_path = write_campaign_report(
+        campaign_root=campaign_root,
+        report_name="fixture-report.json",
+        results=campaign.results,
+        provider_probe_results={},
+    )
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert campaign.results == ()
+    assert campaign.deferred_case_ids == ("case-0", "case-1")
+    assert ShadowEvidenceJournal(campaign_root / "shadow-runtime").load_all() == ()
+    assert payload["readiness"]["real_attempt_count"] == 0
+    assert payload["operational_metrics"]["quota_deferred_cases"] == 2
+    assert payload["operational_metrics"]["availability_state"] == "COOLDOWN"
+    assert payload["operational_metrics"]["availability_reason_code"] == "USAGE_LIMIT"
+
+
+def test_campaign_resume_deferred_after_recovery_probe_success(tmp_path: Path) -> None:
+    campaign_root = tmp_path / "campaign"
+    cases = tuple(passing_case(f"case-{index}") for index in range(2))
+    run_shadow_campaign(
+        campaign_root=campaign_root,
+        campaign_id="p39-fixture",
+        cases=cases,
+        worker_profile=worker_profile(),
+        worker_launcher=lambda repo, _case, _profile: FixtureWorkerHandle(
+            repo,
+            exit_code=1,
+            stderr_tail="ERROR: You've hit your usage limit. Try again later.",
+        ),
+        repo_head="abc123",
+        now=NOW,
+        minimum_cooldown_seconds=1,
+    )
+    availability_journal = QuotaAvailabilityJournal(campaign_root)
+    exhausted = availability_journal.load("fixture-worker-target")
+    assert exhausted is not None
+    availability_journal.save(mark_recovery_probe_due(exhausted, observed_at=NOW))
+
+    resumed = run_shadow_campaign(
+        campaign_root=campaign_root,
+        campaign_id="p39-fixture",
+        cases=cases,
+        worker_profile=worker_profile(),
+        worker_launcher=lambda repo, _case, _profile: FixtureWorkerHandle(repo),
+        repo_head="abc123",
+        now=NOW,
+        resume_deferred=True,
+    )
+
+    observations = ShadowEvidenceJournal(campaign_root / "shadow-runtime").load_all()
+    queue = CampaignQueueJournal(campaign_root).load()
+    availability = availability_journal.load("fixture-worker-target")
+
+    assert len(resumed.results) == 2
+    assert len(observations) == 3
+    assert queue is not None
+    assert [item.state for item in queue.cases] == [
+        CampaignCaseState.VERIFIED,
+        CampaignCaseState.VERIFIED,
+    ]
+    assert availability is not None
+    assert availability.state is QuotaAvailabilityState.RECOVERED_OBSERVED
+    assert availability.reset_at is None
 
 
 def test_real_campaign_script_defines_twenty_codex_only_variants() -> None:
