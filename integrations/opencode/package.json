@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@opencode-ai/plugin": "0.0.0-beta-18387",
+    "typescript": "^5.9.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit && node --test decision_contract.test.ts"
+  }
+}
