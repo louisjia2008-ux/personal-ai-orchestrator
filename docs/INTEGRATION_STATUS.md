@@ -284,6 +284,9 @@ and
 See also
 [`acceptance/P392_OBSERVED_EXHAUSTION_RECOVERY_GOVERNOR_2026-08-31.md`](acceptance/P392_OBSERVED_EXHAUSTION_RECOVERY_GOVERNOR_2026-08-31.md).
 
+The PR #21 integration-freeze merge-readiness audit is recorded in
+[`acceptance/PR21_INTEGRATION_FREEZE_AUDIT_2026-08-31.md`](acceptance/PR21_INTEGRATION_FREEZE_AUDIT_2026-08-31.md).
+
 ## Current CI evidence
 
 P3.9.1 code-bearing integration head verified on GitHub Actions:
