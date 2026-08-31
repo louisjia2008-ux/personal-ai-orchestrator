@@ -147,3 +147,20 @@
 "quota.state.exhausted" = "This quota pool is exhausted; scheduling may be blocked.";
 "quota.state.recovered" = "Quota has recovered.";
 "quota.state.unknown" = "Quota pool state unknown; scheduling treats it cautiously.";
+
+/* P4.2.3 polish. */
+
+"action.copyTaskId" = "Copy task ID";
+"action.copyTaskId.help" = "Copy the authoritative task ID to the clipboard (⌘⌥C).";
+"action.reload" = "Reload";
+"action.reload.help" = "Re-fetch the authoritative detail for the current task (⌘⌥R).";
+
+"empty.tasksHint" = "Press ⌘F to focus search, or ⌘N to create a new task.";
+"empty.taskContextHint" = "Pick a task from the menu above to inspect the matching panel; ⌘[ / ⌘] navigates between tasks.";
+"empty.taskDetailHint" = "Select a task on the left, or search by task ID.";
+
+"settings.activeAuthorized" = "ACTIVE authorized: yes";
+"settings.activeNotAuthorized" = "ACTIVE authorized: no";
+"settings.activeGateLabel" = "ACTIVE gate";
+"settings.activeGate.open" = "OPEN";
+"settings.activeGate.closed" = "CLOSED";

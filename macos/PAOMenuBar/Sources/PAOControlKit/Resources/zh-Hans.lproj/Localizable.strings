@@ -147,3 +147,20 @@
 "quota.state.exhausted" = "该额度池已耗尽，调度可能被阻塞。";
 "quota.state.recovered" = "额度已恢复。";
 "quota.state.unknown" = "额度池状态未知，调度将谨慎对待。";
+
+/* P4.2.3 交互打磨。 */
+
+"action.copyTaskId" = "复制任务 ID";
+"action.copyTaskId.help" = "复制当前任务的权威 ID 到剪贴板（⌘⌥C）。";
+"action.reload" = "重新加载";
+"action.reload.help" = "重新拉取当前任务的权威详情（⌘⌥R）。";
+
+"empty.tasksHint" = "顶部按 ⌘F 聚焦搜索，或按 ⌘N 创建新任务。";
+"empty.taskContextHint" = "顶部 picker 选择任务即可查看对应面板；按 ⌘[ / ⌘] 在任务间切换。";
+"empty.taskDetailHint" = "从左侧选择一个任务，或在搜索框中按任务 ID 搜索。";
+
+"settings.activeAuthorized" = "ACTIVE 授权：已授权";
+"settings.activeNotAuthorized" = "ACTIVE 授权：未授权";
+"settings.activeGateLabel" = "ACTIVE 授权闸门";
+"settings.activeGate.open" = "OPEN";
+"settings.activeGate.closed" = "CLOSED";
