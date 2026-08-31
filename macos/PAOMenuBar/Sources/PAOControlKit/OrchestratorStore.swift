@@ -39,6 +39,7 @@ public final class OrchestratorStore: ObservableObject {
     public let socketPath: String
     public let daemonLifecycle: DaemonLifecycleController
     public let widgetSnapshotBridge: WidgetSnapshotBridge
+    public let widgetSnapshotWriter: WidgetSnapshotWriter
     private let client: PAOControlClient
     private var refreshTask: Task<Void, Never>?
     private var backoffSeconds: Double = 2.0
@@ -63,6 +64,10 @@ public final class OrchestratorStore: ObservableObject {
             client: client
         )
         self.widgetSnapshotBridge = widgetSnapshotBridge ?? .appOwned(layout: configuration.layout)
+        self.widgetSnapshotWriter = WidgetSnapshotWriter(
+            primary: self.widgetSnapshotBridge,
+            fallback: .appOwned(layout: configuration.layout)
+        )
         self.idFactory = idFactory
         daemonLifecycle.ensureStarted()
         startRefreshing()
@@ -168,11 +173,7 @@ public final class OrchestratorStore: ObservableObject {
             daemonLifecycle: daemonLifecycle.status,
             dashboard: dashboard
         )
-        do {
-            try widgetSnapshotBridge.write(snapshot)
-        } catch {
-            ClientLog.operation("widget_snapshot", outcome: "write_failed")
-        }
+        widgetSnapshotWriter.write(snapshot)
     }
 
     private static func disconnectionReason(for error: PAOClientError) -> ConnectionState.DisconnectionReason {
