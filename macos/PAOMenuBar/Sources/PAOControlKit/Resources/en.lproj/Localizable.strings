@@ -82,3 +82,68 @@
 "label.launchAtLogin" = "Launch at login";
 "empty.unsupported" = "Unavailable from the current daemon API.";
 "empty.selectTask" = "Select a task to inspect authoritative detail.";
+
+/* P4.2.3 interactive dashboard. */
+
+"action.newTask" = "New Task";
+"action.newTask.help" = "Create a new structured task (⌘N)";
+"action.newTask.title" = "New Task";
+"action.newTask.subtitle" = "Your input becomes a structured task intent submitted through the typed API; it is never executed as a shell command.";
+"action.submitting" = "Submitting…";
+
+"help.metricTile" = "Click a metric to view matching tasks (navigation only; authoritative state is never mutated).";
+"empty.noBlockers" = "No important blockers right now.";
+"empty.noEvents" = "No events yet.";
+
+"empty.noTasks" = "No tasks";
+"empty.noTasks.hint" = "Create your first task; the authoritative task list will appear here.";
+"empty.tasksNoMatch" = "No tasks match the current search or state filter.";
+"empty.disconnectedTitle" = "Disconnected";
+"empty.tasksDisconnected.hint" = "The daemon is unavailable; the task list refreshes automatically once the connection recovers.";
+
+"label.taskContext" = "Task";
+"label.pickerNoSelection" = "None selected";
+"label.pickerChangeHint" = "Switch the picker above to inspect another task.";
+"label.routingTitle" = "Routing";
+"label.verificationTitle" = "Verification";
+"empty.routingNeedsTask" = "A task must be created and scheduled before a routing decision exists.";
+"empty.verificationNeedsTask" = "A task must exist and host verification must run before results appear.";
+"empty.routingNoSelection" = "Pick a task above to inspect its routing decisions.";
+"empty.verificationNoSelection" = "Pick a task above to inspect its verification status.";
+"empty.routingNotYetDecided" = "No routing decision yet for this task; details appear once it is scheduled.";
+
+"label.agentsTitle" = "Agents / execution targets";
+"label.providersTitle" = "Providers";
+"label.quotaTitle" = "Quota";
+"empty.noProviders.hint" = "No providers registered; provider health appears here once the daemon has provider configuration.";
+
+"label.modelSku" = "Model SKU";
+"label.runtimeId" = "Runtime";
+"label.runtimeAvailability" = "Runtime availability";
+"label.observedState" = "Observed state";
+"label.measurementSource" = "Measurement source";
+"label.confidence" = "Confidence";
+"label.observedAt" = "Observed at";
+"label.reasonCode" = "Reason code";
+"empty.availabilityUnknown" = "Availability unknown (not yet observed).";
+"label.evidence" = "Evidence";
+
+"settings.launchAtLogin.footer" = "Preference recorded; the system login item is not wired up yet (P4.2 stores the setting only and does not change system behavior).";
+"settings.autoStartDaemon.footer" = "Takes effect on next app launch: when off, the app will not start the daemon (an already-running daemon is left untouched).";
+"settings.activeReadOnly" = "ACTIVE is read-only; P4.2 provides no enable, force, or override path.";
+
+"quota.resetUnknown" = "Reset time unknown";
+"quota.observedAt" = "Last observed: %@";
+
+"quota.explain.exact" = "The provider reports the exact remaining quota.";
+"quota.explain.estimated" = "Remaining quota is measured or inferred locally and may deviate from the actual value.";
+"quota.explain.unknown" = "No reliable remaining-quota number exists; a fake percentage is never shown.";
+
+"quota.source.providerExact" = "Evidence source: exact provider report.";
+"quota.source.locallyMeasured" = "Evidence source: locally measured.";
+"quota.source.locallyInferred" = "Evidence source: locally inferred.";
+"quota.source.unknown" = "Evidence source unknown.";
+
+"quota.state.exhausted" = "This quota pool is exhausted; scheduling may be blocked.";
+"quota.state.recovered" = "Quota has recovered.";
+"quota.state.unknown" = "Quota pool state unknown; scheduling treats it cautiously.";

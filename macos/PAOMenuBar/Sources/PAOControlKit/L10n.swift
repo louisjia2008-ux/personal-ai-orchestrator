@@ -36,6 +36,29 @@ public enum L10n {
         "label.verification", "label.history", "label.daemonLifecycle", "label.socket",
         "label.runtimeConfig", "label.autoStartDaemon", "label.launchAtLogin",
         "empty.unsupported", "empty.selectTask",
+        "action.newTask", "action.newTask.help", "action.newTask.title",
+        "action.newTask.subtitle", "action.submitting",
+        "help.metricTile", "empty.noBlockers", "empty.noEvents",
+        "empty.noTasks.hint", "empty.tasksNoMatch", "empty.disconnectedTitle",
+        "empty.tasksDisconnected.hint",
+        "label.taskContext", "label.pickerNoSelection", "label.pickerChangeHint",
+        "label.routingTitle", "label.verificationTitle",
+        "empty.routingNeedsTask", "empty.verificationNeedsTask",
+        "empty.routingNoSelection", "empty.verificationNoSelection",
+        "empty.routingNotYetDecided",
+        "label.agentsTitle", "label.providersTitle", "label.quotaTitle",
+        "empty.noProviders.hint",
+        "label.modelSku", "label.runtimeId", "label.runtimeAvailability",
+        "label.observedState", "label.measurementSource", "label.confidence",
+        "label.observedAt", "label.reasonCode", "empty.availabilityUnknown",
+        "label.evidence",
+        "settings.launchAtLogin.footer", "settings.autoStartDaemon.footer",
+        "settings.activeReadOnly",
+        "quota.resetUnknown", "quota.observedAt",
+        "quota.explain.exact", "quota.explain.estimated", "quota.explain.unknown",
+        "quota.source.providerExact", "quota.source.locallyMeasured",
+        "quota.source.locallyInferred", "quota.source.unknown",
+        "quota.state.exhausted", "quota.state.recovered", "quota.state.unknown",
     ]
 
     /// English is the guaranteed fallback (`defaultLocalization` in Package.swift).
@@ -246,5 +269,97 @@ public enum L10n {
 
     public static func accountsCount(_ count: Int) -> String {
         tr("provider.accounts", [count])
+    }
+
+    // MARK: - P4.2.3 interactive dashboard
+
+    public static var newTask: String { tr("action.newTask") }
+    public static var newTaskHelp: String { tr("action.newTask.help") }
+    public static var newTaskTitle: String { tr("action.newTask.title") }
+    public static var newTaskSubtitle: String { tr("action.newTask.subtitle") }
+    public static var submitting: String { tr("action.submitting") }
+
+    public static var metricTileHelp: String { tr("help.metricTile") }
+    public static var noBlockers: String { tr("empty.noBlockers") }
+    public static var noEvents: String { tr("empty.noEvents") }
+
+    public static var noTasksHint: String { tr("empty.noTasks.hint") }
+    public static var tasksNoMatch: String { tr("empty.tasksNoMatch") }
+    public static var disconnectedLabel: String { tr("empty.disconnectedTitle") }
+    public static var tasksDisconnectedHint: String { tr("empty.tasksDisconnected.hint") }
+
+    public static var taskContext: String { tr("label.taskContext") }
+    public static var pickerNoSelection: String { tr("label.pickerNoSelection") }
+    public static var pickerChangeHint: String { tr("label.pickerChangeHint") }
+
+    public static var routingTitle: String { tr("label.routingTitle") }
+    public static var verificationTitle: String { tr("label.verificationTitle") }
+    public static var routingNeedsTask: String { tr("empty.routingNeedsTask") }
+    public static var verificationNeedsTask: String { tr("empty.verificationNeedsTask") }
+    public static var routingNoSelection: String { tr("empty.routingNoSelection") }
+    public static var verificationNoSelection: String { tr("empty.verificationNoSelection") }
+    public static var routingNotYetDecided: String { tr("empty.routingNotYetDecided") }
+
+    public static var agentsTitle: String { tr("label.agentsTitle") }
+    public static var providersTitle: String { tr("label.providersTitle") }
+    public static var quotaTitle: String { tr("label.quotaTitle") }
+    public static var noProvidersHint: String { tr("empty.noProviders.hint") }
+
+    public static var modelSku: String { tr("label.modelSku") }
+    public static var runtimeIdLabel: String { tr("label.runtimeId") }
+    public static var runtimeAvailability: String { tr("label.runtimeAvailability") }
+    public static var observedState: String { tr("label.observedState") }
+    public static var measurementSource: String { tr("label.measurementSource") }
+    public static var confidenceLabel: String { tr("label.confidence") }
+    public static var observedAt: String { tr("label.observedAt") }
+    public static var reasonCode: String { tr("label.reasonCode") }
+    public static var availabilityUnknown: String { tr("empty.availabilityUnknown") }
+    public static var evidenceLabel: String { tr("label.evidence") }
+
+    public static var launchAtLoginFooter: String { tr("settings.launchAtLogin.footer") }
+    public static var autoStartDaemonFooter: String { tr("settings.autoStartDaemon.footer") }
+    public static var activeReadOnlyNote: String { tr("settings.activeReadOnly") }
+
+    public static var quotaResetUnknown: String { tr("quota.resetUnknown") }
+    public static var quotaObservedAtPrefix: String { tr("quota.observedAt") }
+
+    public static func quotaObservedAt(_ observedAt: String) -> String {
+        tr("quota.observedAt", [observedAt])
+    }
+
+    /// Human-readable explanation for a quota confidence enum. Unknown enum
+    /// values fall back to a generic UNKNOWN explanation; they never fabricate
+    /// numeric percentages.
+    public static func quotaConfidenceExplanation(_ confidence: String) -> String {
+        switch confidence {
+        case "EXACT": return tr("quota.explain.exact")
+        case "ESTIMATED": return tr("quota.explain.estimated")
+        default: return tr("quota.explain.unknown")
+        }
+    }
+
+    public static func quotaSourceExplanation(_ source: String) -> String {
+        switch source {
+        case "PROVIDER_EXACT": return tr("quota.source.providerExact")
+        case "LOCALLY_MEASURED": return tr("quota.source.locallyMeasured")
+        case "LOCALLY_INFERRED": return tr("quota.source.locallyInferred")
+        default: return tr("quota.source.unknown")
+        }
+    }
+
+    public static func quotaStateNote(_ state: String) -> String {
+        switch state {
+        case "EXHAUSTED": return tr("quota.state.exhausted")
+        case "RECOVERED": return tr("quota.state.recovered")
+        default: return tr("quota.state.unknown")
+        }
+    }
+
+    public static func quotaStateSymbol(_ state: String) -> String {
+        switch state {
+        case "EXHAUSTED": return "exclamationmark.triangle"
+        case "RECOVERED": return "checkmark.circle"
+        default: return "questionmark.circle"
+        }
     }
 }
