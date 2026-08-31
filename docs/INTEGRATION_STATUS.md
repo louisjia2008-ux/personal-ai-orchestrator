@@ -239,8 +239,13 @@ and
 
 ## Current CI evidence
 
-Latest pre-P3.8 integration head verified on GitHub Actions:
-`b7671c5d16391c38195f044866d909c6762ad864`.
+Current pushed P3.9.1 integration head verified on GitHub Actions:
+`9fadfbc657a2c0c36bc6e8a858af1ad1cb45410c`.
+
+```text
+test: PASS
+opencode-adapter: PASS
+```
 
 Current local P3.9.1 validation on 2026-08-30:
 
