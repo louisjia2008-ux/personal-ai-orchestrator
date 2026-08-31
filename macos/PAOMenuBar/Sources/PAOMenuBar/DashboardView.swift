@@ -6,7 +6,6 @@ struct DashboardView: View {
     @EnvironmentObject private var store: OrchestratorStore
     @SceneStorage("dashboard.selection") private var storedSelection = DashboardSection.overview.rawValue
     @State private var section: DashboardSection?
-    @State private var selectedTaskId: String?
     @State private var query = ""
     @State private var stateFilter = ""
     @State private var showsNewTaskSheet = false
@@ -30,7 +29,7 @@ struct DashboardView: View {
                 showsNewTaskSheet = false
                 stateFilter = ""
                 query = ""
-                selectedTaskId = submittedTaskId
+                store.selectedTaskId = submittedTaskId
                 section = .tasks
                 Task { await store.loadTaskDetail(taskId: submittedTaskId) }
             }
@@ -86,12 +85,17 @@ struct DashboardView: View {
                 }
             }
             .disabled(store.isRefreshing)
+            .keyboardShortcut("r", modifiers: .command)
             .help(L10n.refresh)
         }
     }
 
     @ViewBuilder
     private func detail(for section: DashboardSection) -> some View {
+        let taskSelection = Binding(
+            get: { store.selectedTaskId },
+            set: { store.selectedTaskId = $0 }
+        )
         switch section {
         case .overview:
             OverviewDashboard(
@@ -102,7 +106,7 @@ struct DashboardView: View {
             TasksDashboard(
                 query: $query,
                 stateFilter: $stateFilter,
-                selectedTaskId: $selectedTaskId,
+                selectedTaskId: taskSelection,
                 onNewTask: { showsNewTaskSheet = true }
             )
         case .agents:
@@ -112,9 +116,9 @@ struct DashboardView: View {
         case .quota:
             QuotaDashboard()
         case .routing:
-            SelectedTaskDetailDashboard(selectedTaskId: $selectedTaskId, mode: .routing, onNewTask: { showsNewTaskSheet = true })
+            SelectedTaskDetailDashboard(selectedTaskId: taskSelection, mode: .routing, onNewTask: { showsNewTaskSheet = true })
         case .verification:
-            SelectedTaskDetailDashboard(selectedTaskId: $selectedTaskId, mode: .verification, onNewTask: { showsNewTaskSheet = true })
+            SelectedTaskDetailDashboard(selectedTaskId: taskSelection, mode: .verification, onNewTask: { showsNewTaskSheet = true })
         case .history:
             HistoryDashboard()
         case .settings:
@@ -263,6 +267,7 @@ private struct TasksDashboard: View {
     @Binding var stateFilter: String
     @Binding var selectedTaskId: String?
     let onNewTask: () -> Void
+    @FocusState private var searchFocused: Bool
 
     private var allTasks: [TaskView] {
         store.tasks?.tasks ?? []
@@ -288,6 +293,7 @@ private struct TasksDashboard: View {
                 HStack {
                     TextField(L10n.search, text: $query)
                         .textFieldStyle(.roundedBorder)
+                        .focused($searchFocused)
                     Picker(L10n.stateFilter, selection: $stateFilter) {
                         Text(L10n.allStates).tag("")
                         ForEach(states, id: \.self) { Text($0).tag($0) }
@@ -305,9 +311,19 @@ private struct TasksDashboard: View {
             }
             .frame(minWidth: 420)
 
-            TaskDetailPanel(detail: store.selectedTaskDetail)
-                .frame(minWidth: 430)
+            TaskDetailPanel(
+                detail: store.selectedTaskDetail,
+                selectedTaskId: selectedTaskId,
+                onCopyTaskId: { selectedTaskId.map(Pasteboard.copy) },
+                onReload: {
+                    if let selectedTaskId {
+                        Task { await store.loadTaskDetail(taskId: selectedTaskId) }
+                    }
+                }
+            )
+            .frame(minWidth: 430)
         }
+        .background(hiddenCommands)
     }
 
     private var taskList: some View {
@@ -317,7 +333,7 @@ private struct TasksDashboard: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(tasks) { task in
-                    TaskRow(task: task)
+                    TaskRow(task: task, isSelected: task.taskId == selectedTaskId)
                         .tag(task.taskId)
                         .padding(.vertical, 2)
                 }
@@ -332,7 +348,7 @@ private struct TasksDashboard: View {
     private var tasksEmptyState: some View {
         VStack(spacing: 12) {
             if store.connection.isConnected {
-                EmptyStateView(title: L10n.noTasks, symbol: "checklist", message: L10n.noTasksHint) {
+                EmptyStateView(title: L10n.noTasks, symbol: "checklist", message: L10n.noTasksHint, hint: L10n.tasksEmptyHint) {
                     Button(L10n.newTask, action: onNewTask)
                 }
             } else {
@@ -345,26 +361,69 @@ private struct TasksDashboard: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    /// Hidden commands for keyboard-first navigation. SwiftUI on macOS only
+    /// honors `.keyboardShortcut` on real views; an empty `Group` works for
+    /// invisible but routable shortcuts.
+    private var hiddenCommands: some View {
+        Group {
+            Button("Focus search") { searchFocused = true }
+                .keyboardShortcut("f", modifiers: .command)
+                .hidden()
+            Button("Previous task") {
+                _ = store.navigateToNeighbour(current: selectedTaskId, in: tasks, offset: -1)
+            }
+            .keyboardShortcut("[", modifiers: .command)
+            .disabled(tasks.isEmpty)
+            .hidden()
+            Button("Next task") {
+                _ = store.navigateToNeighbour(current: selectedTaskId, in: tasks, offset: 1)
+            }
+            .keyboardShortcut("]", modifiers: .command)
+            .disabled(tasks.isEmpty)
+            .hidden()
+            Button("Copy task ID") { selectedTaskId.map(Pasteboard.copy) }
+                .keyboardShortcut("c", modifiers: [.command, .option])
+                .disabled(selectedTaskId == nil)
+                .hidden()
+            Button("Reload detail") {
+                if let selectedTaskId {
+                    Task { await store.loadTaskDetail(taskId: selectedTaskId) }
+                }
+            }
+            .keyboardShortcut("r", modifiers: [.command, .option])
+            .disabled(selectedTaskId == nil)
+            .hidden()
+        }
+    }
 }
 
 private struct TaskRow: View {
     let task: TaskView
+    let isSelected: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(task.taskId)
-                    .font(.system(.body, design: .monospaced))
-                    .lineLimit(1)
-                Spacer()
-                StatusBadge(text: task.state, kind: task.state == "BLOCKED" ? .bad : .neutral)
+        HStack(spacing: 0) {
+            Rectangle()
+                .fill(isSelected ? Color.accentColor : .clear)
+                .frame(width: 3)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(task.taskId)
+                        .font(.system(.body, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    StatusBadge(text: task.state, kind: task.state == "BLOCKED" ? .bad : .neutral)
+                }
+                Text(task.intent)
+                    .lineLimit(2)
+                    .foregroundStyle(.secondary)
+                Text(task.updatedAt)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
             }
-            Text(task.intent)
-                .lineLimit(2)
-                .foregroundStyle(.secondary)
-            Text(task.updatedAt)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            .padding(.leading, 6)
         }
     }
 }
@@ -392,6 +451,7 @@ private struct SelectedTaskDetailDashboard: View {
                 taskPicker
 
                 if let detail = store.selectedTaskDetail {
+                    taskHeader(detail: detail)
                     if mode == .routing {
                         RoutingPanel(detail: detail)
                     } else {
@@ -403,6 +463,7 @@ private struct SelectedTaskDetailDashboard: View {
             }
             .padding(20)
         }
+        .background(hiddenCommands)
         .onAppear {
             if let selectedTaskId {
                 Task { await store.loadTaskDetail(taskId: selectedTaskId) }
@@ -433,12 +494,54 @@ private struct SelectedTaskDetailDashboard: View {
     }
 
     @ViewBuilder
+    private func taskHeader(detail: TaskDetailView) -> some View {
+        DashboardCard(title: L10n.taskDetail, symbol: "doc.text.magnifyingglass") {
+            HStack(alignment: .firstTextBaseline) {
+                Text(detail.task.taskId)
+                    .font(.system(.headline, design: .monospaced))
+                    .textSelection(.enabled)
+                Spacer()
+                StatusBadge(text: detail.task.state, kind: detail.task.state == "BLOCKED" ? .bad : .neutral)
+            }
+            Text(detail.task.intent)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("\(detail.task.createdAt) -> \(detail.task.updatedAt)")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            HStack(spacing: 8) {
+                Button {
+                    Pasteboard.copy(selectedTaskId ?? "")
+                } label: {
+                    Label(L10n.copyTaskId, systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .keyboardShortcut("c", modifiers: [.command, .option])
+                .help(L10n.copyTaskIdHint)
+
+                Button {
+                    if let selectedTaskId {
+                        Task { await store.loadTaskDetail(taskId: selectedTaskId) }
+                    }
+                } label: {
+                    Label(L10n.reload, systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .keyboardShortcut("r", modifiers: [.command, .option])
+                .help(L10n.reloadHint)
+            }
+        }
+    }
+
+    @ViewBuilder
     private var noSelectionState: some View {
         if tasks.isEmpty {
             EmptyStateView(
                 title: mode == .routing ? L10n.routingTitle : L10n.verificationTitle,
                 symbol: mode == .routing ? "point.topleft.down.curvedto.point.bottomright.up" : "checkmark.seal",
-                message: mode == .routing ? L10n.routingNeedsTask : L10n.verificationNeedsTask
+                message: mode == .routing ? L10n.routingNeedsTask : L10n.verificationNeedsTask,
+                hint: L10n.taskContextEmptyHint
             ) {
                 Button(L10n.newTask, action: onNewTask)
             }
@@ -448,6 +551,23 @@ private struct SelectedTaskDetailDashboard: View {
                 symbol: "sidebar.left",
                 message: mode == .routing ? L10n.routingNoSelection : L10n.verificationNoSelection
             )
+        }
+    }
+
+    private var hiddenCommands: some View {
+        Group {
+            Button("Previous task") {
+                _ = store.navigateToNeighbour(current: selectedTaskId, in: tasks, offset: -1)
+            }
+            .keyboardShortcut("[", modifiers: .command)
+            .disabled(tasks.isEmpty)
+            .hidden()
+            Button("Next task") {
+                _ = store.navigateToNeighbour(current: selectedTaskId, in: tasks, offset: 1)
+            }
+            .keyboardShortcut("]", modifiers: .command)
+            .disabled(tasks.isEmpty)
+            .hidden()
         }
     }
 }
@@ -736,10 +856,25 @@ struct ClientSettingsDashboard: View {
             }
             Section(L10n.productionActive) {
                 LabeledContent("ACTIVE", value: store.activeStatus?.productionActive ?? "UNKNOWN")
-                if let reasons = store.activeStatus?.blockingReasons, !reasons.isEmpty {
-                    ForEach(reasons, id: \.self) { reason in
-                        Label(reason, systemImage: "lock")
+                if let active = store.activeStatus {
+                    Label(
+                        active.authorized ? L10n.activeAuthorized : L10n.activeNotAuthorized,
+                        systemImage: active.authorized ? "lock.open" : "lock"
+                    )
+                    .foregroundStyle(.secondary)
+                    ForEach(active.blockingReasons, id: \.self) { reason in
+                        Label(reason, systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.secondary)
+                    }
+                    if !active.gate.isEmpty {
+                        DisclosureGroup(L10n.activeGateLabel) {
+                            ForEach(active.gate.keys.sorted(), id: \.self) { key in
+                                let value = active.gate[key] ?? false
+                                LabeledContent(key, value: value ? L10n.activeGateOpen : L10n.activeGateClosed)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 }
                 Text(L10n.activeReadOnlyNote)
@@ -763,18 +898,48 @@ private struct DaemonLifecycleLabel: View {
 
 private struct TaskDetailPanel: View {
     let detail: TaskDetailView?
+    let selectedTaskId: String?
+    let onCopyTaskId: () -> Void
+    let onReload: () -> Void
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if let detail {
                     DashboardCard(title: L10n.taskDetail, symbol: "doc.text.magnifyingglass") {
-                        Text(detail.task.taskId).font(.system(.headline, design: .monospaced))
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(detail.task.taskId)
+                                .font(.system(.headline, design: .monospaced))
+                                .textSelection(.enabled)
+                            Spacer()
+                            StatusBadge(text: detail.task.state, kind: detail.task.state == "BLOCKED" ? .bad : .neutral)
+                        }
                         Text(detail.task.intent)
-                        StatusBadge(text: detail.task.state, kind: detail.task.state == "BLOCKED" ? .bad : .neutral)
+                            .fixedSize(horizontal: false, vertical: true)
                         Text("\(detail.task.createdAt) -> \(detail.task.updatedAt)")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
+                        HStack(spacing: 8) {
+                            Button {
+                                onCopyTaskId()
+                            } label: {
+                                Label(L10n.copyTaskId, systemImage: "doc.on.doc")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .keyboardShortcut("c", modifiers: [.command, .option])
+                            .help(L10n.copyTaskIdHint)
+
+                            Button {
+                                onReload()
+                            } label: {
+                                Label(L10n.reload, systemImage: "arrow.clockwise")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .keyboardShortcut("r", modifiers: [.command, .option])
+                            .help(L10n.reloadHint)
+                        }
                     }
                     RoutingPanel(detail: detail)
                     VerificationPanel(detail: detail)
@@ -782,8 +947,12 @@ private struct TaskDetailPanel: View {
                         EventList(events: detail.events)
                     }
                 } else {
-                    EmptyStateView(title: L10n.taskDetail, symbol: "doc.text",
-                                   message: L10n.selectTaskEmptyState)
+                    EmptyStateView(
+                        title: L10n.taskDetail,
+                        symbol: "doc.text",
+                        message: L10n.selectTaskEmptyState,
+                        hint: L10n.taskDetailEmptyHint
+                    )
                 }
             }
             .padding(20)
@@ -904,9 +1073,14 @@ private struct MetricTile: View {
                 Text("\(value)")
                     .font(.system(size: 28, weight: .semibold, design: .rounded))
             }
+            .padding(2)
             .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(hovering ? Color.accentColor.opacity(0.10) : .clear)
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(hovering ? Color.accentColor.opacity(0.12) : .clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(hovering ? Color.accentColor.opacity(0.45) : .clear, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -919,31 +1093,56 @@ private struct EmptyStateView: View {
     let title: String
     let symbol: String
     let message: String
+    var hint: String? = nil
     var action: (() -> Void)? = nil
 
-    init(title: String, symbol: String, message: String, action: (() -> Void)? = nil) {
+    init(title: String, symbol: String, message: String, hint: String? = nil, action: (() -> Void)? = nil) {
         self.title = title
         self.symbol = symbol
         self.message = message
+        self.hint = hint
         self.action = action
     }
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             Image(systemName: symbol)
-                .font(.system(size: 38))
+                .font(.system(size: 48, weight: .light))
                 .foregroundStyle(.secondary)
-            Text(title).font(.headline)
+            Text(title).font(.title3.weight(.semibold))
             Text(message)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            if let hint {
+                Text(hint)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let action {
                 Button(L10n.newTask, action: action)
+                    .controlSize(.regular)
                     .padding(.top, 4)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(30)
+    }
+}
+
+/// Sanitized clipboard helper. Plain NSPasteboard writes do not require TCC
+/// accessibility or screen-recording permissions, but only one application
+/// command at a time targets it — exactly the model we need for the
+/// "copy authoritative task ID" surface.
+enum Pasteboard {
+    static func copy(_ value: String) {
+        guard !value.isEmpty else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(value, forType: .string)
+        ClientLog.operation("clipboard", outcome: "copy")
     }
 }
 
