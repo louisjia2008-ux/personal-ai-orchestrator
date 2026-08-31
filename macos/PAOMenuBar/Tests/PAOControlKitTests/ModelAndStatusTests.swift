@@ -171,6 +171,129 @@ final class ModelAndStatusTests: XCTestCase {
         XCTAssertFalse(rendered.contains("submit"))
     }
 
+    func testWidgetSnapshotStalenessFailsClosed() throws {
+        let dashboard = try JSONDecoder().decode(DashboardSummaryView.self, from: Data(dashboardBody.utf8))
+        let generatedAt = Date(timeIntervalSince1970: 1_778_390_400)
+        let snapshot = WidgetSnapshot(
+            generatedAt: generatedAt,
+            connection: .connected,
+            daemonLifecycle: .healthyPreexisting,
+            dashboard: dashboard
+        )
+
+        XCTAssertFalse(snapshot.isStale(referenceDate: generatedAt.addingTimeInterval(299)))
+        XCTAssertTrue(snapshot.isStale(referenceDate: generatedAt.addingTimeInterval(301)))
+
+        let malformed = snapshot.generatedAt.replacingOccurrences(of: "2026", with: "not-a-date")
+        let payload = """
+        {"schema_version":1,"generated_at":"\(malformed)","connection_state":"CONNECTED",
+        "daemon_lifecycle":"DAEMON_HEALTHY_PREEXISTING","production_active":"DISABLED_BY_DESIGN",
+        "counts":{"running":0,"ready":0,"blocked":0,"verified":0,"completed":0,"total":0},
+        "providers":[]}
+        """
+        let decoded = try JSONDecoder().decode(WidgetSnapshot.self, from: Data(payload.utf8))
+        XCTAssertTrue(decoded.isStale(referenceDate: generatedAt))
+    }
+
+    func testWidgetSnapshotWriterFallsBackWhenPrimaryTimesOut() throws {
+        let dashboard = try JSONDecoder().decode(DashboardSummaryView.self, from: Data(dashboardBody.utf8))
+        let snapshot = WidgetSnapshot(
+            generatedAt: Date(timeIntervalSince1970: 1_778_390_400),
+            connection: .connected,
+            daemonLifecycle: .healthyStartedByApp(pid: 123),
+            dashboard: dashboard
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pao-writer-\(UUID().uuidString)", isDirectory: true)
+        let fallbackBridge = WidgetSnapshotBridge(
+            snapshotURL: directory.appendingPathComponent("snapshot.json")
+        )
+        let writer = WidgetSnapshotWriter(
+            primaryWrite: { _ in Thread.sleep(forTimeInterval: 1.0) },
+            fallback: fallbackBridge,
+            timeoutSeconds: 0.15,
+            retryInterval: 60.0
+        )
+
+        writer.write(snapshot)
+
+        let deadline = Date().addingTimeInterval(3.0)
+        while !FileManager.default.fileExists(atPath: fallbackBridge.snapshotURL.path) {
+            if Date() > deadline {
+                XCTFail("fallback snapshot was not written before timeout")
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        let loaded = try fallbackBridge.load()
+        XCTAssertEqual(loaded.daemonLifecycle, "DAEMON_HEALTHY_STARTED_BY_APP")
+        XCTAssertEqual(loaded.productionActive, "DISABLED_BY_DESIGN")
+    }
+
+    func testWidgetSnapshotWriterBlocksPrimaryUntilRetryWindowElapses() throws {
+        let recorder = PrimaryCallRecorder()
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pao-writer-\(UUID().uuidString)", isDirectory: true)
+        let fallbackBridge = WidgetSnapshotBridge(
+            snapshotURL: directory.appendingPathComponent("snapshot.json")
+        )
+        let snapshot = WidgetSnapshot(
+            generatedAt: Date(),
+            connection: .connected,
+            daemonLifecycle: .healthyPreexisting,
+            dashboard: nil
+        )
+        let writer = WidgetSnapshotWriter(
+            primaryWrite: { _ in
+                recorder.record()
+                Thread.sleep(forTimeInterval: 1.0)
+            },
+            fallback: fallbackBridge,
+            timeoutSeconds: 0.15,
+            retryInterval: 0.4
+        )
+
+        writer.write(snapshot)
+        XCTAssertTrue(waitForFile(at: fallbackBridge.snapshotURL, timeout: 3.0))
+        writer.write(snapshot)
+        Thread.sleep(forTimeInterval: 0.6)
+
+        XCTAssertEqual(recorder.count, 1, "primary must not be retried inside the blocked window")
+
+        writer.write(snapshot)
+        let deadline = Date().addingTimeInterval(3.0)
+        while recorder.count < 2 && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTAssertEqual(recorder.count, 2, "primary must be retried after the retry window elapses")
+    }
+
+    private final class PrimaryCallRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var calls = 0
+
+        var count: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return calls
+        }
+
+        func record() {
+            lock.lock()
+            calls += 1
+            lock.unlock()
+        }
+    }
+
+    private func waitForFile(at url: URL, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if FileManager.default.fileExists(atPath: url.path) { return true }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return false
+    }
+
     func testRunningCancelConflictIdentification() {
         let conflict = PAOClientError.httpError(
             status: 409,
