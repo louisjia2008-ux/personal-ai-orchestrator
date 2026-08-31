@@ -174,6 +174,23 @@ and cannot make a cohort production-ACTIVE eligible.
 See
 [`acceptance/P38_FIRST_REAL_SHADOW_OBSERVATION_2026-08-30.md`](acceptance/P38_FIRST_REAL_SHADOW_OBSERVATION_2026-08-30.md).
 
+### MiniMax provider-surface follow-up (2026-08-31)
+
+The historical P3.8 record above is unchanged: the MiniMax surface it probed on 2026-08-30 really
+did return `401 invalid api key`. A credential-safe follow-up probe on 2026-08-31 (existing
+authentication reused, no credential contents read, copied or displayed) clarified that the 401 was
+scoped to the international endpoint surface, not to MiniMax as a provider:
+
+```text
+minimax-cn / minimax-cn-coding-plan: AUTH_OK / EXECUTABLE (live micro-probe succeeded)
+international minimax / minimax-coding-plan: 401 invalid api key
+INTERPRETATION: endpoint/credential-surface mismatch, not global MiniMax unavailability
+```
+
+This correction updates current provider truth only. It does not rewrite the P3.8 acceptance
+report, does not add provider-exact quota/reset truth, and does not change any Shadow campaign
+evidence or production gate state.
+
 ## P3.9 real Shadow quality campaign
 
 P3.9 turns the single P3.8 pipeline proof into a reusable declarative campaign runner and a small
