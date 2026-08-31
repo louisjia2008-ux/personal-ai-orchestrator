@@ -187,10 +187,10 @@ A spike may exercise session-scoped `ACTIVE` switching in disposable fixtures; t
 
 ## P4 — Clients / macOS Control Plane
 
-Status: `P4_2_DASHBOARD_FOUNDATION_WIDGETKIT_BLOCKED` (2026-08-31);
-P4.0 accepted 2026-08-31 and P4.1 merged. A native dashboard foundation now exists;
-app-owned daemon lifecycle, self-contained Python packaging, WidgetKit, and human visual
-acceptance remain open P4.2 gates.
+Status: `P4_2_APP_DAEMON_WIDGET_SOURCE_ACCEPTED_APPEX_BLOCKED` (2026-08-31);
+P4.0 accepted 2026-08-31 and P4.1 merged. A native dashboard, app-owned bundled daemon
+lifecycle, PyInstaller helper packaging, and WidgetKit source/snapshot bridge now exist;
+installable `.appex` packaging/signing and human visual acceptance remain open P4.2 gates.
 
 ### Objective
 Expose the same orchestrator state safely to multiple front ends while keeping the core headless.
@@ -220,14 +220,16 @@ Completed foundation:
 - read-only ACTIVE display and no ACTIVE mutation surface;
 - quota rendering that keeps `EXACT`, `ESTIMATED`, and `UNKNOWN` visibly distinct;
 - app-support runtime layout and credential-free runtime config bootstrap;
+- app-owned bundled daemon lifecycle through direct `Process` launch and a start lock;
+- PyInstaller `Contents/Helpers/pao-daemon` packaging in `Personal AI Orchestrator.app`;
+- WidgetKit source target plus a sanitized read-only snapshot bridge;
 - local app-bundle assembly script for `Personal AI Orchestrator.app`.
 
 Remaining before full P4.2 acceptance:
 
-- app-owned daemon lifecycle without manual Terminal bootstrap;
-- credible bundled Python/runtime distribution strategy implemented, not only documented;
-- WidgetKit read-only snapshot bridge through an app-extension-capable project structure;
-- real target-Mac visual/runtime acceptance.
+- installable WidgetKit `.appex` packaging/signing from an Xcode app-extension target or
+  equivalent project migration;
+- Finder/Open launch, real Widget display, and human visual acceptance on the target Mac.
 
 ---
 

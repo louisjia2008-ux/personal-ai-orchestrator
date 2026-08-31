@@ -21,6 +21,11 @@ let package = Package(
             dependencies: ["PAOControlKit"],
             path: "Sources/PAOMenuBar"
         ),
+        .target(
+            name: "PAOWidgetExtension",
+            dependencies: ["PAOControlKit"],
+            path: "Sources/PAOWidgetExtension"
+        ),
         .testTarget(
             name: "PAOControlKitTests",
             dependencies: ["PAOControlKit"],

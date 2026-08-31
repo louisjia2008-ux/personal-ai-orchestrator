@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import signal
+import threading
 from pathlib import Path
 
 from personal_ai_orchestrator.activation import ActiveRoutingGate
@@ -64,6 +66,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="also serve the P4 typed control plane on this Unix Domain Socket",
     )
+    parser.add_argument(
+        "--control-only",
+        action="store_true",
+        help="serve only the typed UDS control plane; skip the loopback routing API",
+    )
     return parser.parse_args(argv)
 
 
@@ -94,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         runtime_state_root=args.runtime_state_root,
     )
     control_server: ControlPlaneServer | None = None
+    control_service: ControlPlaneService | None = None
     if args.control_socket is not None:
         control_service = build_control_service(
             config=config,
@@ -102,6 +110,28 @@ def main(argv: list[str] | None = None) -> int:
         )
         control_server = ControlPlaneServer(control_service, args.control_socket)
         control_server.start_background()
+    if args.control_only:
+        if control_server is None:
+            raise SystemExit("--control-only requires --control-socket")
+        stop = threading.Event()
+        previous_term = signal.getsignal(signal.SIGTERM)
+
+        def _stop(_signum, _frame) -> None:
+            stop.set()
+
+        signal.signal(signal.SIGTERM, _stop)
+        try:
+            while not stop.wait(timeout=3600):
+                pass
+        except KeyboardInterrupt:
+            return 0
+        finally:
+            signal.signal(signal.SIGTERM, previous_term)
+            control_server.stop()
+            if control_service is not None:
+                control_service.store.close()
+            service.store.close()
+        return 0
     try:
         serve(service, host=args.host, port=args.port)
     except KeyboardInterrupt:
@@ -112,6 +142,8 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if control_server is not None:
             control_server.stop()
+        if control_service is not None:
+            control_service.store.close()
         service.store.close()
     return 0
 

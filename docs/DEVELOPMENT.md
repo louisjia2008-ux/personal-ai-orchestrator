@@ -147,9 +147,10 @@ bash scripts/build_app_bundle.sh
 open "dist/Personal AI Orchestrator.app"
 ```
 
-The bundle script performs a SwiftPM release build and assembles
-`dist/Personal AI Orchestrator.app`. The executable is still the SwiftUI client; the daemon
-remains external and authoritative. P4.2 also adds `/v1/dashboard` and
+The bundle script performs a SwiftPM release build, builds a project-local PyInstaller
+`pao-daemon` helper, and assembles `dist/Personal AI Orchestrator.app`. The SwiftUI client
+starts the bundled helper with `Process` when the typed control socket is unavailable; the
+daemon remains external and authoritative. P4.2 also adds `/v1/dashboard` and
 `/v1/tasks/<id>/detail`, so the shared store can refresh one aggregate dashboard view rather
 than polling each screen independently.
 
@@ -168,7 +169,8 @@ Production ACTIVE.
 
 Current P4.2 limitations:
 
-- app-owned daemon autostart is designed but not yet wired to `Process`/LaunchAgent;
-- Python runtime packaging is not self-contained yet;
-- WidgetKit requires an Xcode app-extension target or equivalent project migration, plus a
-  sanitized shared snapshot bridge. Do not treat the SwiftPM dashboard as WidgetKit support.
+- the app-owned daemon uses direct `Process` launch and an app-support lock, not a LaunchAgent
+  or `SMAppService`;
+- the bundled helper is PyInstaller-based and built from project-local packaging dependencies;
+- WidgetKit source and a sanitized shared snapshot bridge exist, but producing an installable
+  `.appex` still requires an Xcode app-extension packaging/signing path.

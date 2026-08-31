@@ -203,7 +203,8 @@ A first-party macOS client is being built with three complementary surfaces:
   `Open Dashboard` command;
 - **Full Dashboard** — native `NavigationSplitView` sections for overview, tasks,
   execution targets, providers, quota, routing, verification, history, and settings;
-- **Desktop / Notification Center Widgets** — planned read-only snapshot surface.
+- **Desktop / Notification Center Widgets** — read-only snapshot source/bridge, pending
+  installable `.appex` packaging.
 
 P4.2 introduces a local app-bundle builder:
 
@@ -212,6 +213,9 @@ cd macos/PAOMenuBar
 bash scripts/build_app_bundle.sh
 open "dist/Personal AI Orchestrator.app"
 ```
+
+The bundle contains `Contents/Helpers/pao-daemon`; the app starts that helper without manual
+Terminal daemon bootstrap when its typed control socket is unavailable.
 
 The dashboard is still a client. It reads typed `/v1` daemon views and never reads
 Safety Kernel SQLite, credentials, provider auth files, or browser/session stores directly.

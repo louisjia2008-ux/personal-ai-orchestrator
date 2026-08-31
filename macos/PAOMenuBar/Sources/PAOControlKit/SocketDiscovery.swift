@@ -10,14 +10,15 @@ public enum SocketDiscovery {
     /// Resolution order: explicit UserDefaults override, then environment, then app-support
     /// layout socket under `~/Library/Caches` to respect macOS AF_UNIX path limits.
     public static func resolve(userDefaults: UserDefaults = .standard,
-                               environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
+                               environment: [String: String] = ProcessInfo.processInfo.environment,
+                               defaultLayout: AppSupportLayout = .resolve()) -> String {
         if let configured = userDefaults.string(forKey: userDefaultsKey), !configured.isEmpty {
             return configured
         }
         if let fromEnvironment = environment[environmentKey], !fromEnvironment.isEmpty {
             return fromEnvironment
         }
-        return AppSupportLayout.resolve().socketPath
+        return defaultLayout.socketPath
     }
 
     public enum Validation: Equatable {

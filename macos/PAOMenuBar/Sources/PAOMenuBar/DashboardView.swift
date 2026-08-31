@@ -111,6 +111,7 @@ private struct OverviewDashboard: View {
                         Text(store.connection.isConnected ? L10n.connectedLabel : disconnectedText)
                             .foregroundStyle(.secondary)
                     }
+                    DaemonLifecycleLabel(lifecycle: store.daemonLifecycle)
                     Text(store.socketPath)
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.tertiary)
@@ -376,6 +377,7 @@ struct ClientSettingsDashboard: View {
                 Toggle(L10n.autoStartDaemon, isOn: $autoStartDaemon)
                 LabeledContent(L10n.socket, value: store.socketPath)
                 LabeledContent(L10n.runtimeConfig, value: layout.runtimeConfigPath)
+                DaemonLifecycleLabel(lifecycle: store.daemonLifecycle)
             }
             Section(L10n.productionActive) {
                 LabeledContent("ACTIVE", value: store.activeStatus?.productionActive ?? "UNKNOWN")
@@ -385,6 +387,14 @@ struct ClientSettingsDashboard: View {
         }
         .formStyle(.grouped)
         .padding(20)
+    }
+}
+
+private struct DaemonLifecycleLabel: View {
+    @ObservedObject var lifecycle: DaemonLifecycleController
+
+    var body: some View {
+        LabeledContent(L10n.daemonLifecycle, value: lifecycle.status.displayValue)
     }
 }
 
