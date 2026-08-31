@@ -35,6 +35,7 @@ public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var cancellationNotice: CancelNotice?
     @Published public var menuVisible: Bool = false
     @Published public var dashboardVisible: Bool = false
+    @Published public private(set) var isRefreshing: Bool = false
 
     public let socketPath: String
     public let daemonLifecycle: DaemonLifecycleController
@@ -54,6 +55,7 @@ public final class OrchestratorStore: ObservableObject {
     public init(socketPath: String,
                 daemonConfiguration: DaemonLaunchConfiguration? = nil,
                 widgetSnapshotBridge: WidgetSnapshotBridge? = nil,
+                autoStartDaemon: Bool = true,
                 idFactory: @escaping () -> String = { UUID().uuidString.prefix(12).lowercased() }) {
         self.socketPath = socketPath
         let client = PAOControlClient(socketPath: socketPath)
@@ -69,7 +71,9 @@ public final class OrchestratorStore: ObservableObject {
             fallback: .appOwned(layout: configuration.layout)
         )
         self.idFactory = idFactory
-        daemonLifecycle.ensureStarted()
+        if autoStartDaemon {
+            daemonLifecycle.ensureStarted()
+        }
         startRefreshing()
     }
 
@@ -121,7 +125,12 @@ public final class OrchestratorStore: ObservableObject {
         return current
     }
 
+    /// User-triggered refresh. Re-entrant clicks coalesce into one underlying
+    /// refresh so rapid toolbar clicks cannot spawn concurrent polls.
     public func refreshNow() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
         await refreshOnce()
     }
 
