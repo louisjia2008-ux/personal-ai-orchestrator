@@ -6,12 +6,15 @@ import argparse
 from pathlib import Path
 
 from personal_ai_orchestrator.activation import ActiveRoutingGate
+from personal_ai_orchestrator.control_api import ControlPlaneServer, ControlPlaneService
 from personal_ai_orchestrator.execution_controller import reconcile_workspace_truth
 from personal_ai_orchestrator.local_api import serve
 from personal_ai_orchestrator.policy_snapshot import PolicySnapshotJournal
+from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
 from personal_ai_orchestrator.routing_service import RoutingService
 from personal_ai_orchestrator.runtime_config import RuntimeConfig
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore
+from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
 
 
 def load_runtime_config(path: Path) -> RuntimeConfig:
@@ -55,7 +58,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--runtime-state-root", type=Path, required=True)
     parser.add_argument("--host", default="127.0.0.1", choices=("127.0.0.1", "::1", "localhost"))
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument(
+        "--control-socket",
+        type=Path,
+        default=None,
+        help="also serve the P4 typed control plane on this Unix Domain Socket",
+    )
     return parser.parse_args(argv)
+
+
+def build_control_service(
+    *,
+    config: RuntimeConfig,
+    state_db: Path,
+    runtime_state_root: Path,
+) -> ControlPlaneService:
+    """Build the read-mostly control-plane facade over the same durable truth."""
+
+    return ControlPlaneService(
+        registry=config.registry,
+        store=SafetyKernelStore(state_db),
+        activation_gate=ActiveRoutingGate(),
+        runtime_availability=dict(config.runtime_availability),
+        verification_journal=VerificationEvidenceJournal(runtime_state_root),
+        quota_availability_journal=QuotaAvailabilityJournal(runtime_state_root),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -66,9 +93,20 @@ def main(argv: list[str] | None = None) -> int:
         state_db=args.state_db,
         runtime_state_root=args.runtime_state_root,
     )
+    control_server: ControlPlaneServer | None = None
+    if args.control_socket is not None:
+        control_service = build_control_service(
+            config=config,
+            state_db=args.state_db,
+            runtime_state_root=args.runtime_state_root,
+        )
+        control_server = ControlPlaneServer(control_service, args.control_socket)
+        control_server.start_background()
     try:
         serve(service, host=args.host, port=args.port)
     finally:
+        if control_server is not None:
+            control_server.stop()
         service.store.close()
     return 0
 
@@ -77,4 +115,10 @@ if __name__ == "__main__":  # pragma: no cover - exercised through real daemon a
     raise SystemExit(main())
 
 
-__all__ = ["build_service", "load_runtime_config", "main", "parse_args"]
+__all__ = [
+    "build_control_service",
+    "build_service",
+    "load_runtime_config",
+    "main",
+    "parse_args",
+]

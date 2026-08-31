@@ -79,3 +79,38 @@ Verification belongs in host-owned verifier profiles.
 Client presentation belongs in Telegram/DeskPet/front-end adapters.
 
 Do not let one layer absorb another merely because a model/provider exposes a convenient feature.
+
+## Local control plane and CLI (P4.0)
+
+Start the daemon with an optional control-plane socket:
+
+```bash
+python -m personal_ai_orchestrator.daemon \
+  --config runtime.json \
+  --state-db state.sqlite3 \
+  --runtime-state-root runtime-state \
+  --control-socket ~/.personal-ai-orchestrator/control.sock
+```
+
+The `pao` console script (or `python -m personal_ai_orchestrator.cli`) submits structured
+requests only; CLI arguments never become shell commands. Socket resolution order:
+`--socket`, then `PAO_CONTROL_SOCKET`, then `~/.personal-ai-orchestrator/control.sock`.
+
+```bash
+pao submit --task-id T1 --request-id R1 --intent "natural-language intent"
+pao status T1
+pao list
+pao runs T1
+pao report T1            # verification evidence report
+pao routing T1           # latest durable routing decision
+pao cancel T1 --request-id cancel-R1
+pao approvals T1         # read-only approval records
+pao providers            # sanitized provider/quota health
+pao quota
+pao active-status        # Production ACTIVE gate (read-only)
+```
+
+`--json` renders raw API responses. The control plane binds a `0600` Unix Domain Socket,
+accepts bounded JSON only, validates Host/Origin where present, and returns sanitized error
+codes. macOS limits socket paths to 104 bytes; keep the socket near the filesystem root of
+its state directory.

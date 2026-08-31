@@ -19,6 +19,9 @@ dev = [
   "ruff>=0.6,<1",
 ]
 
+[project.scripts]
+pao = "personal_ai_orchestrator.cli:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
