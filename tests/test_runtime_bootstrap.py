@@ -27,7 +27,7 @@ def _test_layout(tmp_path: Path) -> ApplicationSupportLayout:
         state_db=app_root / "state.sqlite3",
         runtime_state_root=app_root / "runtime-state",
         logs_root=app_root / "logs",
-        socket_path=Path("/private/tmp") / f"{tmp_path.name}.sock",
+        socket_path=Path("/tmp") / f"{tmp_path.name}.sock",
     )
 
 
