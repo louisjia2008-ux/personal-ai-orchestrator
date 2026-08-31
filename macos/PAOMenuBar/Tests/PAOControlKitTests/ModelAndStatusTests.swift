@@ -124,22 +124,51 @@ final class ModelAndStatusTests: XCTestCase {
 
     func testDaemonLaunchConfigurationUsesFixedDaemonArguments() {
         let layout = AppSupportLayout.resolve(homeDirectory: "/Users/example")
-        let config = DaemonLaunchConfiguration(layout: layout)
-        XCTAssertEqual(config.pythonExecutable, "/usr/bin/env")
+        let helper = URL(fileURLWithPath: "/App/Contents/Helpers/pao-daemon")
+        let config = DaemonLaunchConfiguration(layout: layout, helperURL: helper)
+        XCTAssertEqual(config.helperURL.path, "/App/Contents/Helpers/pao-daemon")
         XCTAssertEqual(config.socketValidation, .valid)
+        XCTAssertEqual(config.arguments, [])
+    }
+
+    func testDaemonLifecycleStatusDisplayValuesAreStable() {
+        XCTAssertEqual(DaemonLifecycleStatus.alreadyRunning.displayValue, "DAEMON_ALREADY_RUNNING")
+        XCTAssertEqual(DaemonLifecycleStatus.starting.displayValue, "DAEMON_STARTING")
+        XCTAssertEqual(DaemonLifecycleStatus.healthyPreexisting.displayValue, "DAEMON_HEALTHY_PREEXISTING")
         XCTAssertEqual(
-            config.arguments,
-            [
-                "python",
-                "-m", "personal_ai_orchestrator.daemon",
-                "--config", layout.runtimeConfigPath,
-                "--state-db", layout.stateDatabasePath,
-                "--runtime-state-root", layout.runtimeStateRoot,
-                "--control-socket", layout.socketPath,
-                "--host", "127.0.0.1",
-                "--port", "8765",
-            ]
+            DaemonLifecycleStatus.healthyStartedByApp(pid: 123).displayValue,
+            "DAEMON_HEALTHY_STARTED_BY_APP"
         )
+        XCTAssertEqual(DaemonLifecycleStatus.failed(reason: "helper_missing").displayValue, "DAEMON_FAILED")
+    }
+
+    func testWidgetSnapshotBridgeWritesSanitizedReadOnlyPayload() throws {
+        let dashboard = try JSONDecoder().decode(DashboardSummaryView.self, from: Data(dashboardBody.utf8))
+        let snapshot = WidgetSnapshot(
+            generatedAt: Date(timeIntervalSince1970: 1_778_390_400),
+            connection: .connected,
+            daemonLifecycle: .healthyStartedByApp(pid: 123),
+            dashboard: dashboard
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pao-widget-\(UUID().uuidString)", isDirectory: true)
+        let bridge = WidgetSnapshotBridge(snapshotURL: directory.appendingPathComponent("snapshot.json"))
+
+        try bridge.write(snapshot)
+
+        let loaded = try bridge.load()
+        XCTAssertEqual(loaded.connectionState, "CONNECTED")
+        XCTAssertEqual(loaded.daemonLifecycle, "DAEMON_HEALTHY_STARTED_BY_APP")
+        XCTAssertEqual(loaded.productionActive, "DISABLED_BY_DESIGN")
+        XCTAssertEqual(loaded.counts.total, 2)
+
+        let rendered = String(data: try JSONEncoder().encode(loaded), encoding: .utf8) ?? ""
+        XCTAssertFalse(rendered.contains("credential_ref"))
+        XCTAssertFalse(rendered.contains("api_key"))
+        XCTAssertFalse(rendered.contains("socket"))
+        XCTAssertFalse(rendered.contains("intent"))
+        XCTAssertFalse(rendered.contains("cancel"))
+        XCTAssertFalse(rendered.contains("submit"))
     }
 
     func testRunningCancelConflictIdentification() {

@@ -37,6 +37,8 @@ public final class OrchestratorStore: ObservableObject {
     @Published public var dashboardVisible: Bool = false
 
     public let socketPath: String
+    public let daemonLifecycle: DaemonLifecycleController
+    public let widgetSnapshotBridge: WidgetSnapshotBridge
     private let client: PAOControlClient
     private var refreshTask: Task<Void, Never>?
     private var backoffSeconds: Double = 2.0
@@ -49,10 +51,20 @@ public final class OrchestratorStore: ObservableObject {
     public static let duplicateSubmitWindow: TimeInterval = 5.0
 
     public init(socketPath: String,
+                daemonConfiguration: DaemonLaunchConfiguration? = nil,
+                widgetSnapshotBridge: WidgetSnapshotBridge? = nil,
                 idFactory: @escaping () -> String = { UUID().uuidString.prefix(12).lowercased() }) {
         self.socketPath = socketPath
-        self.client = PAOControlClient(socketPath: socketPath)
+        let client = PAOControlClient(socketPath: socketPath)
+        self.client = client
+        let configuration = daemonConfiguration ?? DaemonLaunchConfiguration()
+        self.daemonLifecycle = DaemonLifecycleController(
+            configuration: configuration,
+            client: client
+        )
+        self.widgetSnapshotBridge = widgetSnapshotBridge ?? .appOwned(layout: configuration.layout)
         self.idFactory = idFactory
+        daemonLifecycle.ensureStarted()
         startRefreshing()
     }
 
@@ -93,6 +105,12 @@ public final class OrchestratorStore: ObservableObject {
             backoffSeconds = 2.0
             return (menuVisible || dashboardVisible) ? Self.menuOpenInterval : Self.backgroundInterval
         }
+        switch daemonLifecycle.status {
+        case .alreadyRunning, .starting, .startedByApp, .healthyStartedByApp, .healthyPreexisting:
+            return 1.0
+        default:
+            break
+        }
         let current = backoffSeconds
         backoffSeconds = min(backoffSeconds * 2, Self.maximumBackoff)
         return current
@@ -130,13 +148,30 @@ public final class OrchestratorStore: ObservableObject {
             let counts = taskCounts()
             ClientLog.taskCounts(running: counts.running, ready: counts.ready,
                                  blocked: counts.blocked, verified: counts.verified)
+            writeWidgetSnapshot()
         } catch let error as PAOClientError {
             self.lastError = error
             transition(.disconnected(reason: Self.disconnectionReason(for: error)))
+            writeWidgetSnapshot()
             ClientLog.operation("refresh", outcome: error.logCode)
         } catch {
             transition(.disconnected(reason: .malformedResponse))
+            writeWidgetSnapshot()
             ClientLog.operation("refresh", outcome: "malformed")
+        }
+    }
+
+    private func writeWidgetSnapshot() {
+        let snapshot = WidgetSnapshot(
+            generatedAt: Date(),
+            connection: connection,
+            daemonLifecycle: daemonLifecycle.status,
+            dashboard: dashboard
+        )
+        do {
+            try widgetSnapshotBridge.write(snapshot)
+        } catch {
+            ClientLog.operation("widget_snapshot", outcome: "write_failed")
         }
     }
 

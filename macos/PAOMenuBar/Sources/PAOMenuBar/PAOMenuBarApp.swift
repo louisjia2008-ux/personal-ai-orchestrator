@@ -15,8 +15,18 @@ struct PAOMenuBarApp: App {
     @StateObject private var store: OrchestratorStore
 
     init() {
-        let path = SocketDiscovery.resolve()
-        _store = StateObject(wrappedValue: OrchestratorStore(socketPath: path))
+        let home = ProcessInfo.processInfo.environment["HOME"].flatMap { value in
+            value.isEmpty ? nil : value
+        } ?? NSHomeDirectory()
+        let layout = AppSupportLayout.resolve(homeDirectory: home)
+        let path = SocketDiscovery.resolve(defaultLayout: layout)
+        _store = StateObject(
+            wrappedValue: OrchestratorStore(
+                socketPath: path,
+                daemonConfiguration: DaemonLaunchConfiguration(layout: layout),
+                widgetSnapshotBridge: .appOwned(layout: layout)
+            )
+        )
         // Acceptance evidence: which localization the bundle machinery resolved
         // for this launch (follows macOS preferred languages automatically).
         ClientLog.operation("startup", outcome: "ui_language=\(L10n.resolvedLanguageCode)")
