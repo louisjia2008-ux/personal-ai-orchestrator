@@ -4,20 +4,34 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_DIR="$(cd "${PACKAGE_DIR}/../.." && pwd)"
-CONFIGURATION="${CONFIGURATION:-release}"
 APP_NAME="Personal AI Orchestrator"
-APP_DIR="${PACKAGE_DIR}/dist/${APP_NAME}.app"
-CONTENTS_DIR="${APP_DIR}/Contents"
-MACOS_DIR="${CONTENTS_DIR}/MacOS"
-HELPERS_DIR="${CONTENTS_DIR}/Helpers"
-RESOURCES_DIR="${CONTENTS_DIR}/Resources"
-BUILD_DIR="${PACKAGE_DIR}/.build/arm64-apple-macosx/${CONFIGURATION}"
+DIST_DIR="${PACKAGE_DIR}/dist"
+APP_DIR="${DIST_DIR}/${APP_NAME}.app"
+HELPERS_DIR="${APP_DIR}/Contents/Helpers"
+WIDGET_APPEX="${APP_DIR}/Contents/PlugIns/PAOWidgetExtension.appex"
+XCODE_PROJECT="${PACKAGE_DIR}/PAOMenuBar.xcodeproj"
+XCODE_DERIVED="${PACKAGE_DIR}/.build/xcderived"
+XCODE_APP="${XCODE_DERIVED}/Build/Products/Release/${APP_NAME}.app"
+HOST_ENTITLEMENTS="${PACKAGE_DIR}/Config/PersonalAIOrchestrator.entitlements"
+WIDGET_ENTITLEMENTS="${PACKAGE_DIR}/Config/PAOWidgetExtension.entitlements"
+CODESIGN_IDENTITY="${PAO_CODESIGN_IDENTITY:--}"
 PYTHON="${PAO_PACKAGING_PYTHON:-${REPO_DIR}/.venv/bin/python}"
 DAEMON_DIST="${PACKAGE_DIR}/.build/pao-daemon-dist"
 DAEMON_BUILD="${PACKAGE_DIR}/.build/pao-daemon-build"
 DAEMON_SPEC="${PACKAGE_DIR}/.build/pao-daemon-spec"
 
-swift build --package-path "${PACKAGE_DIR}" -c "${CONFIGURATION}"
+xcodegen generate --spec "${PACKAGE_DIR}/project.yml"
+
+xcodebuild \
+  -project "${XCODE_PROJECT}" \
+  -scheme "${APP_NAME}" \
+  -configuration Release \
+  -derivedDataPath "${XCODE_DERIVED}" \
+  CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="-" \
+  DEVELOPMENT_TEAM="" \
+  CODE_SIGN_ENTITLEMENTS="" \
+  build
 
 if [[ ! -x "${PYTHON}" ]]; then
   echo "packaging python not found: ${PYTHON}" >&2
@@ -42,48 +56,18 @@ fi
   "${REPO_DIR}/scripts/pao_daemon_entry.py"
 
 rm -rf "${APP_DIR}"
-mkdir -p "${MACOS_DIR}" "${HELPERS_DIR}" "${RESOURCES_DIR}"
+mkdir -p "${DIST_DIR}"
+ditto "${XCODE_APP}" "${APP_DIR}"
 
-cp "${BUILD_DIR}/PAOMenuBar" "${MACOS_DIR}/Personal AI Orchestrator"
-chmod 755 "${MACOS_DIR}/Personal AI Orchestrator"
+mkdir -p "${HELPERS_DIR}"
 cp "${DAEMON_DIST}/pao-daemon" "${HELPERS_DIR}/pao-daemon"
 chmod 755 "${HELPERS_DIR}/pao-daemon"
 
-if [[ -d "${BUILD_DIR}/PAOMenuBar_PAOControlKit.bundle" ]]; then
-  cp -R "${BUILD_DIR}/PAOMenuBar_PAOControlKit.bundle" "${APP_DIR}/"
-  cp -R "${BUILD_DIR}/PAOMenuBar_PAOControlKit.bundle" "${RESOURCES_DIR}/"
-fi
-
-cat > "${CONTENTS_DIR}/Info.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleDevelopmentRegion</key>
-  <string>en</string>
-  <key>CFBundleDisplayName</key>
-  <string>Personal AI Orchestrator</string>
-  <key>CFBundleExecutable</key>
-  <string>Personal AI Orchestrator</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.personal-ai-orchestrator.dashboard</string>
-  <key>CFBundleInfoDictionaryVersion</key>
-  <string>6.0</string>
-  <key>CFBundleName</key>
-  <string>Personal AI Orchestrator</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleShortVersionString</key>
-  <string>0.0.1</string>
-  <key>CFBundleVersion</key>
-  <string>1</string>
-  <key>LSMinimumSystemVersion</key>
-  <string>13.0</string>
-  <key>NSHumanReadableCopyright</key>
-  <string>Copyright 2026</string>
-</dict>
-</plist>
-PLIST
+codesign --force --sign "${CODESIGN_IDENTITY}" "${HELPERS_DIR}/pao-daemon"
+codesign --force --sign "${CODESIGN_IDENTITY}" --entitlements "${WIDGET_ENTITLEMENTS}" "${WIDGET_APPEX}"
+codesign --force --sign "${CODESIGN_IDENTITY}" --entitlements "${HOST_ENTITLEMENTS}" "${APP_DIR}"
+codesign --verify --strict --verbose=2 "${HELPERS_DIR}/pao-daemon"
+codesign --verify --strict --verbose=2 "${WIDGET_APPEX}"
+codesign --verify --deep --strict --verbose=2 "${APP_DIR}"
 
 echo "${APP_DIR}"
