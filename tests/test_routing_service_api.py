@@ -108,6 +108,7 @@ def _registry() -> ModelRegistry:
                 model_sku_id="m3",
                 account_id="account",
                 runtime_id="opencode",
+                execution_verified=True,
             )
         },
         quota_bindings=(
@@ -180,6 +181,7 @@ def _unknown_quota_registry() -> ModelRegistry:
                 model_sku_id="gpt-5.5",
                 account_id="account",
                 runtime_id="codex-cli",
+                execution_verified=True,
             )
         },
         quota_bindings=(

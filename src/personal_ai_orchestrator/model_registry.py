@@ -395,7 +395,7 @@ class ExecutionTarget(RegistryModel):
     runtime_provider_id: str | None = None
     variant: str | None = None
     enabled: bool = True
-    execution_verified: bool = True
+    execution_verified: bool = False
 
 
 class QuotaBinding(RegistryModel):

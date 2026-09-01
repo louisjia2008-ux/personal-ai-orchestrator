@@ -103,6 +103,7 @@ def build_control_service(
         verification_journal=VerificationEvidenceJournal(runtime_state_root),
         quota_availability_journal=QuotaAvailabilityJournal(runtime_state_root),
         provider_registry_manager=provider_registry_manager,
+        owner_initiated_execution_enabled=config.owner_initiated_execution_enabled,
     )
 
 

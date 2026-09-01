@@ -129,16 +129,19 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
     public let modelSkuId: String
     public let runtimeId: String
     public let enabled: Bool
+    public let executionVerified: Bool?
     public let runtimeAvailable: Bool?
     public let observedAvailability: ObservedAvailabilityView?
 
     public var id: String { executionTargetId }
+    public var isExecutionVerified: Bool { executionVerified ?? false }
 
     enum CodingKeys: String, CodingKey {
         case executionTargetId = "execution_target_id"
         case modelSkuId = "model_sku_id"
         case runtimeId = "runtime_id"
         case enabled
+        case executionVerified = "execution_verified"
         case runtimeAvailable = "runtime_available"
         case observedAvailability = "observed_availability"
     }

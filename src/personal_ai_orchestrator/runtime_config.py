@@ -28,6 +28,7 @@ class RuntimeConfig(BaseModel):
     task_profiles: tuple[TaskProfile, ...] = ()
     runtime_availability: dict[str, bool] = Field(default_factory=dict)
     telemetry: dict[str, TargetTelemetry] = Field(default_factory=dict)
+    owner_initiated_execution_enabled: bool = False
 
     @model_validator(mode="after")
     def validate_runtime_refs(self) -> RuntimeConfig:

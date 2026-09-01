@@ -24,6 +24,7 @@ from personal_ai_orchestrator.control_api import (
     DashboardSummaryView,
     DispatchTaskView,
     HealthView,
+    OwnerExecutionSettingsView,
     ProviderHealthListView,
     RoutingDecisionView,
     RunListView,
@@ -151,10 +152,18 @@ class ControlPlaneClient:
                 "request_id": request_id,
                 "task_state_version": task_state_version,
                 "execution_target_id": execution_target_id,
-                "authority": "OWNER_INITIATED_EXECUTION",
             },
         )
         return DispatchTaskView.model_validate(rendered)
+
+    def owner_execution_settings(self) -> OwnerExecutionSettingsView:
+        return self._get(  # type: ignore[return-value]
+            "/v1/settings/owner-execution",
+            OwnerExecutionSettingsView,
+        )
+
+    def get_dispatch(self, request_id: str) -> DispatchTaskView:
+        return self._get(f"/v1/dispatches/{request_id}", DispatchTaskView)  # type: ignore[return-value]
 
     def verification_report(self, task_id: str) -> VerificationReportView:
         return self._get(  # type: ignore[return-value]

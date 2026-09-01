@@ -120,6 +120,7 @@
 "label.modelSku" = "Model SKU";
 "label.runtimeId" = "Runtime";
 "label.runtimeAvailability" = "Runtime availability";
+"label.executionVerified" = "Execution verified";
 "label.observedState" = "Observed state";
 "label.measurementSource" = "Measurement source";
 "label.confidence" = "Confidence";

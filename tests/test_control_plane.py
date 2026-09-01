@@ -121,6 +121,7 @@ def _registry() -> ModelRegistry:
                 model_sku_id="m3",
                 account_id="account",
                 runtime_id="opencode",
+                execution_verified=True,
             )
         },
     )
@@ -147,6 +148,7 @@ def harness(tmp_path):
         runtime_availability={"m3-sub": True},
         verification_journal=VerificationEvidenceJournal(tmp_path),
         quota_availability_journal=availability,
+        owner_initiated_execution_enabled=True,
     )
     server = ControlPlaneServer(service, socket_path)
     server.start_background()
@@ -255,13 +257,39 @@ def test_owner_dispatch_accepts_verified_target_and_is_idempotent(harness):
 
     assert first.accepted is True
     assert first.authority == "OWNER_INITIATED_EXECUTION"
-    assert first.task.state == TaskState.RUNNING.value
+    assert first.status == "RESERVED"
+    assert first.task.state == TaskState.READY.value
     assert second.model_dump() == first.model_dump()
     assert harness.client.active_status().production_active == "DISABLED_BY_DESIGN"
     rows = harness.store.connection.execute(
         "SELECT COUNT(*) AS n FROM routing_decisions WHERE request_id='dispatch-1'"
     ).fetchone()
+    assert rows["n"] == 0
+    rows = harness.store.connection.execute(
+        "SELECT COUNT(*) AS n FROM owner_dispatches WHERE request_id='dispatch-1'"
+    ).fetchone()
     assert rows["n"] == 1
+
+
+def test_owner_dispatch_fails_closed_when_owner_execution_setting_is_off(harness):
+    harness.service.owner_initiated_execution_enabled = False
+    task = _submit(harness)
+
+    with pytest.raises(ControlPlaneError) as error:
+        harness.client.dispatch(
+            "task-1",
+            request_id="dispatch-disabled",
+            task_state_version=task.state_version,
+            execution_target_id="m3-sub",
+        )
+
+    assert error.value.status == 403
+    assert error.value.code == "owner_initiated_execution_disabled"
+    assert harness.client.owner_execution_settings().owner_initiated_execution_enabled is False
+    rows = harness.store.connection.execute(
+        "SELECT COUNT(*) AS n FROM owner_dispatches WHERE request_id='dispatch-disabled'"
+    ).fetchone()
+    assert rows["n"] == 0
 
 
 def test_owner_dispatch_rejects_stale_task_version(harness):
@@ -277,6 +305,121 @@ def test_owner_dispatch_rejects_stale_task_version(harness):
 
     assert error.value.status == 409
     assert error.value.code == "stale_task_state_version"
+    dispatch = harness.client.get_dispatch("dispatch-stale")
+    assert dispatch.status == "BLOCKED"
+    assert dispatch.failure_code == "STALE_TASK_STATE_VERSION"
+
+
+def test_owner_dispatch_request_id_conflicts_on_semantic_payload_changes(harness):
+    task = _submit(harness)
+    harness.client.dispatch(
+        "task-1",
+        request_id="dispatch-conflict",
+        task_state_version=task.state_version,
+        execution_target_id="m3-sub",
+    )
+
+    with pytest.raises(ControlPlaneError) as version_error:
+        harness.client.dispatch(
+            "task-1",
+            request_id="dispatch-conflict",
+            task_state_version=task.state_version + 1,
+            execution_target_id="m3-sub",
+        )
+    assert version_error.value.status == 409
+    assert version_error.value.code == "conflicting_dispatch_request_id"
+
+    with pytest.raises(ControlPlaneError) as target_error:
+        harness.client.dispatch(
+            "task-1",
+            request_id="dispatch-conflict",
+            task_state_version=task.state_version,
+            execution_target_id="different-target",
+        )
+    assert target_error.value.status == 409
+    assert target_error.value.code == "conflicting_dispatch_request_id"
+
+    other = _submit(harness, task_id="task-2", request_id="req-2")
+    with pytest.raises(ControlPlaneError) as task_error:
+        harness.client.dispatch(
+            "task-2",
+            request_id="dispatch-conflict",
+            task_state_version=other.state_version,
+            execution_target_id="m3-sub",
+        )
+    assert task_error.value.status == 409
+    assert task_error.value.code == "conflicting_dispatch_request_id"
+
+
+def test_owner_dispatch_rejects_client_supplied_authority_or_mode(harness):
+    task = _submit(harness)
+    status, body = _raw_request(
+        harness.socket_path,
+        "POST",
+        "/v1/tasks/task-1/dispatch",
+        headers={"content-type": "application/json"},
+        body=json.dumps(
+            {
+                "request_id": "dispatch-authority",
+                "task_state_version": task.state_version,
+                "execution_target_id": "m3-sub",
+                "authority": "OWNER_INITIATED_EXECUTION",
+            }
+        ).encode(),
+    )
+    assert status == 400
+    assert json.loads(body) == {"error": "invalid_json_schema"}
+
+    status, body = _raw_request(
+        harness.socket_path,
+        "POST",
+        "/v1/tasks/task-1/dispatch",
+        headers={"content-type": "application/json"},
+        body=json.dumps(
+            {
+                "request_id": "dispatch-mode",
+                "task_state_version": task.state_version,
+                "execution_target_id": "m3-sub",
+                "mode": "ACTIVE",
+            }
+        ).encode(),
+    )
+    assert status == 400
+    assert json.loads(body) == {"error": "invalid_json_schema"}
+
+
+def test_owner_dispatch_is_separate_from_routing_decisions(harness):
+    task = _submit(harness)
+    decision = {
+        "decision_id": "route-before-dispatch",
+        "request_id": "route-request",
+        "mode": "SHADOW",
+        "selected_execution_target_id": None,
+        "fallback_reason": "quota confidence remained UNKNOWN",
+    }
+    harness.store.record_routing_decision(
+        decision_id="route-before-dispatch",
+        request_id="route-request",
+        task_id="task-1",
+        payload=decision,
+    )
+
+    dispatch = harness.client.dispatch(
+        "task-1",
+        request_id="dispatch-after-route",
+        task_state_version=task.state_version,
+        execution_target_id="m3-sub",
+    )
+
+    routing = harness.client.routing_decision("task-1")
+    assert routing.decision_id == "route-before-dispatch"
+    assert routing.request_id == "route-request"
+    assert dispatch.request_id == "dispatch-after-route"
+    assert harness.client.get_dispatch("dispatch-after-route").dispatch_id == dispatch.dispatch_id
+    rows = harness.store.connection.execute(
+        "SELECT COUNT(*) AS n FROM routing_decisions WHERE request_id='dispatch-after-route'"
+    ).fetchone()
+    assert rows["n"] == 0
 
 
 def test_owner_dispatch_denies_catalog_only_target(harness):
@@ -299,6 +442,9 @@ def test_owner_dispatch_denies_catalog_only_target(harness):
     assert error.value.status == 409
     assert error.value.code == "execution_target_not_launchable"
     assert harness.client.get_task("task-1").state == TaskState.SUBMITTED.value
+    dispatch = harness.client.get_dispatch("dispatch-catalog-only")
+    assert dispatch.status == "BLOCKED"
+    assert dispatch.failure_code == "EXECUTION_TARGET_NOT_LAUNCHABLE"
     events = harness.store.audit_events("task-1")
     assert any(event["event_type"] == "OWNER_DISPATCH_BLOCKED" for event in events)
 

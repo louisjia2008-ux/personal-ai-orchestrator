@@ -676,6 +676,10 @@ private struct ExecutionTargetDisclosure: View {
             VStack(alignment: .leading, spacing: 6) {
                 LabeledContent(L10n.modelSku, value: target.modelSkuId)
                 LabeledContent(L10n.runtimeIdLabel, value: target.runtimeId)
+                LabeledContent(
+                    L10n.executionVerified,
+                    value: target.isExecutionVerified ? "TRUE" : "FALSE"
+                )
                 if let runtimeAvailable = target.runtimeAvailable {
                     LabeledContent(
                         L10n.runtimeAvailability,
@@ -702,7 +706,10 @@ private struct ExecutionTargetDisclosure: View {
                 Text(target.executionTargetId)
                     .font(.system(.body, design: .monospaced))
                 Spacer()
-                StatusBadge(text: target.enabled ? "ENABLED" : "DISABLED", kind: target.enabled ? .good : .neutral)
+                StatusBadge(
+                    text: target.enabled && target.isExecutionVerified ? "VERIFIED" : "UNVERIFIED",
+                    kind: target.enabled && target.isExecutionVerified ? .good : .neutral
+                )
             }
         }
     }
