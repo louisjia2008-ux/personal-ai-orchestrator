@@ -450,3 +450,67 @@ public struct SubmitRequest: Encodable, Equatable, Sendable {
         self.intent = intent
     }
 }
+
+public struct DispatchRequest: Encodable, Equatable, Sendable {
+    public let requestId: String
+    public let taskStateVersion: Int
+    public let executionTargetId: String
+
+    enum CodingKeys: String, CodingKey {
+        case requestId = "request_id"
+        case taskStateVersion = "task_state_version"
+        case executionTargetId = "execution_target_id"
+    }
+
+    public init(requestId: String, taskStateVersion: Int, executionTargetId: String) {
+        self.requestId = requestId
+        self.taskStateVersion = taskStateVersion
+        self.executionTargetId = executionTargetId
+    }
+}
+
+public struct DispatchTaskView: Decodable, Equatable, Sendable {
+    public let dispatchId: String
+    public let task: TaskView
+    public let requestId: String
+    public let authority: String
+    public let executionTargetId: String
+    public let status: String
+    public let accepted: Bool
+    public let reason: String?
+    public let failureCode: String?
+
+    enum CodingKeys: String, CodingKey {
+        case dispatchId = "dispatch_id"
+        case task
+        case requestId = "request_id"
+        case authority
+        case executionTargetId = "execution_target_id"
+        case status
+        case accepted
+        case reason
+        case failureCode = "failure_code"
+    }
+}
+
+public struct OwnerExecutionSettingsView: Decodable, Equatable, Sendable {
+    public let ownerInitiatedExecutionEnabled: Bool
+    public let productionActive: String
+
+    enum CodingKeys: String, CodingKey {
+        case ownerInitiatedExecutionEnabled = "owner_initiated_execution_enabled"
+        case productionActive = "production_active"
+    }
+}
+
+public struct OwnerExecutionSettingsUpdateRequest: Encodable, Equatable, Sendable {
+    public let ownerInitiatedExecutionEnabled: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case ownerInitiatedExecutionEnabled = "owner_initiated_execution_enabled"
+    }
+
+    public init(ownerInitiatedExecutionEnabled: Bool) {
+        self.ownerInitiatedExecutionEnabled = ownerInitiatedExecutionEnabled
+    }
+}

@@ -50,6 +50,27 @@ public enum L10n {
         "empty.noProviders.hint",
         "label.modelSku", "label.runtimeId", "label.runtimeAvailability",
         "label.executionVerified",
+        "label.ownerDispatch",
+        "label.ownerExecutionSetting",
+        "label.ownerExecutionToggle",
+        "label.ownerExecutionState",
+        "label.ownerExecutionMeaning",
+        "label.ownerExecutionDisabled",
+        "label.ownerExecutionFooter",
+        "label.executionTarget",
+        "label.providerModel",
+        "label.dispatch",
+        "label.dispatchHelp",
+        "label.dispatchBlockedHint",
+        "label.dispatchStatus",
+        "label.failureCode",
+        "label.worktree",
+        "label.branch",
+        "label.writerLock",
+        "label.workerRun",
+        "label.noVerifiedTargets",
+        "label.ownerDispatchFooter",
+        "label.taskNotDispatchable",
         "label.observedState", "label.measurementSource", "label.confidence",
         "label.observedAt", "label.reasonCode", "empty.availabilityUnknown",
         "label.evidence",
@@ -325,6 +346,30 @@ public enum L10n {
     public static var runtimeIdLabel: String { tr("label.runtimeId") }
     public static var runtimeAvailability: String { tr("label.runtimeAvailability") }
     public static var executionVerified: String { tr("label.executionVerified") }
+    public static var ownerDispatch: String { tr("label.ownerDispatch") }
+    public static var ownerExecutionSetting: String { tr("label.ownerExecutionSetting") }
+    public static var ownerExecutionToggle: String { tr("label.ownerExecutionToggle") }
+    public static var ownerExecutionState: String { tr("label.ownerExecutionState") }
+    public static var ownerExecutionMeaning: String { tr("label.ownerExecutionMeaning") }
+    public static var ownerExecutionDisabled: String { tr("label.ownerExecutionDisabled") }
+    public static var ownerExecutionFooter: String { tr("label.ownerExecutionFooter") }
+    public static var executionTarget: String { tr("label.executionTarget") }
+    public static var providerModel: String { tr("label.providerModel") }
+    public static var dispatch: String { tr("label.dispatch") }
+    public static var dispatchHelp: String { tr("label.dispatchHelp") }
+    public static var dispatchBlockedHint: String { tr("label.dispatchBlockedHint") }
+    public static var dispatchStatus: String { tr("label.dispatchStatus") }
+    public static var failureCode: String { tr("label.failureCode") }
+    public static var worktree: String { tr("label.worktree") }
+    public static var branch: String { tr("label.branch") }
+    public static var writerLock: String { tr("label.writerLock") }
+    public static var workerRun: String { tr("label.workerRun") }
+    public static var noVerifiedTargets: String { tr("label.noVerifiedTargets") }
+    public static var ownerDispatchFooter: String { tr("label.ownerDispatchFooter") }
+
+    public static func taskNotDispatchable(_ state: String) -> String {
+        String(format: tr("label.taskNotDispatchable"), state)
+    }
     public static var observedState: String { tr("label.observedState") }
     public static var measurementSource: String { tr("label.measurementSource") }
     public static var confidenceLabel: String { tr("label.confidence") }

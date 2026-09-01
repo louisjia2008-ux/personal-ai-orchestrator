@@ -13,6 +13,44 @@ final class ModelAndStatusTests: XCTestCase {
         XCTAssertEqual(view.tasks[1].stateVersion, 3)
     }
 
+    func testDispatchAndOwnerExecutionDecoding() throws {
+        let dispatchBody = """
+        {"dispatch_id":"owner-dispatch-d1","task":{"task_id":"task-1","request_id":"r1","intent":"i","state":"READY","state_version":1,"created_at":"2026-09-01T00:00:00Z","updated_at":"2026-09-01T00:00:00Z"},"request_id":"d1","authority":"OWNER_INITIATED_EXECUTION","execution_target_id":"zai-coding-plan-glm-5.3","status":"RESERVED","accepted":true,"reason":"owner initiated execution dispatch reserved","failure_code":null}
+        """
+        let dispatch = try JSONDecoder().decode(DispatchTaskView.self, from: Data(dispatchBody.utf8))
+        XCTAssertEqual(dispatch.dispatchId, "owner-dispatch-d1")
+        XCTAssertEqual(dispatch.authority, "OWNER_INITIATED_EXECUTION")
+        XCTAssertEqual(dispatch.status, "RESERVED")
+        XCTAssertTrue(dispatch.accepted)
+        XCTAssertNil(dispatch.failureCode)
+        XCTAssertEqual(dispatch.task.taskId, "task-1")
+
+        let settingsBody = """
+        {"owner_initiated_execution_enabled":true,"production_active":"DISABLED_BY_DESIGN"}
+        """
+        let settings = try JSONDecoder().decode(
+            OwnerExecutionSettingsView.self,
+            from: Data(settingsBody.utf8)
+        )
+        XCTAssertTrue(settings.ownerInitiatedExecutionEnabled)
+        XCTAssertEqual(settings.productionActive, "DISABLED_BY_DESIGN")
+
+        let request = DispatchRequest(
+            requestId: "d1",
+            taskStateVersion: 1,
+            executionTargetId: "zai-coding-plan-glm-5.3"
+        )
+        let encoded = try JSONEncoder().encode(request)
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        XCTAssertEqual(json["request_id"] as? String, "d1")
+        XCTAssertEqual(json["task_state_version"] as? Int, 1)
+        XCTAssertEqual(json["execution_target_id"] as? String, "zai-coding-plan-glm-5.3")
+        // The client must never send an authority field; the server derives it.
+        XCTAssertNil(json["authority"])
+    }
+
     func testProviderAndQuotaDecoding() throws {
         let view = try JSONDecoder().decode(ProviderHealthListView.self, from: Data(providersBody.utf8))
         let provider = try XCTUnwrap(view.providers.first)
