@@ -106,28 +106,29 @@ def build_control_service(
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    provider_registry_manager: ProviderRegistryManager | None = None,
+) -> int:
     args = parse_args(argv)
     config = load_runtime_config(args.config)
-    # P4.2.4-A: the dynamic provider-registry manager is built before
-    # any service so the Control API can project discovered truth
-    # from frame one. The manager reuses a previously persisted
-    # snapshot when one is available, otherwise it runs the
-    # credential-safe discovery cycle on first launch.
-    manager = ProviderRegistryManager(runtime_state_root=args.runtime_state_root)
-    # §23 "Refresh providers" — daemon startup refresh. The manager's
-    # constructor only loads persisted metadata (status / last error),
-    # so the first /v1/dashboard response still has an empty registry.
-    # We populate the in-memory ModelRegistry eagerly here so that the
-    # Control API handlers can project providers/targets from frame
-    # one without waiting for the user to click the explicit Refresh
-    # button.
-    manager.refresh()
+    # P4.2.4-A.1 single-startup-contract: when invoked from
+    # ``product_daemon`` the manager has already been constructed and
+    # rehydrated from disk; pass it through so we honour the contract
+    # (exactly one discovery cycle on cold first launch, zero cycles on
+    # subsequent boots). When invoked directly without an external
+    # manager, fall back to building one here; the manager constructor
+    # rehydrates from disk and does NOT run an implicit refresh.
+    if provider_registry_manager is None:
+        provider_registry_manager = ProviderRegistryManager(
+            runtime_state_root=args.runtime_state_root,
+        )
     service = build_service(
         config=config,
         state_db=args.state_db,
         runtime_state_root=args.runtime_state_root,
-        provider_registry_manager=manager,
+        provider_registry_manager=provider_registry_manager,
     )
     control_server: ControlPlaneServer | None = None
     control_service: ControlPlaneService | None = None
@@ -136,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             state_db=args.state_db,
             runtime_state_root=args.runtime_state_root,
-            provider_registry_manager=manager,
+            provider_registry_manager=provider_registry_manager,
         )
         control_server = ControlPlaneServer(control_service, args.control_socket)
         control_server.start_background()

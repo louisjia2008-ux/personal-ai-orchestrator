@@ -39,7 +39,8 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Callable, Sequence
+import threading
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -76,11 +77,82 @@ DISCOVERY_SUBPROCESS_TIMEOUT_SECONDS = 8.0
 # is a generous upper bound that still rejects runaway output.
 DISCOVERY_SUBPROCESS_MAX_OUTPUT_BYTES = 256 * 1024
 
+# Environment variables that must NEVER be forwarded to a discovery
+# subprocess. The discovery contract reads only provider labels and env-var
+# NAMES — values are never propagated. The blocklist is intentionally
+# explicit (rather than the inverse allowlist) so a future environment
+# change cannot accidentally leak a credential.
+#
+# P4.2.4-A.1 §15 — credential isolation contract.
+_DISCOVERY_ENV_BLOCKLIST: frozenset[str] = frozenset({
+    # Known by this module
+    "ZAI_API_KEY",
+    "MINIMAX_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "DEEPSEEK_API_KEY",
+    # Additional credential variables that may be present in the operator's
+    # environment. The blocklist is additive: when a new provider is added
+    # the corresponding credential variable(s) MUST be added here.
+    "OPENAI_ORGANIZATION",
+    "OPENAI_API_BASE",
+    "OPENAI_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "GOOGLE_API_KEY",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GEMINI_API_KEY",
+    "GROQ_API_KEY",
+    "MISTRAL_API_KEY",
+    "COHERE_API_KEY",
+    "PERPLEXITY_API_KEY",
+    "XAI_API_KEY",
+    "HUGGINGFACE_TOKEN",
+    "HF_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SESSION_TOKEN",
+    "GITLAB_TOKEN",
+    "BITBUCKET_TOKEN",
+    "NETLIFY_AUTH_TOKEN",
+    "VERCEL_TOKEN",
+    "RAILWAY_TOKEN",
+    "RENDER_API_KEY",
+    "SUPABASE_KEY",
+    "SUPABASE_SERVICE_KEY",
+})
+
+# Minimal allowlist of environment variables the OpenCode CLI needs to
+# produce catalog output. The intersection of (allowlist \ blocklist) is
+# what actually reaches the subprocess. Any variable outside this set
+# must not be passed by the harness.
+_DISCOVERY_ENV_ALLOWLIST: frozenset[str] = frozenset({
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "TZ",
+    "TMPDIR",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "XDG_RUNTIME_DIR",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
+})
+
 # The provider families we attempt to discover. Each entry pairs:
 #   - the OpenCode provider family identifier as returned by ``opencode models``
 #   - the environment variable name whose *presence* indicates that an API
 #     credential is configured (value is never read)
-#   - an optional alternative env var (for vendors that document multiple)
+#   - provider_label_keywords used to map an OpenCode credentials-section
+#     label to this specific surface. The keywords MUST be region-specific
+#     so that a "MiniMax CN" label does not authenticate the international
+#     surface (P4.2.4-A.1 §22).
 #
 # Adding a new provider here is a deliberate act: nothing in the codebase
 # should infer families automatically from CLI output, because the harness
@@ -183,28 +255,31 @@ PROVIDER_FAMILIES: tuple[ProviderFamilySpec, ...] = (
         provider_id="minimax-cn",
         display_name="MiniMax CN",
         env_variables=("MINIMAX_API_KEY",),
-        provider_label_keywords=("minimaxi", "MiniMax"),
+        # Region-specific keyword. The generic ``MiniMax`` keyword is
+        # intentionally absent so a label like ``MiniMax International``
+        # does not authenticate this CN surface.
+        provider_label_keywords=("minimaxi", "MiniMax CN"),
         alternative_endpoints=("api.minimaxi.com",),
     ),
     ProviderFamilySpec(
         provider_id="minimax-cn-coding-plan",
         display_name="MiniMax CN Coding Plan",
         env_variables=("MINIMAX_API_KEY",),
-        provider_label_keywords=("minimaxi", "MiniMax"),
+        provider_label_keywords=("minimaxi", "MiniMax CN"),
         alternative_endpoints=("api.minimaxi.com",),
     ),
     ProviderFamilySpec(
         provider_id="minimax",
         display_name="MiniMax International",
         env_variables=("MINIMAX_API_KEY",),
-        provider_label_keywords=("minimax.io", "MiniMax"),
+        provider_label_keywords=("minimax.io", "MiniMax International"),
         alternative_endpoints=("api.minimax.io",),
     ),
     ProviderFamilySpec(
         provider_id="minimax-coding-plan",
         display_name="MiniMax International Coding Plan",
         env_variables=("MINIMAX_API_KEY",),
-        provider_label_keywords=("minimax.io", "MiniMax"),
+        provider_label_keywords=("minimax.io", "MiniMax International"),
         alternative_endpoints=("api.minimax.io",),
     ),
 )
@@ -217,6 +292,34 @@ class ProviderDiscovery:
     This object is the only thing the discovery module hands to the
     product runtime. ``assert_sanitized`` rejects any field whose value
     matches a credential shape before it ever leaves the module.
+
+    P4.2.4-A.1 separates the previously-combined "auth evidence" into
+    three orthogonal fields so the Dashboard can show what was actually
+    observed and what was merely inferred (P4.2.4-A.1 §22):
+
+    - ``catalog_discovered``: ``True`` when ``opencode models`` returned at
+      least one SKU for this provider_id. This is the only thing that
+      proves the runtime knows about the family.
+    - ``credential_evidence_present``: ``True`` when *any* credential
+      indicator was observed (env var set, label in credentials section,
+      label in environment section). This is a *weak* signal: a single
+      ``MINIMAX_API_KEY`` is seen for all four MiniMax surfaces at once,
+      so this flag must NOT be used to authenticate a specific surface.
+    - ``credential_scope_verified``: ``True`` only when the credentials-
+      section label matched this surface's region-specific keyword. This
+      is the only field that may authorise ``AUTH_FROM_ENV_PRESENCE``.
+    - ``execution_verified``: always ``False`` in this phase. No model
+      probe has been executed; the value is exposed so the Dashboard can
+      surface "not yet verified" honestly.
+
+    ``auth_status`` is derived from the three evidence flags and is the
+    field projected to the Dashboard. The mapping is:
+
+    - ``catalog_discovered`` + ``credential_scope_verified``
+      → ``AUTH_FROM_ENV_PRESENCE``
+    - otherwise, ``credential_evidence_present``
+      → ``AUTH_UNKNOWN`` (evidence exists but scope is not verified)
+    - otherwise → ``AUTH_REQUIRED``
     """
 
     provider_id: str
@@ -229,6 +332,10 @@ class ProviderDiscovery:
     observed_at: datetime
     region: str | None = None
     in_credentials_store: bool = False
+    catalog_discovered: bool = True
+    credential_evidence_present: bool = False
+    credential_scope_verified: bool = False
+    execution_verified: bool = False
 
     def to_provider_surface_evidence(
         self,
@@ -319,6 +426,10 @@ class DiscoveryResult:
                     "env_variables_present": list(p.env_variables_present),
                     "region": p.region,
                     "in_credentials_store": p.in_credentials_store,
+                    "catalog_discovered": p.catalog_discovered,
+                    "credential_evidence_present": p.credential_evidence_present,
+                    "credential_scope_verified": p.credential_scope_verified,
+                    "execution_verified": p.execution_verified,
                     "observed_at": p.observed_at.isoformat(),
                 }
                 for p in self.providers
@@ -346,6 +457,14 @@ class DiscoveryResult:
                     else None
                 ),
                 in_credentials_store=bool(item.get("in_credentials_store", False)),
+                catalog_discovered=bool(item.get("catalog_discovered", True)),
+                credential_evidence_present=bool(
+                    item.get("credential_evidence_present", False)
+                ),
+                credential_scope_verified=bool(
+                    item.get("credential_scope_verified", False)
+                ),
+                execution_verified=bool(item.get("execution_verified", False)),
                 observed_at=datetime.fromisoformat(str(item["observed_at"])),
             )
             for item in payload.get("providers", [])  # type: ignore[arg-type]
@@ -423,60 +542,178 @@ def _resolve_opencode(explicit: Path | None) -> Path | None:
     return None
 
 
+def _build_subprocess_env(parent_env: Mapping[str, str]) -> dict[str, str]:
+    """Return the minimal environment for a discovery subprocess.
+
+    The discovery contract is "read labels and env-var NAMES only; never
+    propagate values". We enforce this by computing the *intersection* of
+    the parent env with a small allowlist, then explicitly removing every
+    known credential env var from the result. This is the inverse of the
+    Python-default ``subprocess.run(env=...)`` behaviour, which forwards
+    the entire parent environment unless the caller asks otherwise.
+
+    P4.2.4-A.1 §15 — credential isolation contract. Even if a future
+    OpenCode release invents a new credential env var we did not predict,
+    the allowlist keeps the worst-case surface to "PATH + locale" only.
+    """
+
+    out: dict[str, str] = {}
+    for key in _DISCOVERY_ENV_ALLOWLIST:
+        if key in parent_env:
+            out[key] = parent_env[key]
+    for blocked in _DISCOVERY_ENV_BLOCKLIST:
+        out.pop(blocked, None)
+    return out
+
+
 def _run_opencode(
     argv: Sequence[str],
     *,
     executable: Path,
     timeout_seconds: float = DISCOVERY_SUBPROCESS_TIMEOUT_SECONDS,
     max_output_bytes: int = DISCOVERY_SUBPROCESS_MAX_OUTPUT_BYTES,
+    env: Mapping[str, str] | None = None,
 ) -> SubprocessResult:
     """Spawn the OpenCode CLI with a strict argv, timeout, and output cap.
 
-    Never spawns a shell. ``argv`` is a tuple of strings; the first element
-    is the resolved executable path. ``stdout`` and ``stderr`` are captured
-    as bytes; output larger than ``max_output_bytes`` is truncated and the
-    ``truncated`` flag is set so the caller can decide to retry or fail
-    closed.
+    Implementation contract (P4.2.4-A.1 §16):
+
+    - strict argv, no shell (``shell=False``);
+    - exact child PID: a single ``subprocess.Popen`` instance; no
+      ``killall``, ``pkill``, or ``os.killpg`` of arbitrary groups;
+    - incremental stdout/stderr consumption: child output is drained by
+      dedicated reader threads so a runaway producer is bounded;
+    - hard byte bound: once ``max_output_bytes`` is reached the buffer is
+      closed and the child is signalled; the result reports ``truncated``;
+    - timeout: ``proc.wait(timeout=timeout_seconds)``; on timeout the
+      child is terminated and reaped before this function returns;
+    - cleanup/reap: every code path eventually calls ``proc.wait()`` so
+      the OS does not accumulate zombies;
+    - the subprocess inherits an explicit allowlisted env (see
+      :func:`_build_subprocess_env`); the parent environment is never
+      passed through.
+
+    ``stderr`` is captured only for diagnostic truncation messages. It is
+    never persisted.
     """
 
     if not argv:
         raise ValueError("argv must not be empty")
     full_argv: tuple[str, ...] = (str(executable), *argv)
+    if env is None:
+        env = _build_subprocess_env(os.environ)
+
+    stdout_buf = bytearray()
+    stderr_buf = bytearray()
+    overflow = threading.Event()
+    stdout_done = threading.Event()
+    stderr_done = threading.Event()
+    stdout_truncated = False
+    stderr_truncated = False
+
+    proc = subprocess.Popen(  # noqa: S603 — argv + env are fully controlled
+        full_argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        env=dict(env),
+        shell=False,
+        start_new_session=True,
+    )
+
+    def _drain(stream, buf: bytearray, done: threading.Event) -> None:
+        nonlocal stdout_truncated, stderr_truncated
+        try:
+            while True:
+                chunk = stream.read1(8192)
+                if not chunk:
+                    break
+                if overflow.is_set():
+                    # Bound was already exceeded on the other stream
+                    # (or this stream); keep draining so the OS pipe
+                    # buffer does not fill and deadlock the child, but
+                    # do not retain the data.
+                    continue
+                if len(buf) + len(chunk) > max_output_bytes:
+                    needed = max_output_bytes - len(buf)
+                    if needed > 0:
+                        buf.extend(chunk[:needed])
+                    overflow.set()
+                    if buf is stdout_buf:
+                        stdout_truncated = True
+                    else:
+                        stderr_truncated = True
+                    # Terminate the exact child immediately so the
+                    # producer cannot keep emitting bytes past the
+                    # bound. The kill targets ``proc.pid`` only —
+                    # no killall, no pkill, no signal-group blast.
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        pass
+                else:
+                    buf.extend(chunk)
+        finally:
+            done.set()
+            try:
+                stream.close()
+            except Exception:  # pragma: no cover — defensive
+                pass
+
+    stdout_thread = threading.Thread(
+        target=_drain, args=(proc.stdout, stdout_buf, stdout_done),
+        name=f"discovery-stdout-{proc.pid}",
+    )
+    stderr_thread = threading.Thread(
+        target=_drain, args=(proc.stderr, stderr_buf, stderr_done),
+        name=f"discovery-stderr-{proc.pid}",
+    )
+    stdout_thread.daemon = True
+    stderr_thread.daemon = True
+    stdout_thread.start()
+    stderr_thread.start()
+
+    timed_out = False
+    returncode = -1
     try:
-        completed = subprocess.run(  # noqa: S603 — argv is fully controlled
-            full_argv,
-            check=False,
-            capture_output=True,
-            timeout=timeout_seconds,
-            shell=False,                                # never a shell
-            env={k: v for k, v in os.environ.items() if k != "PATH"} | {"PATH": ""},
-        )
-    except subprocess.TimeoutExpired as exc:
-        return SubprocessResult(
-            argv=full_argv,
-            returncode=-1,
-            stdout=(exc.stdout.decode("utf-8", "replace") if exc.stdout else ""),
-            stderr=(exc.stderr.decode("utf-8", "replace") if exc.stderr else ""),
-            truncated=True,
-        )
-    stdout_bytes = completed.stdout or b""
-    stderr_bytes = completed.stderr or b""
-    truncated = False
-    if len(stdout_bytes) > max_output_bytes:
-        stdout_bytes = stdout_bytes[:max_output_bytes]
-        truncated = True
-    if len(stderr_bytes) > max_output_bytes:
-        stderr_bytes = stderr_bytes[:max_output_bytes]
-        truncated = True
-    stdout = stdout_bytes.decode("utf-8", "replace")
-    stderr = stderr_bytes.decode("utf-8", "replace")
-    # Belt and suspenders: refuse to keep anything that looks like a token
-    # even if a future OpenCode build changes its stdout shape.
-    stdout = _redact(stdout)
-    stderr = _redact(stderr)
+        try:
+            returncode = proc.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+    finally:
+        # Belt-and-suspenders: if either bound was exceeded or the
+        # timeout fired, the child has already been signalled via
+        # ``proc.kill()`` above; this final block reaps the process
+        # and ensures the reader threads exit cleanly. The kill targets
+        # the exact PID — no process-group blast.
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:  # pragma: no cover — defensive
+                pass
+        stdout_thread.join(timeout=1.0)
+        stderr_thread.join(timeout=1.0)
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:  # pragma: no cover — defensive
+                    pass
+
+    truncated = stdout_truncated or stderr_truncated or timed_out or overflow.is_set()
+    if truncated:
+        returncode = -1
+    stdout_bytes = bytes(stdout_buf[:max_output_bytes])
+    stderr_bytes = bytes(stderr_buf[:max_output_bytes])
+    stdout = _redact(stdout_bytes.decode("utf-8", "replace"))
+    stderr = _redact(stderr_bytes.decode("utf-8", "replace"))
     return SubprocessResult(
         argv=full_argv,
-        returncode=int(completed.returncode),
+        returncode=int(returncode),
         stdout=stdout,
         stderr=stderr,
         truncated=truncated,
@@ -558,16 +795,28 @@ class _AuthPresence:
     credentials_section_labels: frozenset[str]
     environment_section_labels: frozenset[str]
     env_variable_names_seen: frozenset[str]
+    # Parenthetical endpoint annotations captured alongside the
+    # credentials-section and environment-section labels. P4.2.4-A.1
+    # §22 uses these hints to disambiguate CN vs international MiniMax
+    # surfaces whose labels are otherwise identical.
+    credentials_region_hints: frozenset[str] = frozenset()
+    environment_region_hints: frozenset[str] = frozenset()
 
     def has_in_credentials_store(self, spec: ProviderFamilySpec) -> bool:
         for label in self.credentials_section_labels:
             if any(token in label for token in spec.provider_label_keywords):
+                return True
+        for hint in self.credentials_region_hints:
+            if any(endpoint in hint for endpoint in spec.alternative_endpoints):
                 return True
         return False
 
     def has_in_environment(self, spec: ProviderFamilySpec) -> bool:
         for label in self.environment_section_labels:
             if any(token in label for token in spec.provider_label_keywords):
+                return True
+        for hint in self.environment_region_hints:
+            if any(endpoint in hint for endpoint in spec.alternative_endpoints):
                 return True
         return any(name in self.env_variable_names_seen for name in spec.env_variables)
 
@@ -579,13 +828,24 @@ def _parse_provider_list(stdout: str) -> _AuthPresence:
     provider **labels** and environment variable **names** only. It treats
     anything that matches a secret regex as a hard error (the harness never
     sees a token value).
+
+    P4.2.4-A.1 §22 — CN / INTERNATIONAL auth truth. The parser preserves
+    the full display label (not just the first whitespace-delimited
+    token) and also captures any parenthetical endpoint annotation
+    (e.g. ``(minimaxi.com)``, ``(minimax.io)``) as a *region hint*. This
+    is how the family table's region-specific keywords actually match
+    real-world OpenCode output, which labels CN and international
+    surfaces identically apart from the endpoint annotation.
     """
 
     cleaned = _strip_ansi(stdout)
     credentials_labels: set[str] = set()
+    credentials_regions: set[str] = set()
     env_section_labels: set[str] = set()
+    env_section_regions: set[str] = set()
     env_names: set[str] = set()
     section = ""
+    parenthetical = re.compile(r"\(([a-z0-9.-]+)\)")
     for raw_line in cleaned.splitlines():
         line = raw_line.rstrip()
         if "Credentials" in line and line.startswith(("┌", "│", "|")):
@@ -610,21 +870,32 @@ def _parse_provider_list(stdout: str) -> _AuthPresence:
             continue
         if not content:
             continue
-        # Split on whitespace. The first whitespace-delimited token is the
-        # provider label; any token that looks like ``UPPER_SNAKE`` is an
-        # environment variable name (only meaningful in the Environment
-        # section).
+        # Split on whitespace. The full content up to the first
+        # ``UPPER_SNAKE`` token (which is the environment variable
+        # name, environment section only) is the display label; we
+        # also extract any parenthetical endpoint annotation as a
+        # region hint.
         parts = content.split()
         if not parts:
             continue
-        # Preserve the full display label (not just the first token) so
-        # that families like ``Z.AI Coding Plan`` match on the substring
-        # ``Z.AI``.
-        display_label = parts[0]
+        label_end = len(parts)
+        if section == "environment":
+            for idx, token in enumerate(parts):
+                if re.fullmatch(r"[A-Z][A-Z0-9_]*", token):
+                    label_end = idx
+                    break
+        display_label = " ".join(parts[:label_end])
+        region_hints = parenthetical.findall(display_label)
         if section == "credentials":
-            credentials_labels.add(display_label)
+            if display_label:
+                credentials_labels.add(display_label)
+            for hint in region_hints:
+                credentials_regions.add(hint)
         elif section == "environment":
-            env_section_labels.add(display_label)
+            if display_label:
+                env_section_labels.add(display_label)
+            for hint in region_hints:
+                env_section_regions.add(hint)
             env_candidate = next(
                 (p for p in parts if re.fullmatch(r"[A-Z][A-Z0-9_]*", p)),
                 None,
@@ -635,6 +906,8 @@ def _parse_provider_list(stdout: str) -> _AuthPresence:
         credentials_section_labels=frozenset(credentials_labels),
         environment_section_labels=frozenset(env_section_labels),
         env_variable_names_seen=frozenset(env_names),
+        credentials_region_hints=frozenset(credentials_regions),
+        environment_region_hints=frozenset(env_section_regions),
     )
 
 
@@ -792,6 +1065,7 @@ def discover(
     discovered: list[ProviderDiscovery] = []
     for family in families:
         model_skus = catalog_by_provider.get(family.provider_id, ())
+        catalog_discovered = bool(model_skus)
         env_present = tuple(
             name for name in family.env_variables
             # We check ``os.environ`` (the harness process environment) for
@@ -800,8 +1074,28 @@ def discover(
         )
         in_cred_store = presence.has_in_credentials_store(family)
         in_env_section = presence.has_in_environment(family)
-        if in_cred_store or in_env_section or env_present:
+        # ``credential_evidence_present`` is the *weak* signal: any of
+        # these may be set even when the credential does not apply to
+        # this specific surface (e.g. ``MINIMAX_API_KEY`` is set for all
+        # four MiniMax surfaces at once). Do NOT use this flag to
+        # authorise ``AUTH_FROM_ENV_PRESENCE`` — that requires
+        # ``credential_scope_verified`` below.
+        credential_evidence_present = bool(
+            env_present or in_cred_store or in_env_section
+        )
+        # ``credential_scope_verified`` is the only signal that proves a
+        # credential applies to this specific surface. It is true only
+        # when the OpenCode credentials-section label matched the
+        # family’s region-specific keyword. The label test is exact: the
+        # family table is curated to require region-specific markers, so
+        # a generic "MiniMax" label does not authenticate the
+        # international surface, and vice versa. Env-var presence alone
+        # never produces scope-verified.
+        credential_scope_verified = in_cred_store
+        if catalog_discovered and credential_scope_verified:
             auth_status = AuthStatus.AUTH_FROM_ENV_PRESENCE
+        elif credential_evidence_present:
+            auth_status = AuthStatus.AUTH_UNKNOWN
         else:
             auth_status = AuthStatus.AUTH_REQUIRED
         execution_status = (
@@ -809,10 +1103,7 @@ def discover(
             if model_skus
             else ExecutionStatus.UNKNOWN
         )
-        evidence_source = (
-            "DISCOVERED_FROM_CATALOG" if model_skus
-            else "DISCOVERED_FROM_CATALOG"   # always catalog-derived; no probes run
-        )
+        evidence_source = "DISCOVERED_FROM_CATALOG"
         region = _infer_region(family)
         # Reject any per-family record whose serialised form would carry
         # a secret. ``assert_sanitized`` raises ``ValueError`` on the
@@ -829,6 +1120,10 @@ def discover(
                 env_variables_present=env_present,
                 region=region,
                 in_credentials_store=in_cred_store,
+                catalog_discovered=catalog_discovered,
+                credential_evidence_present=credential_evidence_present,
+                credential_scope_verified=credential_scope_verified,
+                execution_verified=False,
                 observed_at=observed_at,
             )
             assert_sanitized(record.__dict__)

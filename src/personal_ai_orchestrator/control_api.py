@@ -674,7 +674,7 @@ class ControlPlaneService:
         for provider_id, provider in sorted(effective_registry.providers.items()):
             account_ids = [
                 account.id
-                for account in self.registry.accounts.values()
+                for account in effective_registry.accounts.values()
                 if account.provider_id == provider_id
             ]
             plan_ids = {
