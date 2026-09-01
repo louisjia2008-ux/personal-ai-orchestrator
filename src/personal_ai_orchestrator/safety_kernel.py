@@ -63,6 +63,29 @@ class TaskRecord(FrozenModel):
     updated_at: datetime
 
 
+class OwnerDispatchStatus(StrEnum):
+    RESERVED = "RESERVED"
+    STARTED = "STARTED"
+    BLOCKED = "BLOCKED"
+    CANCELLED = "CANCELLED"
+    FINISHED = "FINISHED"
+
+
+class OwnerDispatchRecord(FrozenModel):
+    dispatch_id: str
+    request_id: str
+    task_id: str
+    task_state_version: int = Field(ge=0)
+    execution_target_id: str
+    authority: str
+    status: OwnerDispatchStatus
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    failure_code: str | None = None
+    failure_reason: str | None = None
+
+
 class WorkspaceRecord(FrozenModel):
     task_id: str
     repo_path: str
@@ -149,6 +172,20 @@ class SafetyKernelStore:
                 task_id TEXT,
                 payload_json TEXT NOT NULL,
                 created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS owner_dispatches (
+                dispatch_id TEXT PRIMARY KEY,
+                request_id TEXT NOT NULL UNIQUE,
+                task_id TEXT NOT NULL REFERENCES tasks(task_id),
+                task_state_version INTEGER NOT NULL,
+                execution_target_id TEXT NOT NULL,
+                authority TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                failure_code TEXT,
+                failure_reason TEXT
             );
             """
         )
@@ -375,6 +412,273 @@ class SafetyKernelStore:
             self.connection.execute("ROLLBACK")
             raise
 
+    def reserve_owner_dispatch(
+        self,
+        *,
+        dispatch_id: str,
+        request_id: str,
+        task_id: str,
+        task_state_version: int,
+        execution_target_id: str,
+        authority: str,
+    ) -> tuple[OwnerDispatchRecord, bool]:
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            self.get_task(task_id)
+            existing = self.connection.execute(
+                "SELECT * FROM owner_dispatches WHERE request_id=?", (request_id,)
+            ).fetchone()
+            if existing is not None:
+                record = self._owner_dispatch_from_row(existing)
+                same = (
+                    record.dispatch_id == dispatch_id
+                    and record.task_id == task_id
+                    and record.task_state_version == task_state_version
+                    and record.execution_target_id == execution_target_id
+                    and record.authority == authority
+                )
+                if not same:
+                    raise ValueError("request_id already has a conflicting owner dispatch")
+                self.connection.execute("COMMIT")
+                return record, False
+
+            stamp = _now()
+            self.connection.execute(
+                """
+                INSERT INTO owner_dispatches(
+                    dispatch_id,request_id,task_id,task_state_version,execution_target_id,
+                    authority,status,created_at,started_at,finished_at,failure_code,failure_reason
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    dispatch_id,
+                    request_id,
+                    task_id,
+                    task_state_version,
+                    execution_target_id,
+                    authority,
+                    OwnerDispatchStatus.RESERVED.value,
+                    stamp,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+            )
+            self._audit(
+                task_id,
+                "OWNER_DISPATCH_RESERVED",
+                {
+                    "dispatch_id": dispatch_id,
+                    "request_id": request_id,
+                    "execution_target_id": execution_target_id,
+                    "authority": authority,
+                },
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_owner_dispatch_by_request_id(request_id), True
+
+    def get_owner_dispatch_by_request_id(self, request_id: str) -> OwnerDispatchRecord:
+        row = self.connection.execute(
+            "SELECT * FROM owner_dispatches WHERE request_id=?", (request_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(request_id)
+        return self._owner_dispatch_from_row(row)
+
+    def mark_owner_dispatch_blocked(
+        self,
+        request_id: str,
+        *,
+        failure_code: str,
+        failure_reason: str,
+    ) -> OwnerDispatchRecord:
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get_owner_dispatch_by_request_id(request_id)
+            if current.status in {
+                OwnerDispatchStatus.FINISHED,
+                OwnerDispatchStatus.CANCELLED,
+                OwnerDispatchStatus.BLOCKED,
+            }:
+                self.connection.execute("COMMIT")
+                return current
+            stamp = _now()
+            updated = self.connection.execute(
+                """
+                UPDATE owner_dispatches
+                SET status=?, finished_at=?, failure_code=?, failure_reason=?
+                WHERE request_id=? AND status IN (?,?)
+                """,
+                (
+                    OwnerDispatchStatus.BLOCKED.value,
+                    stamp,
+                    failure_code,
+                    failure_reason,
+                    request_id,
+                    OwnerDispatchStatus.RESERVED.value,
+                    OwnerDispatchStatus.STARTED.value,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("owner dispatch block lost concurrency race")
+            self._audit(
+                current.task_id,
+                "OWNER_DISPATCH_BLOCKED",
+                {
+                    "dispatch_id": current.dispatch_id,
+                    "request_id": request_id,
+                    "execution_target_id": current.execution_target_id,
+                    "failure_code": failure_code,
+                    "failure_reason": failure_reason,
+                },
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_owner_dispatch_by_request_id(request_id)
+
+    def start_dispatched_worker(
+        self,
+        *,
+        dispatch_id: str,
+        task_id: str,
+        expected_task_version: int,
+        run_id: str,
+        worker_id: str,
+        writer_token: str,
+        pid: int | None = None,
+    ) -> TaskRecord:
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            dispatch = self.connection.execute(
+                "SELECT * FROM owner_dispatches WHERE dispatch_id=?", (dispatch_id,)
+            ).fetchone()
+            if dispatch is None:
+                raise KeyError(dispatch_id)
+            if dispatch["task_id"] != task_id:
+                raise ValueError("dispatch_id does not belong to task_id")
+            if dispatch["status"] != OwnerDispatchStatus.RESERVED.value:
+                raise RuntimeError("owner dispatch is not reserved")
+            task = self.get_task(task_id)
+            if task.state is not TaskState.READY:
+                raise ValueError("dispatched worker can only start from READY")
+            if task.state_version != expected_task_version:
+                raise RuntimeError("stale task state_version")
+            workspace = self.get_workspace(task_id)
+            if workspace.writer_token != writer_token:
+                raise RuntimeError("dispatched worker requires the active writer lock")
+            active = self.connection.execute(
+                "SELECT run_id FROM runs WHERE task_id=? AND status='RUNNING' LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            if active is not None:
+                raise RuntimeError("task already has an active worker run")
+
+            stamp = _now()
+            next_version = task.state_version + 1
+            self.connection.execute(
+                "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?)",
+                (run_id, task_id, worker_id, pid, "RUNNING", stamp, None, None),
+            )
+            updated_task = self.connection.execute(
+                """
+                UPDATE tasks SET state=?, state_version=?, updated_at=?
+                WHERE task_id=? AND state_version=? AND state=?
+                """,
+                (
+                    TaskState.RUNNING.value,
+                    next_version,
+                    stamp,
+                    task_id,
+                    task.state_version,
+                    TaskState.READY.value,
+                ),
+            )
+            if updated_task.rowcount != 1:
+                raise RuntimeError("dispatched worker lost task-state concurrency race")
+            updated_dispatch = self.connection.execute(
+                """
+                UPDATE owner_dispatches SET status=?, started_at=?
+                WHERE dispatch_id=? AND status=?
+                """,
+                (
+                    OwnerDispatchStatus.STARTED.value,
+                    stamp,
+                    dispatch_id,
+                    OwnerDispatchStatus.RESERVED.value,
+                ),
+            )
+            if updated_dispatch.rowcount != 1:
+                raise RuntimeError("dispatched worker lost dispatch-state concurrency race")
+            self._audit(
+                task_id,
+                "RUN_STARTED",
+                {"run_id": run_id, "worker_id": worker_id, "pid": pid},
+            )
+            self._audit(
+                task_id,
+                "TASK_STATE_CHANGED",
+                {
+                    "from": TaskState.READY.value,
+                    "to": TaskState.RUNNING.value,
+                    "state_version": next_version,
+                    "reason": "host-supervised owner dispatch worker started",
+                },
+            )
+            self._audit(
+                task_id,
+                "OWNER_DISPATCH_STARTED",
+                {"dispatch_id": dispatch_id, "request_id": dispatch["request_id"]},
+            )
+            self.connection.execute("COMMIT")
+        except sqlite3.IntegrityError as error:
+            self.connection.execute("ROLLBACK")
+            raise RuntimeError("worker run violates durable run ownership constraints") from error
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_task(task_id)
+
+    def assert_running_invariant(self, task_id: str) -> None:
+        task = self.get_task(task_id)
+        if task.state is not TaskState.RUNNING:
+            return
+        active_runs = self.connection.execute(
+            "SELECT COUNT(*) AS n FROM runs WHERE task_id=? AND status='RUNNING'",
+            (task_id,),
+        ).fetchone()["n"]
+        if active_runs != 1:
+            raise RuntimeError("RUNNING task must have exactly one active run")
+        workspace = self.get_workspace(task_id)
+        if workspace.writer_token is None:
+            raise RuntimeError("RUNNING task must retain the writer lock")
+
+    @staticmethod
+    def _owner_dispatch_from_row(row: sqlite3.Row) -> OwnerDispatchRecord:
+        return OwnerDispatchRecord(
+            dispatch_id=row["dispatch_id"],
+            request_id=row["request_id"],
+            task_id=row["task_id"],
+            task_state_version=row["task_state_version"],
+            execution_target_id=row["execution_target_id"],
+            authority=row["authority"],
+            status=OwnerDispatchStatus(row["status"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            started_at=(
+                None if row["started_at"] is None else datetime.fromisoformat(row["started_at"])
+            ),
+            finished_at=(
+                None if row["finished_at"] is None else datetime.fromisoformat(row["finished_at"])
+            ),
+            failure_code=row["failure_code"],
+            failure_reason=row["failure_reason"],
+        )
+
     def finish_run(self, run_id: str, *, status: str, result: Any = None) -> None:
         self.connection.execute("BEGIN IMMEDIATE")
         try:
@@ -511,4 +815,11 @@ class SafetyKernelStore:
         )
 
 
-__all__ = ["SafetyKernelStore", "TaskRecord", "TaskState", "WorkspaceRecord"]
+__all__ = [
+    "OwnerDispatchRecord",
+    "OwnerDispatchStatus",
+    "SafetyKernelStore",
+    "TaskRecord",
+    "TaskState",
+    "WorkspaceRecord",
+]

@@ -35,7 +35,11 @@ from personal_ai_orchestrator.provider_registry_manager import (
     ProviderRegistryManager,
 )
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
-from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
+from personal_ai_orchestrator.safety_kernel import (
+    OwnerDispatchRecord,
+    SafetyKernelStore,
+    TaskState,
+)
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
 from personal_ai_orchestrator.verifier import VerificationResult
 
@@ -80,7 +84,6 @@ class DispatchTaskRequest(_ViewModel):
     request_id: str = Field(min_length=1, max_length=128)
     task_state_version: int = Field(ge=0)
     execution_target_id: str = Field(min_length=1, max_length=128)
-    authority: DispatchAuthority
 
 
 class TaskView(_ViewModel):
@@ -99,12 +102,20 @@ class CancelView(_ViewModel):
 
 
 class DispatchTaskView(_ViewModel):
+    dispatch_id: str
     task: TaskView
     request_id: str
     authority: str
     execution_target_id: str
+    status: str
     accepted: bool
-    reason: str
+    reason: str | None = None
+    failure_code: str | None = None
+
+
+class OwnerExecutionSettingsView(_ViewModel):
+    owner_initiated_execution_enabled: bool
+    production_active: str
 
 
 class RunView(_ViewModel):
@@ -309,6 +320,7 @@ class ControlPlaneService:
     verification_journal: VerificationEvidenceJournal | None = None
     quota_availability_journal: QuotaAvailabilityJournal | None = None
     provider_registry_manager: ProviderRegistryManager | None = None
+    owner_initiated_execution_enabled: bool = False
 
     def open_request(self) -> ControlPlaneService:
         """Return a request-local service bound to a fresh SQLite connection."""
@@ -323,6 +335,7 @@ class ControlPlaneService:
             verification_journal=self.verification_journal,
             quota_availability_journal=self.quota_availability_journal,
             provider_registry_manager=self.provider_registry_manager,
+            owner_initiated_execution_enabled=self.owner_initiated_execution_enabled,
         )
 
     @staticmethod
@@ -436,37 +449,39 @@ class ControlPlaneService:
         request = DispatchTaskRequest.model_validate(payload)
         self._validate_identifier("request_id", request.request_id)
         self._validate_identifier("execution_target_id", request.execution_target_id)
-
-        existing = self.store.connection.execute(
-            "SELECT payload_json FROM routing_decisions WHERE request_id=?",
-            (request.request_id,),
-        ).fetchone()
-        if existing is not None:
-            try:
-                persisted = json.loads(existing["payload_json"])
-            except json.JSONDecodeError:
-                raise ControlPlaneError(409, "dispatch_idempotency_record_corrupt") from None
-            if not isinstance(persisted, dict) or persisted.get("kind") != "OWNER_DISPATCH":
-                raise ControlPlaneError(409, "request_id_already_used")
-            if persisted.get("task_id") != task_id:
-                raise ControlPlaneError(409, "request_id_already_used")
-            task = self.store.get_task(task_id)
-            return DispatchTaskView(
-                task=_task_view(task),
-                request_id=request.request_id,
-                authority=DispatchAuthority.OWNER_INITIATED_EXECUTION.value,
-                execution_target_id=str(persisted.get("execution_target_id", "")),
-                accepted=bool(persisted.get("accepted", False)),
-                reason=str(persisted.get("reason", "idempotent replay")),
-            )
-
+        if not self.owner_initiated_execution_enabled:
+            raise ControlPlaneError(403, "owner_initiated_execution_disabled")
         try:
             task = self.store.get_task(task_id)
         except KeyError:
             raise ControlPlaneError(404, "task_not_found") from None
+        dispatch_id = f"owner-dispatch-{request.request_id}"
+        try:
+            dispatch, created = self.store.reserve_owner_dispatch(
+                dispatch_id=dispatch_id,
+                request_id=request.request_id,
+                task_id=task_id,
+                task_state_version=request.task_state_version,
+                execution_target_id=request.execution_target_id,
+                authority=DispatchAuthority.OWNER_INITIATED_EXECUTION.value,
+            )
+        except ValueError:
+            raise ControlPlaneError(409, "conflicting_dispatch_request_id") from None
+        if not created:
+            return self._dispatch_view(dispatch)
         if task.state_version != request.task_state_version:
+            self.store.mark_owner_dispatch_blocked(
+                request.request_id,
+                failure_code="STALE_TASK_STATE_VERSION",
+                failure_reason="dispatch task_state_version did not match authoritative task",
+            )
             raise ControlPlaneError(409, "stale_task_state_version")
         if task.state not in {TaskState.SUBMITTED, TaskState.READY}:
+            self.store.mark_owner_dispatch_blocked(
+                request.request_id,
+                failure_code="TASK_STATE_NOT_DISPATCHABLE",
+                failure_reason=f"task state {task.state.value} is not dispatchable",
+            )
             raise ControlPlaneError(409, "task_state_not_dispatchable")
 
         effective_registry = (
@@ -481,15 +496,10 @@ class ControlPlaneService:
                 runtime_available=self.runtime_availability.get(request.execution_target_id, False),
             )
         except RuntimeError as error:
-            self.store._audit(
-                task_id,
-                "OWNER_DISPATCH_BLOCKED",
-                {
-                    "request_id": request.request_id,
-                    "execution_target_id": request.execution_target_id,
-                    "authority": DispatchAuthority.OWNER_INITIATED_EXECUTION.value,
-                    "reason": str(error),
-                },
+            self.store.mark_owner_dispatch_blocked(
+                request.request_id,
+                failure_code="EXECUTION_TARGET_NOT_LAUNCHABLE",
+                failure_reason=str(error),
             )
             raise ControlPlaneError(409, "execution_target_not_launchable") from None
 
@@ -498,44 +508,36 @@ class ControlPlaneService:
                 task_id,
                 TaskState.READY,
                 expected_version=task.state_version,
-                reason="owner initiated execution dispatch accepted",
+                reason="owner initiated execution dispatch reserved",
             )
-        task = self.store.transition_task(
-            task_id,
-            TaskState.RUNNING,
-            expected_version=task.state_version,
-            reason="owner initiated execution preflight accepted",
+        return self._dispatch_view(dispatch)
+
+    def owner_execution_settings(self) -> OwnerExecutionSettingsView:
+        return OwnerExecutionSettingsView(
+            owner_initiated_execution_enabled=self.owner_initiated_execution_enabled,
+            production_active=self.active_status().production_active,
         )
-        persisted = {
-            "kind": "OWNER_DISPATCH",
-            "task_id": task_id,
-            "request_id": request.request_id,
-            "authority": DispatchAuthority.OWNER_INITIATED_EXECUTION.value,
-            "execution_target_id": request.execution_target_id,
-            "accepted": True,
-            "reason": "owner initiated execution preflight accepted",
-        }
-        self.store.connection.execute(
-            """
-            INSERT INTO routing_decisions(decision_id,request_id,task_id,payload_json,created_at)
-            VALUES(?,?,?,?,?)
-            """,
-            (
-                f"owner-dispatch-{request.request_id}",
-                request.request_id,
-                task_id,
-                json.dumps(persisted, sort_keys=True, separators=(",", ":")),
-                task.updated_at.isoformat(),
-            ),
-        )
-        self.store._audit(task_id, "OWNER_DISPATCH_ACCEPTED", persisted)
+
+    def get_owner_dispatch(self, request_id: str) -> DispatchTaskView:
+        self._validate_identifier("request_id", request_id)
+        try:
+            dispatch = self.store.get_owner_dispatch_by_request_id(request_id)
+        except KeyError:
+            raise ControlPlaneError(404, "dispatch_not_found") from None
+        return self._dispatch_view(dispatch)
+
+    def _dispatch_view(self, dispatch: OwnerDispatchRecord) -> DispatchTaskView:
+        task = self.store.get_task(dispatch.task_id)
         return DispatchTaskView(
+            dispatch_id=dispatch.dispatch_id,
             task=_task_view(task),
-            request_id=request.request_id,
-            authority=DispatchAuthority.OWNER_INITIATED_EXECUTION.value,
-            execution_target_id=request.execution_target_id,
-            accepted=True,
-            reason="owner initiated execution preflight accepted",
+            request_id=dispatch.request_id,
+            authority=dispatch.authority,
+            execution_target_id=dispatch.execution_target_id,
+            status=dispatch.status.value,
+            accepted=dispatch.failure_code is None,
+            reason=dispatch.failure_reason or "owner initiated execution dispatch reserved",
+            failure_code=dispatch.failure_code,
         )
 
     def verification_report(self, task_id: str) -> VerificationReportView:
@@ -1163,6 +1165,17 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
 
             if count == 2 and rest[0] == "approvals" and method == "GET":
                 self._view(200, request_service.get_approval(rest[1]))
+                return
+
+            if count == 2 and rest[0] == "dispatches" and method == "GET":
+                self._view(200, request_service.get_owner_dispatch(rest[1]))
+                return
+
+            if rest == ("settings", "owner-execution"):
+                if method != "GET":
+                    self._json(405, {"error": "method_not_allowed"})
+                    return
+                self._view(200, request_service.owner_execution_settings())
                 return
 
             if rest == ("providers",):

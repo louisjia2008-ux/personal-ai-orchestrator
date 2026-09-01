@@ -108,6 +108,7 @@ class CampaignWorkerProfile(RegistryModel):
     quota_source_reference: str = Field(min_length=1)
     quota_source_note: str = Field(min_length=1)
     quota_confidence: EvidenceConfidence = EvidenceConfidence.UNKNOWN
+    execution_verified: bool = False
 
 
 class WorkerExecutionResult(RegistryModel):
@@ -389,6 +390,7 @@ def worker_registry(profile: CampaignWorkerProfile, *, now: datetime) -> ModelRe
                 model_sku_id=profile.model_sku_id,
                 account_id=profile.account_id,
                 runtime_id=profile.runtime_id,
+                execution_verified=profile.execution_verified,
             )
         },
         quota_bindings=(

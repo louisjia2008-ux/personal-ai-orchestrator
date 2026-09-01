@@ -120,6 +120,7 @@
 "label.modelSku" = "模型 SKU";
 "label.runtimeId" = "运行时";
 "label.runtimeAvailability" = "运行时可用性";
+"label.executionVerified" = "执行已验证";
 "label.observedState" = "观察状态";
 "label.measurementSource" = "测量来源";
 "label.confidence" = "置信度";

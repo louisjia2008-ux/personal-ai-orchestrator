@@ -49,6 +49,7 @@ public enum L10n {
         "label.agentsTitle", "label.providersTitle", "label.quotaTitle",
         "empty.noProviders.hint",
         "label.modelSku", "label.runtimeId", "label.runtimeAvailability",
+        "label.executionVerified",
         "label.observedState", "label.measurementSource", "label.confidence",
         "label.observedAt", "label.reasonCode", "empty.availabilityUnknown",
         "label.evidence",
@@ -323,6 +324,7 @@ public enum L10n {
     public static var modelSku: String { tr("label.modelSku") }
     public static var runtimeIdLabel: String { tr("label.runtimeId") }
     public static var runtimeAvailability: String { tr("label.runtimeAvailability") }
+    public static var executionVerified: String { tr("label.executionVerified") }
     public static var observedState: String { tr("label.observedState") }
     public static var measurementSource: String { tr("label.measurementSource") }
     public static var confidenceLabel: String { tr("label.confidence") }

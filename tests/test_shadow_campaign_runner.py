@@ -62,6 +62,7 @@ def worker_profile() -> CampaignWorkerProfile:
         quota_source_reference="fixture-local",
         quota_source_note="Fixture quota truth is intentionally unknown",
         quota_confidence=EvidenceConfidence.UNKNOWN,
+        execution_verified=True,
     )
 
 

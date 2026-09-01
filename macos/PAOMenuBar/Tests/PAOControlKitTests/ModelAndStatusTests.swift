@@ -22,6 +22,8 @@ final class ModelAndStatusTests: XCTestCase {
         XCTAssertEqual(pool.confidence, "ESTIMATED")
         XCTAssertEqual(pool.measurementSourceType, "PROVIDER_API")
         let target = try XCTUnwrap(provider.executionTargets.first)
+        XCTAssertEqual(target.executionVerified, false)
+        XCTAssertFalse(target.isExecutionVerified)
         XCTAssertEqual(target.observedAvailability?.state, "EXHAUSTED_OBSERVED")
         XCTAssertEqual(target.observedAvailability?.sanitizedReasonCode, "USAGE_LIMIT")
         XCTAssertEqual(target.observedAvailability?.measurementSource, "LOCALLY_MEASURED")
@@ -29,7 +31,7 @@ final class ModelAndStatusTests: XCTestCase {
 
     func testProviderHealthViewDecodesDiscoveryEvidence() throws {
         let body = """
-        {"providers":[{"provider_id":"zai-coding-plan","display_name":"GLM / Z.AI","account_count":0,"quota_pools":[],"execution_targets":[{"execution_target_id":"zai-coding-plan/glm-5.3","model_sku_id":"zai-coding-plan/glm-5.3","runtime_id":"opencode","enabled":true,"runtime_available":true}],"evidence_source":"DISCOVERED_FROM_CATALOG","auth_status":"AUTH_FROM_ENV_PRESENCE","execution_status":"AVAILABLE_FOR_CATALOG","last_checked":"2026-08-31T00:00:00Z"}]}
+        {"providers":[{"provider_id":"zai-coding-plan","display_name":"GLM / Z.AI","account_count":0,"quota_pools":[],"execution_targets":[{"execution_target_id":"zai-coding-plan/glm-5.3","model_sku_id":"zai-coding-plan/glm-5.3","runtime_id":"opencode","enabled":true,"execution_verified":false,"runtime_available":true}],"evidence_source":"DISCOVERED_FROM_CATALOG","auth_status":"AUTH_FROM_ENV_PRESENCE","execution_status":"AVAILABLE_FOR_CATALOG","last_checked":"2026-08-31T00:00:00Z"}]}
         """
         let view = try JSONDecoder().decode(ProviderHealthListView.self, from: Data(body.utf8))
         let provider = try XCTUnwrap(view.providers.first)

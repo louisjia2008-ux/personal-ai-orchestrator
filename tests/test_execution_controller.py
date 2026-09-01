@@ -180,6 +180,30 @@ def test_launch_gate_denies_catalog_only_target_even_when_enabled() -> None:
         )
 
 
+def test_launch_gate_denies_legacy_target_missing_execution_verified() -> None:
+    registry = ModelRegistry(
+        providers={"p": Provider(id="p", display_name="Provider")},
+        accounts={"a": Account(id="a", provider_id="p", label="account")},
+        models={"m": ModelSKU(id="m", provider_id="p", display_name="Model")},
+        execution_targets={
+            "target": ExecutionTarget(
+                id="target",
+                model_sku_id="m",
+                account_id="a",
+                runtime_id="opencode",
+                enabled=True,
+            )
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="not been runtime-verified"):
+        validate_execution_target_launch(
+            registry,
+            execution_target_id="target",
+            runtime_available=True,
+        )
+
+
 def test_worker_success_requires_matching_persisted_verifier_evidence(tmp_path: Path) -> None:
     store = _running_store(tmp_path)
     state = record_worker_exit(

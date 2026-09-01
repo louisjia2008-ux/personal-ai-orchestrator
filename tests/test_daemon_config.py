@@ -3,7 +3,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from personal_ai_orchestrator.daemon import build_service, load_runtime_config
+from personal_ai_orchestrator.daemon import (
+    build_control_service,
+    build_service,
+    load_runtime_config,
+)
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.runtime_config import RuntimeConfig
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
@@ -84,6 +88,26 @@ def test_static_runtime_config_cannot_enable_production_active() -> None:
     }
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         RuntimeConfig.model_validate(payload)
+
+
+def test_owner_execution_toggle_is_separate_from_production_active(tmp_path: Path) -> None:
+    config = RuntimeConfig(
+        catalog_snapshot_id="catalog-empty",
+        registry=ModelRegistry(),
+        owner_initiated_execution_enabled=True,
+    )
+    service = build_control_service(
+        config=config,
+        state_db=tmp_path / "state.sqlite3",
+        runtime_state_root=tmp_path / "runtime-state",
+    )
+    try:
+        settings = service.owner_execution_settings()
+        assert settings.owner_initiated_execution_enabled is True
+        assert settings.production_active == "DISABLED_BY_DESIGN"
+        assert service.active_status().authorized is False
+    finally:
+        service.store.close()
 
 
 def test_runtime_config_rejects_unknown_target_refs() -> None:

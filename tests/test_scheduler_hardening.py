@@ -349,12 +349,14 @@ def _scheduler_registry(*, minimax_remaining: float, minimax_reset_minutes: int)
             model_sku_id="minimax-m3",
             account_id="minimax-a",
             runtime_id="opencode",
+            execution_verified=True,
         ),
         "glm-sub": ExecutionTarget(
             id="glm-sub",
             model_sku_id="glm-5.3",
             account_id="zai-a",
             runtime_id="opencode",
+            execution_verified=True,
         ),
     }
     bindings = (
