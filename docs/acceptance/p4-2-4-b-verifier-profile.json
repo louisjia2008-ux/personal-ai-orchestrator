@@ -1,0 +1,21 @@
+{
+  "name": "p4-2-4-b-real-acceptance",
+  "commands": [
+    {
+      "name": "hello-exists",
+      "argv": ["test", "-f", "hello.txt"],
+      "timeout_seconds": 60.0
+    },
+    {
+      "name": "hello-exact-content",
+      "argv": [
+        "sh",
+        "-c",
+        "test \"$(cat hello.txt)\" = \"Personal AI Orchestrator real worker acceptance.\""
+      ],
+      "timeout_seconds": 60.0
+    }
+  ],
+  "allowed_paths": ["hello.txt", "opencode.json"],
+  "require_diff_check": true
+}
