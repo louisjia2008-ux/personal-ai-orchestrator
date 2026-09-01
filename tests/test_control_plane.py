@@ -237,6 +237,72 @@ def test_submit_conflicting_request_id_rejected(harness):
     assert error.value.code == "conflicting_request_id"
 
 
+def test_owner_dispatch_accepts_verified_target_and_is_idempotent(harness):
+    task = _submit(harness)
+
+    first = harness.client.dispatch(
+        "task-1",
+        request_id="dispatch-1",
+        task_state_version=task.state_version,
+        execution_target_id="m3-sub",
+    )
+    second = harness.client.dispatch(
+        "task-1",
+        request_id="dispatch-1",
+        task_state_version=task.state_version,
+        execution_target_id="m3-sub",
+    )
+
+    assert first.accepted is True
+    assert first.authority == "OWNER_INITIATED_EXECUTION"
+    assert first.task.state == TaskState.RUNNING.value
+    assert second.model_dump() == first.model_dump()
+    assert harness.client.active_status().production_active == "DISABLED_BY_DESIGN"
+    rows = harness.store.connection.execute(
+        "SELECT COUNT(*) AS n FROM routing_decisions WHERE request_id='dispatch-1'"
+    ).fetchone()
+    assert rows["n"] == 1
+
+
+def test_owner_dispatch_rejects_stale_task_version(harness):
+    _submit(harness)
+
+    with pytest.raises(ControlPlaneError) as error:
+        harness.client.dispatch(
+            "task-1",
+            request_id="dispatch-stale",
+            task_state_version=99,
+            execution_target_id="m3-sub",
+        )
+
+    assert error.value.status == 409
+    assert error.value.code == "stale_task_state_version"
+
+
+def test_owner_dispatch_denies_catalog_only_target(harness):
+    target = harness.service.registry.execution_targets["m3-sub"].model_copy(
+        update={"enabled": True, "execution_verified": False}
+    )
+    harness.service.registry = harness.service.registry.model_copy(
+        update={"execution_targets": {"m3-sub": target}}
+    )
+    task = _submit(harness)
+
+    with pytest.raises(ControlPlaneError) as error:
+        harness.client.dispatch(
+            "task-1",
+            request_id="dispatch-catalog-only",
+            task_state_version=task.state_version,
+            execution_target_id="m3-sub",
+        )
+
+    assert error.value.status == 409
+    assert error.value.code == "execution_target_not_launchable"
+    assert harness.client.get_task("task-1").state == TaskState.SUBMITTED.value
+    events = harness.store.audit_events("task-1")
+    assert any(event["event_type"] == "OWNER_DISPATCH_BLOCKED" for event in events)
+
+
 def test_submit_rejects_unknown_fields(harness):
     status, body = _raw_request(
         harness.socket_path,

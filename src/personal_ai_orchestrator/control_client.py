@@ -22,6 +22,7 @@ from personal_ai_orchestrator.control_api import (
     CancelView,
     ControlPlaneError,
     DashboardSummaryView,
+    DispatchTaskView,
     HealthView,
     ProviderHealthListView,
     RoutingDecisionView,
@@ -134,6 +135,26 @@ class ControlPlaneClient:
         payload = {"request_id": request_id} if request_id is not None else {}
         rendered = self._request("POST", f"/v1/tasks/{task_id}/cancel", payload=payload)
         return CancelView.model_validate(rendered)
+
+    def dispatch(
+        self,
+        task_id: str,
+        *,
+        request_id: str,
+        task_state_version: int,
+        execution_target_id: str,
+    ) -> DispatchTaskView:
+        rendered = self._request(
+            "POST",
+            f"/v1/tasks/{task_id}/dispatch",
+            payload={
+                "request_id": request_id,
+                "task_state_version": task_state_version,
+                "execution_target_id": execution_target_id,
+                "authority": "OWNER_INITIATED_EXECUTION",
+            },
+        )
+        return DispatchTaskView.model_validate(rendered)
 
     def verification_report(self, task_id: str) -> VerificationReportView:
         return self._get(  # type: ignore[return-value]

@@ -9,9 +9,17 @@ from personal_ai_orchestrator.execution_controller import (
     record_worker_exit,
     reconcile_workspace_truth,
     start_worker_run,
+    validate_execution_target_launch,
 )
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
-from personal_ai_orchestrator.model_registry import EvidenceConfidence
+from personal_ai_orchestrator.model_registry import (
+    Account,
+    EvidenceConfidence,
+    ExecutionTarget,
+    ModelRegistry,
+    ModelSKU,
+    Provider,
+)
 from personal_ai_orchestrator.shadow_evidence import (
     PendingShadowObservation,
     ResetCycleReference,
@@ -145,6 +153,31 @@ def test_invalid_worker_result_blocks_task(tmp_path: Path) -> None:
         worker_result="COMPLETE",
     )
     assert state is TaskState.BLOCKED
+
+
+def test_launch_gate_denies_catalog_only_target_even_when_enabled() -> None:
+    registry = ModelRegistry(
+        providers={"p": Provider(id="p", display_name="Provider")},
+        accounts={"a": Account(id="a", provider_id="p", label="account")},
+        models={"m": ModelSKU(id="m", provider_id="p", display_name="Model")},
+        execution_targets={
+            "target": ExecutionTarget(
+                id="target",
+                model_sku_id="m",
+                account_id="a",
+                runtime_id="opencode",
+                enabled=True,
+                execution_verified=False,
+            )
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="not been runtime-verified"):
+        validate_execution_target_launch(
+            registry,
+            execution_target_id="target",
+            runtime_available=True,
+        )
 
 
 def test_worker_success_requires_matching_persisted_verifier_evidence(tmp_path: Path) -> None:

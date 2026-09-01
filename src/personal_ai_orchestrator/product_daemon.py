@@ -28,9 +28,6 @@ from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryM
 from personal_ai_orchestrator.provider_registry_store import (
     EMPTY_BOOTSTRAP_SNAPSHOT_ID,
 )
-from personal_ai_orchestrator.provider_registry_store import (
-    load as load_persisted_registry,
-)
 from personal_ai_orchestrator.runtime_config import (
     ApplicationSupportLayout,
     RuntimeConfig,
@@ -73,18 +70,17 @@ def resolve_dynamic_registry(
     3. Exposes the resulting ``ModelRegistry`` to the Control API.
 
     The function never raises; on failure the manager retains an
-    ``EMPTY`` status so the Dashboard can surface the truth.
+    observable ``FAILED`` status so the Dashboard can surface the truth.
     """
 
     manager = ProviderRegistryManager(
         runtime_state_root=layout.runtime_state_root,
         opencode_path=opencode_path,
     )
-    # §22: empty-bootstrap upgrade is automatic, deterministic, and
-    # does not require operator intervention.
-    persisted = load_persisted_registry(layout.runtime_state_root)
-    if persisted is None:
-        manager.bootstrap_if_empty(catalog_snapshot_id=EMPTY_BOOTSTRAP_SNAPSHOT_ID)
+    # Sole owner of first-boot bootstrap. The manager decides whether
+    # persisted state is MISSING (cold first install) or invalid
+    # (fail-closed; no automatic discovery).
+    manager.bootstrap_if_empty(catalog_snapshot_id=EMPTY_BOOTSTRAP_SNAPSHOT_ID)
     return manager
 
 
@@ -135,10 +131,6 @@ def main(argv: list[str] | None = None) -> int:
     # manager is then handed to ``daemon.main`` so the bundled daemon
     # and the manager share the exact same in-memory state.
     manager = resolve_dynamic_registry(layout=layout)
-    # The empty-bootstrap upgrade is a no-op when the manager already
-    # rehydrated from a persisted snapshot; otherwise it runs exactly
-    # one discovery cycle and writes the sanitized result.
-    manager.bootstrap_if_empty(catalog_snapshot_id=PRODUCT_CATALOG_SNAPSHOT_ID)
     return daemon_main(
         build_daemon_argv(layout, host=args.host, port=args.port),
         provider_registry_manager=manager,

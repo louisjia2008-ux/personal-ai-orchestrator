@@ -235,6 +235,10 @@ class ProviderFamilySpec:
         Free-form annotations describing documented provider endpoints. Used
         only for the CN/international distinction (§19); never copied to
         the Dashboard verbatim.
+    plan_surface_keywords:
+        Optional credential-label tokens that distinguish a plan surface
+        within a region. Region evidence alone must not authenticate both
+        regular and coding-plan MiniMax surfaces.
     """
 
     provider_id: str
@@ -242,6 +246,7 @@ class ProviderFamilySpec:
     env_variables: tuple[str, ...]
     provider_label_keywords: tuple[str, ...]
     alternative_endpoints: tuple[str, ...] = ()
+    plan_surface_keywords: tuple[str, ...] = ()
 
 
 PROVIDER_FAMILIES: tuple[ProviderFamilySpec, ...] = (
@@ -250,6 +255,7 @@ PROVIDER_FAMILIES: tuple[ProviderFamilySpec, ...] = (
         display_name="GLM / Z.AI",
         env_variables=("ZAI_API_KEY",),
         provider_label_keywords=("Z.AI", "GLM"),
+        plan_surface_keywords=("Coding Plan",),
     ),
     ProviderFamilySpec(
         provider_id="minimax-cn",
@@ -260,6 +266,7 @@ PROVIDER_FAMILIES: tuple[ProviderFamilySpec, ...] = (
         # does not authenticate this CN surface.
         provider_label_keywords=("minimaxi", "MiniMax CN"),
         alternative_endpoints=("api.minimaxi.com",),
+        plan_surface_keywords=("Token Plan",),
     ),
     ProviderFamilySpec(
         provider_id="minimax-cn-coding-plan",
@@ -267,6 +274,7 @@ PROVIDER_FAMILIES: tuple[ProviderFamilySpec, ...] = (
         env_variables=("MINIMAX_API_KEY",),
         provider_label_keywords=("minimaxi", "MiniMax CN"),
         alternative_endpoints=("api.minimaxi.com",),
+        plan_surface_keywords=("Coding Plan",),
     ),
     ProviderFamilySpec(
         provider_id="minimax",
@@ -274,6 +282,7 @@ PROVIDER_FAMILIES: tuple[ProviderFamilySpec, ...] = (
         env_variables=("MINIMAX_API_KEY",),
         provider_label_keywords=("minimax.io", "MiniMax International"),
         alternative_endpoints=("api.minimax.io",),
+        plan_surface_keywords=("Token Plan",),
     ),
     ProviderFamilySpec(
         provider_id="minimax-coding-plan",
@@ -281,6 +290,7 @@ PROVIDER_FAMILIES: tuple[ProviderFamilySpec, ...] = (
         env_variables=("MINIMAX_API_KEY",),
         provider_label_keywords=("minimax.io", "MiniMax International"),
         alternative_endpoints=("api.minimax.io",),
+        plan_surface_keywords=("Coding Plan",),
     ),
 )
 
@@ -305,9 +315,14 @@ class ProviderDiscovery:
       label in environment section). This is a *weak* signal: a single
       ``MINIMAX_API_KEY`` is seen for all four MiniMax surfaces at once,
       so this flag must NOT be used to authenticate a specific surface.
-    - ``credential_scope_verified``: ``True`` only when the credentials-
-      section label matched this surface's region-specific keyword. This
-      is the only field that may authorise ``AUTH_FROM_ENV_PRESENCE``.
+    - ``credential_region_verified``: ``True`` only when the credentials-
+      section label matched this surface's region-specific keyword or
+      endpoint hint.
+    - ``credential_plan_surface_verified``: ``True`` only when the
+      credentials-section label also distinguishes the plan surface
+      (for example Token Plan vs Coding Plan).
+    - ``credential_scope_verified``: retained as the combined
+      region-and-plan truth for backward-readable snapshots.
     - ``execution_verified``: always ``False`` in this phase. No model
       probe has been executed; the value is exposed so the Dashboard can
       surface "not yet verified" honestly.
@@ -334,6 +349,8 @@ class ProviderDiscovery:
     in_credentials_store: bool = False
     catalog_discovered: bool = True
     credential_evidence_present: bool = False
+    credential_region_verified: bool = False
+    credential_plan_surface_verified: bool = False
     credential_scope_verified: bool = False
     execution_verified: bool = False
 
@@ -390,6 +407,9 @@ class DiscoveryResult:
     source_method: str
     providers: tuple[ProviderDiscovery, ...]
     state: DiscoveryState
+    configured_family_count: int = 0
+    catalog_discovered_provider_count: int = 0
+    credential_evidence_provider_count: int = 0
     last_error_code: str | None = None
 
     def provider_count(self) -> int:
@@ -414,6 +434,9 @@ class DiscoveryResult:
             "opencode_version": self.opencode_version,
             "source_method": self.source_method,
             "discovery_state": self.state.value,
+            "configured_family_count": self.configured_family_count,
+            "catalog_discovered_provider_count": self.catalog_discovered_provider_count,
+            "credential_evidence_provider_count": self.credential_evidence_provider_count,
             "last_error_code": self.last_error_code,
             "providers": [
                 {
@@ -428,6 +451,8 @@ class DiscoveryResult:
                     "in_credentials_store": p.in_credentials_store,
                     "catalog_discovered": p.catalog_discovered,
                     "credential_evidence_present": p.credential_evidence_present,
+                    "credential_region_verified": p.credential_region_verified,
+                    "credential_plan_surface_verified": p.credential_plan_surface_verified,
                     "credential_scope_verified": p.credential_scope_verified,
                     "execution_verified": p.execution_verified,
                     "observed_at": p.observed_at.isoformat(),
@@ -461,6 +486,18 @@ class DiscoveryResult:
                 credential_evidence_present=bool(
                     item.get("credential_evidence_present", False)
                 ),
+                credential_region_verified=bool(
+                    item.get(
+                        "credential_region_verified",
+                        item.get("credential_scope_verified", False),
+                    )
+                ),
+                credential_plan_surface_verified=bool(
+                    item.get(
+                        "credential_plan_surface_verified",
+                        item.get("credential_scope_verified", False),
+                    )
+                ),
                 credential_scope_verified=bool(
                     item.get("credential_scope_verified", False)
                 ),
@@ -477,6 +514,19 @@ class DiscoveryResult:
             source_method=str(payload["source_method"]),
             providers=providers,
             state=DiscoveryState(str(payload.get("discovery_state", "DISCOVERED"))),
+            configured_family_count=int(payload.get("configured_family_count", 0)),
+            catalog_discovered_provider_count=int(
+                payload.get(
+                    "catalog_discovered_provider_count",
+                    sum(1 for provider in providers if provider.catalog_discovered),
+                )
+            ),
+            credential_evidence_provider_count=int(
+                payload.get(
+                    "credential_evidence_provider_count",
+                    sum(1 for provider in providers if provider.credential_evidence_present),
+                )
+            ),
             last_error_code=(
                 str(payload["last_error_code"])
                 if payload.get("last_error_code") is not None
@@ -803,11 +853,22 @@ class _AuthPresence:
     environment_region_hints: frozenset[str] = frozenset()
 
     def has_in_credentials_store(self, spec: ProviderFamilySpec) -> bool:
+        return self.has_region_verified(spec)
+
+    def has_region_verified(self, spec: ProviderFamilySpec) -> bool:
         for label in self.credentials_section_labels:
             if any(token in label for token in spec.provider_label_keywords):
                 return True
         for hint in self.credentials_region_hints:
             if any(endpoint in hint for endpoint in spec.alternative_endpoints):
+                return True
+        return False
+
+    def has_plan_surface_verified(self, spec: ProviderFamilySpec) -> bool:
+        if not spec.plan_surface_keywords:
+            return True
+        for label in self.credentials_section_labels:
+            if any(token in label for token in spec.plan_surface_keywords):
                 return True
         return False
 
@@ -1072,7 +1133,11 @@ def discover(
             # **presence** only. The value is never read.
             if name in os.environ
         )
-        in_cred_store = presence.has_in_credentials_store(family)
+        credential_region_verified = presence.has_region_verified(family)
+        credential_plan_surface_verified = presence.has_plan_surface_verified(family)
+        credential_scope_verified = (
+            credential_region_verified and credential_plan_surface_verified
+        )
         in_env_section = presence.has_in_environment(family)
         # ``credential_evidence_present`` is the *weak* signal: any of
         # these may be set even when the credential does not apply to
@@ -1081,17 +1146,8 @@ def discover(
         # authorise ``AUTH_FROM_ENV_PRESENCE`` — that requires
         # ``credential_scope_verified`` below.
         credential_evidence_present = bool(
-            env_present or in_cred_store or in_env_section
+            env_present or credential_region_verified or in_env_section
         )
-        # ``credential_scope_verified`` is the only signal that proves a
-        # credential applies to this specific surface. It is true only
-        # when the OpenCode credentials-section label matched the
-        # family’s region-specific keyword. The label test is exact: the
-        # family table is curated to require region-specific markers, so
-        # a generic "MiniMax" label does not authenticate the
-        # international surface, and vice versa. Env-var presence alone
-        # never produces scope-verified.
-        credential_scope_verified = in_cred_store
         if catalog_discovered and credential_scope_verified:
             auth_status = AuthStatus.AUTH_FROM_ENV_PRESENCE
         elif credential_evidence_present:
@@ -1119,9 +1175,11 @@ def discover(
                 model_skus=model_skus,
                 env_variables_present=env_present,
                 region=region,
-                in_credentials_store=in_cred_store,
+                in_credentials_store=credential_region_verified,
                 catalog_discovered=catalog_discovered,
                 credential_evidence_present=credential_evidence_present,
+                credential_region_verified=credential_region_verified,
+                credential_plan_surface_verified=credential_plan_surface_verified,
                 credential_scope_verified=credential_scope_verified,
                 execution_verified=False,
                 observed_at=observed_at,
@@ -1133,12 +1191,12 @@ def discover(
                 error_code="SANITIZATION_REJECTED",
                 error_message=str(exc),
             )
-        discovered.append(record)
+        if catalog_discovered or credential_evidence_present:
+            discovered.append(record)
 
-    state = (
-        DiscoveryState.DISCOVERED if discovered
-        else DiscoveryState.EMPTY
-    )
+    catalog_count = sum(1 for record in discovered if record.catalog_discovered)
+    credential_count = sum(1 for record in discovered if record.credential_evidence_present)
+    state = DiscoveryState.DISCOVERED if discovered else DiscoveryState.EMPTY
     try:
         result = DiscoveryResult(
             discovered_at=observed_at,
@@ -1147,6 +1205,9 @@ def discover(
             source_method="opencode_cli_inspection",
             providers=tuple(discovered),
             state=state,
+            configured_family_count=len(tuple(families)),
+            catalog_discovered_provider_count=catalog_count,
+            credential_evidence_provider_count=credential_count,
             last_error_code=None,
         )
         result.to_dict()  # triggers assert_sanitized
@@ -1234,6 +1295,7 @@ def build_registry(result: DiscoveryResult) -> ModelRegistry:
                 runtime_id="opencode",
                 runtime_provider_id="opencode",
                 enabled=True,
+                execution_verified=record.execution_verified,
             )
     snapshot = {
         "schema_version": 1,

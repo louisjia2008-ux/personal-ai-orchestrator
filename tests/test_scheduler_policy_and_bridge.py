@@ -198,6 +198,28 @@ def test_failure_count_activates_escalation_floor() -> None:
     )
 
 
+def test_catalog_only_execution_target_enabled_flag_does_not_allow_launch() -> None:
+    registry = _registry()
+    catalog_only = registry.execution_targets["m3-sub"].model_copy(
+        update={"enabled": True, "execution_verified": False}
+    )
+    registry = registry.model_copy(update={"execution_targets": {"m3-sub": catalog_only}})
+
+    decision = route_task(
+        registry,
+        task=_task(),
+        now=NOW,
+        known_at=NOW,
+        runtime_availability={"m3-sub": True},
+    )
+
+    candidate = decision.evaluations[0]
+    assert candidate.eligible is False
+    assert candidate.admitted is False
+    assert "execution target has not been runtime-verified" in candidate.reasons
+    assert decision.selected_execution_target_id is None
+
+
 def test_bridge_freezes_snapshot_refs_and_blocks_unapproved_active() -> None:
     registry = _registry()
     request = RoutingRequest(

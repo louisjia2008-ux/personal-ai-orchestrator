@@ -216,6 +216,8 @@ def _hard_requirement_reasons(
         reasons.append("model disabled")
     if not target.enabled:
         reasons.append("execution target disabled")
+    if not target.execution_verified:
+        reasons.append("execution target has not been runtime-verified")
     if not runtime_available:
         reasons.append("runtime unavailable")
 

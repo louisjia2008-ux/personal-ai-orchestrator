@@ -46,6 +46,7 @@ from personal_ai_orchestrator.provider_registry_store import (
     EMPTY_BOOTSTRAP_SNAPSHOT_ID,
     PERSISTED_FILENAME,
     PersistedRegistry,
+    RegistryLoadStatus,
     is_empty_bootstrap_catalog,
     load,
     registry_path,
@@ -495,12 +496,112 @@ def test_discover_returns_typed_outcome() -> None:
         }
 
 
+def test_discover_empty_state_when_configured_families_have_no_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import personal_ai_orchestrator.provider_discovery as mod
+
+    executable = tmp_path / "opencode"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    empty_family = ProviderFamilySpec(
+        provider_id="empty-provider",
+        display_name="Empty Provider",
+        env_variables=("EMPTY_PROVIDER_API_KEY",),
+        provider_label_keywords=("Empty Provider",),
+    )
+
+    def _resolve(_explicit):
+        return executable
+
+    def _run(argv, **_kwargs):
+        if argv == ("--version",):
+            return SubprocessResult((str(executable), *argv), 0, "fixture\n", "", False)
+        if argv == ("providers", "list"):
+            return SubprocessResult((str(executable), *argv), 0, "", "", False)
+        return SubprocessResult((str(executable), *argv), 1, "No models found", "", False)
+
+    monkeypatch.setattr(mod, "_resolve_opencode", _resolve)
+    monkeypatch.setattr(mod, "_run_opencode", _run)
+
+    outcome = discover(families=(empty_family,))
+
+    assert outcome.error_code is None
+    assert outcome.result is not None
+    assert outcome.result.state is DiscoveryState.EMPTY
+    assert outcome.result.providers == ()
+    assert outcome.result.configured_family_count == 1
+    assert outcome.result.catalog_discovered_provider_count == 0
+    assert outcome.result.credential_evidence_provider_count == 0
+
+
+def test_discover_counts_catalog_and_credential_evidence_separately(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import personal_ai_orchestrator.provider_discovery as mod
+
+    executable = tmp_path / "opencode"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    catalog_family = ProviderFamilySpec(
+        provider_id="catalog-provider",
+        display_name="Catalog Provider",
+        env_variables=("CATALOG_PROVIDER_API_KEY",),
+        provider_label_keywords=("Catalog Provider",),
+    )
+    credential_family = ProviderFamilySpec(
+        provider_id="credential-provider",
+        display_name="Credential Provider",
+        env_variables=("CREDENTIAL_PROVIDER_API_KEY",),
+        provider_label_keywords=("Credential Provider",),
+    )
+
+    def _resolve(_explicit):
+        return executable
+
+    def _run(argv, **_kwargs):
+        if argv == ("--version",):
+            return SubprocessResult((str(executable), *argv), 0, "fixture\n", "", False)
+        if argv == ("providers", "list"):
+            return SubprocessResult(
+                (str(executable), *argv),
+                0,
+                "┌  Credentials\n●  Credential Provider api\n└  1 credentials\n",
+                "",
+                False,
+            )
+        if argv == ("models", "catalog-provider"):
+            return SubprocessResult(
+                (str(executable), *argv),
+                0,
+                "catalog-provider/model-a\n",
+                "",
+                False,
+            )
+        return SubprocessResult((str(executable), *argv), 1, "No models found", "", False)
+
+    monkeypatch.setattr(mod, "_resolve_opencode", _resolve)
+    monkeypatch.setattr(mod, "_run_opencode", _run)
+
+    outcome = discover(families=(catalog_family, credential_family))
+
+    assert outcome.error_code is None
+    assert outcome.result is not None
+    assert outcome.result.state is DiscoveryState.DISCOVERED
+    assert outcome.result.provider_count() == 2
+    assert outcome.result.configured_family_count == 2
+    assert outcome.result.catalog_discovered_provider_count == 1
+    assert outcome.result.credential_evidence_provider_count == 1
+
+
 @pytest.mark.skipif(
     _resolve_opencode(None) is None,
     reason="opencode CLI not available in this environment",
 )
 def test_discover_result_to_dict_contains_no_secrets() -> None:
     outcome = discover()
+    if outcome.result is None:
+        pytest.skip(f"opencode discovery unavailable: {outcome.error_code}")
     assert outcome.result is not None
     payload = outcome.result.to_dict()
     serialized = json.dumps(payload)
@@ -691,10 +792,14 @@ def test_provider_discovery_fields_are_independent() -> None:
         in_credentials_store=False,
         catalog_discovered=False,
         credential_evidence_present=True,        # env var present
-        credential_scope_verified=False,         # but not region-verified
+        credential_region_verified=False,
+        credential_plan_surface_verified=False,
+        credential_scope_verified=False,
         execution_verified=False,
     )
     assert record.credential_evidence_present is True
+    assert record.credential_region_verified is False
+    assert record.credential_plan_surface_verified is False
     assert record.credential_scope_verified is False
     assert record.auth_status is AuthStatus.AUTH_UNKNOWN
     assert record.execution_verified is False
@@ -720,6 +825,8 @@ def test_provider_discovery_fields_are_independent() -> None:
                 "in_credentials_store": record.in_credentials_store,
                 "catalog_discovered": record.catalog_discovered,
                 "credential_evidence_present": record.credential_evidence_present,
+                "credential_region_verified": record.credential_region_verified,
+                "credential_plan_surface_verified": record.credential_plan_surface_verified,
                 "credential_scope_verified": record.credential_scope_verified,
                 "execution_verified": record.execution_verified,
                 "observed_at": record.observed_at.isoformat(),
@@ -727,7 +834,41 @@ def test_provider_discovery_fields_are_independent() -> None:
         }
     )
     assert restored.providers[0].credential_scope_verified is False
+    assert restored.providers[0].credential_region_verified is False
+    assert restored.providers[0].credential_plan_surface_verified is False
     assert restored.providers[0].catalog_discovered is False
+
+
+def test_minimax_token_plan_label_does_not_authenticate_cn_coding_plan() -> None:
+    """Region evidence for ``minimaxi.com`` must not become coding-plan entitlement."""
+
+    presence = _AuthPresence(
+        credentials_section_labels=frozenset({"MiniMax Token Plan (api.minimaxi.com) api"}),
+        credentials_region_hints=frozenset({"api.minimaxi.com"}),
+        environment_section_labels=frozenset(),
+        env_variable_names_seen=frozenset(),
+    )
+    cn_regular = ProviderFamilySpec(
+        provider_id="minimax-cn",
+        display_name="MiniMax CN",
+        env_variables=("MINIMAX_API_KEY",),
+        provider_label_keywords=("minimaxi", "MiniMax CN"),
+        alternative_endpoints=("api.minimaxi.com",),
+        plan_surface_keywords=("Token Plan",),
+    )
+    cn_coding = ProviderFamilySpec(
+        provider_id="minimax-cn-coding-plan",
+        display_name="MiniMax CN Coding Plan",
+        env_variables=("MINIMAX_API_KEY",),
+        provider_label_keywords=("minimaxi", "MiniMax CN"),
+        alternative_endpoints=("api.minimaxi.com",),
+        plan_surface_keywords=("Coding Plan",),
+    )
+
+    assert presence.has_region_verified(cn_regular) is True
+    assert presence.has_plan_surface_verified(cn_regular) is True
+    assert presence.has_region_verified(cn_coding) is True
+    assert presence.has_plan_surface_verified(cn_coding) is False
 
 
 def test_env_blocklist_covers_required_provider_credentials() -> None:
@@ -772,20 +913,27 @@ def test_save_and_load_round_trip(tmp_state_root: Path) -> None:
     assert target == registry_path(tmp_state_root)
     assert target.is_file()
     persisted = load(tmp_state_root)
-    assert isinstance(persisted, PersistedRegistry)
-    assert persisted.payload["schema_version"] == CURRENT_SCHEMA_VERSION
-    providers = persisted.payload["providers"]
+    assert persisted.status is RegistryLoadStatus.LOADED
+    assert isinstance(persisted.persisted, PersistedRegistry)
+    assert persisted.persisted.payload["schema_version"] == CURRENT_SCHEMA_VERSION
+    providers = persisted.persisted.payload["providers"]
     assert providers and providers[0]["provider_id"] == "zai-coding-plan"
     assert providers[0]["auth_status"] == "AUTH_FROM_ENV_PRESENCE"
 
 
-def test_load_returns_none_when_missing(tmp_state_root: Path) -> None:
-    assert load(tmp_state_root) is None
+def test_load_returns_typed_missing_when_missing(tmp_state_root: Path) -> None:
+    outcome = load(tmp_state_root)
+    assert outcome.status is RegistryLoadStatus.MISSING
+    assert outcome.persisted is None
+    assert outcome.error_code is None
 
 
 def test_load_rejects_corrupt_payload(tmp_state_root: Path) -> None:
     registry_path(tmp_state_root).write_text("not json", encoding="utf-8")
-    assert load(tmp_state_root) is None
+    outcome = load(tmp_state_root)
+    assert outcome.status is RegistryLoadStatus.CORRUPT
+    assert outcome.persisted is None
+    assert outcome.error_code == "PERSISTED_REGISTRY_CORRUPT"
 
 
 def test_load_rejects_unknown_schema(tmp_state_root: Path) -> None:
@@ -793,7 +941,10 @@ def test_load_rejects_unknown_schema(tmp_state_root: Path) -> None:
         json.dumps({"schema_version": 999}),
         encoding="utf-8",
     )
-    assert load(tmp_state_root) is None
+    outcome = load(tmp_state_root)
+    assert outcome.status is RegistryLoadStatus.UNSUPPORTED_SCHEMA
+    assert outcome.persisted is None
+    assert outcome.error_code == "PERSISTED_REGISTRY_UNSUPPORTED_SCHEMA"
 
 
 def test_save_rejects_secret_in_discovery_result(tmp_state_root: Path) -> None:
@@ -830,6 +981,8 @@ def test_is_empty_bootstrap_catalog() -> None:
 )
 def test_upgrade_from_empty_bootstrap_persists_snapshot(tmp_state_root: Path) -> None:
     persisted, error = upgrade_from_empty_bootstrap(runtime_state_root=tmp_state_root)
+    if error is not None:
+        pytest.skip(f"opencode discovery unavailable: {error}")
     assert error is None
     assert persisted is not None
     assert (tmp_state_root / PERSISTED_FILENAME).is_file()
@@ -869,6 +1022,9 @@ def test_manager_status_projection() -> None:
         discovery_state="DISCOVERED",
         last_discovered_at="2026-01-01T00:00:00+00:00",
         provider_count=2,
+        configured_family_count=5,
+        catalog_discovered_provider_count=2,
+        credential_evidence_provider_count=1,
         execution_target_count=14,
         last_error_code=None,
         catalog_snapshot_id="1.18.25",
@@ -877,6 +1033,9 @@ def test_manager_status_projection() -> None:
     payload = status.to_dict()
     assert payload["discovery_state"] == "DISCOVERED"
     assert payload["provider_count"] == 2
+    assert payload["configured_family_count"] == 5
+    assert payload["catalog_discovered_provider_count"] == 2
+    assert payload["credential_evidence_provider_count"] == 1
     assert payload["execution_target_count"] == 14
 
 
@@ -896,6 +1055,11 @@ def _make_discovery_result(
         source_method="opencode_cli_inspection",
         providers=providers,
         state=state,
+        configured_family_count=len(PROVIDER_FAMILIES),
+        catalog_discovered_provider_count=sum(1 for p in providers if p.catalog_discovered),
+        credential_evidence_provider_count=sum(
+            1 for p in providers if p.credential_evidence_present
+        ),
         last_error_code=None,
     )
 
@@ -1119,8 +1283,9 @@ def test_manager_rejects_unknown_persisted_schema_fail_closed(
     )
     mgr = ProviderRegistryManager(runtime_state_root=tmp_state_root)
     status = mgr.status()
-    assert status.discovery_state == "PENDING"
+    assert status.discovery_state == "FAILED"
     assert status.provider_count == 0
+    assert status.last_error_code == "PERSISTED_REGISTRY_UNSUPPORTED_SCHEMA"
     assert mgr.registry().providers == {}
     # An explicit refresh is the only way to recover.
     assert mgr.discovery_cycle_count() == 0

@@ -10,6 +10,7 @@ from typing import Any
 
 from personal_ai_orchestrator.process_supervisor import ProcessSupervisor, SupervisedProcess
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
+from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.shadow_evidence import (
     ShadowEvidenceJournal,
     ShadowFailureClass,
@@ -26,6 +27,26 @@ _TERMINAL_STATES = {TaskState.FAILED, TaskState.CANCELLED, TaskState.COMPLETED}
 
 def _render_result(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def validate_execution_target_launch(
+    registry: ModelRegistry,
+    *,
+    execution_target_id: str,
+    runtime_available: bool,
+) -> None:
+    """Fail closed unless the selected target is actually launchable."""
+
+    try:
+        target = registry.execution_targets[execution_target_id]
+    except KeyError:
+        raise RuntimeError("execution target is not in the registry") from None
+    if not target.enabled:
+        raise RuntimeError("execution target is disabled")
+    if not target.execution_verified:
+        raise RuntimeError("execution target has not been runtime-verified")
+    if not runtime_available:
+        raise RuntimeError("execution runtime is unavailable")
 
 
 def start_worker_run(
@@ -405,4 +426,5 @@ __all__ = [
     "record_worker_exit",
     "reconcile_workspace_truth",
     "start_worker_run",
+    "validate_execution_target_launch",
 ]

@@ -4,11 +4,27 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import UTC, datetime
 from pathlib import Path
+
+import pytest
 
 from personal_ai_orchestrator.control_client import ControlPlaneClient
 from personal_ai_orchestrator.model_registry import Account, ModelRegistry, Provider
 from personal_ai_orchestrator.product_daemon import build_daemon_argv, default_product_config
+from personal_ai_orchestrator.provider_discovery import (
+    AuthStatus,
+    DiscoveryCycleOutcome,
+    DiscoveryResult,
+    DiscoveryState,
+    ExecutionStatus,
+    ProviderDiscovery,
+)
+from personal_ai_orchestrator.provider_registry_store import (
+    RegistryLoadStatus,
+    registry_path,
+    save,
+)
 from personal_ai_orchestrator.runtime_config import (
     RuntimeConfig,
     default_application_support_layout,
@@ -17,6 +33,58 @@ from personal_ai_orchestrator.runtime_config import (
 
 def _short_home(prefix: str) -> Path:
     return Path(tempfile.mkdtemp(prefix=prefix, dir="/tmp"))
+
+
+def _result(*, providers: tuple[ProviderDiscovery, ...] | None = None) -> DiscoveryResult:
+    records = providers
+    if records is None:
+        records = (
+            ProviderDiscovery(
+                provider_id="zai-coding-plan",
+                display_name="GLM / Z.AI",
+                auth_status=AuthStatus.AUTH_FROM_ENV_PRESENCE,
+                execution_status=ExecutionStatus.AVAILABLE_FOR_CATALOG,
+                evidence_source="DISCOVERED_FROM_CATALOG",
+                model_skus=("glm-5.3",),
+                env_variables_present=(),
+                observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+                catalog_discovered=True,
+                credential_evidence_present=True,
+                credential_region_verified=True,
+                credential_plan_surface_verified=True,
+                credential_scope_verified=True,
+                execution_verified=False,
+            ),
+        )
+    return DiscoveryResult(
+        discovered_at=datetime(2026, 1, 1, tzinfo=UTC),
+        opencode_path="/usr/bin/opencode",
+        opencode_version="fixture",
+        source_method="fixture",
+        providers=records,
+        state=DiscoveryState.DISCOVERED if records else DiscoveryState.EMPTY,
+        configured_family_count=5,
+        catalog_discovered_provider_count=sum(1 for p in records if p.catalog_discovered),
+        credential_evidence_provider_count=sum(1 for p in records if p.credential_evidence_present),
+    )
+
+
+def _run_main_without_server(
+    home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> object:
+    captured = {}
+
+    def _fake_daemon_main(argv, *, provider_registry_manager=None):
+        captured["argv"] = argv
+        captured["manager"] = provider_registry_manager
+        return 0
+
+    monkeypatch.setattr("personal_ai_orchestrator.product_daemon.daemon_main", _fake_daemon_main)
+    import personal_ai_orchestrator.product_daemon as product_daemon
+
+    assert product_daemon.main(["--home", str(home), "--port", "0"]) == 0
+    return captured["manager"]
 
 
 def test_default_product_config_is_credential_free_setup_required() -> None:
@@ -44,6 +112,138 @@ def test_product_daemon_builds_control_only_daemon_argv() -> None:
         "8765",
         "--control-only",
     ]
+
+
+def test_product_daemon_first_boot_success_discovers_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = _short_home("pao-product-success-")
+    calls = [0]
+
+    def _discover(**_kwargs):
+        calls[0] += 1
+        return DiscoveryCycleOutcome(result=_result(), error_code=None, error_message=None)
+
+    monkeypatch.setattr("personal_ai_orchestrator.provider_registry_manager.discover", _discover)
+    manager = _run_main_without_server(home, monkeypatch)
+
+    assert calls[0] == 1
+    assert manager.discovery_cycle_count() == 1
+    assert manager.status().discovery_state == "DISCOVERED"
+
+
+def test_product_daemon_first_boot_failure_discovers_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = _short_home("pao-product-failure-")
+    calls = [0]
+
+    def _discover(**_kwargs):
+        calls[0] += 1
+        return DiscoveryCycleOutcome(
+            result=None,
+            error_code="OPENCODE_PROVIDERS_LIST_FAILED",
+            error_message="fixture failure",
+        )
+
+    monkeypatch.setattr("personal_ai_orchestrator.provider_registry_manager.discover", _discover)
+    manager = _run_main_without_server(home, monkeypatch)
+
+    assert calls[0] == 1
+    assert manager.discovery_cycle_count() == 1
+    assert manager.status().discovery_state == "FAILED"
+    assert manager.status().last_error_code == "OPENCODE_PROVIDERS_LIST_FAILED"
+
+
+def test_product_daemon_subsequent_valid_boot_discovers_zero_times(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = _short_home("pao-product-subsequent-")
+    layout = default_application_support_layout(home)
+    save(_result(), runtime_state_root=layout.runtime_state_root)
+    calls = [0]
+
+    def _discover(**_kwargs):
+        calls[0] += 1
+        raise AssertionError("discover must not run for a valid persisted boot")
+
+    monkeypatch.setattr("personal_ai_orchestrator.provider_registry_manager.discover", _discover)
+    manager = _run_main_without_server(home, monkeypatch)
+
+    assert calls[0] == 0
+    assert manager.discovery_cycle_count() == 0
+    assert manager.load_status() is RegistryLoadStatus.LOADED
+    assert manager.status().discovery_state == "DISCOVERED"
+
+
+def test_product_daemon_corrupt_snapshot_does_not_auto_discover(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = _short_home("pao-product-corrupt-")
+    layout = default_application_support_layout(home)
+    layout.runtime_state_root.mkdir(parents=True, exist_ok=True)
+    registry_path(layout.runtime_state_root).write_text("not json", encoding="utf-8")
+    calls = [0]
+
+    def _discover(**_kwargs):
+        calls[0] += 1
+        raise AssertionError("discover must not run for a corrupt persisted snapshot")
+
+    monkeypatch.setattr("personal_ai_orchestrator.provider_registry_manager.discover", _discover)
+    manager = _run_main_without_server(home, monkeypatch)
+
+    assert calls[0] == 0
+    assert manager.discovery_cycle_count() == 0
+    assert manager.load_status() is RegistryLoadStatus.CORRUPT
+    assert manager.status().discovery_state == "FAILED"
+    assert manager.status().last_error_code == "PERSISTED_REGISTRY_CORRUPT"
+
+
+def test_product_daemon_unsupported_schema_does_not_auto_discover(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = _short_home("pao-product-schema-")
+    layout = default_application_support_layout(home)
+    layout.runtime_state_root.mkdir(parents=True, exist_ok=True)
+    registry_path(layout.runtime_state_root).write_text(
+        json.dumps({"schema_version": 999, "providers": []}),
+        encoding="utf-8",
+    )
+    calls = [0]
+
+    def _discover(**_kwargs):
+        calls[0] += 1
+        raise AssertionError("discover must not run for an unsupported persisted snapshot")
+
+    monkeypatch.setattr("personal_ai_orchestrator.provider_registry_manager.discover", _discover)
+    manager = _run_main_without_server(home, monkeypatch)
+
+    assert calls[0] == 0
+    assert manager.discovery_cycle_count() == 0
+    assert manager.load_status() is RegistryLoadStatus.UNSUPPORTED_SCHEMA
+    assert manager.status().discovery_state == "FAILED"
+    assert manager.status().last_error_code == "PERSISTED_REGISTRY_UNSUPPORTED_SCHEMA"
+
+
+def test_product_daemon_explicit_refresh_discovers_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = _short_home("pao-product-refresh-")
+    layout = default_application_support_layout(home)
+    save(_result(), runtime_state_root=layout.runtime_state_root)
+    calls = [0]
+
+    def _discover(**_kwargs):
+        calls[0] += 1
+        return DiscoveryCycleOutcome(result=_result(), error_code=None, error_message=None)
+
+    monkeypatch.setattr("personal_ai_orchestrator.provider_registry_manager.discover", _discover)
+    manager = _run_main_without_server(home, monkeypatch)
+    assert calls[0] == 0
+
+    manager.refresh()
+    assert calls[0] == 1
+    assert manager.discovery_cycle_count() == 1
 
 
 def test_product_daemon_bootstraps_runtime_and_serves_control_plane() -> None:

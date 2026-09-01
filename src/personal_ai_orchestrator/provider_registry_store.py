@@ -38,6 +38,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,14 @@ from personal_ai_orchestrator.provider_discovery import (
 CURRENT_SCHEMA_VERSION = 1
 PERSISTED_FILENAME = "provider-registry.json"
 EMPTY_BOOTSTRAP_SNAPSHOT_ID = "product-bootstrap-empty-registry-v1"
+
+
+class RegistryLoadStatus(StrEnum):
+    MISSING = "MISSING"
+    LOADED = "LOADED"
+    CORRUPT = "CORRUPT"
+    UNSUPPORTED_SCHEMA = "UNSUPPORTED_SCHEMA"
+    SANITIZATION_REJECTED = "SANITIZATION_REJECTED"
 
 
 @dataclass(frozen=True)
@@ -86,6 +95,20 @@ class PersistedRegistry:
     def last_error_code(self) -> str | None:
         value = self.payload.get("last_error_code")
         return value if isinstance(value, str) else None
+
+
+@dataclass(frozen=True)
+class RegistryLoadOutcome:
+    """Typed outcome for loading a persisted provider-registry snapshot."""
+
+    status: RegistryLoadStatus
+    persisted: PersistedRegistry | None = None
+    source_path: Path | None = None
+    error_code: str | None = None
+
+    @property
+    def loaded(self) -> bool:
+        return self.status is RegistryLoadStatus.LOADED and self.persisted is not None
 
 
 def registry_path(runtime_state_root: Path) -> Path:
@@ -138,35 +161,60 @@ def save(
     return target
 
 
-def load(runtime_state_root: Path) -> PersistedRegistry | None:
-    """Load the persisted registry, or ``None`` if missing/corrupt.
+def load(runtime_state_root: Path) -> RegistryLoadOutcome:
+    """Load the persisted registry and return a typed outcome.
 
-    A corrupt payload is treated the same as a missing file: the product
-    runtime falls back to a fresh discovery cycle. We deliberately do not
-    raise — load() is on the daemon hot path and must never panic on a
-    partial-write left over from an earlier crash.
+    Missing, corrupt JSON, unsupported schema and sanitization rejection
+    are intentionally distinct. The product daemon uses this distinction
+    to fail closed for invalid existing state while still allowing a true
+    cold first install to bootstrap discovery exactly once.
     """
 
     target = registry_path(runtime_state_root)
     if not target.is_file():
-        return None
+        return RegistryLoadOutcome(
+            status=RegistryLoadStatus.MISSING,
+            source_path=target,
+            error_code=None,
+        )
     try:
         with target.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
     except (OSError, json.JSONDecodeError):
-        return None
+        return RegistryLoadOutcome(
+            status=RegistryLoadStatus.CORRUPT,
+            source_path=target,
+            error_code="PERSISTED_REGISTRY_CORRUPT",
+        )
     if not isinstance(payload, dict):
-        return None
+        return RegistryLoadOutcome(
+            status=RegistryLoadStatus.CORRUPT,
+            source_path=target,
+            error_code="PERSISTED_REGISTRY_CORRUPT",
+        )
     if payload.get("schema_version") != CURRENT_SCHEMA_VERSION:
         # Unknown future schema — refuse to load to avoid silent
-        # misinterpretation. Operator must run a discovery cycle to
-        # regenerate the file under the current schema.
-        return None
+        # misinterpretation. Operator recovery must be explicit.
+        return RegistryLoadOutcome(
+            status=RegistryLoadStatus.UNSUPPORTED_SCHEMA,
+            source_path=target,
+            error_code="PERSISTED_REGISTRY_UNSUPPORTED_SCHEMA",
+        )
     try:
         assert_sanitized(payload)
     except ValueError:
-        return None
-    return PersistedRegistry(payload=payload, source_path=target)
+        return RegistryLoadOutcome(
+            status=RegistryLoadStatus.SANITIZATION_REJECTED,
+            source_path=target,
+            error_code="PERSISTED_REGISTRY_SANITIZATION_REJECTED",
+        )
+    persisted = PersistedRegistry(payload=payload, source_path=target)
+    return RegistryLoadOutcome(
+        status=RegistryLoadStatus.LOADED,
+        persisted=persisted,
+        source_path=target,
+        error_code=persisted.last_error_code,
+    )
 
 
 def is_empty_bootstrap_catalog(catalog_snapshot_id: str | None) -> bool:
@@ -201,8 +249,8 @@ def upgrade_from_empty_bootstrap(
         save(outcome.result, runtime_state_root=runtime_state_root)
     except Exception as exc:  # pragma: no cover — defensive
         return None, f"PERSIST_FAILED:{exc}"
-    persisted = load(runtime_state_root)
-    return persisted, None
+    load_outcome = load(runtime_state_root)
+    return load_outcome.persisted if load_outcome.loaded else None, None
 
 
 __all__ = [
@@ -210,6 +258,8 @@ __all__ = [
     "EMPTY_BOOTSTRAP_SNAPSHOT_ID",
     "PERSISTED_FILENAME",
     "PersistedRegistry",
+    "RegistryLoadOutcome",
+    "RegistryLoadStatus",
     "is_empty_bootstrap_catalog",
     "load",
     "registry_path",
