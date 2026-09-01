@@ -1081,6 +1081,23 @@ struct ClientSettingsDashboard: View {
                 LabeledContent(L10n.runtimeConfig, value: layout.runtimeConfigPath)
                 DaemonLifecycleLabel(lifecycle: store.daemonLifecycle)
             }
+            DashboardCard(title: L10n.ownerExecutionSetting, symbol: "person.badge.key") {
+                let enabled = store.ownerExecutionSettings?.ownerInitiatedExecutionEnabled ?? false
+                Toggle(L10n.ownerExecutionToggle, isOn: Binding(
+                    get: { enabled },
+                    set: { newValue in
+                        Task { await store.setOwnerExecution(enabled: newValue) }
+                    }
+                ))
+                .disabled(store.ownerExecutionSettings == nil)
+                Text(L10n.ownerExecutionFooter)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                LabeledContent(L10n.ownerExecutionState, value: enabled ? "ON" : "OFF")
+                Text(L10n.ownerExecutionMeaning)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             DashboardCard(title: L10n.productionActive, symbol: "lock") {
                 LabeledContent("ACTIVE", value: store.activeStatus?.productionActive ?? "UNKNOWN")
                 if let active = store.activeStatus {
@@ -1168,6 +1185,7 @@ private struct TaskDetailPanel: View {
                     }
                     RoutingPanel(detail: detail)
                     VerificationPanel(detail: detail)
+                    OwnerDispatchPanel(detail: detail)
                     DashboardCard(title: L10n.history, symbol: "clock") {
                         EventList(events: detail.events)
                     }
@@ -1219,6 +1237,109 @@ private struct VerificationPanel: View {
             }
             ForEach(detail.approvals.approvals) { approval in
                 Text("\(approval.kind): \(approval.status)")
+            }
+        }
+    }
+}
+
+/// Owner-initiated execution panel. Dispatch is only enabled when the
+/// safety gates hold: the owner setting is ON, the task is dispatchable,
+/// and a verified execution target is selected. Nothing here implies
+/// autonomous Production ACTIVE.
+private struct OwnerDispatchPanel: View {
+    @EnvironmentObject private var store: OrchestratorStore
+    let detail: TaskDetailView
+    @State private var selectedTargetId: String = ""
+
+    private var verifiedTargets: [ExecutionTargetHealthView] {
+        (store.providers?.providers ?? [])
+            .flatMap(\.executionTargets)
+            .filter { $0.enabled && $0.isExecutionVerified }
+    }
+
+    private var ownerSettingEnabled: Bool {
+        store.ownerExecutionSettings?.ownerInitiatedExecutionEnabled ?? false
+    }
+
+    private var taskDispatchable: Bool {
+        detail.task.state == "SUBMITTED" || detail.task.state == "READY"
+    }
+
+    private var canDispatch: Bool {
+        ownerSettingEnabled && taskDispatchable && !verifiedTargets.isEmpty && !selectedTargetId.isEmpty
+    }
+
+    var body: some View {
+        DashboardCard(title: L10n.ownerDispatch, symbol: "person.badge.key") {
+            if !ownerSettingEnabled {
+                Label(L10n.ownerExecutionDisabled, systemImage: "lock")
+                    .foregroundStyle(.secondary)
+            }
+            if !taskDispatchable {
+                Label(
+                    L10n.taskNotDispatchable(detail.task.state),
+                    systemImage: "exclamationmark.circle"
+                )
+                .foregroundStyle(.secondary)
+            }
+            if verifiedTargets.isEmpty {
+                Label(L10n.noVerifiedTargets, systemImage: "xmark.shield")
+                    .foregroundStyle(.secondary)
+            } else {
+                Picker(L10n.executionTarget, selection: $selectedTargetId) {
+                    ForEach(verifiedTargets) { target in
+                        Text(target.executionTargetId).tag(target.executionTargetId)
+                    }
+                }
+                if let target = verifiedTargets.first(where: { $0.executionTargetId == selectedTargetId }) {
+                    LabeledContent(L10n.providerModel, value: target.modelSkuId)
+                }
+            }
+            Button {
+                Task {
+                    await store.dispatch(
+                        taskId: detail.task.taskId,
+                        executionTargetId: selectedTargetId
+                    )
+                }
+            } label: {
+                Label(L10n.dispatch, systemImage: "play")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!canDispatch)
+            .help(canDispatch ? L10n.dispatchHelp : L10n.dispatchBlockedHint)
+
+            if let dispatch = store.lastDispatch, dispatch.task.taskId == detail.task.taskId {
+                LabeledContent(L10n.dispatchStatus, value: dispatch.status)
+                if let code = dispatch.failureCode {
+                    LabeledContent(L10n.failureCode, value: code).foregroundStyle(.red)
+                }
+                if let reason = dispatch.reason {
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if let workspace = detail.workspace {
+                LabeledContent(L10n.worktree, value: workspace.worktreePath)
+                    .font(.system(.caption, design: .monospaced))
+                LabeledContent(L10n.branch, value: workspace.branch)
+                LabeledContent(L10n.writerLock, value: workspace.writerLocked ? "HELD" : "RELEASED")
+            }
+            ForEach(detail.runs) { run in
+                VStack(alignment: .leading, spacing: 2) {
+                    LabeledContent(L10n.workerRun, value: run.status)
+                    LabeledContent("PID", value: run.pid.map(String.init) ?? "-")
+                }
+            }
+            Text(L10n.ownerDispatchFooter)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .onAppear {
+            if selectedTargetId.isEmpty {
+                selectedTargetId = verifiedTargets.first?.executionTargetId ?? ""
             }
         }
     }

@@ -19,6 +19,14 @@ public enum CancelNotice: Equatable, Sendable {
     case malformedResponse
 }
 
+/// Structured owner-dispatch outcome; sanitized daemon codes surface verbatim.
+public enum DispatchNotice: Equatable, Sendable {
+    case dispatched(taskId: String, dispatchId: String, status: String)
+    case blocked(taskId: String, code: String)
+    case failed(detail: String)
+    case malformedResponse
+}
+
 /// Client-side display state. Authoritative state is always reloaded from the daemon;
 /// this store keeps no durable task database of its own.
 @MainActor
@@ -31,6 +39,9 @@ public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var providerDiscoveryStatus: ProviderDiscoveryStatusView?
     @Published public private(set) var isRefreshingProviders: Bool = false
     @Published public private(set) var activeStatus: ActiveStatusView?
+    @Published public private(set) var ownerExecutionSettings: OwnerExecutionSettingsView?
+    @Published public private(set) var lastDispatch: DispatchTaskView?
+    @Published public private(set) var dispatchNotice: DispatchNotice?
     @Published public private(set) var lastError: PAOClientError?
     @Published public private(set) var lastSubmittedTaskId: String?
     @Published public private(set) var submitNotice: SubmitNotice?
@@ -161,6 +172,9 @@ public final class OrchestratorStore: ObservableObject {
             self.tasks = TaskListView(tasks: dashboard.recentTasks, total: dashboard.counts.total)
             self.providers = dashboard.providers
             self.activeStatus = dashboard.activeStatus
+            if let settings = try? await client.ownerExecutionSettings() {
+                self.ownerExecutionSettings = settings
+            }
             self.lastError = nil
             await refreshProviderStatusSilently()
             let counts = taskCounts()
@@ -213,15 +227,63 @@ public final class OrchestratorStore: ObservableObject {
             selectedTaskDetail = nil
             providers = nil
             activeStatus = nil
+            ownerExecutionSettings = nil
+            lastDispatch = nil
             // Ephemeral operation success state claims daemon authority; once the
             // connection is gone it must not linger as if still authoritative.
             lastSubmittedTaskId = nil
             submitNotice = nil
             cancellationNotice = nil
+            dispatchNotice = nil
         }
     }
 
     // MARK: - Operations
+
+    /// Owner-initiated dispatch: explicit, one task at a time, through
+    /// the Safety Kernel gates. Client supplies no authority field; the
+    /// daemon derives OWNER_INITIATED_EXECUTION itself.
+    public func dispatch(taskId: String, executionTargetId: String) async {
+        let suffix = idFactory()
+        do {
+            // Fetch the authoritative state version right before dispatch;
+            // stale versions are rejected by the daemon with 409.
+            let task = try await client.getTask(taskId)
+            let request = DispatchRequest(
+                requestId: "dispatch-\(suffix)",
+                taskStateVersion: task.stateVersion,
+                executionTargetId: executionTargetId
+            )
+            let result = try await client.dispatch(taskId: taskId, request: request)
+            lastDispatch = result
+            dispatchNotice = result.accepted
+                ? .dispatched(taskId: taskId, dispatchId: result.dispatchId, status: result.status)
+                : .blocked(taskId: taskId, code: result.failureCode ?? "BLOCKED")
+            ClientLog.operation("dispatch", outcome: "ok")
+            await loadTaskDetail(taskId: taskId)
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            dispatchNotice = .blocked(taskId: taskId, code: error.displayDetail)
+            ClientLog.operation("dispatch", outcome: error.logCode)
+        } catch {
+            dispatchNotice = .malformedResponse
+            ClientLog.operation("dispatch", outcome: "malformed")
+        }
+    }
+
+    /// Toggle the persisted Owner-Initiated Execution setting. This is a
+    /// separate concept from Production ACTIVE (disabled by design).
+    public func setOwnerExecution(enabled: Bool) async {
+        do {
+            ownerExecutionSettings = try await client.setOwnerExecutionEnabled(enabled)
+            ClientLog.operation("owner-execution", outcome: "ok")
+        } catch let error as PAOClientError {
+            lastError = error
+            ClientLog.operation("owner-execution", outcome: error.logCode)
+        } catch {
+            ClientLog.operation("owner-execution", outcome: "malformed")
+        }
+    }
 
     /// Quick submit: input becomes a structured task intent through POST /v1/tasks.
     /// It is never interpreted as a shell command.

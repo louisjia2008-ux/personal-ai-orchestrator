@@ -67,6 +67,39 @@ public struct PAOControlClient: Sendable {
         return try await post("/v1/tasks/\(taskId)/cancel", body: CancelBody(requestId: requestId))
     }
 
+    public func dispatch(taskId: String, request: DispatchRequest) async throws -> DispatchTaskView {
+        try await post("/v1/tasks/\(taskId)/dispatch", body: request)
+    }
+
+    public func getDispatch(requestId: String) async throws -> DispatchTaskView {
+        try await get("/v1/dispatches/\(requestId)")
+    }
+
+    public func ownerExecutionSettings() async throws -> OwnerExecutionSettingsView {
+        try await get("/v1/settings/owner-execution")
+    }
+
+    public func setOwnerExecutionEnabled(_ enabled: Bool) async throws -> OwnerExecutionSettingsView {
+        struct EnabledBody: Encodable {
+            let ownerInitiatedExecutionEnabled: Bool
+
+            enum CodingKeys: String, CodingKey {
+                case ownerInitiatedExecutionEnabled = "owner_initiated_execution_enabled"
+            }
+        }
+        let body = EnabledBody(ownerInitiatedExecutionEnabled: enabled)
+        let data = try await rawRequest(
+            method: "PUT",
+            path: "/v1/settings/owner-execution",
+            body: JSONEncoder().encode(body)
+        )
+        do {
+            return try JSONDecoder().decode(OwnerExecutionSettingsView.self, from: data)
+        } catch {
+            throw PAOClientError.malformedResponse
+        }
+    }
+
     public func providers() async throws -> ProviderHealthListView {
         try await get("/v1/providers")
     }
