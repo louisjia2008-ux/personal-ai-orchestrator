@@ -64,6 +64,16 @@ public enum L10n {
         "empty.taskDetailHint", "settings.activeAuthorized",
         "settings.activeNotAuthorized", "settings.activeGateLabel",
         "settings.activeGate.open", "settings.activeGate.closed",
+        "label.taskBrowser", "label.taskDetailCanvas",
+        "empty.selectTaskForDetails", "label.taskBrowserHint",
+        "action.backToTasks", "action.refreshProviders",
+        "label.providerDiscoveryState", "label.providerLastDiscovered",
+        "label.discoveryEmpty", "label.discoveryError",
+        "provider.authStatus", "provider.executionStatus",
+        "provider.executionTargets", "provider.quotaState",
+        "provider.lastChecked", "provider.evidenceSource",
+        "evidence.discoveredFromCatalog", "evidence.authFromEnvPresence",
+        "evidence.executionProbeNotRun", "evidence.executionProbeRun",
     ]
 
     /// English is the guaranteed fallback (`defaultLocalization` in Package.swift).
@@ -382,4 +392,37 @@ public enum L10n {
     public static var activeGateLabel: String { tr("settings.activeGateLabel") }
     public static var activeGateOpen: String { tr("settings.activeGate.open") }
     public static var activeGateClosed: String { tr("settings.activeGate.closed") }
+
+    // MARK: - P4.2.4-A unified shell
+
+    public static var taskBrowserTitle: String { tr("label.taskBrowser") }
+    public static var taskDetailCanvasTitle: String { tr("label.taskDetailCanvas") }
+    public static var selectTaskForDetails: String { tr("empty.selectTaskForDetails") }
+    public static var taskBrowserHint: String { tr("label.taskBrowserHint") }
+    public static var backToTasks: String { tr("action.backToTasks") }
+    public static var refreshProviders: String { tr("action.refreshProviders") }
+
+    public static var providerAuthStatus: String { tr("provider.authStatus") }
+    public static var providerExecutionStatus: String { tr("provider.executionStatus") }
+    public static var providerExecutionTargets: String { tr("provider.executionTargets") }
+    public static var providerQuotaState: String { tr("provider.quotaState") }
+    public static var providerLastChecked: String { tr("provider.lastChecked") }
+    public static var providerEvidenceSource: String { tr("provider.evidenceSource") }
+
+    public static var evidenceDiscoveredFromCatalog: String { tr("evidence.discoveredFromCatalog") }
+    public static var evidenceAuthFromEnvPresence: String { tr("evidence.authFromEnvPresence") }
+    public static var evidenceExecutionProbeNotRun: String { tr("evidence.executionProbeNotRun") }
+    public static var evidenceExecutionProbeRun: String { tr("evidence.executionProbeRun") }
+
+    public static var providerDiscoveryState: String { tr("label.providerDiscoveryState") }
+    public static var providerLastDiscovered: String { tr("label.providerLastDiscovered") }
+    public static var discoveryEmpty: String { tr("label.discoveryEmpty") }
+    public static var discoveryError: String { tr("label.discoveryError") }
+
+    public static func providerLastDiscovered(_ timestamp: String) -> String {
+        tr("label.providerLastDiscovered", [timestamp])
+    }
+    public static func discoveryError(_ code: String) -> String {
+        tr("label.discoveryError", [code])
+    }
 }

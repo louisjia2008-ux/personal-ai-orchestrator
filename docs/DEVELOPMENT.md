@@ -150,22 +150,29 @@ open "dist/Personal AI Orchestrator.app"
 The bundle script performs a SwiftPM release build, builds a project-local PyInstaller
 `pao-daemon` helper, and assembles `dist/Personal AI Orchestrator.app`. The SwiftUI client
 starts the bundled helper with `Process` when the typed control socket is unavailable; the
-daemon remains external and authoritative. P4.2 also adds `/v1/dashboard` and
-`/v1/tasks/<id>/detail`, so the shared store can refresh one aggregate dashboard view rather
-than polling each screen independently.
+daemon remains external and authoritative. P4.2.3 polished Tasks shell consistency.
+P4.2.4-A added the unified dashboard shell and the real GLM / MiniMax provider
+registry: `/v1/dashboard`, `/v1/providers`, `/v1/providers/status`, and
+`/v1/providers/refresh` so the shared store can refresh one aggregate dashboard view
+rather than polling each screen independently.
 
 Runtime state for product launches should be bootstrapped outside source worktrees:
 
 ```text
-~/Library/Application Support/Personal AI Orchestrator/runtime.json
-~/Library/Application Support/Personal AI Orchestrator/state.sqlite3
-~/Library/Application Support/Personal AI Orchestrator/runtime-state/
+~/Library/Application Support/Personal AI Orchestrator/
+  runtime.json
+  state.sqlite3
+  runtime-state/
+  provider-registry.json  # sanitized dynamic registry (credential-free)
+  logs/
 ~/Library/Caches/Personal AI Orchestrator/control.sock
 ```
 
 `bootstrap_application_support()` writes `runtime.json` atomically and fails if the static
 runtime config contains provider credential references. Static config still cannot enable
-Production ACTIVE.
+Production ACTIVE. The legacy empty-bootstrap snapshot id
+(`product-bootstrap-empty-registry-v1`) triggers a credential-safe discovery cycle on
+first launch; user-authored registries are preserved.
 
 Current P4.2 limitations:
 
@@ -173,4 +180,6 @@ Current P4.2 limitations:
   or `SMAppService`;
 - the bundled helper is PyInstaller-based and built from project-local packaging dependencies;
 - WidgetKit source and a sanitized shared snapshot bridge exist, but producing an installable
-  `.appex` still requires an Xcode app-extension packaging/signing path.
+  `.appex` still requires an Xcode app-extension packaging/signing path;
+- owner-initiated execution / OpenCode dispatch / host verifier integration are deferred
+  to P4.2.4-B; the bundled daemon intentionally has no dispatch endpoint yet.

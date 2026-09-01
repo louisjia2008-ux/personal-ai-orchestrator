@@ -164,3 +164,29 @@
 "settings.activeGateLabel" = "ACTIVE gate";
 "settings.activeGate.open" = "OPEN";
 "settings.activeGate.closed" = "CLOSED";
+
+/* P4.2.4-A unified shell. */
+
+"label.taskBrowser" = "Tasks";
+"label.taskDetailCanvas" = "Task detail";
+"label.taskBrowserHint" = "Search and filter by state; ⌘[ / ⌘] navigates.";
+"empty.selectTaskForDetails" = "Select a task to view authoritative details.";
+"action.backToTasks" = "Back to tasks";
+"action.refreshProviders" = "Refresh providers";
+
+"provider.authStatus" = "Auth status";
+"provider.executionStatus" = "Execution status";
+"provider.executionTargets" = "Execution targets";
+"provider.quotaState" = "Quota state";
+"provider.lastChecked" = "Last checked";
+"provider.evidenceSource" = "Evidence source";
+
+"evidence.discoveredFromCatalog" = "DISCOVERED_FROM_CATALOG";
+"evidence.authFromEnvPresence" = "AUTH_FROM_ENV_PRESENCE";
+"evidence.executionProbeNotRun" = "EXECUTION_PROBE_NOT_RUN";
+"evidence.executionProbeRun" = "EXECUTION_PROBE_RUN";
+
+"label.providerDiscoveryState" = "Discovery state";
+"label.providerLastDiscovered" = "Last discovered at %@";
+"label.discoveryEmpty" = "No providers discovered yet. Run Refresh providers to inspect the local runtime.";
+"label.discoveryError" = "Discovery error: %@";

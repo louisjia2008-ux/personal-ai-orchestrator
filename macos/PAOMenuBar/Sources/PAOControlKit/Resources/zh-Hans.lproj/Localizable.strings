@@ -164,3 +164,29 @@
 "settings.activeGateLabel" = "ACTIVE 授权闸门";
 "settings.activeGate.open" = "OPEN";
 "settings.activeGate.closed" = "CLOSED";
+
+/* P4.2.4-A 统一外壳。 */
+
+"label.taskBrowser" = "任务列表";
+"label.taskDetailCanvas" = "任务详情";
+"label.taskBrowserHint" = "按状态搜索与筛选；⌘[ / ⌘] 切换任务。";
+"empty.selectTaskForDetails" = "选择一个任务以查看权威详情。";
+"action.backToTasks" = "返回任务列表";
+"action.refreshProviders" = "刷新提供商";
+
+"provider.authStatus" = "认证状态";
+"provider.executionStatus" = "执行状态";
+"provider.executionTargets" = "执行目标";
+"provider.quotaState" = "额度状态";
+"provider.lastChecked" = "最近检查";
+"provider.evidenceSource" = "证据来源";
+
+"evidence.discoveredFromCatalog" = "DISCOVERED_FROM_CATALOG（来自目录）";
+"evidence.authFromEnvPresence" = "AUTH_FROM_ENV_PRESENCE（依据环境变量存在）";
+"evidence.executionProbeNotRun" = "EXECUTION_PROBE_NOT_RUN（未执行实际探测）";
+"evidence.executionProbeRun" = "EXECUTION_PROBE_RUN（已执行探测）";
+
+"label.providerDiscoveryState" = "发现状态";
+"label.providerLastDiscovered" = "最近发现于 %@";
+"label.discoveryEmpty" = "尚未发现任何提供商。请执行「刷新提供商」以检查本地运行时。";
+"label.discoveryError" = "发现错误：%@";

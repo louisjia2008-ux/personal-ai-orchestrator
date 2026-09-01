@@ -71,6 +71,15 @@ public struct PAOControlClient: Sendable {
         try await get("/v1/providers")
     }
 
+    public func providerDiscoveryStatus() async throws -> ProviderDiscoveryStatusView {
+        try await get("/v1/providers/status")
+    }
+
+    public func refreshProviders() async throws -> ProviderDiscoveryStatusView {
+        struct EmptyBody: Encodable {}
+        return try await post("/v1/providers/refresh", body: EmptyBody())
+    }
+
     public func quota() async throws -> ProviderHealthListView {
         try await get("/v1/quota")
     }

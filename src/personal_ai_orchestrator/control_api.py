@@ -29,6 +29,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from personal_ai_orchestrator.activation import ActiveRoutingGate
 from personal_ai_orchestrator.approval import ApprovalAuthority
 from personal_ai_orchestrator.model_registry import ModelRegistry
+from personal_ai_orchestrator.provider_registry_manager import (
+    ProviderRegistryManager,
+)
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
@@ -212,10 +215,24 @@ class ProviderHealthView(_ViewModel):
     account_count: int
     quota_pools: tuple[QuotaPoolHealthView, ...] = ()
     execution_targets: tuple[ExecutionTargetHealthView, ...] = ()
+    evidence_source: str | None = None
+    auth_status: str | None = None
+    execution_status: str | None = None
+    last_checked: str | None = None
 
 
 class ProviderHealthListView(_ViewModel):
     providers: tuple[ProviderHealthView, ...]
+
+
+class ProviderDiscoveryStatusView(_ViewModel):
+    discovery_state: str
+    last_discovered_at: str | None = None
+    provider_count: int = 0
+    execution_target_count: int = 0
+    last_error_code: str | None = None
+    catalog_snapshot_id: str | None = None
+    source_method: str | None = None
 
 
 class ActiveStatusView(_ViewModel):
@@ -265,6 +282,7 @@ class ControlPlaneService:
     runtime_availability: dict[str, bool] = field(default_factory=dict)
     verification_journal: VerificationEvidenceJournal | None = None
     quota_availability_journal: QuotaAvailabilityJournal | None = None
+    provider_registry_manager: ProviderRegistryManager | None = None
 
     def open_request(self) -> ControlPlaneService:
         """Return a request-local service bound to a fresh SQLite connection."""
@@ -278,6 +296,7 @@ class ControlPlaneService:
             runtime_availability=self.runtime_availability,
             verification_journal=self.verification_journal,
             quota_availability_journal=self.quota_availability_journal,
+            provider_registry_manager=self.provider_registry_manager,
         )
 
     @staticmethod
@@ -639,9 +658,20 @@ class ControlPlaneService:
     def providers(self) -> ProviderHealthListView:
         views: list[ProviderHealthView] = []
         plans_by_account: dict[str, list[str]] = {}
-        for plan in self.registry.plans.values():
+        # P4.2.4-A: prefer the dynamic registry owned by the
+        # ProviderRegistryManager when one is configured. This is how
+        # the bundled product daemon surfaces real GLM / MiniMax CN
+        # discovery results even though the static runtime.json still
+        # carries the legacy empty-bootstrap snapshot.
+        effective_registry = (
+            self.provider_registry_manager.registry()
+            if self.provider_registry_manager is not None
+            else self.registry
+        )
+        for plan in effective_registry.plans.values():
             plans_by_account.setdefault(plan.account_id, []).append(plan.id)
-        for provider_id, provider in sorted(self.registry.providers.items()):
+        evidence_by_provider = self._evidence_by_provider()
+        for provider_id, provider in sorted(effective_registry.providers.items()):
             account_ids = [
                 account.id
                 for account in self.registry.accounts.values()
@@ -654,14 +684,15 @@ class ControlPlaneService:
             }
             pools = tuple(
                 self._quota_pool_view(pool)
-                for pool_id, pool in sorted(self.registry.quota_pools.items())
+                for pool_id, pool in sorted(effective_registry.quota_pools.items())
                 if pool.plan_id in plan_ids
             )
             targets = tuple(
                 self._execution_target_view(target)
-                for target_id, target in sorted(self.registry.execution_targets.items())
-                if self.registry.models[target.model_sku_id].provider_id == provider_id
+                for target_id, target in sorted(effective_registry.execution_targets.items())
+                if effective_registry.models[target.model_sku_id].provider_id == provider_id
             )
+            evidence = evidence_by_provider.get(provider_id)
             views.append(
                 ProviderHealthView(
                     provider_id=provider_id,
@@ -669,9 +700,81 @@ class ControlPlaneService:
                     account_count=len(account_ids),
                     quota_pools=pools,
                     execution_targets=targets,
+                    evidence_source=evidence.evidence_source if evidence else None,
+                    auth_status=evidence.auth_status if evidence else None,
+                    execution_status=evidence.execution_status if evidence else None,
+                    last_checked=(
+                        evidence.observed_at.isoformat()
+                        if evidence is not None and evidence.observed_at is not None
+                        else None
+                    ),
                 )
             )
         return ProviderHealthListView(providers=tuple(views))
+
+    def _evidence_by_provider(self) -> dict[str, Any]:
+        """Map ``provider_id`` to the latest sanitized discovery record.
+
+        Returns an empty mapping when no manager is attached. This is
+        intentionally permissive: the Control API must continue to
+        work even before P4.2.4-A discovery completes for the very
+        first time.
+        """
+
+        if self.provider_registry_manager is None:
+            return {}
+        result = self.provider_registry_manager.last_discovery_result()
+        if result is None:
+            return {}
+        return {
+            record.provider_id: record
+            for record in result.providers
+        }
+
+    def provider_discovery_status(self) -> ProviderDiscoveryStatusView:
+        if self.provider_registry_manager is None:
+            return ProviderDiscoveryStatusView(
+                discovery_state="PENDING",
+                provider_count=0,
+                execution_target_count=0,
+            )
+        status = self.provider_registry_manager.status()
+        return ProviderDiscoveryStatusView(
+            discovery_state=status.discovery_state,
+            last_discovered_at=status.last_discovered_at,
+            provider_count=status.provider_count,
+            execution_target_count=status.execution_target_count,
+            last_error_code=status.last_error_code,
+            catalog_snapshot_id=status.catalog_snapshot_id,
+            source_method=status.source_method,
+        )
+
+    def refresh_providers(self) -> ProviderDiscoveryStatusView:
+        """Run a fresh discovery cycle and return the new status.
+
+        Concurrency: the manager coalesces overlapping calls so the
+        OpenCode CLI is invoked at most once per refresh.
+        """
+
+        if self.provider_registry_manager is None:
+            return ProviderDiscoveryStatusView(
+                discovery_state="UNAVAILABLE",
+                provider_count=0,
+                execution_target_count=0,
+                last_error_code="PROVIDER_REGISTRY_MANAGER_NOT_CONFIGURED",
+            )
+        status = self.provider_registry_manager.refresh()
+        if status is None:
+            status = self.provider_registry_manager.status()
+        return ProviderDiscoveryStatusView(
+            discovery_state=status.discovery_state,
+            last_discovered_at=status.last_discovered_at,
+            provider_count=status.provider_count,
+            execution_target_count=status.execution_target_count,
+            last_error_code=status.last_error_code,
+            catalog_snapshot_id=status.catalog_snapshot_id,
+            source_method=status.source_method,
+        )
 
     def quota(self) -> ProviderHealthListView:
         return self.providers()
@@ -915,6 +1018,28 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                     self._json(405, {"error": "method_not_allowed"})
                     return
                 self._view(200, request_service.providers())
+                return
+
+            if rest == ("providers", "status"):
+                if method != "GET":
+                    self._json(405, {"error": "method_not_allowed"})
+                    return
+                self._view(200, request_service.provider_discovery_status())
+                return
+
+            if rest == ("providers", "refresh"):
+                if method != "POST":
+                    self._json(405, {"error": "method_not_allowed"})
+                    return
+                # Refresh is intentionally idempotent: a missing/empty
+                # body is treated the same as an explicit empty JSON
+                # object, since the operation has no parameters.
+                length = int(self.headers.get("content-length", "0") or 0)
+                if length > 0:
+                    payload = self._read_json()
+                    if payload is None:
+                        return
+                self._view(200, request_service.refresh_providers())
                 return
 
             if rest == ("quota",):

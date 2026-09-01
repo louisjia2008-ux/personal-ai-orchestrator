@@ -182,4 +182,23 @@ final class OrchestratorStoreTests: XCTestCase {
         await store.refreshNow()
         XCTAssertEqual(store.connection, .disconnected(reason: .apiVersionMismatch(version: "v9")))
     }
+
+    func testProviderDiscoveryStatusIsLoadedAndRefreshable() async throws {
+        let daemon = TestDaemon()
+        registerStandardRoutes(daemon)
+        let path = temporarySocketPath("discovery")
+        try daemon.start(socketPath: path)
+        defer { daemon.stop() }
+
+        let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
+        await store.refreshNow()
+        let status = try XCTUnwrap(store.providerDiscoveryStatus)
+        XCTAssertEqual(status.discoveryState, "DISCOVERED")
+        XCTAssertEqual(status.providerCount, 5)
+        XCTAssertEqual(status.executionTargetCount, 35)
+
+        // Coalesced refresh: a rapid second refresh must not stall the test.
+        await store.refreshProviders()
+        XCTAssertEqual(store.providerDiscoveryStatus?.discoveryState, "DISCOVERED")
+    }
 }

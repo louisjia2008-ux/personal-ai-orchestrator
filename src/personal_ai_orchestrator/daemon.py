@@ -12,6 +12,7 @@ from personal_ai_orchestrator.control_api import ControlPlaneServer, ControlPlan
 from personal_ai_orchestrator.execution_controller import reconcile_workspace_truth
 from personal_ai_orchestrator.local_api import serve
 from personal_ai_orchestrator.policy_snapshot import PolicySnapshotJournal
+from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryManager
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
 from personal_ai_orchestrator.routing_service import RoutingService
 from personal_ai_orchestrator.runtime_config import RuntimeConfig
@@ -28,6 +29,7 @@ def build_service(
     config: RuntimeConfig,
     state_db: Path,
     runtime_state_root: Path,
+    provider_registry_manager: ProviderRegistryManager | None = None,
 ) -> RoutingService:
     runtime_state_root.mkdir(parents=True, exist_ok=True)
     store = SafetyKernelStore(state_db)
@@ -37,8 +39,13 @@ def build_service(
     # Startup blocking is also the point at which stale writer ownership becomes invalid. Clear
     # those exact persisted locks and fail closed any still-routable task whose worktree vanished.
     reconcile_workspace_truth(store)
+    registry = (
+        provider_registry_manager.registry()
+        if provider_registry_manager is not None
+        else config.registry
+    )
     service = RoutingService(
-        registry=config.registry,
+        registry=registry,
         store=store,
         catalog_snapshot_id=config.catalog_snapshot_id,
         policy=config.policy,
@@ -79,26 +86,48 @@ def build_control_service(
     config: RuntimeConfig,
     state_db: Path,
     runtime_state_root: Path,
+    provider_registry_manager: ProviderRegistryManager | None = None,
 ) -> ControlPlaneService:
     """Build the read-mostly control-plane facade over the same durable truth."""
 
+    registry = (
+        provider_registry_manager.registry()
+        if provider_registry_manager is not None
+        else config.registry
+    )
     return ControlPlaneService(
-        registry=config.registry,
+        registry=registry,
         store=SafetyKernelStore(state_db),
         activation_gate=ActiveRoutingGate(),
         runtime_availability=dict(config.runtime_availability),
         verification_journal=VerificationEvidenceJournal(runtime_state_root),
         quota_availability_journal=QuotaAvailabilityJournal(runtime_state_root),
+        provider_registry_manager=provider_registry_manager,
     )
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     config = load_runtime_config(args.config)
+    # P4.2.4-A: the dynamic provider-registry manager is built before
+    # any service so the Control API can project discovered truth
+    # from frame one. The manager reuses a previously persisted
+    # snapshot when one is available, otherwise it runs the
+    # credential-safe discovery cycle on first launch.
+    manager = ProviderRegistryManager(runtime_state_root=args.runtime_state_root)
+    # §23 "Refresh providers" — daemon startup refresh. The manager's
+    # constructor only loads persisted metadata (status / last error),
+    # so the first /v1/dashboard response still has an empty registry.
+    # We populate the in-memory ModelRegistry eagerly here so that the
+    # Control API handlers can project providers/targets from frame
+    # one without waiting for the user to click the explicit Refresh
+    # button.
+    manager.refresh()
     service = build_service(
         config=config,
         state_db=args.state_db,
         runtime_state_root=args.runtime_state_root,
+        provider_registry_manager=manager,
     )
     control_server: ControlPlaneServer | None = None
     control_service: ControlPlaneService | None = None
@@ -107,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             state_db=args.state_db,
             runtime_state_root=args.runtime_state_root,
+            provider_registry_manager=manager,
         )
         control_server = ControlPlaneServer(control_service, args.control_socket)
         control_server.start_background()

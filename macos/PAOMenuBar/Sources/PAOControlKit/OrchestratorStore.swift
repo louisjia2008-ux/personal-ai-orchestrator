@@ -28,6 +28,8 @@ public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var dashboard: DashboardSummaryView?
     @Published public private(set) var selectedTaskDetail: TaskDetailView?
     @Published public private(set) var providers: ProviderHealthListView?
+    @Published public private(set) var providerDiscoveryStatus: ProviderDiscoveryStatusView?
+    @Published public private(set) var isRefreshingProviders: Bool = false
     @Published public private(set) var activeStatus: ActiveStatusView?
     @Published public private(set) var lastError: PAOClientError?
     @Published public private(set) var lastSubmittedTaskId: String?
@@ -160,6 +162,7 @@ public final class OrchestratorStore: ObservableObject {
             self.providers = dashboard.providers
             self.activeStatus = dashboard.activeStatus
             self.lastError = nil
+            await refreshProviderStatusSilently()
             let counts = taskCounts()
             ClientLog.taskCounts(running: counts.running, ready: counts.ready,
                                  blocked: counts.blocked, verified: counts.verified)
@@ -316,6 +319,39 @@ public final class OrchestratorStore: ObservableObject {
             selectedTaskDetail = nil
         }
         return next
+    }
+
+    /// User-triggered provider-discovery refresh. Coalesces rapid clicks into a
+    /// single bounded call against `/v1/providers/refresh`.
+    public func refreshProviders() async {
+        guard !isRefreshingProviders else { return }
+        isRefreshingProviders = true
+        defer { isRefreshingProviders = false }
+        do {
+            let status = try await client.refreshProviders()
+            providerDiscoveryStatus = status
+            let providers = try? await client.providers()
+            if let providers { self.providers = providers }
+            ClientLog.operation("refresh_providers", outcome: status.discoveryState.lowercased())
+        } catch let error as PAOClientError {
+            self.lastError = error
+            ClientLog.operation("refresh_providers", outcome: error.logCode)
+        } catch {
+            ClientLog.operation("refresh_providers", outcome: "malformed")
+        }
+    }
+
+    /// Internal: fetch provider-discovery status without surfacing a
+    /// spinner. Called after each successful dashboard refresh so the
+    /// Providers/Agents/Quota cards reflect the most recent discovery
+    /// cycle even when the user has not clicked the explicit refresh.
+    private func refreshProviderStatusSilently() async {
+        do {
+            let status = try await client.providerDiscoveryStatus()
+            providerDiscoveryStatus = status
+        } catch {
+            // Silent: dashboard already reports connection health.
+        }
     }
 }
 

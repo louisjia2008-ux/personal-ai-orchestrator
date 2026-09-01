@@ -229,3 +229,106 @@ Baseline
    offer task pickers, quota cards explain themselves, settings are labeled
    honestly, refresh works.
 3. Owner adds the widget in Notification Center and performs visual acceptance.
+
+---
+
+# P4.2.4-A Unified Dashboard Shell + Real Provider Registry
+
+Date: 2026-09-01
+
+Status: `P4_2_PROVIDER_REGISTRY_IMPLEMENTED_DISPATCH_PENDING`
+
+## Owner UX blocker resolved
+
+The owner reported that the Tasks screen appeared as a different application
+shell because the previous nested `NavigationSplitView` rendered the task list
+as a second sidebar. P4.2.4-A removed the nested split view and rewrote the
+Tasks master/detail as a content-area HStack inside the shared page container.
+The primary sidebar is now stable across every section.
+
+## Unified page chrome
+
+`DashboardPageContainer` is the single rendering wrapper used by:
+
+总览 / 任务 / Agents / 提供商 / 额度 / 调度 / 验证 / 历史 / 设置
+
+It enforces identical padding, background, top-baseline, toolbar alignment,
+and empty-state visual language for every section. `DashboardBrowserPanel`
+and `DashboardDetailPanel` are the only place where a list/detail composition
+appears, and they are explicitly subordinate to the primary sidebar.
+
+## Real provider registry
+
+The empty product runtime that previously rendered no providers now exposes
+real GLM / Z.AI and MiniMax CN discovery through the bundled daemon:
+
+```text
+provider_discovery.discover()
+        |
+opencode providers list (ANSI stripped, sanitized)
+        |
+opencode models <family> per PROVIDER_FAMILIES
+        |
+DISCOVERED_FROM_CATALOG / AUTH_FROM_ENV_PRESENCE / AVAILABLE_FOR_CATALOG
+        |
+persisted to provider-registry.json
+        |
+projected through /v1/providers, /v1/providers/status, /v1/providers/refresh
+```
+
+Provider families supported:
+
+- zai-coding-plan (GLM / Z.AI)
+- minimax-cn (MiniMax CN)
+- minimax-cn-coding-plan (MiniMax CN Coding Plan)
+- minimax (MiniMax International)
+- minimax-coding-plan (MiniMax International Coding Plan)
+
+For each provider, the Dashboard renders the discovered model SKUs as
+synthetic execution targets (one per `<provider>/<model>`) with
+`runtime_id=opencode`, `account_id=<provider>`, `enabled=True`. CN vs
+international MiniMax endpoints are exposed via a `region` tag.
+
+## Empty-bootstrap upgrade
+
+Legacy `product-bootstrap-empty-registry-v1` is upgraded in place on the
+first launch of an existing installation. No manual deletion of
+`runtime.json` is required. User-authored registries are preserved.
+
+## Credential safety
+
+- Subprocess is spawned with explicit argv, never a shell.
+- 8 s wall-clock timeout, 256 KB stdout cap per subprocess.
+- ANSI color codes stripped; any string matching `sk-...`,
+  `Bearer ...`, or `AKIA...` is replaced with `<redacted>` before parsing.
+- `assert_sanitized` is applied to every persisted snapshot and every
+  per-provider record. Negative tests with `sk-canary...`,
+  `Bearer canary...`, `AKIAEXAMPLEKEY123` canaries confirm none of them
+  ever survive the pipeline into the runtime registry, the Control API,
+  or Dashboard logs.
+
+## Control API additions
+
+- `GET /v1/providers/status` returns
+  `{discovery_state, last_discovered_at, provider_count,
+  execution_target_count, last_error_code, catalog_snapshot_id,
+  source_method}` with a refresh-coalesced manager under the hood.
+- `POST /v1/providers/refresh` re-runs the credential-safe discovery
+  cycle and returns the new status. Body is optional.
+
+## Test counts at this head
+
+- Python: 272 passed (was 229; +43 for discovery / sanitization / secrets)
+- Swift: 50 passed (was 47; +3 for ProviderDiscoveryStatusView decoding and
+  `testProviderDiscoveryStatusIsLoadedAndRefreshable`)
+- OpenCode: 10/10 contract tests + typecheck pass
+- Xcode host Release build: pass
+- Ruff: clean
+
+## Remaining before full P4.2 acceptance
+
+- Installable WidgetKit `.appex` packaging/signing.
+- Owner visual acceptance on the target Mac (this phase closes the
+  Tasks-shell consistency blocker; the provider registry now displays
+  real content from `opencode models`).
+- P4.2.4-B: owner-initiated execution, OpenCode dispatch, host verifier.
