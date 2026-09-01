@@ -38,6 +38,7 @@ from personal_ai_orchestrator.provider_discovery import (
     discover,
 )
 from personal_ai_orchestrator.provider_registry_store import (
+    RegistryLoadStatus,
     load,
     save,
 )
@@ -54,6 +55,9 @@ class ProviderDiscoveryStatus:
     discovery_state: str
     last_discovered_at: str | None
     provider_count: int
+    configured_family_count: int
+    catalog_discovered_provider_count: int
+    credential_evidence_provider_count: int
     execution_target_count: int
     last_error_code: str | None
     catalog_snapshot_id: str | None
@@ -64,6 +68,9 @@ class ProviderDiscoveryStatus:
             "discovery_state": self.discovery_state,
             "last_discovered_at": self.last_discovered_at,
             "provider_count": self.provider_count,
+            "configured_family_count": self.configured_family_count,
+            "catalog_discovered_provider_count": self.catalog_discovered_provider_count,
+            "credential_evidence_provider_count": self.credential_evidence_provider_count,
             "execution_target_count": self.execution_target_count,
             "last_error_code": self.last_error_code,
             "catalog_snapshot_id": self.catalog_snapshot_id,
@@ -79,6 +86,7 @@ class _RuntimeState:
     last_result: DiscoveryResult | None
     last_status: ProviderDiscoveryStatus
     last_error_code: str | None
+    load_status: RegistryLoadStatus
 
 
 class ProviderRegistryManager:
@@ -127,8 +135,8 @@ class ProviderRegistryManager:
         module's subprocess is never invoked during this step.
         """
 
-        persisted = load(self._runtime_state_root)
-        if persisted is None:
+        load_outcome = load(self._runtime_state_root)
+        if load_outcome.status is RegistryLoadStatus.MISSING:
             return _RuntimeState(
                 registry=_empty_registry(),
                 last_result=None,
@@ -136,13 +144,37 @@ class ProviderRegistryManager:
                     discovery_state=DiscoveryState.PENDING.value,
                     last_discovered_at=None,
                     provider_count=0,
+                    configured_family_count=0,
+                    catalog_discovered_provider_count=0,
+                    credential_evidence_provider_count=0,
                     execution_target_count=0,
                     last_error_code=None,
                     catalog_snapshot_id=None,
                     source_method=None,
                 ),
                 last_error_code=None,
+                load_status=load_outcome.status,
             )
+        if not load_outcome.loaded or load_outcome.persisted is None:
+            return _RuntimeState(
+                registry=_empty_registry(),
+                last_result=None,
+                last_status=ProviderDiscoveryStatus(
+                    discovery_state=DiscoveryState.FAILED.value,
+                    last_discovered_at=None,
+                    provider_count=0,
+                    configured_family_count=0,
+                    catalog_discovered_provider_count=0,
+                    credential_evidence_provider_count=0,
+                    execution_target_count=0,
+                    last_error_code=load_outcome.error_code,
+                    catalog_snapshot_id=None,
+                    source_method="persisted_registry_load",
+                ),
+                last_error_code=load_outcome.error_code,
+                load_status=load_outcome.status,
+            )
+        persisted = load_outcome.persisted
         try:
             result = DiscoveryResult.from_dict(persisted.payload)
         except (KeyError, ValueError, TypeError):
@@ -158,12 +190,16 @@ class ProviderRegistryManager:
                     discovery_state=DiscoveryState.PENDING.value,
                     last_discovered_at=None,
                     provider_count=0,
+                    configured_family_count=0,
+                    catalog_discovered_provider_count=0,
+                    credential_evidence_provider_count=0,
                     execution_target_count=0,
                     last_error_code="PERSISTED_SNAPSHOT_REJECTED",
                     catalog_snapshot_id=None,
                     source_method=None,
                 ),
                 last_error_code="PERSISTED_SNAPSHOT_REJECTED",
+                load_status=RegistryLoadStatus.SANITIZATION_REJECTED,
             )
         try:
             registry = build_registry(result)
@@ -175,18 +211,23 @@ class ProviderRegistryManager:
                     discovery_state=DiscoveryState.PENDING.value,
                     last_discovered_at=None,
                     provider_count=0,
+                    configured_family_count=0,
+                    catalog_discovered_provider_count=0,
+                    credential_evidence_provider_count=0,
                     execution_target_count=0,
                     last_error_code="PERSISTED_REGISTRY_BUILD_FAILED",
                     catalog_snapshot_id=None,
                     source_method=None,
                 ),
                 last_error_code="PERSISTED_REGISTRY_BUILD_FAILED",
+                load_status=RegistryLoadStatus.SANITIZATION_REJECTED,
             )
         return _RuntimeState(
             registry=registry,
             last_result=result,
             last_status=_status_from_result(result),
             last_error_code=persisted.last_error_code,
+            load_status=RegistryLoadStatus.LOADED,
         )
 
     # ------------------------------------------------------------------
@@ -219,6 +260,10 @@ class ProviderRegistryManager:
         with self._lock:
             return self._discovery_cycle_count
 
+    def load_status(self) -> RegistryLoadStatus:
+        with self._lock:
+            return self._state.load_status
+
     def bootstrap_if_empty(self, *, catalog_snapshot_id: str | None) -> bool:
         """Upgrade from the empty-bootstrap snapshot if needed.
 
@@ -246,9 +291,11 @@ class ProviderRegistryManager:
             return False
         with self._lock:
             already_loaded = self._state.last_result is not None
-        if already_loaded:
+            load_status = self._state.load_status
+        if already_loaded or load_status is not RegistryLoadStatus.MISSING:
             return False
-        return self.refresh() is not None
+        self.refresh()
+        return True
 
     def refresh(self) -> ProviderDiscoveryStatus | None:
         """Run a fresh discovery cycle.
@@ -284,6 +331,7 @@ class ProviderRegistryManager:
                         last_result=outcome.result,
                         last_status=status,
                         last_error_code=None,
+                        load_status=RegistryLoadStatus.LOADED,
                     )
                     return status
                 # Failure: surface the error code; keep the previous
@@ -293,6 +341,13 @@ class ProviderRegistryManager:
                     discovery_state=DiscoveryState.FAILED.value,
                     last_discovered_at=_isoformat(self._state.last_status.last_discovered_at),
                     provider_count=self._state.last_status.provider_count,
+                    configured_family_count=self._state.last_status.configured_family_count,
+                    catalog_discovered_provider_count=(
+                        self._state.last_status.catalog_discovered_provider_count
+                    ),
+                    credential_evidence_provider_count=(
+                        self._state.last_status.credential_evidence_provider_count
+                    ),
                     execution_target_count=self._state.last_status.execution_target_count,
                     last_error_code=outcome.error_code,
                     catalog_snapshot_id=self._state.last_status.catalog_snapshot_id,
@@ -315,12 +370,14 @@ def _empty_registry() -> ModelRegistry:
 
 
 def _status_from_result(result: DiscoveryResult) -> ProviderDiscoveryStatus:
-    target_count = sum(len(p.model_skus) for p in result.providers)
     return ProviderDiscoveryStatus(
         discovery_state=result.state.value,
         last_discovered_at=result.discovered_at.isoformat(),
-        provider_count=len(result.providers),
-        execution_target_count=target_count,
+        provider_count=result.provider_count(),
+        configured_family_count=result.configured_family_count,
+        catalog_discovered_provider_count=result.catalog_discovered_provider_count,
+        credential_evidence_provider_count=result.credential_evidence_provider_count,
+        execution_target_count=result.execution_target_count(),
         last_error_code=result.last_error_code,
         catalog_snapshot_id=result.opencode_version,
         source_method=result.source_method,
