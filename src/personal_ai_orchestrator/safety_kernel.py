@@ -542,6 +542,103 @@ class SafetyKernelStore:
             raise
         return self.get_owner_dispatch_by_request_id(request_id)
 
+    def finish_owner_dispatch(
+        self,
+        request_id: str,
+        *,
+        failure_code: str | None = None,
+        failure_reason: str | None = None,
+    ) -> OwnerDispatchRecord:
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get_owner_dispatch_by_request_id(request_id)
+            if current.status in {
+                OwnerDispatchStatus.FINISHED,
+                OwnerDispatchStatus.CANCELLED,
+                OwnerDispatchStatus.BLOCKED,
+            }:
+                self.connection.execute("COMMIT")
+                return current
+            stamp = _now()
+            updated = self.connection.execute(
+                """
+                UPDATE owner_dispatches
+                SET status=?, finished_at=?, failure_code=?, failure_reason=?
+                WHERE request_id=? AND status=?
+                """,
+                (
+                    OwnerDispatchStatus.FINISHED.value,
+                    stamp,
+                    failure_code,
+                    failure_reason,
+                    request_id,
+                    OwnerDispatchStatus.STARTED.value,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("owner dispatch finish lost concurrency race")
+            self._audit(
+                current.task_id,
+                "OWNER_DISPATCH_FINISHED",
+                {
+                    "dispatch_id": current.dispatch_id,
+                    "request_id": request_id,
+                    "execution_target_id": current.execution_target_id,
+                    "failure_code": failure_code,
+                    "failure_reason": failure_reason,
+                },
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_owner_dispatch_by_request_id(request_id)
+
+    def mark_owner_dispatch_cancelled(self, request_id: str) -> OwnerDispatchRecord:
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get_owner_dispatch_by_request_id(request_id)
+            if current.status in {
+                OwnerDispatchStatus.FINISHED,
+                OwnerDispatchStatus.CANCELLED,
+                OwnerDispatchStatus.BLOCKED,
+            }:
+                self.connection.execute("COMMIT")
+                return current
+            stamp = _now()
+            updated = self.connection.execute(
+                """
+                UPDATE owner_dispatches
+                SET status=?, finished_at=?, failure_code=?, failure_reason=?
+                WHERE request_id=? AND status IN (?,?)
+                """,
+                (
+                    OwnerDispatchStatus.CANCELLED.value,
+                    stamp,
+                    "OWNER_CANCELLED",
+                    "owner cancelled the dispatched worker execution",
+                    request_id,
+                    OwnerDispatchStatus.RESERVED.value,
+                    OwnerDispatchStatus.STARTED.value,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("owner dispatch cancellation lost concurrency race")
+            self._audit(
+                current.task_id,
+                "OWNER_DISPATCH_CANCELLED",
+                {
+                    "dispatch_id": current.dispatch_id,
+                    "request_id": request_id,
+                    "execution_target_id": current.execution_target_id,
+                },
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_owner_dispatch_by_request_id(request_id)
+
     def start_dispatched_worker(
         self,
         *,

@@ -34,8 +34,14 @@ def validate_execution_target_launch(
     *,
     execution_target_id: str,
     runtime_available: bool,
+    execution_evidence_journal: Any = None,
 ) -> None:
-    """Fail closed unless the selected target is actually launchable."""
+    """Fail closed unless the selected target is actually launchable.
+
+    ``execution_verified`` defaults to False everywhere; the only
+    launch-authorizing alternative is durable evidence that a REAL worker
+    invocation on this exact target previously succeeded.
+    """
 
     try:
         target = registry.execution_targets[execution_target_id]
@@ -44,7 +50,15 @@ def validate_execution_target_launch(
     if not target.enabled:
         raise RuntimeError("execution target is disabled")
     if not target.execution_verified:
-        raise RuntimeError("execution target has not been runtime-verified")
+        journal = execution_evidence_journal
+        evidence_ok = False
+        if journal is not None:
+            try:
+                evidence_ok = journal.target_has_verified_evidence(execution_target_id)
+            except Exception:
+                evidence_ok = False
+        if not evidence_ok:
+            raise RuntimeError("execution target has not been runtime-verified")
     if not runtime_available:
         raise RuntimeError("execution runtime is unavailable")
 

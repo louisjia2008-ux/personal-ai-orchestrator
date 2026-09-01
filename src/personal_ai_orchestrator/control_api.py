@@ -30,7 +30,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from personal_ai_orchestrator.activation import ActiveRoutingGate
 from personal_ai_orchestrator.approval import ApprovalAuthority
 from personal_ai_orchestrator.execution_controller import validate_execution_target_launch
+from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
 from personal_ai_orchestrator.model_registry import ModelRegistry
+from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
 from personal_ai_orchestrator.provider_registry_manager import (
     ProviderRegistryManager,
 )
@@ -116,6 +118,10 @@ class DispatchTaskView(_ViewModel):
 class OwnerExecutionSettingsView(_ViewModel):
     owner_initiated_execution_enabled: bool
     production_active: str
+
+
+class OwnerExecutionSettingsUpdateRequest(_ViewModel):
+    owner_initiated_execution_enabled: bool
 
 
 class RunView(_ViewModel):
@@ -320,7 +326,13 @@ class ControlPlaneService:
     verification_journal: VerificationEvidenceJournal | None = None
     quota_availability_journal: QuotaAvailabilityJournal | None = None
     provider_registry_manager: ProviderRegistryManager | None = None
-    owner_initiated_execution_enabled: bool = False
+    owner_execution: OwnerExecutionSettings = field(default_factory=OwnerExecutionSettings)
+    execution_evidence_journal: ExecutionEvidenceJournal | None = None
+    dispatch_executor: Any = None
+
+    @property
+    def owner_initiated_execution_enabled(self) -> bool:
+        return self.owner_execution.enabled
 
     def open_request(self) -> ControlPlaneService:
         """Return a request-local service bound to a fresh SQLite connection."""
@@ -335,7 +347,9 @@ class ControlPlaneService:
             verification_journal=self.verification_journal,
             quota_availability_journal=self.quota_availability_journal,
             provider_registry_manager=self.provider_registry_manager,
-            owner_initiated_execution_enabled=self.owner_initiated_execution_enabled,
+            owner_execution=self.owner_execution,
+            execution_evidence_journal=self.execution_evidence_journal,
+            dispatch_executor=self.dispatch_executor,
         )
 
     @staticmethod
@@ -427,6 +441,16 @@ class ControlPlaneService:
         if task.state is TaskState.CANCELLED:
             return CancelView(task=_task_view(task), cancelled_now=False)
         if task.state is TaskState.RUNNING:
+            executor = self.dispatch_executor
+            if executor is not None and executor.execution_supervisor.get(task_id) is not None:
+                cancelled = executor.cancel_active(task_id)
+                task = self.store.get_task(task_id)
+                if task.state is TaskState.CANCELLED:
+                    return CancelView(task=_task_view(task), cancelled_now=cancelled)
+                if task.state is not TaskState.RUNNING:
+                    # The exact child died while cancellation was in
+                    # flight; the worker-exit path owns the outcome.
+                    return CancelView(task=_task_view(task), cancelled_now=False)
             raise ControlPlaneError(
                 409,
                 "running_task_cancellation_requires_execution_supervisor",
@@ -494,6 +518,7 @@ class ControlPlaneService:
                 effective_registry,
                 execution_target_id=request.execution_target_id,
                 runtime_available=self.runtime_availability.get(request.execution_target_id, False),
+                execution_evidence_journal=self.execution_evidence_journal,
             )
         except RuntimeError as error:
             self.store.mark_owner_dispatch_blocked(
@@ -510,13 +535,28 @@ class ControlPlaneService:
                 expected_version=task.state_version,
                 reason="owner initiated execution dispatch reserved",
             )
+        if self.dispatch_executor is not None:
+            thread = threading.Thread(
+                target=self.dispatch_executor.execute,
+                args=(request.request_id,),
+                name=f"owner-dispatch-{request.request_id}",
+                daemon=True,
+            )
+            thread.start()
         return self._dispatch_view(dispatch)
 
     def owner_execution_settings(self) -> OwnerExecutionSettingsView:
         return OwnerExecutionSettingsView(
-            owner_initiated_execution_enabled=self.owner_initiated_execution_enabled,
+            owner_initiated_execution_enabled=self.owner_execution.enabled,
             production_active=self.active_status().production_active,
         )
+
+    def update_owner_execution_settings(
+        self, payload: dict[str, Any]
+    ) -> OwnerExecutionSettingsView:
+        request = OwnerExecutionSettingsUpdateRequest.model_validate(payload)
+        self.owner_execution.set_enabled(request.owner_initiated_execution_enabled)
+        return self.owner_execution_settings()
 
     def get_owner_dispatch(self, request_id: str) -> DispatchTaskView:
         self._validate_identifier("request_id", request_id)
@@ -781,12 +821,20 @@ class ControlPlaneService:
                     confidence=evidence.confidence.value,
                     sanitized_reason_code=evidence.sanitized_reason_code,
                 )
+        execution_verified = target.execution_verified
+        if not execution_verified and self.execution_evidence_journal is not None:
+            try:
+                execution_verified = (
+                    self.execution_evidence_journal.target_has_verified_evidence(target.id)
+                )
+            except Exception:
+                execution_verified = False
         return ExecutionTargetHealthView(
             execution_target_id=target.id,
             model_sku_id=target.model_sku_id,
             runtime_id=target.runtime_id,
             enabled=target.enabled,
-            execution_verified=target.execution_verified,
+            execution_verified=execution_verified,
             runtime_available=self.runtime_availability.get(target.id),
             observed_availability=observed,
         )
@@ -1172,10 +1220,16 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                 return
 
             if rest == ("settings", "owner-execution"):
-                if method != "GET":
-                    self._json(405, {"error": "method_not_allowed"})
+                if method == "GET":
+                    self._view(200, request_service.owner_execution_settings())
                     return
-                self._view(200, request_service.owner_execution_settings())
+                if method == "PUT":
+                    payload = self._read_json()
+                    if payload is None:
+                        return
+                    self._view(200, request_service.update_owner_execution_settings(payload))
+                    return
+                self._json(405, {"error": "method_not_allowed"})
                 return
 
             if rest == ("providers",):

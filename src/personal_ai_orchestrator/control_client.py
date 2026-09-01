@@ -162,6 +162,14 @@ class ControlPlaneClient:
             OwnerExecutionSettingsView,
         )
 
+    def set_owner_execution_enabled(self, enabled: bool) -> OwnerExecutionSettingsView:
+        rendered = self._request(
+            "PUT",
+            "/v1/settings/owner-execution",
+            payload={"owner_initiated_execution_enabled": bool(enabled)},
+        )
+        return OwnerExecutionSettingsView.model_validate(rendered)
+
     def get_dispatch(self, request_id: str) -> DispatchTaskView:
         return self._get(f"/v1/dispatches/{request_id}", DispatchTaskView)  # type: ignore[return-value]
 
