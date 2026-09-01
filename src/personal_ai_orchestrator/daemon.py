@@ -3,17 +3,26 @@
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import threading
 from pathlib import Path
 
 from personal_ai_orchestrator.activation import ActiveRoutingGate
 from personal_ai_orchestrator.control_api import ControlPlaneServer, ControlPlaneService
+from personal_ai_orchestrator.dispatch_executor import (
+    DispatchExecutorConfig,
+    OwnerDispatchExecutor,
+)
 from personal_ai_orchestrator.execution_controller import reconcile_workspace_truth
+from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
 from personal_ai_orchestrator.local_api import serve
+from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
 from personal_ai_orchestrator.policy_snapshot import PolicySnapshotJournal
 from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryManager
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
+from personal_ai_orchestrator.quota_collectors.minimax import MiniMaxQuotaCollector
+from personal_ai_orchestrator.quota_collectors.zai import ZAIQuotaCollector
 from personal_ai_orchestrator.routing_service import RoutingService
 from personal_ai_orchestrator.runtime_config import RuntimeConfig
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore
@@ -78,7 +87,40 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="serve only the typed UDS control plane; skip the loopback routing API",
     )
+    parser.add_argument(
+        "--execution-repo",
+        type=Path,
+        default=None,
+        help="host-owned repository policy enabling owner-dispatch worker execution",
+    )
+    parser.add_argument(
+        "--worktree-root",
+        type=Path,
+        default=None,
+        help="managed root for task worktrees (defaults under runtime state root)",
+    )
     return parser.parse_args(argv)
+
+
+def default_quota_collectors() -> dict[str, object]:
+    """Collectors keyed by discovery provider family.
+
+    Tokens come ONLY from the operator environment. auth.json is never
+    read; when a token is absent the collector reports AUTH_REQUIRED and
+    quota admission fails closed or records UNKNOWN truthfully.
+    """
+
+    collectors: dict[str, object] = {}
+    zai_token = os.environ.get("ZAI_API_KEY")
+    if zai_token:
+        collectors["zai-coding-plan"] = ZAIQuotaCollector(authorization_token=zai_token)
+    minimax_token = os.environ.get("MINIMAX_API_KEY")
+    if minimax_token:
+        collectors["minimax-coding-plan"] = MiniMaxQuotaCollector(bearer_token=minimax_token)
+        collectors["minimax-cn-coding-plan"] = MiniMaxQuotaCollector(
+            bearer_token=minimax_token
+        )
+    return collectors
 
 
 def build_control_service(
@@ -87,14 +129,45 @@ def build_control_service(
     state_db: Path,
     runtime_state_root: Path,
     provider_registry_manager: ProviderRegistryManager | None = None,
+    execution_repo: Path | None = None,
+    worktree_root: Path | None = None,
+    opencode_bin: str = "opencode",
+    quota_collectors: dict[str, object] | None = None,
+    verifier_profile=None,
 ) -> ControlPlaneService:
-    """Build the read-mostly control-plane facade over the same durable truth."""
+    """Build the control-plane facade over the same durable truth.
+
+    When ``execution_repo`` is provided (host-owned repository policy),
+    owner dispatch executes real isolated worktree workers.
+    """
 
     registry = (
         provider_registry_manager.registry()
         if provider_registry_manager is not None
         else config.registry
     )
+    execution_evidence_journal = ExecutionEvidenceJournal(runtime_state_root)
+    executor = None
+    if execution_repo is not None:
+        executor = OwnerDispatchExecutor(
+            state_db=state_db,
+            config=DispatchExecutorConfig(
+                repo_path=execution_repo,
+                worktree_root=worktree_root
+                or (runtime_state_root / "worktrees"),
+                opencode_bin=opencode_bin,
+                verifier_profile=verifier_profile,
+            ),
+            registry_provider=lambda: (
+                provider_registry_manager.registry()
+                if provider_registry_manager is not None
+                else config.registry
+            ),
+            verification_journal=VerificationEvidenceJournal(runtime_state_root),
+            execution_evidence_journal=execution_evidence_journal,
+            quota_availability_journal=QuotaAvailabilityJournal(runtime_state_root),
+            quota_collectors=quota_collectors or default_quota_collectors(),
+        )
     return ControlPlaneService(
         registry=registry,
         store=SafetyKernelStore(state_db),
@@ -103,7 +176,11 @@ def build_control_service(
         verification_journal=VerificationEvidenceJournal(runtime_state_root),
         quota_availability_journal=QuotaAvailabilityJournal(runtime_state_root),
         provider_registry_manager=provider_registry_manager,
-        owner_initiated_execution_enabled=config.owner_initiated_execution_enabled,
+        owner_execution=OwnerExecutionSettings(
+            runtime_state_root / "owner-execution.json"
+        ),
+        execution_evidence_journal=execution_evidence_journal,
+        dispatch_executor=executor,
     )
 
 
@@ -139,6 +216,8 @@ def main(
             state_db=args.state_db,
             runtime_state_root=args.runtime_state_root,
             provider_registry_manager=provider_registry_manager,
+            execution_repo=args.execution_repo,
+            worktree_root=args.worktree_root,
         )
         control_server = ControlPlaneServer(control_service, args.control_socket)
         control_server.start_background()

@@ -41,6 +41,7 @@ from personal_ai_orchestrator.model_registry import (
     QuotaWindowKind,
     QuotaWindowSnapshot,
 )
+from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
 from personal_ai_orchestrator.quota_availability import (
     QuotaAvailabilityJournal,
     unknown_availability,
@@ -148,7 +149,7 @@ def harness(tmp_path):
         runtime_availability={"m3-sub": True},
         verification_journal=VerificationEvidenceJournal(tmp_path),
         quota_availability_journal=availability,
-        owner_initiated_execution_enabled=True,
+        owner_execution=OwnerExecutionSettings(tmp_path / "owner-execution.json", initial=True),
     )
     server = ControlPlaneServer(service, socket_path)
     server.start_background()
@@ -272,7 +273,7 @@ def test_owner_dispatch_accepts_verified_target_and_is_idempotent(harness):
 
 
 def test_owner_dispatch_fails_closed_when_owner_execution_setting_is_off(harness):
-    harness.service.owner_initiated_execution_enabled = False
+    harness.service.owner_execution.set_enabled(False)
     task = _submit(harness)
 
     with pytest.raises(ControlPlaneError) as error:

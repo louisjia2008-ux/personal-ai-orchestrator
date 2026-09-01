@@ -9,6 +9,7 @@ from personal_ai_orchestrator.daemon import (
     load_runtime_config,
 )
 from personal_ai_orchestrator.model_registry import ModelRegistry
+from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
 from personal_ai_orchestrator.runtime_config import RuntimeConfig
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
 from personal_ai_orchestrator.scheduler import TaskProfile
@@ -94,7 +95,6 @@ def test_owner_execution_toggle_is_separate_from_production_active(tmp_path: Pat
     config = RuntimeConfig(
         catalog_snapshot_id="catalog-empty",
         registry=ModelRegistry(),
-        owner_initiated_execution_enabled=True,
     )
     service = build_control_service(
         config=config,
@@ -103,11 +103,24 @@ def test_owner_execution_toggle_is_separate_from_production_active(tmp_path: Pat
     )
     try:
         settings = service.owner_execution_settings()
-        assert settings.owner_initiated_execution_enabled is True
+        assert settings.owner_initiated_execution_enabled is False
         assert settings.production_active == "DISABLED_BY_DESIGN"
         assert service.active_status().authorized is False
+        service.owner_execution.set_enabled(True)
+        assert service.owner_execution_settings().owner_initiated_execution_enabled is True
+        assert service.active_status().authorized is False
+        assert service.active_status().production_active == "DISABLED_BY_DESIGN"
     finally:
         service.store.close()
+
+
+def test_owner_execution_setting_fails_closed_on_corrupt_state(tmp_path: Path) -> None:
+    (tmp_path / "runtime-state").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "runtime-state" / "owner-execution.json").write_text(
+        "not json at all", encoding="utf-8"
+    )
+    settings = OwnerExecutionSettings(tmp_path / "runtime-state" / "owner-execution.json")
+    assert settings.enabled is False
 
 
 def test_runtime_config_rejects_unknown_target_refs() -> None:

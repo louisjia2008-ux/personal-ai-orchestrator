@@ -1,0 +1,167 @@
+"""Durable execution-verification evidence for launch surfaces.
+
+No execution target may claim ``execution_verified=True`` without a durable
+evidence record produced by a real worker invocation observed by the host.
+A failed call must never establish VERIFIED.
+"""
+
+from __future__ import annotations
+
+import os
+import tempfile
+from datetime import UTC, datetime
+from enum import StrEnum
+from hashlib import sha256
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class ExecutionVerificationOutcome(StrEnum):
+    VERIFIED = "VERIFIED"
+    AUTH_FAILED = "AUTH_FAILED"
+    QUOTA_BLOCKED = "QUOTA_BLOCKED"
+    RUNTIME_UNAVAILABLE = "RUNTIME_UNAVAILABLE"
+    UNKNOWN = "UNKNOWN"
+
+
+class ExecutionVerificationMethod(StrEnum):
+    REAL_WORKER_INVOCATION = "REAL_WORKER_INVOCATION"
+
+
+class ExecutionVerificationEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    evidence_id: str = Field(min_length=1)
+    provider_id: str = Field(min_length=1)
+    execution_target_id: str = Field(min_length=1)
+    model_sku_id: str = Field(min_length=1)
+    observed_at: datetime
+    verification_method: ExecutionVerificationMethod
+    result: ExecutionVerificationOutcome
+    reason_code: str = Field(min_length=1)
+
+    @property
+    def establishes_verified(self) -> bool:
+        return self.result is ExecutionVerificationOutcome.VERIFIED
+
+
+def build_execution_evidence(
+    *,
+    provider_id: str,
+    execution_target_id: str,
+    model_sku_id: str,
+    observed_at: datetime | None = None,
+    result: ExecutionVerificationOutcome,
+    reason_code: str,
+    verification_method: ExecutionVerificationMethod = (
+        ExecutionVerificationMethod.REAL_WORKER_INVOCATION
+    ),
+) -> ExecutionVerificationEvidence:
+    stamp = observed_at or datetime.now(UTC)
+    payload = {
+        "provider_id": provider_id,
+        "execution_target_id": execution_target_id,
+        "model_sku_id": model_sku_id,
+        "observed_at": stamp.isoformat(),
+        "verification_method": verification_method.value,
+        "result": result.value,
+        "reason_code": reason_code,
+    }
+    digest = sha256(
+        "".join(f"{key}={payload[key]}" for key in sorted(payload)).encode("utf-8")
+    ).hexdigest()
+    return ExecutionVerificationEvidence(
+        evidence_id=f"exec-verify-{digest[:24]}",
+        provider_id=provider_id,
+        execution_target_id=execution_target_id,
+        model_sku_id=model_sku_id,
+        observed_at=stamp,
+        verification_method=verification_method,
+        result=result,
+        reason_code=reason_code,
+    )
+
+
+class ExecutionEvidenceJournal:
+    """Append-only store of execution-verification evidence records."""
+
+    def __init__(self, root: Path) -> None:
+        self.directory = root / "execution-evidence"
+
+    def path_for(self, evidence_id: str) -> Path:
+        if not evidence_id or any(part in evidence_id for part in ("/", "\\", "..")):
+            raise ValueError("unsafe evidence_id")
+        return self.directory / f"{evidence_id}.json"
+
+    def append(self, evidence: ExecutionVerificationEvidence) -> Path:
+        target = self.path_for(evidence.evidence_id)
+        rendered = evidence.model_dump_json(indent=2) + "\n"
+        if target.exists():
+            if target.read_text(encoding="utf-8") != rendered:
+                raise ValueError("evidence_id already has different content")
+            return target
+        self.directory.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=self.directory)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(rendered)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_name, target)
+        except Exception:
+            try:
+                os.unlink(temp_name)
+            except FileNotFoundError:
+                pass
+            raise
+        return target
+
+    def load(self, evidence_id: str) -> ExecutionVerificationEvidence | None:
+        path = self.path_for(evidence_id)
+        if not path.exists():
+            return None
+        return ExecutionVerificationEvidence.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+
+    def latest_for_target(
+        self,
+        execution_target_id: str,
+    ) -> ExecutionVerificationEvidence | None:
+        if not self.directory.exists():
+            return None
+        latest: ExecutionVerificationEvidence | None = None
+        latest_key: tuple[datetime, int] | None = None
+        for path in sorted(self.directory.glob("exec-verify-*.json")):
+            try:
+                evidence = ExecutionVerificationEvidence.model_validate_json(
+                    path.read_text(encoding="utf-8")
+                )
+            except Exception:
+                continue
+            if evidence.execution_target_id != execution_target_id:
+                continue
+            try:
+                mtime_ns = path.stat().st_mtime_ns
+            except OSError:
+                mtime_ns = 0
+            key = (evidence.observed_at, mtime_ns)
+            if latest_key is None or key > latest_key:
+                latest = evidence
+                latest_key = key
+        return latest
+
+    def target_has_verified_evidence(self, execution_target_id: str) -> bool:
+        latest = self.latest_for_target(execution_target_id)
+        return latest is not None and latest.establishes_verified
+
+
+__all__ = [
+    "ExecutionEvidenceJournal",
+    "ExecutionVerificationEvidence",
+    "ExecutionVerificationMethod",
+    "ExecutionVerificationOutcome",
+    "build_execution_evidence",
+]
