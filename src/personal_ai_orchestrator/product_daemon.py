@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 from personal_ai_orchestrator.daemon import main as daemon_main
+from personal_ai_orchestrator.legacy_migration import migrate_legacy_state
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryManager
 from personal_ai_orchestrator.provider_registry_store import (
@@ -125,6 +126,14 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:
         print("pao-daemon: runtime_config_invalid", file=sys.stderr)
         return 78
+    # §11 legacy state migration: idempotent, non-destructive, never
+    # copies credentials or authority surfaces; every outcome is
+    # observable in runtime-state/migration/legacy-migration-v1.json.
+    legacy_home = args.home if args.home is not None else Path.home()
+    migrate_legacy_state(
+        legacy_home / ".personal-ai-orchestrator",
+        layout.app_support_root,
+    )
     # P4.2.4-A.1 single-startup-contract: build the manager once here
     # so the bootstrap upgrade (cold first launch) and the in-memory
     # rehydration (subsequent boots) happen in the same place. The
