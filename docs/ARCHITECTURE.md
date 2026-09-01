@@ -237,6 +237,32 @@ from the actual execution target, and `UNKNOWN` quota never renders as a numeric
 percentage. Production ACTIVE remains `DISABLED_BY_DESIGN` unless the daemon activation
 authority reports otherwise; the app has no enable, force, or override button.
 
+### P4.2.4-B app and worker contract
+
+The native macOS app is the owner control surface. A normal owner should be able to create
+a task, watch execution progress, stop a running task, inspect changed files, and read
+verification status without opening OpenCode directly.
+
+```text
+Personal AI Orchestrator
+  = control plane + scheduler + safety authority + observability UI
+
+OpenCode
+  = execution harness
+
+GLM / MiniMax / Codex / future models
+  = compute workers
+
+Host verifier
+  = completion authority
+```
+
+OpenCode output is observable evidence, not authority. The app may show a read-only
+execution console with bounded, sanitized worker metadata and task events, but it must not
+offer an interactive shell for normal operation and must never treat model prose such as
+`COMPLETE` as `VERIFIED`. Only the daemon-owned verifier and Safety Kernel transitions can
+advance task authority.
+
 ### P4.2.4-A real provider registry
 
 The bundled daemon owns a dynamic `ProviderRegistryManager` that performs

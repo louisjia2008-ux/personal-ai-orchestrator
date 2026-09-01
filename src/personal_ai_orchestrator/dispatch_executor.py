@@ -35,6 +35,7 @@ import asyncio
 import hashlib
 import os
 import secrets
+import shutil
 import subprocess
 import threading
 from collections.abc import Callable
@@ -291,16 +292,18 @@ class OwnerDispatchExecutor:
 
         # Defense in depth: re-validate launchability against the live
         # registry and durable execution evidence even though the control
-        # plane already gated the dispatch reservation.
+        # plane already gated the dispatch reservation. Runtime
+        # availability is derived from the actual worker binary surface.
         try:
             validate_execution_target_launch(
                 self._registry_provider(),
                 execution_target_id=dispatch.execution_target_id,
-                runtime_available=True,
+                runtime_available=shutil.which(self.config.opencode_bin) is not None,
                 execution_evidence_journal=self._execution_evidence_journal,
             )
         except RuntimeError as error:
-            store.mark_owner_dispatch_blocked(
+            self._fail_pre_worker(
+                store,
                 request_id,
                 failure_code="EXECUTION_TARGET_NOT_LAUNCHABLE",
                 failure_reason=str(error),
@@ -309,7 +312,6 @@ class OwnerDispatchExecutor:
             return
 
         # -- worktree ----------------------------------------------------
-        acquired_writer = False
         worktree, failure = self._prepare_worktree(store, dispatch)
         if worktree is None:
             self._fail_pre_worker(
@@ -325,7 +327,6 @@ class OwnerDispatchExecutor:
         writer_token = f"writer-{dispatch.dispatch_id}-{secrets.token_hex(8)}"
         try:
             store.acquire_writer(dispatch.task_id, writer_token)
-            acquired_writer = True
         except Exception:
             self._fail_pre_worker(
                 store,
@@ -337,13 +338,20 @@ class OwnerDispatchExecutor:
             return
 
         # -- quota admission --------------------------------------------
-        admission = self._admit_quota(store, dispatch)
-        if not admission.admitted:
+        try:
+            admission = self._admit_quota(store, dispatch)
+        except Exception:
+            admission = None
+        if admission is None or not admission.admitted:
             self._fail_pre_worker(
                 store,
                 request_id,
-                writer_token=writer_token if acquired_writer else None,
-                failure_code=admission.failure_code or "QUOTA_ADMISSION_FAILED",
+                writer_token=writer_token,
+                failure_code=(
+                    admission.failure_code
+                    if admission is not None and admission.failure_code
+                    else "QUOTA_ADMISSION_FAILED"
+                ),
                 failure_reason="quota admission blocked the billable launch",
             )
             store.close()
@@ -443,6 +451,18 @@ class OwnerDispatchExecutor:
                 exit_code == 0 and next_state is TaskState.WORKER_FINISHED
             )
         except asyncio.CancelledError:
+            # Loop shutdown/cancellation must never strand a live child,
+            # a RUNNING task or the writer lock. Repair synchronously
+            # (no awaits that could re-cancel), then propagate.
+            self._emergency_repair(
+                store,
+                request_id,
+                dispatch,
+                supervised,
+                run_id,
+                writer_token,
+                cancelled=True,
+            )
             raise
         except TimeoutError:
             exit_code = await self._supervisor.cancel(
@@ -469,6 +489,28 @@ class OwnerDispatchExecutor:
                 pass
             if task_now.state is TaskState.CANCELLED:
                 store.mark_owner_dispatch_cancelled(request_id)
+            else:
+                store.finish_owner_dispatch(
+                    request_id,
+                    failure_code=f"TASK_{task_now.state.value}",
+                    failure_reason=(
+                        "task finalized concurrently during worker execution"
+                    ),
+                )
+            store.close()
+            return
+        except Exception as error:
+            # Final executor safety net after RUNNING was granted: kill
+            # the exact child and fail the run/task/dispatch/lock closed.
+            self._emergency_repair(
+                store,
+                request_id,
+                dispatch,
+                supervised,
+                run_id,
+                writer_token,
+                error=error,
+            )
             store.close()
             return
         finally:
@@ -516,8 +558,12 @@ class OwnerDispatchExecutor:
                 next_state = TaskState.BLOCKED
 
         # -- main repo immutability --------------------------------------
-        main_after = main_repo_fingerprint(self.config.repo_path)
-        main_unchanged = main_before == main_after
+        try:
+            main_after = main_repo_fingerprint(self.config.repo_path)
+            main_unchanged = main_before == main_after
+        except Exception:
+            main_after = dict(main_before)
+            main_unchanged = False
 
         # -- evidence + lock release -------------------------------------
         verified = next_state is TaskState.VERIFIED
@@ -546,7 +592,10 @@ class OwnerDispatchExecutor:
                 else f"WORKER_OUTCOME_{next_state.value}"
             ),
         )
-        self._execution_evidence_journal.append(evidence)
+        try:
+            self._execution_evidence_journal.append(evidence)
+        except Exception:
+            pass
 
         try:
             store.release_writer(dispatch.task_id, writer_token)
@@ -562,23 +611,26 @@ class OwnerDispatchExecutor:
                 failure_code=failure_code,
                 failure_reason=None if verified else f"task ended in {next_state.value}",
             )
-        store._audit(
-            dispatch.task_id,
-            "OWNER_DISPATCH_COMPLETED",
-            {
-                "dispatch_id": dispatch.dispatch_id,
-                "request_id": request_id,
-                "run_id": run_id,
-                "final_state": next_state.value,
-                "execution_evidence_id": evidence.evidence_id,
-                "quota_state": admission.evidence.state.value,
-                "quota_confidence": admission.evidence.confidence.value,
-                "main_head_before": main_before["head"],
-                "main_head_after": main_after["head"],
-                "main_repo_unchanged": main_unchanged,
-                "worktree_path": str(worktree.worktree_path),
-            },
-        )
+        try:
+            store._audit(
+                dispatch.task_id,
+                "OWNER_DISPATCH_COMPLETED",
+                {
+                    "dispatch_id": dispatch.dispatch_id,
+                    "request_id": request_id,
+                    "run_id": run_id,
+                    "final_state": next_state.value,
+                    "execution_evidence_id": evidence.evidence_id,
+                    "quota_state": admission.evidence.state.value,
+                    "quota_confidence": admission.evidence.confidence.value,
+                    "main_head_before": main_before["head"],
+                    "main_head_after": main_after["head"],
+                    "main_repo_unchanged": main_unchanged,
+                    "worktree_path": str(worktree.worktree_path),
+                },
+            )
+        except Exception:
+            pass
         store.close()
 
     def cancel_active(self, task_id: str, *, timeout: float = 60.0) -> bool:
@@ -632,6 +684,61 @@ class OwnerDispatchExecutor:
     # ------------------------------------------------------------------
     # internals
     # ------------------------------------------------------------------
+
+    def _emergency_repair(
+        self,
+        store: SafetyKernelStore,
+        request_id: str,
+        dispatch: OwnerDispatchRecord,
+        supervised: SupervisedProcess,
+        run_id: str,
+        writer_token: str,
+        *,
+        cancelled: bool = False,
+        error: BaseException | None = None,
+    ) -> None:
+        """Last-resort fail-closed repair after RUNNING was granted.
+
+        Kills the exact supervised child, closes the run row, blocks the
+        task, releases the writer lock and blocks the dispatch. Every
+        step is best-effort so one broken step cannot skip the rest.
+        Synchronous by design so it also works during loop teardown.
+        """
+
+        self.execution_supervisor.unregister(dispatch.task_id)
+        self._supervisor.emergency_kill(supervised)
+        try:
+            task = store.get_task(dispatch.task_id)
+            if task.state is TaskState.RUNNING:
+                run = store.connection.execute(
+                    "SELECT status FROM runs WHERE run_id=?", (run_id,)
+                ).fetchone()
+                if run is not None and run["status"] == "RUNNING":
+                    store.finish_run(
+                        run_id, status="FAILED", result={"emergency_repair": True}
+                    )
+                store.transition_task(
+                    dispatch.task_id,
+                    TaskState.BLOCKED,
+                    expected_version=task.state_version,
+                    reason="executor emergency repair after internal error",
+                )
+        except Exception:
+            pass
+        try:
+            store.release_writer(dispatch.task_id, writer_token)
+        except Exception:
+            pass
+        try:
+            store.mark_owner_dispatch_blocked(
+                request_id,
+                failure_code="EXECUTOR_INTERNAL_ERROR",
+                failure_reason=(
+                    type(error).__name__ if error is not None else "CANCELLED"
+                ),
+            )
+        except Exception:
+            pass
 
     def _open_store(self) -> SafetyKernelStore:
         return self._store_factory()

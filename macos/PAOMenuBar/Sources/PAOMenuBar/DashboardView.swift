@@ -389,6 +389,9 @@ private struct TasksDashboard: View {
                 onCopyTaskId: { Pasteboard.copy(selectedTaskId) },
                 onReload: {
                     Task { await store.loadTaskDetail(taskId: selectedTaskId) }
+                },
+                onStop: {
+                    Task { await store.cancel(taskId: selectedTaskId) }
                 }
             )
         } else {
@@ -528,7 +531,7 @@ private struct SelectedTaskDetailDashboard: View {
                 }
             }
             .pickerStyle(.menu)
-            if let selectedTaskId {
+            if selectedTaskId != nil {
                 Text(L10n.pickerChangeHint)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -584,10 +587,9 @@ private struct SelectedTaskDetailDashboard: View {
                 title: mode == .routing ? L10n.routingTitle : L10n.verificationTitle,
                 symbol: mode == .routing ? "point.topleft.down.curvedto.point.bottomright.up" : "checkmark.seal",
                 message: mode == .routing ? L10n.routingNeedsTask : L10n.verificationNeedsTask,
-                hint: L10n.taskContextEmptyHint
-            ) {
-                Button(L10n.newTask, action: onNewTask)
-            }
+                hint: L10n.taskContextEmptyHint,
+                action: onNewTask
+            )
         } else {
             EmptyStateView(
                 title: mode == .routing ? L10n.routingTitle : L10n.verificationTitle,
@@ -1143,52 +1145,26 @@ private struct TaskDetailPanel: View {
     let selectedTaskId: String?
     let onCopyTaskId: () -> Void
     let onReload: () -> Void
+    let onStop: () -> Void
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if let detail {
-                    DashboardCard(title: L10n.taskDetail, symbol: "doc.text.magnifyingglass") {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(detail.task.taskId)
-                                .font(.system(.headline, design: .monospaced))
-                                .textSelection(.enabled)
-                            Spacer()
-                            StatusBadge(text: detail.task.state, kind: detail.task.state == "BLOCKED" ? .bad : .neutral)
-                        }
-                        Text(detail.task.intent)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text("\(detail.task.createdAt) -> \(detail.task.updatedAt)")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                        HStack(spacing: 8) {
-                            Button {
-                                onCopyTaskId()
-                            } label: {
-                                Label(L10n.copyTaskId, systemImage: "doc.on.doc")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .keyboardShortcut("c", modifiers: [.command, .option])
-                            .help(L10n.copyTaskIdHint)
-
-                            Button {
-                                onReload()
-                            } label: {
-                                Label(L10n.reload, systemImage: "arrow.clockwise")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .keyboardShortcut("r", modifiers: [.command, .option])
-                            .help(L10n.reloadHint)
-                        }
-                    }
+                    TaskSummaryPanel(
+                        detail: detail,
+                        onCopyTaskId: onCopyTaskId,
+                        onReload: onReload,
+                        onStop: onStop
+                    )
+                    ProgressPanel(detail: detail)
+                    LiveActivityPanel(detail: detail)
+                    ChangesPanel(detail: detail)
+                    TestsVerificationPanel(detail: detail)
                     RoutingPanel(detail: detail)
-                    VerificationPanel(detail: detail)
                     OwnerDispatchPanel(detail: detail)
-                    DashboardCard(title: L10n.history, symbol: "clock") {
-                        EventList(events: detail.events)
-                    }
+                    AdvancedDetailsPanel(detail: detail)
+                    RawWorkerConsolePanel(detail: detail)
                 } else {
                     EmptyStateView(
                         title: L10n.taskDetail,
@@ -1199,6 +1175,189 @@ private struct TaskDetailPanel: View {
                 }
             }
             .padding(20)
+        }
+    }
+}
+
+private struct TaskSummaryPanel: View {
+    let detail: TaskDetailView
+    let onCopyTaskId: () -> Void
+    let onReload: () -> Void
+    let onStop: () -> Void
+
+    private var currentPhase: String {
+        ExecutionPhase.derive(from: detail).first(where: { $0.isCurrent })?.title ?? "Preparing"
+    }
+
+    private var providerModel: String {
+        detail.runs.last?.workerId
+            ?? detail.routing?.selectedExecutionTargetId
+            ?? "Auto"
+    }
+
+    var body: some View {
+        DashboardCard(title: "Summary", symbol: "doc.text.magnifyingglass") {
+            HStack(alignment: .firstTextBaseline) {
+                Text(detail.task.intent)
+                    .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                StatusBadge(
+                    text: detail.task.state,
+                    kind: detail.task.state == "BLOCKED" ? .bad : (detail.task.state == "VERIFIED" ? .good : .neutral)
+                )
+            }
+            LabeledContent(L10n.providerModel, value: providerModel)
+            LabeledContent("Current phase", value: currentPhase)
+            LabeledContent("Elapsed", value: elapsedText(start: detail.task.createdAt, end: detail.task.updatedAt))
+            HStack(spacing: 8) {
+                if detail.task.state == "RUNNING" || detail.task.state == "VERIFYING" {
+                    Button(role: .destructive) {
+                        onStop()
+                    } label: {
+                        Label("Stop", systemImage: "stop.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .help("Cancel through the authoritative host execution path.")
+                }
+                Button {
+                    onReload()
+                } label: {
+                    Label(L10n.reload, systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .keyboardShortcut("r", modifiers: [.command, .option])
+                .help(L10n.reloadHint)
+
+                Button {
+                    onCopyTaskId()
+                } label: {
+                    Label(L10n.copyTaskId, systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .keyboardShortcut("c", modifiers: [.command, .option])
+                .help(L10n.copyTaskIdHint)
+            }
+        }
+    }
+}
+
+private struct ExecutionPhase: Identifiable {
+    let title: String
+    let isComplete: Bool
+    let isCurrent: Bool
+
+    var id: String { title }
+
+    static func derive(from detail: TaskDetailView) -> [ExecutionPhase] {
+        let events = Set(detail.events.map(\.eventType))
+        let hasWorkspace = detail.workspace != nil || events.contains("WORKSPACE_REGISTERED")
+        let hasRouting = detail.routing != nil || events.contains("ROUTING_DECISION_RECORDED")
+        let hasQuota = events.contains("QUOTA_ADMITTED")
+        let hasRun = !detail.runs.isEmpty || events.contains("RUN_STARTED")
+        let editingDone = detail.runs.contains { $0.status != "RUNNING" } || events.contains("RUN_FINISHED")
+        let verifying = detail.task.state == "VERIFYING"
+            || detail.task.state == "VERIFIED"
+            || detail.verification.status != "NOT_VERIFIED"
+        let finished = ["VERIFIED", "BLOCKED", "FAILED", "CANCELLED", "COMPLETED"].contains(detail.task.state)
+        let states: [(String, Bool)] = [
+            ("Preparing", true),
+            ("Routing", hasRouting),
+            ("Workspace", hasWorkspace),
+            ("Quota", hasQuota),
+            ("Starting worker", hasRun),
+            ("Editing", editingDone),
+            ("Testing", editingDone),
+            ("Verifying", verifying),
+            ("Finished", finished),
+        ]
+        let currentIndex = states.firstIndex { !$0.1 } ?? states.count - 1
+        return states.enumerated().map { index, item in
+            ExecutionPhase(title: item.0, isComplete: item.1, isCurrent: index == currentIndex)
+        }
+    }
+}
+
+private struct ProgressPanel: View {
+    let detail: TaskDetailView
+
+    var body: some View {
+        DashboardCard(title: "Progress", symbol: "checklist") {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 8)], spacing: 8) {
+                ForEach(ExecutionPhase.derive(from: detail)) { phase in
+                    HStack(spacing: 6) {
+                        Image(systemName: phase.isComplete ? "checkmark.circle.fill" : (phase.isCurrent ? "circle.dotted" : "circle"))
+                            .foregroundStyle(phase.isComplete ? .green : (phase.isCurrent ? .accentColor : .secondary))
+                        Text(phase.title)
+                            .lineLimit(1)
+                    }
+                    .font(.caption)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                }
+            }
+        }
+    }
+}
+
+private struct LiveActivityPanel: View {
+    let detail: TaskDetailView
+
+    var body: some View {
+        DashboardCard(title: "Live Activity", symbol: "waveform.path.ecg") {
+            EventList(events: detail.events)
+        }
+    }
+}
+
+private struct ChangesPanel: View {
+    let detail: TaskDetailView
+
+    var body: some View {
+        DashboardCard(title: "Changes", symbol: "doc.on.clipboard") {
+            if let workspace = detail.workspace {
+                LabeledContent(L10n.worktree, value: workspace.worktreePath)
+                    .font(.system(.caption, design: .monospaced))
+                LabeledContent(L10n.branch, value: workspace.branch)
+                LabeledContent("Files changed", value: changedFileText)
+            } else {
+                Label("No task worktree has been registered yet.", systemImage: "tray")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var changedFileText: String {
+        guard let result = detail.verification.result else { return "not verified yet" }
+        let count = result.changedPaths.count
+        return "\(count)"
+    }
+}
+
+private struct TestsVerificationPanel: View {
+    let detail: TaskDetailView
+
+    var body: some View {
+        DashboardCard(title: "Tests / Verification", symbol: "checkmark.seal") {
+            StatusBadge(text: detail.verification.status, kind: detail.verification.status == "VERIFIED" ? .good : .neutral)
+            LabeledContent(L10n.evidenceLabel, value: detail.verification.evidenceId ?? "none")
+            if let result = detail.verification.result {
+                LabeledContent("Verifier profile", value: result.profile)
+                ForEach(result.stages) { stage in
+                    LabeledContent(stage.name, value: stage.passed ? "passed" : "failed")
+                }
+            }
+            if let failure = detail.verification.failureReason {
+                Text(failure).foregroundStyle(.red)
+            }
+            ForEach(detail.approvals.approvals) { approval in
+                Text("\(approval.kind): \(approval.status)")
+            }
         }
     }
 }
@@ -1345,6 +1504,98 @@ private struct OwnerDispatchPanel: View {
     }
 }
 
+private struct AdvancedDetailsPanel: View {
+    let detail: TaskDetailView
+
+    var body: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 8) {
+                LabeledContent("Task ID", value: detail.task.taskId)
+                LabeledContent("Request ID", value: detail.task.requestId)
+                if let routing = detail.routing {
+                    LabeledContent("Routing decision", value: routing.decisionId)
+                    LabeledContent("Routing request", value: routing.requestId)
+                }
+                if let workspace = detail.workspace {
+                    LabeledContent(L10n.worktree, value: workspace.worktreePath)
+                        .font(.system(.caption, design: .monospaced))
+                    LabeledContent("Base SHA", value: workspace.baseSha)
+                    LabeledContent(L10n.writerLock, value: workspace.writerLocked ? "HELD" : "RELEASED")
+                }
+                ForEach(detail.runs) { run in
+                    VStack(alignment: .leading, spacing: 4) {
+                        LabeledContent("Run ID", value: run.runId)
+                        LabeledContent("Execution target", value: run.workerId)
+                        LabeledContent("PID", value: run.pid.map(String.init) ?? "-")
+                        LabeledContent("Run status", value: run.status)
+                    }
+                    .padding(.vertical, 4)
+                    Divider()
+                }
+            }
+        } label: {
+            Label("Advanced Details", systemImage: "gearshape.2")
+                .font(.headline)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct RawWorkerConsolePanel: View {
+    let detail: TaskDetailView
+
+    var body: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 10) {
+                if detail.runs.isEmpty {
+                    Label("No worker run has started.", systemImage: "tray")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(detail.runs) { run in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("worker=\(run.workerId) status=\(run.status)")
+                        if let exitCode = run.exitCode {
+                            Text("exit_code=\(exitCode)")
+                        }
+                        Text("stdout_bytes=\(run.stdoutBytes ?? 0) stderr_bytes=\(run.stderrBytes ?? 0)")
+                        if let stdout = run.stdoutSHA256 {
+                            Text("stdout_sha256=\(stdout)")
+                        }
+                        if let stderr = run.stderrSHA256 {
+                            Text("stderr_sha256=\(stderr)")
+                        }
+                        if run.outputTruncated == true {
+                            Text("output_truncated=true")
+                        }
+                        if run.timedOut == true {
+                            Text("timed_out=true")
+                        }
+                    }
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(Color.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                }
+                ForEach(detail.events) { event in
+                    Text("[\(event.createdAt)] \(event.eventType): \(event.summary)")
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        } label: {
+            Label("Raw Worker Output", systemImage: "terminal")
+                .font(.headline)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 private struct EventList: View {
     let events: [ActivityEventView]
 
@@ -1366,6 +1617,28 @@ private struct EventList: View {
             }
         }
     }
+}
+
+private func elapsedText(start: String, end: String) -> String {
+    guard let startDate = parseAPIDate(start),
+          let endDate = parseAPIDate(end) else {
+        return "unknown"
+    }
+    let seconds = max(0, Int(endDate.timeIntervalSince(startDate)))
+    if seconds < 60 { return "\(seconds)s" }
+    let minutes = seconds / 60
+    if minutes < 60 { return "\(minutes)m \(seconds % 60)s" }
+    return "\(minutes / 60)h \(minutes % 60)m"
+}
+
+private func parseAPIDate(_ value: String) -> Date? {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let date = formatter.date(from: value) {
+        return date
+    }
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter.date(from: value)
 }
 
 private enum BadgeKind {

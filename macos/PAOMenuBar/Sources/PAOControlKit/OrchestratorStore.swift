@@ -62,6 +62,7 @@ public final class OrchestratorStore: ObservableObject {
     private let idFactory: () -> String
 
     public static let menuOpenInterval: TimeInterval = 2.0
+    public static let activeTaskInterval: TimeInterval = 1.0
     public static let backgroundInterval: TimeInterval = 15.0
     public static let maximumBackoff: TimeInterval = 60.0
     public static let duplicateSubmitWindow: TimeInterval = 5.0
@@ -126,6 +127,10 @@ public final class OrchestratorStore: ObservableObject {
     private func nextInterval() -> TimeInterval {
         if connection.isConnected {
             backoffSeconds = 2.0
+            if let detail = selectedTaskDetail,
+               detail.task.state == "RUNNING" || detail.task.state == "VERIFYING" {
+                return Self.activeTaskInterval
+            }
             return (menuVisible || dashboardVisible) ? Self.menuOpenInterval : Self.backgroundInterval
         }
         switch daemonLifecycle.status {
@@ -177,6 +182,9 @@ public final class OrchestratorStore: ObservableObject {
             }
             self.lastError = nil
             await refreshProviderStatusSilently()
+            if let selectedTaskId {
+                await loadTaskDetail(taskId: selectedTaskId)
+            }
             let counts = taskCounts()
             ClientLog.taskCounts(running: counts.running, ready: counts.ready,
                                  blocked: counts.blocked, verified: counts.verified)

@@ -36,8 +36,14 @@ MIGRATION_SCHEMA = "legacy-state-migration-v1"
 MIGRATION_RECORD_NAME = "legacy-migration-v1.json"
 
 _CREDENTIAL_NAME_PATTERN = re.compile(
-    r"(auth\.json|credential|api[-_]?key|secret|token|\.key$)", re.IGNORECASE
+    r"(auth\.json|credential|api[-_]?key|secret|token|\.key$|\.env$|\.env\.|"
+    r"\.netrc$|id_rsa|id_ed25519|\.pem$|\.p12$|\.pfx$|\.kdbx$|\.keystore$)",
+    re.IGNORECASE,
 )
+# Only these artifact classes are ever copied; anything else is skipped
+# observably. Unknown extensions can carry credentials in formats the
+# content guard cannot parse, so they fail closed.
+_COPYABLE_SUFFIXES = (".json", ".sqlite3")
 _CREDENTIAL_KEY_PATTERN = re.compile(
     r"(api[_-]?key|credential[_-]?ref|access[_-]?token|refresh[_-]?token|secret|bearer)",
     re.IGNORECASE,
@@ -159,7 +165,10 @@ def migrate_legacy_state(
             existing = MigrationRecord.model_validate_json(
                 record_path.read_text(encoding="utf-8")
             )
-            if existing.migration_schema == MIGRATION_SCHEMA:
+            if existing.migration_schema == MIGRATION_SCHEMA and (
+                existing.outcome
+                in {MigrationOutcome.COMPLETED, MigrationOutcome.COMPLETED_WITH_SKIPS}
+            ):
                 return existing
         except Exception:
             # A corrupt record is an observable failure; never re-migrate
@@ -247,6 +256,16 @@ def _migrate_one(path: Path, relative: str, destination: Path) -> MigrationEntry
             outcome=EntryOutcome.SKIPPED_AUTHORITY_SURFACE,
             source_path=str(path),
             detail="authority surfaces are never migrated (no fabricated approval/active)",
+        )
+    if not name.endswith(_COPYABLE_SUFFIXES):
+        return MigrationEntry(
+            relative_path=relative,
+            outcome=EntryOutcome.SKIPPED_UNSUPPORTED,
+            source_path=str(path),
+            detail=(
+                "non-copyable artifact class; only sanitized JSON state and "
+                "sqlite databases are migrated"
+            ),
         )
 
     if destination.exists():

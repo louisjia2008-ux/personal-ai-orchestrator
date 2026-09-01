@@ -24,6 +24,11 @@ from personal_ai_orchestrator.verifier import VerificationResult
 
 _TERMINAL_STATES = {TaskState.FAILED, TaskState.CANCELLED, TaskState.COMPLETED}
 
+# Execution-verification evidence older than this no longer authorizes
+# launch; the runtime surface must be re-proven by a fresh real worker
+# invocation.
+EXECUTION_EVIDENCE_MAX_AGE_SECONDS = 30 * 24 * 3600.0
+
 
 def _render_result(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
@@ -54,7 +59,10 @@ def validate_execution_target_launch(
         evidence_ok = False
         if journal is not None:
             try:
-                evidence_ok = journal.target_has_verified_evidence(execution_target_id)
+                evidence_ok = journal.target_has_verified_evidence(
+                    execution_target_id,
+                    max_age_seconds=EXECUTION_EVIDENCE_MAX_AGE_SECONDS,
+                )
             except Exception:
                 evidence_ok = False
         if not evidence_ok:
