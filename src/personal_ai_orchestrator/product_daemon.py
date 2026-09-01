@@ -27,7 +27,6 @@ from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryManager
 from personal_ai_orchestrator.provider_registry_store import (
     EMPTY_BOOTSTRAP_SNAPSHOT_ID,
-    is_empty_bootstrap_catalog,
 )
 from personal_ai_orchestrator.provider_registry_store import (
     load as load_persisted_registry,
@@ -130,18 +129,20 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:
         print("pao-daemon: runtime_config_invalid", file=sys.stderr)
         return 78
-    # P4.2.4-A: dynamic registry is built before the daemon main loop
-    # so the Control API can project the right snapshot from frame one.
+    # P4.2.4-A.1 single-startup-contract: build the manager once here
+    # so the bootstrap upgrade (cold first launch) and the in-memory
+    # rehydration (subsequent boots) happen in the same place. The
+    # manager is then handed to ``daemon.main`` so the bundled daemon
+    # and the manager share the exact same in-memory state.
     manager = resolve_dynamic_registry(layout=layout)
-    # §22: empty-bootstrap upgrade is a no-op when the persisted
-    # snapshot already exists.
-    if is_empty_bootstrap_catalog(catalog_snapshot_id=PRODUCT_CATALOG_SNAPSHOT_ID):
-        manager.bootstrap_if_empty(catalog_snapshot_id=PRODUCT_CATALOG_SNAPSHOT_ID)
-    # The bundled daemon currently runs the existing control plane;
-    # the manager is exposed via a side-channel so future phases can
-    # wire it into the ControlPlaneService without breaking the
-    # current daemon.
-    return daemon_main(build_daemon_argv(layout, host=args.host, port=args.port))
+    # The empty-bootstrap upgrade is a no-op when the manager already
+    # rehydrated from a persisted snapshot; otherwise it runs exactly
+    # one discovery cycle and writes the sanitized result.
+    manager.bootstrap_if_empty(catalog_snapshot_id=PRODUCT_CATALOG_SNAPSHOT_ID)
+    return daemon_main(
+        build_daemon_argv(layout, host=args.host, port=args.port),
+        provider_registry_manager=manager,
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised by subprocess/package smoke

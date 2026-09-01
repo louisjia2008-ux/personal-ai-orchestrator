@@ -222,7 +222,7 @@ private struct OverviewDashboard: View {
                     navigateToTasks(filter: "VERIFIED")
                 }
                 MetricTile("COMPLETED", counts?.completed ?? 0, symbol: "checkmark.circle") {
-                    navigateToTasks(filter: "VERIFIED")
+                    navigateToTasks(filter: "COMPLETED")
                 }
             }
             Text(L10n.metricTileHelp)

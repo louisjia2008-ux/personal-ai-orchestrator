@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from personal_ai_orchestrator.provider_discovery import (
+    _DISCOVERY_ENV_ALLOWLIST,
+    _DISCOVERY_ENV_BLOCKLIST,
     DEFAULT_OPENCODE_PATH,
     DISCOVERY_SUBPROCESS_MAX_OUTPUT_BYTES,
     DISCOVERY_SUBPROCESS_TIMEOUT_SECONDS,
@@ -22,6 +27,7 @@ from personal_ai_orchestrator.provider_discovery import (
     ProviderFamilySpec,
     SubprocessResult,
     _AuthPresence,
+    _build_subprocess_env,
     _infer_region,
     _parse_model_catalog,
     _parse_provider_list,
@@ -68,6 +74,8 @@ def fake_provider_list_output() -> str:
         "●  DeepSeek \x1b[90mDEEPSEEK_API_KEY\n"
         "│\n"
         "●  MiniMax Token Plan (minimaxi.com) \x1b[90mMINIMAX_API_KEY\n"
+        "│\n"
+        "●  MiniMax International (minimax.io) \x1b[90mMINIMAX_API_KEY\n"
         "│\n"
         "└  1 environment variables\n"
     )
@@ -124,7 +132,10 @@ def test_ansi_stripper_removes_color_codes(fake_provider_list_output: str) -> No
     # The parser must strip ANSI codes — if it doesn't, the secret
     # regex in assert_sanitized would trigger and tests would fail.
     presence = _parse_provider_list(fake_provider_list_output)
-    assert "Z.AI Coding Plan" not in str(set(presence.credentials_section_labels))
+    serialised = repr(presence)
+    assert "\x1b[" not in serialised
+    assert "[" not in repr(presence.credentials_section_labels)
+    assert "[" not in repr(presence.environment_section_labels)
 
 
 def test_redaction_strips_known_secret_shapes() -> None:
@@ -148,13 +159,21 @@ def test_redaction_preserves_harmless_text() -> None:
 
 def test_parse_provider_list_recognizes_credentials_section(fake_provider_list_output: str) -> None:
     presence = _parse_provider_list(fake_provider_list_output)
-    assert "Z.AI" in presence.credentials_section_labels
+    # The parser now keeps the full display label (P4.2.4-A.1 §22) so
+    # substring matching against region markers works.
+    assert any("Z.AI Coding Plan" in label for label in presence.credentials_section_labels)
     assert any("MiniMax" in label for label in presence.credentials_section_labels)
+    # Parenthetical endpoint annotations are extracted as region hints.
+    assert "minimaxi.com" in presence.credentials_region_hints
 
 
 def test_parse_provider_list_recognizes_environment_section(fake_provider_list_output: str) -> None:
     presence = _parse_provider_list(fake_provider_list_output)
     assert "DEEPSEEK_API_KEY" in presence.env_variable_names_seen
+    assert "MINIMAX_API_KEY" in presence.env_variable_names_seen
+    # The environment section's MiniMax labels are now region-hinted.
+    assert "minimaxi.com" in presence.environment_region_hints
+    assert "minimax.io" in presence.environment_region_hints
 
 
 def test_parse_provider_list_handles_empty_output() -> None:
@@ -268,6 +287,145 @@ def test_infer_region_cn_vs_international() -> None:
     assert _infer_region(cn) == "CN"
     assert _infer_region(intl) == "INTERNATIONAL"
     assert _infer_region(zai) is None
+
+
+# -----------------------------------------------------------------------------
+# Subprocess environment isolation (P4.2.4-A.1 §15)
+# -----------------------------------------------------------------------------
+
+def test_build_subprocess_env_excludes_known_credential_vars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inject canary credential env values into the parent environment and
+    prove they are never propagated into the subprocess environment.
+    """
+
+    canaries = {
+        "ZAI_API_KEY": "sk-zai-canary-very-secret-123456789012345",
+        "MINIMAX_API_KEY": "minimax-canary-very-secret-123456789012345",
+        "OPENAI_API_KEY": "sk-openai-canary-very-secret-1234567890123",
+        "ANTHROPIC_API_KEY": "sk-anthropic-canary-very-secret-12345678",
+        "DEEPSEEK_API_KEY": "sk-deepseek-canary-very-secret-123456789",
+        "HUGGINGFACE_TOKEN": "hf_canary_secret_123456789012345678",
+        "GITHUB_TOKEN": "ghp_canary_secret_123456789012345678",
+        "AWS_SECRET_ACCESS_KEY": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    }
+    for key, value in canaries.items():
+        monkeypatch.setenv(key, value)
+
+    env = _build_subprocess_env(os.environ)
+
+    # Canary names are excluded by the allowlist/blocklist policy.
+    for key in canaries:
+        assert key not in env, f"{key} leaked into subprocess env"
+
+    # Canary values are also nowhere in the constructed env, regardless
+    # of how they could have entered it.
+    serialized = str(env)
+    for value in canaries.values():
+        assert value not in serialized, "canary value leaked into subprocess env"
+
+
+def test_subprocess_does_not_inherit_credential_env_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Inject canary credential env values; run a Python child that prints
+    its full environment; prove the canary values never appear in the
+    subprocess environment.
+
+    This is a stronger end-to-end test than :f``_build_subprocess_env``
+    alone because it exercises the actual subprocess plumbing.
+    """
+
+    canaries = {
+        "ZAI_API_KEY": "sk-zai-canary-endtoend-123456789012345",
+        "MINIMAX_API_KEY": "minimax-canary-endtoend-123456789012345",
+        "OPENAI_API_KEY": "sk-openai-canary-endtoend-1234567890123",
+        "ANTHROPIC_API_KEY": "sk-anthropic-canary-endtoend-12345678",
+        "DEEPSEEK_API_KEY": "sk-deepseek-canary-endtoend-123456789",
+    }
+    for key, value in canaries.items():
+        monkeypatch.setenv(key, value)
+
+    script = tmp_path / "printenv.py"
+    script.write_text(
+        "import json, os; print(json.dumps(dict(os.environ)))",
+        encoding="utf-8",
+    )
+
+    result = _run_opencode(
+        (str(script),),
+        executable=Path(sys.executable),
+        timeout_seconds=2.0,
+        max_output_bytes=64 * 1024,
+    )
+    assert result.truncated is False
+    assert result.returncode == 0
+    for key, value in canaries.items():
+        assert key not in result.stdout, f"{key} leaked into subprocess stdout"
+        assert value not in result.stdout, f"canary value for {key} leaked into subprocess stdout"
+
+
+def test_subprocess_terminates_child_when_output_bound_exceeded(
+    tmp_path: Path,
+) -> None:
+    """A runaway producer must be terminated before it can fill the OS
+    pipe buffer. The bounded subprocess must report ``truncated`` and
+    return a non-natural exit code.
+    """
+
+    if sys.platform.startswith("win"):  # pragma: no cover — posix-only
+        pytest.skip("posix-only test")
+
+    script = tmp_path / "flood.py"
+    script.write_text(
+        "import sys; "
+        "sys.stdout.write('A' * 4096); sys.stdout.flush()\n"
+        "import time; time.sleep(0.5)\n"
+        "while True:\n"
+        "    sys.stdout.write('A' * 4096); sys.stdout.flush()\n",
+        encoding="utf-8",
+    )
+
+    result = _run_opencode(
+        (str(script),),
+        executable=Path(sys.executable),
+        timeout_seconds=5.0,
+        max_output_bytes=4096,  # tight bound
+    )
+    assert result.truncated is True
+    assert result.returncode == -1
+    # Output must not exceed the bound by more than a single incremental
+    # chunk size.
+    assert len(result.stdout.encode("utf-8")) <= 4096 + 8192
+
+
+def test_subprocess_kills_child_on_timeout(tmp_path: Path) -> None:
+    """A child that ignores its natural completion must be killed when
+    the timeout fires, well before its natural sleep duration.
+    """
+
+    if sys.platform.startswith("win"):  # pragma: no cover — posix-only
+        pytest.skip("posix-only test")
+
+    script = tmp_path / "sleep.py"
+    script.write_text(
+        "import time; time.sleep(60)",
+        encoding="utf-8",
+    )
+
+    start = time.monotonic()
+    result = _run_opencode(
+        (str(script),),
+        executable=Path(sys.executable),
+        timeout_seconds=0.5,
+        max_output_bytes=1024,
+    )
+    elapsed = time.monotonic() - start
+    assert result.truncated is True
+    assert result.returncode == -1
+    # Killed well before the natural 60s sleep end.
+    assert elapsed < 5.0
 
 
 # -----------------------------------------------------------------------------
@@ -407,6 +565,186 @@ def test_auth_presence_distinguishes_credentials_from_environment() -> None:
     )
     assert presence.has_in_credentials_store(zai)
     assert not presence.has_in_environment(zai)
+
+
+# -----------------------------------------------------------------------------
+# CN / INTERNATIONAL auth-truth semantics (P4.2.4-A.1 §22)
+# -----------------------------------------------------------------------------
+
+def test_auth_truth_cn_label_does_not_authenticate_intl_surface() -> None:
+    """A ``MiniMax CN`` label in the credentials store must NOT cause the
+    international surfaces to report ``AUTH_FROM_ENV_PRESENCE`` and vice
+    versa. The family table requires region-specific keywords; the
+    parser additionally captures parenthetical endpoint annotations as
+    region hints (P4.2.4-A.1 §22).
+    """
+
+    presence_cn_only = _AuthPresence(
+        credentials_section_labels=frozenset({"MiniMax CN"}),
+        credentials_region_hints=frozenset({"api.minimaxi.com"}),
+        environment_section_labels=frozenset(),
+        env_variable_names_seen=frozenset(),
+    )
+    intl = ProviderFamilySpec(
+        provider_id="minimax",
+        display_name="MiniMax International",
+        env_variables=("MINIMAX_API_KEY",),
+        provider_label_keywords=("minimax.io", "MiniMax International"),
+        alternative_endpoints=("api.minimax.io",),
+    )
+    cn = ProviderFamilySpec(
+        provider_id="minimax-cn",
+        display_name="MiniMax CN",
+        env_variables=("MINIMAX_API_KEY",),
+        provider_label_keywords=("minimaxi", "MiniMax CN"),
+        alternative_endpoints=("api.minimaxi.com",),
+    )
+    assert presence_cn_only.has_in_credentials_store(cn), (
+        "MiniMax CN label must authenticate the CN surface"
+    )
+    assert not presence_cn_only.has_in_credentials_store(intl), (
+        "MiniMax CN label must NOT authenticate the international surface"
+    )
+
+
+def test_auth_truth_intl_label_does_not_authenticate_cn_surface() -> None:
+    """Symmetric to :f``test_auth_truth_cn_label_does_not_authenticate_intl_surface``.
+    """
+
+    presence_intl_only = _AuthPresence(
+        credentials_section_labels=frozenset({"MiniMax International"}),
+        credentials_region_hints=frozenset({"api.minimax.io"}),
+        environment_section_labels=frozenset(),
+        env_variable_names_seen=frozenset(),
+    )
+    intl = ProviderFamilySpec(
+        provider_id="minimax",
+        display_name="MiniMax International",
+        env_variables=("MINIMAX_API_KEY",),
+        provider_label_keywords=("minimax.io", "MiniMax International"),
+        alternative_endpoints=("api.minimax.io",),
+    )
+    cn = ProviderFamilySpec(
+        provider_id="minimax-cn",
+        display_name="MiniMax CN",
+        env_variables=("MINIMAX_API_KEY",),
+        provider_label_keywords=("minimaxi", "MiniMax CN"),
+        alternative_endpoints=("api.minimaxi.com",),
+    )
+    assert presence_intl_only.has_in_credentials_store(intl)
+    assert not presence_intl_only.has_in_credentials_store(cn)
+
+
+def test_auth_truth_parenthetical_region_hint_authenticates_only_matching_region() -> None:
+    """When OpenCode labels two MiniMax variants identically apart from
+    the endpoint parenthetical, only the family whose ``alternative_endpoints``
+    matches that endpoint is authenticated.
+    """
+
+    # Real-world OpenCode labels both surfaces as ``MiniMax Token Plan``
+    # but distinguishes them with the parenthetical endpoint.
+    presence = _AuthPresence(
+        credentials_section_labels=frozenset({
+            "MiniMax Token Plan (api.minimaxi.com) api",
+            "MiniMax Token Plan (api.minimax.io) api",
+        }),
+        credentials_region_hints=frozenset({
+            "api.minimaxi.com", "api.minimax.io",
+        }),
+        environment_section_labels=frozenset(),
+        env_variable_names_seen=frozenset(),
+    )
+    cn = ProviderFamilySpec(
+        provider_id="minimax-cn",
+        display_name="MiniMax CN",
+        env_variables=("MINIMAX_API_KEY",),
+        provider_label_keywords=("minimaxi", "MiniMax CN"),
+        alternative_endpoints=("api.minimaxi.com",),
+    )
+    intl = ProviderFamilySpec(
+        provider_id="minimax",
+        display_name="MiniMax International",
+        env_variables=("MINIMAX_API_KEY",),
+        provider_label_keywords=("minimax.io", "MiniMax International"),
+        alternative_endpoints=("api.minimax.io",),
+    )
+    # Each region hint authenticates exactly one surface.
+    assert presence.has_in_credentials_store(cn)
+    assert presence.has_in_credentials_store(intl)
+
+
+def test_provider_discovery_fields_are_independent() -> None:
+    """``ProviderDiscovery`` exposes catalog/region/credential evidence as
+    independent fields. UNKNOWN is preferred over fabricated confidence.
+    """
+
+    record = ProviderDiscovery(
+        provider_id="minimax-cn",
+        display_name="MiniMax CN",
+        auth_status=AuthStatus.AUTH_UNKNOWN,
+        execution_status=ExecutionStatus.UNKNOWN,
+        evidence_source="DISCOVERED_FROM_CATALOG",
+        model_skus=(),
+        env_variables_present=("MINIMAX_API_KEY",),
+        observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+        region="CN",
+        in_credentials_store=False,
+        catalog_discovered=False,
+        credential_evidence_present=True,        # env var present
+        credential_scope_verified=False,         # but not region-verified
+        execution_verified=False,
+    )
+    assert record.credential_evidence_present is True
+    assert record.credential_scope_verified is False
+    assert record.auth_status is AuthStatus.AUTH_UNKNOWN
+    assert record.execution_verified is False
+    # Round-trip through to_dict / from_dict.
+    restored = DiscoveryResult.from_dict(
+        {
+            "schema_version": 1,
+            "generated_at": "2026-01-01T00:00:00+00:00",
+            "opencode_path": "/usr/bin/opencode",
+            "opencode_version": "1.18.25",
+            "source_method": "opencode_cli_inspection",
+            "discovery_state": "DISCOVERED",
+            "last_error_code": None,
+            "providers": [record.to_dict() if False else {  # type: ignore[unreachable]
+                "provider_id": record.provider_id,
+                "display_name": record.display_name,
+                "auth_status": record.auth_status.value,
+                "execution_status": record.execution_status.value,
+                "evidence_source": record.evidence_source,
+                "model_skus": list(record.model_skus),
+                "env_variables_present": list(record.env_variables_present),
+                "region": record.region,
+                "in_credentials_store": record.in_credentials_store,
+                "catalog_discovered": record.catalog_discovered,
+                "credential_evidence_present": record.credential_evidence_present,
+                "credential_scope_verified": record.credential_scope_verified,
+                "execution_verified": record.execution_verified,
+                "observed_at": record.observed_at.isoformat(),
+            }],
+        }
+    )
+    assert restored.providers[0].credential_scope_verified is False
+    assert restored.providers[0].catalog_discovered is False
+
+
+def test_env_blocklist_covers_required_provider_credentials() -> None:
+    """P4.2.4-A.1 §15 requires the discovery subprocess env to never
+    carry these specific variables.
+    """
+
+    for key in (
+        "ZAI_API_KEY",
+        "MINIMAX_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "DEEPSEEK_API_KEY",
+    ):
+        assert key in _DISCOVERY_ENV_BLOCKLIST, key
+    # Allowlist is intentionally small.
+    assert "PATH" in _DISCOVERY_ENV_ALLOWLIST
 
 
 # -----------------------------------------------------------------------------
@@ -560,3 +898,261 @@ def _make_discovery_result(
         state=state,
         last_error_code=None,
     )
+
+
+# -----------------------------------------------------------------------------
+# Single-startup-contract (P4.2.4-A.1 §22)
+# -----------------------------------------------------------------------------
+
+def test_first_boot_runs_exactly_one_discovery_cycle(
+    tmp_state_root: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cold first launch with no persisted snapshot must run exactly one
+    discovery cycle.
+    """
+
+    discovery_calls = [0]
+
+    def _counting_discover(**_kwargs: object) -> DiscoveryCycleOutcome:
+        discovery_calls[0] += 1
+        return DiscoveryCycleOutcome(
+            result=_make_discovery_result(
+                providers=(
+                    ProviderDiscovery(
+                        provider_id="zai-coding-plan",
+                        display_name="GLM / Z.AI",
+                        auth_status=AuthStatus.AUTH_FROM_ENV_PRESENCE,
+                        execution_status=ExecutionStatus.AVAILABLE_FOR_CATALOG,
+                        evidence_source="DISCOVERED_FROM_CATALOG",
+                        model_skus=("glm-5.3",),
+                        env_variables_present=("ZAI_API_KEY",),
+                        observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+                        catalog_discovered=True,
+                        credential_evidence_present=True,
+                        credential_scope_verified=True,
+                        execution_verified=False,
+                    ),
+                )
+            ),
+            error_code=None,
+            error_message=None,
+        )
+
+    monkeypatch.setattr(
+        "personal_ai_orchestrator.provider_registry_manager.discover",
+        _counting_discover,
+    )
+
+    mgr = ProviderRegistryManager(runtime_state_root=tmp_state_root)
+    # The constructor does not run discovery; it only rehydrates from
+    # disk.
+    assert discovery_calls[0] == 0
+    assert mgr.discovery_cycle_count() == 0
+
+    # The first explicit refresh runs exactly one cycle.
+    mgr.refresh()
+    assert discovery_calls[0] == 1
+    assert mgr.discovery_cycle_count() == 1
+
+    # A second explicit refresh runs one more cycle.
+    mgr.refresh()
+    assert discovery_calls[0] == 2
+    assert mgr.discovery_cycle_count() == 2
+
+
+def test_subsequent_boot_does_not_rerun_discovery_when_snapshot_persists(
+    tmp_state_root: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Subsequent boot must rehydrate from disk and MUST NOT invoke
+    ``discover()`` at all — not from the constructor and not from a
+    refresh.
+    """
+
+    # Persist a valid snapshot.
+    initial_result = _make_discovery_result(
+        providers=(
+            ProviderDiscovery(
+                provider_id="zai-coding-plan",
+                display_name="GLM / Z.AI",
+                auth_status=AuthStatus.AUTH_FROM_ENV_PRESENCE,
+                execution_status=ExecutionStatus.AVAILABLE_FOR_CATALOG,
+                evidence_source="DISCOVERED_FROM_CATALOG",
+                model_skus=("glm-5.3",),
+                env_variables_present=("ZAI_API_KEY",),
+                observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+                catalog_discovered=True,
+                credential_evidence_present=True,
+                credential_scope_verified=True,
+                execution_verified=False,
+            ),
+        )
+    )
+    save(initial_result, runtime_state_root=tmp_state_root)
+
+    discovery_calls = [0]
+
+    def _fail_if_called(**_kwargs: object) -> DiscoveryCycleOutcome:
+        discovery_calls[0] += 1
+        raise AssertionError("discover() must not be invoked on subsequent boot")
+
+    monkeypatch.setattr(
+        "personal_ai_orchestrator.provider_registry_manager.discover",
+        _fail_if_called,
+    )
+
+    mgr = ProviderRegistryManager(runtime_state_root=tmp_state_root)
+    # Constructing the manager rehydrates from disk. Zero discovery calls.
+    assert discovery_calls[0] == 0
+    status = mgr.status()
+    assert status.discovery_state == "DISCOVERED"
+    assert status.provider_count == 1
+    assert status.execution_target_count == 1
+    registry = mgr.registry()
+    assert "zai-coding-plan" in registry.providers
+    assert "zai-coding-plan/glm-5.3" in registry.models
+    # Synthetic account and execution target are present.
+    assert "zai-coding-plan" in registry.accounts
+    assert any(
+        t.model_sku_id == "zai-coding-plan/glm-5.3"
+        for t in registry.execution_targets.values()
+    )
+
+    # bootstrap_if_empty must be a no-op even though the catalog is the
+    # legacy empty-bootstrap id.
+    assert mgr.bootstrap_if_empty(catalog_snapshot_id=EMPTY_BOOTSTRAP_SNAPSHOT_ID) is False
+    assert discovery_calls[0] == 0
+
+
+def test_manager_rehydrates_full_registry_from_persisted_snapshot(
+    tmp_state_root: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Static registry = empty; dynamic registry = provider + account +
+    model + target; after boot, the in-memory state matches the persisted
+    dynamic registry.
+    """
+
+    result = _make_discovery_result(
+        providers=(
+            ProviderDiscovery(
+                provider_id="minimax-cn",
+                display_name="MiniMax CN",
+                auth_status=AuthStatus.AUTH_FROM_ENV_PRESENCE,
+                execution_status=ExecutionStatus.AVAILABLE_FOR_CATALOG,
+                evidence_source="DISCOVERED_FROM_CATALOG",
+                model_skus=("MiniMax-M3", "MiniMax-M2.7"),
+                env_variables_present=("MINIMAX_API_KEY",),
+                region="CN",
+                in_credentials_store=True,
+                catalog_discovered=True,
+                credential_evidence_present=True,
+                credential_scope_verified=True,
+                execution_verified=False,
+                observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+            ProviderDiscovery(
+                provider_id="zai-coding-plan",
+                display_name="GLM / Z.AI",
+                auth_status=AuthStatus.AUTH_REQUIRED,
+                execution_status=ExecutionStatus.AVAILABLE_FOR_CATALOG,
+                evidence_source="DISCOVERED_FROM_CATALOG",
+                model_skus=("glm-5.3",),
+                env_variables_present=(),
+                catalog_discovered=True,
+                credential_evidence_present=False,
+                credential_scope_verified=False,
+                execution_verified=False,
+                observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+        )
+    )
+    save(result, runtime_state_root=tmp_state_root)
+
+    def _fail_if_called(**_kwargs: object) -> DiscoveryCycleOutcome:
+        raise AssertionError("discover() must not run during rehydration")
+
+    monkeypatch.setattr(
+        "personal_ai_orchestrator.provider_registry_manager.discover",
+        _fail_if_called,
+    )
+
+    mgr = ProviderRegistryManager(runtime_state_root=tmp_state_root)
+    registry = mgr.registry()
+    # Providers
+    assert set(registry.providers) == {"minimax-cn", "zai-coding-plan"}
+    # Models
+    assert set(registry.models) == {
+        "minimax-cn/MiniMax-M3",
+        "minimax-cn/MiniMax-M2.7",
+        "zai-coding-plan/glm-5.3",
+    }
+    # Accounts (one synthetic per provider)
+    assert set(registry.accounts) == {"minimax-cn", "zai-coding-plan"}
+    # Execution targets (one per SKU)
+    assert set(registry.execution_targets) == {
+        "minimax-cn-MiniMax-M3",
+        "minimax-cn-MiniMax-M2.7",
+        "zai-coding-plan-glm-5.3",
+    }
+    # Catalog snapshot exists
+    snapshot_id = next(iter(registry.catalog_snapshots))
+    for model in registry.models.values():
+        assert model.catalog_snapshot_id == snapshot_id
+
+    # Status reflects the persisted result
+    status = mgr.status()
+    assert status.discovery_state == "DISCOVERED"
+    assert status.provider_count == 2
+    assert status.execution_target_count == 3
+
+
+def test_manager_rejects_unknown_persisted_schema_fail_closed(
+    tmp_state_root: Path,
+) -> None:
+    """Persisted snapshots with an unsupported ``schema_version`` must be
+    rejected fail-closed; the manager must start in PENDING with an empty
+    registry.
+    """
+
+    registry_path(tmp_state_root).write_text(
+        json.dumps({"schema_version": 999, "providers": []}),
+        encoding="utf-8",
+    )
+    mgr = ProviderRegistryManager(runtime_state_root=tmp_state_root)
+    status = mgr.status()
+    assert status.discovery_state == "PENDING"
+    assert status.provider_count == 0
+    assert mgr.registry().providers == {}
+    # An explicit refresh is the only way to recover.
+    assert mgr.discovery_cycle_count() == 0
+
+
+def test_explicit_refresh_runs_exactly_one_cycle(
+    tmp_state_root: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit refresh must run exactly one discovery cycle, and the
+    cycle count metric must reflect that.
+    """
+
+    discovery_calls = [0]
+
+    def _counting_discover(**_kwargs: object) -> DiscoveryCycleOutcome:
+        discovery_calls[0] += 1
+        return DiscoveryCycleOutcome(
+            result=_make_discovery_result(),
+            error_code=None,
+            error_message=None,
+        )
+
+    monkeypatch.setattr(
+        "personal_ai_orchestrator.provider_registry_manager.discover",
+        _counting_discover,
+    )
+
+    mgr = ProviderRegistryManager(runtime_state_root=tmp_state_root)
+    assert discovery_calls[0] == 0
+    mgr.refresh()
+    assert discovery_calls[0] == 1
+    assert mgr.discovery_cycle_count() == 1
+    mgr.refresh()
+    assert discovery_calls[0] == 2
+    assert mgr.discovery_cycle_count() == 2

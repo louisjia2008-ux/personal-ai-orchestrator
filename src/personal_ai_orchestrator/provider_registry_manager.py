@@ -82,7 +82,27 @@ class _RuntimeState:
 
 
 class ProviderRegistryManager:
-    """Owns the *dynamic* provider registry for the lifetime of the daemon."""
+    """Owns the *dynamic* provider registry for the lifetime of the daemon.
+
+    Startup policy (P4.2.4-A.1 §22 single-startup-contract):
+
+    1. The constructor attempts to load a previously persisted sanitized
+       snapshot from disk via :func:`load`. If a *valid* snapshot exists,
+       the in-memory :class:`ModelRegistry` is fully reconstructed from
+       that snapshot **without** invoking the OpenCode CLI. This is the
+       "subsequent boot" path.
+    2. If no snapshot exists, the manager starts in
+       :attr:`DiscoveryState.PENDING` with an empty registry. The first
+       call to :meth:`refresh` performs exactly **one** discovery cycle
+       — the "cold first boot" path.
+    3. An explicit user-initiated refresh (Dashboard "Refresh providers"
+       button → ``POST /v1/providers/refresh``) calls :meth:`refresh` and
+       performs exactly one cycle. Concurrent calls coalesce.
+    4. There is **no** implicit boot-time refresh path. The manager is
+       fully informative as soon as the persisted snapshot is loaded, so
+       the daemon never needs to invoke the OpenCode CLI purely for the
+       sake of populating the in-memory state.
+    """
 
     def __init__(
         self,
@@ -94,19 +114,22 @@ class ProviderRegistryManager:
         self._opencode_path = opencode_path
         self._lock = threading.RLock()
         self._refresh_in_flight = False
-        # Best-effort load of the last persisted snapshot so a daemon
-        # restart does not require re-running OpenCode CLI inspection
-        # before the Dashboard becomes informative.
-        persisted = load(runtime_state_root)
-        if persisted is not None:
-            self._state = _RuntimeState(
-                registry=_empty_registry(),
-                last_result=None,
-                last_status=_status_from_persisted(persisted),
-                last_error_code=persisted.last_error_code,
-            )
-        else:
-            self._state = _RuntimeState(
+        self._discovery_cycle_count = 0
+        self._state = self._rehydrate_state()
+
+    def _rehydrate_state(self) -> _RuntimeState:
+        """Build the initial runtime state from disk, if a valid snapshot
+        is present.
+
+        A valid snapshot produces a fully-populated :class:`ModelRegistry`
+        (providers, accounts, models, execution targets, catalog
+        snapshots) reconstructed by :func:`build_registry`. The Discovery
+        module's subprocess is never invoked during this step.
+        """
+
+        persisted = load(self._runtime_state_root)
+        if persisted is None:
+            return _RuntimeState(
                 registry=_empty_registry(),
                 last_result=None,
                 last_status=ProviderDiscoveryStatus(
@@ -120,6 +143,51 @@ class ProviderRegistryManager:
                 ),
                 last_error_code=None,
             )
+        try:
+            result = DiscoveryResult.from_dict(persisted.payload)
+        except (KeyError, ValueError, TypeError):
+            # Schema drift or corruption — the persist module already
+            # rejected unknown schemas; here we also reject payloads that
+            # claim ``schema_version == CURRENT_SCHEMA_VERSION`` but do
+            # not satisfy the typed model. Fail closed: PENDING state,
+            # empty registry, no status metadata.
+            return _RuntimeState(
+                registry=_empty_registry(),
+                last_result=None,
+                last_status=ProviderDiscoveryStatus(
+                    discovery_state=DiscoveryState.PENDING.value,
+                    last_discovered_at=None,
+                    provider_count=0,
+                    execution_target_count=0,
+                    last_error_code="PERSISTED_SNAPSHOT_REJECTED",
+                    catalog_snapshot_id=None,
+                    source_method=None,
+                ),
+                last_error_code="PERSISTED_SNAPSHOT_REJECTED",
+            )
+        try:
+            registry = build_registry(result)
+        except Exception:
+            return _RuntimeState(
+                registry=_empty_registry(),
+                last_result=None,
+                last_status=ProviderDiscoveryStatus(
+                    discovery_state=DiscoveryState.PENDING.value,
+                    last_discovered_at=None,
+                    provider_count=0,
+                    execution_target_count=0,
+                    last_error_code="PERSISTED_REGISTRY_BUILD_FAILED",
+                    catalog_snapshot_id=None,
+                    source_method=None,
+                ),
+                last_error_code="PERSISTED_REGISTRY_BUILD_FAILED",
+            )
+        return _RuntimeState(
+            registry=registry,
+            last_result=result,
+            last_status=_status_from_result(result),
+            last_error_code=persisted.last_error_code,
+        )
 
     # ------------------------------------------------------------------
     # Public surface
@@ -139,10 +207,35 @@ class ProviderRegistryManager:
         with self._lock:
             return self._state.last_result
 
+    def discovery_cycle_count(self) -> int:
+        """Return the cumulative number of ``refresh`` invocations.
+
+        Used by the single-startup-contract tests to verify that:
+
+        - subsequent boot does not run a discovery cycle, and
+        - an explicit refresh runs exactly one cycle.
+        """
+
+        with self._lock:
+            return self._discovery_cycle_count
+
     def bootstrap_if_empty(self, *, catalog_snapshot_id: str | None) -> bool:
         """Upgrade from the empty-bootstrap snapshot if needed.
 
         Returns ``True`` if a discovery cycle ran during bootstrap.
+
+        Per P4.2.4-A.1 §22 single-startup-contract: bootstrap only runs a
+        discovery cycle when *both* conditions hold:
+
+        - the static runtime config still carries the legacy
+          ``EMPTY_BOOTSTRAP_SNAPSHOT_ID`` (i.e. this is the cold first
+          launch); AND
+        - the manager has no persisted sanitized snapshot on disk to
+          rehydrate from.
+
+        If the persisted snapshot already exists, the constructor
+        already rehydrated the in-memory state and the bootstrap is a
+        no-op. There is no implicit "refresh on every boot".
         """
 
         from personal_ai_orchestrator.provider_registry_store import (
@@ -151,13 +244,19 @@ class ProviderRegistryManager:
 
         if catalog_snapshot_id != EMPTY_BOOTSTRAP_SNAPSHOT_ID:
             return False
+        with self._lock:
+            already_loaded = self._state.last_result is not None
+        if already_loaded:
+            return False
         return self.refresh() is not None
 
     def refresh(self) -> ProviderDiscoveryStatus | None:
         """Run a fresh discovery cycle.
 
         Coalesces concurrent invocations so the OpenCode CLI is invoked
-        at most once per cycle even under load.
+        at most once per cycle even under load. Each ``refresh`` call is
+        recorded in :attr:`discovery_cycle_count` so tests can verify the
+        single-startup-contract.
 
         Returns the freshly-computed status, or ``None`` if the cycle
         failed (in which case the previous status remains visible to the
@@ -168,6 +267,7 @@ class ProviderRegistryManager:
             if self._refresh_in_flight:
                 return self._state.last_status
             self._refresh_in_flight = True
+            self._discovery_cycle_count += 1
 
         try:
             outcome: DiscoveryCycleOutcome = discover(opencode_path=self._opencode_path)
@@ -212,21 +312,6 @@ class ProviderRegistryManager:
 
 def _empty_registry() -> ModelRegistry:
     return ModelRegistry()
-
-
-def _status_from_persisted(persisted: Any) -> ProviderDiscoveryStatus:
-    payload = persisted.payload
-    providers = payload.get("providers", []) if isinstance(payload, dict) else []
-    target_count = sum(len(p.get("model_skus", []) or []) for p in providers)  # type: ignore[union-attr]
-    return ProviderDiscoveryStatus(
-        discovery_state=str(payload.get("discovery_state", "DISCOVERED")),
-        last_discovered_at=_isoformat(payload.get("generated_at")) if payload else None,
-        provider_count=len(providers),
-        execution_target_count=target_count,
-        last_error_code=payload.get("last_error_code") if payload else None,
-        catalog_snapshot_id=payload.get("opencode_version"),
-        source_method=payload.get("source_method"),
-    )
 
 
 def _status_from_result(result: DiscoveryResult) -> ProviderDiscoveryStatus:

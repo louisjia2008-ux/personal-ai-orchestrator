@@ -36,6 +36,13 @@ final class InteractiveDashboardTests: XCTestCase {
         XCTAssertTrue(MetricsFilter.matches(state: "VERIFIED", filter: "VERIFIED"))
         XCTAssertTrue(MetricsFilter.matches(state: "COMPLETED", filter: "VERIFIED"))
         XCTAssertFalse(MetricsFilter.matches(state: "READY", filter: "VERIFIED"))
+        // COMPLETED filter must include COMPLETED tasks (regression:
+        // before A.1 the Overview COMPLETED tile wired the VERIFIED
+        // filter; clicking it produced a Tasks scope that excluded
+        // COMPLETED tasks).
+        XCTAssertTrue(MetricsFilter.matches(state: "COMPLETED", filter: "COMPLETED"))
+        XCTAssertFalse(MetricsFilter.matches(state: "VERIFIED", filter: "COMPLETED"))
+        XCTAssertFalse(MetricsFilter.matches(state: "RUNNING", filter: "COMPLETED"))
         // Unknown states never sneak through a foreign filter.
         XCTAssertFalse(MetricsFilter.matches(state: "WEIRD", filter: "RUNNING"))
     }
