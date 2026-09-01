@@ -154,6 +154,7 @@ class DispatchExecutorConfig:
     require_quota_certainty: bool = False
     verifier_profile: VerifierProfile | None = None
     extra_worker_args: tuple[str, ...] = ()
+    worker_permission_config: Path | None = None
 
 
 @dataclass
@@ -400,6 +401,7 @@ class OwnerDispatchExecutor:
         self.execution_supervisor.register(execution)
 
         # -- supervised worker lifecycle ---------------------------------
+        real_invocation_succeeded = False
         try:
             exit_code, stdout, stderr, truncated = await self._wait_for_worker(supervised)
             if (
@@ -436,6 +438,9 @@ class OwnerDispatchExecutor:
                 run_id=run_id,
                 exit_code=exit_code,
                 worker_result=result,
+            )
+            real_invocation_succeeded = (
+                exit_code == 0 and next_state is TaskState.WORKER_FINISHED
             )
         except asyncio.CancelledError:
             raise
@@ -532,12 +537,12 @@ class OwnerDispatchExecutor:
             model_sku_id=self._model_sku_id(dispatch),
             result=(
                 ExecutionVerificationOutcome.VERIFIED
-                if verified
+                if real_invocation_succeeded
                 else ExecutionVerificationOutcome.UNKNOWN
             ),
             reason_code=(
-                "REAL_WORKER_VERIFIED"
-                if verified
+                "REAL_WORKER_DISPATCH_SUCCEEDED"
+                if real_invocation_succeeded
                 else f"WORKER_OUTCOME_{next_state.value}"
             ),
         )
@@ -659,6 +664,7 @@ class OwnerDispatchExecutor:
                     branch=existing.branch,
                     base_sha=existing.base_sha,
                 )
+                self._seed_worker_policy(managed)
                 return managed, None
             except KeyError:
                 pass
@@ -667,6 +673,7 @@ class OwnerDispatchExecutor:
                 task_id=dispatch.task_id,
                 base_sha=base_sha,
             )
+            self._seed_worker_policy(managed)
             store.register_workspace(
                 task_id=dispatch.task_id,
                 repo_path=str(managed.repo_path),
@@ -679,6 +686,25 @@ class OwnerDispatchExecutor:
             return None, "WORKTREE_ALREADY_EXISTS"
         except Exception:
             return None, "WORKTREE_ALLOCATION_FAILED"
+
+    def _seed_worker_policy(self, managed: ManagedWorktree) -> None:
+        """Seed the host-owned OpenCode worker sandbox into the worktree.
+
+        Non-interactive ``opencode run`` auto-rejects permission prompts,
+        which would make every edit fail. The host therefore provisions a
+        project config that allows edits inside the assigned worktree and
+        denies bash / webfetch outright. This is host policy, written
+        before the worker exists; the worker can neither create nor
+        change it afterwards through the denied surfaces.
+        """
+
+        seed = self.config.worker_permission_config
+        if seed is None:
+            return
+        target = managed.worktree_path / "opencode.json"
+        if target.exists():
+            return
+        target.write_bytes(seed.read_bytes())
 
     def _admit_quota(
         self, store: SafetyKernelStore, dispatch: OwnerDispatchRecord
@@ -706,8 +732,9 @@ class OwnerDispatchExecutor:
                 quota_pool_id=quota_pool_id,
                 observed_at=now,
             )
+            # UNKNOWN must remain UNKNOWN — and must remain durable.
+            self._quota_availability_journal.save(evidence)
             if self.config.require_quota_certainty:
-                self._quota_availability_journal.save(evidence)
                 return QuotaAdmission(
                     admitted=False,
                     failure_code="QUOTA_UNKNOWN",

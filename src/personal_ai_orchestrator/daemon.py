@@ -99,7 +99,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="managed root for task worktrees (defaults under runtime state root)",
     )
+    parser.add_argument(
+        "--verifier-profile",
+        type=Path,
+        default=None,
+        help=(
+            "host-owned deterministic verifier profile JSON "
+            "(VerifierProfile schema); without it dispatch fails closed"
+        ),
+    )
+    parser.add_argument(
+        "--worker-permission-config",
+        type=Path,
+        default=None,
+        help=(
+            "host-owned opencode.json seeded into each task worktree "
+            "(edit allow, bash/webfetch deny recommended)"
+        ),
+    )
     return parser.parse_args(argv)
+
+
+def load_verifier_profile(path: Path | None):
+    """Load the host verifier profile; absent profile stays fail-closed None."""
+
+    if path is None:
+        return None
+    from personal_ai_orchestrator.verifier import VerifierProfile
+
+    return VerifierProfile.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 def default_quota_collectors() -> dict[str, object]:
@@ -134,6 +162,7 @@ def build_control_service(
     opencode_bin: str = "opencode",
     quota_collectors: dict[str, object] | None = None,
     verifier_profile=None,
+    worker_permission_config: Path | None = None,
 ) -> ControlPlaneService:
     """Build the control-plane facade over the same durable truth.
 
@@ -157,6 +186,7 @@ def build_control_service(
                 or (runtime_state_root / "worktrees"),
                 opencode_bin=opencode_bin,
                 verifier_profile=verifier_profile,
+                worker_permission_config=worker_permission_config,
             ),
             registry_provider=lambda: (
                 provider_registry_manager.registry()
@@ -218,6 +248,8 @@ def main(
             provider_registry_manager=provider_registry_manager,
             execution_repo=args.execution_repo,
             worktree_root=args.worktree_root,
+            verifier_profile=load_verifier_profile(args.verifier_profile),
+            worker_permission_config=args.worker_permission_config,
         )
         control_server = ControlPlaneServer(control_service, args.control_socket)
         control_server.start_background()

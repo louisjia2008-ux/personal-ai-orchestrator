@@ -313,6 +313,40 @@ def _close(snapshot: dict) -> None:
     snapshot["store"].close()
 
 
+def test_worker_permission_config_seeded_into_worktree(tmp_path: Path) -> None:
+    policy = tmp_path / "policy" / "opencode.json"
+    policy.parent.mkdir(parents=True, exist_ok=True)
+    policy.write_text(
+        '{"$schema": "https://opencode.ai/config.json", '
+        '"permission": {"edit": "allow", "bash": "deny", "webfetch": "deny"}}',
+        encoding="utf-8",
+    )
+    harness = ExecutorHarness(tmp_path)
+    harness.executor.config = DispatchExecutorConfig(
+        repo_path=harness.executor.config.repo_path,
+        worktree_root=harness.executor.config.worktree_root,
+        opencode_bin=harness.executor.config.opencode_bin,
+        verifier_profile=VerifierProfile(
+            name="seeded",
+            commands=(
+                VerifierCommand(name="hello-exists", argv=("test", "-f", "hello.txt")),
+            ),
+            allowed_paths=("hello.txt", "opencode.json"),
+        ),
+        worker_permission_config=policy,
+    )
+    request_id = harness.reserve()
+    harness.run(request_id)
+
+    snapshot = harness.snapshot()
+    try:
+        assert snapshot["task"].state is TaskState.VERIFIED
+    finally:
+        _close(snapshot)
+    seeded = tmp_path / "worktrees" / "task-1" / "opencode.json"
+    assert seeded.read_text(encoding="utf-8") == policy.read_text(encoding="utf-8")
+
+
 def test_worker_env_excludes_credentials() -> None:
     os.environ.update(
         {
@@ -358,6 +392,13 @@ def test_successful_dispatch_reaches_verified_with_durable_evidence(
     assert evidence is not None
     assert evidence.result.value == "VERIFIED"
     assert evidence.verification_method.value == "REAL_WORKER_INVOCATION"
+    # UNKNOWN quota semantics stay durable and truthful even without a collector.
+    quota = QuotaAvailabilityJournal(harness.runtime_root).load(
+        "zai-coding-plan-glm-5.3"
+    )
+    assert quota is not None
+    assert quota.state.value == "UNKNOWN"
+    assert quota.confidence.value == "UNKNOWN"
 
 
 def test_worker_spawn_failure_blocks_without_ghost_running(tmp_path: Path) -> None:
@@ -419,7 +460,10 @@ def test_verifier_failure_blocks_verified(tmp_path: Path) -> None:
         _close(snapshot)
     evidence = harness.execution_evidence.latest_for_target("zai-coding-plan-glm-5.3")
     assert evidence is not None
-    assert evidence.result.value == "UNKNOWN"
+    # The real invocation itself succeeded (exit 0), so execution
+    # capability stays VERIFIED even though the task is BLOCKED.
+    assert evidence.result.value == "VERIFIED"
+    assert evidence.reason_code == "REAL_WORKER_DISPATCH_SUCCEEDED"
 
 
 def test_worktree_creation_failure_blocks_sanitized(tmp_path: Path) -> None:

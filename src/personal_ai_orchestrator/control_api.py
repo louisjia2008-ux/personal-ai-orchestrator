@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import socket
 import threading
 from dataclasses import dataclass, field
@@ -354,8 +355,29 @@ class ControlPlaneService:
 
     @staticmethod
     def _validate_identifier(kind: str, value: str) -> None:
-        if not _IDENTIFIER.match(value):
+        if _IDENTIFIER.match(value) is None:
             raise ControlPlaneError(400, f"invalid_{kind}")
+
+    def _effective_registry(self) -> ModelRegistry:
+        return (
+            self.provider_registry_manager.registry()
+            if self.provider_registry_manager is not None
+            else self.registry
+        )
+
+    def _runtime_available(self, execution_target_id: str) -> bool:
+        """Static availability map wins; discovered opencode targets derive
+        availability from the local runtime surface truthfully."""
+
+        if execution_target_id in self.runtime_availability:
+            return self.runtime_availability[execution_target_id]
+        target = self._effective_registry().execution_targets.get(execution_target_id)
+        if target is None:
+            return False
+        runtime_provider = target.runtime_provider_id or "opencode"
+        if runtime_provider != "opencode":
+            return False
+        return shutil.which("opencode") is not None
 
     def submit_task(self, payload: dict[str, Any]) -> TaskView:
         request = TaskSubmitRequest.model_validate(payload)
@@ -517,7 +539,7 @@ class ControlPlaneService:
             validate_execution_target_launch(
                 effective_registry,
                 execution_target_id=request.execution_target_id,
-                runtime_available=self.runtime_availability.get(request.execution_target_id, False),
+                runtime_available=self._runtime_available(request.execution_target_id),
                 execution_evidence_journal=self.execution_evidence_journal,
             )
         except RuntimeError as error:
@@ -835,7 +857,11 @@ class ControlPlaneService:
             runtime_id=target.runtime_id,
             enabled=target.enabled,
             execution_verified=execution_verified,
-            runtime_available=self.runtime_availability.get(target.id),
+            runtime_available=(
+                self.runtime_availability.get(target.id)
+                if target.id in self.runtime_availability
+                else self._runtime_available(target.id)
+            ),
             observed_availability=observed,
         )
 
@@ -1120,7 +1146,7 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                     self._json(404, {"error": "not_found"})
                     return
                 rest = segments[1:]
-                if method not in ("GET", "POST"):
+                if method not in ("GET", "POST", "PUT"):
                     self._json(405, {"error": "method_not_allowed"})
                     return
                 request_service = service.open_request()
