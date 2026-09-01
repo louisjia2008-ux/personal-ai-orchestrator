@@ -216,13 +216,13 @@ Personal AI Orchestrator.app
         |
 MenuBarExtra + Dashboard Window + Settings Scene
         |
-Shared OrchestratorStore
+Shared OrchestratorStore (auto-refresh /v1/dashboard + /v1/providers/status)
         |
 PAOControlClient
         |
-/v1/dashboard and /v1/tasks/<id>/detail
+/v1/dashboard, /v1/providers, /v1/providers/status, /v1/providers/refresh
         |
-ControlPlaneService projections over Safety Kernel truth
+ControlPlaneService projections over Safety Kernel truth + ProviderRegistryManager
 ```
 
 `/v1/dashboard` composes health, task counts, recent tasks, provider/quota health,
@@ -237,6 +237,33 @@ from the actual execution target, and `UNKNOWN` quota never renders as a numeric
 percentage. Production ACTIVE remains `DISABLED_BY_DESIGN` unless the daemon activation
 authority reports otherwise; the app has no enable, force, or override button.
 
+### P4.2.4-A real provider registry
+
+The bundled daemon owns a dynamic `ProviderRegistryManager` that performs
+credential-safe provider discovery against the local OpenCode CLI:
+
+```text
+provider_discovery.discover()
+        |
+spawns `opencode providers list` + `opencode models <family>`
+        |
+parses provider labels + env-var names only (no token values)
+        |
+returns sanitized ProviderDiscovery records
+        |
+ProviderRegistryManager persists provider-registry.json
+        |
+ControlPlaneService projects through /v1/providers/status
+        |
+Dashboard Provider / Agents / Quota pages render real GLM / MiniMax rows
+```
+
+The discovery subprocess is bounded (8 s timeout, 256 KB stdout cap), never
+spawns a shell, and redacts any token-shaped substring from captured output.
+The Dashboard surfaces `evidence_source`, `auth_status`, `execution_status`,
+and `last_checked` for every provider, with a CN vs international region tag
+for MiniMax surfaces.
+
 Runtime bootstrap now has a macOS application-support layout:
 
 ```text
@@ -244,6 +271,7 @@ Runtime bootstrap now has a macOS application-support layout:
   runtime.json
   state.sqlite3
   runtime-state/
+  provider-registry.json (sanitized dynamic registry; credential-free)
   logs/
 
 ~/Library/Caches/Personal AI Orchestrator/control.sock
@@ -251,8 +279,9 @@ Runtime bootstrap now has a macOS application-support layout:
 
 The socket lives under Caches to keep the AF_UNIX path below macOS limits. Runtime config
 bootstrap validates schema versioning, writes atomically, and rejects static config that
-contains `credential_ref` values. This is a foundation for app-owned daemon lifecycle; it
-does not yet make the Python daemon self-contained or signed.
+contains `credential_ref` values. The legacy `product-bootstrap-empty-registry-v1`
+bootstrap snapshot is upgraded in place by the discovery cycle on first launch;
+user-authored registries are preserved.
 
 ## P4.1 native macOS menu bar client
 

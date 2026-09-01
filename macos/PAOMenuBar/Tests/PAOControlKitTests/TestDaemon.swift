@@ -138,6 +138,10 @@ let providersBody = """
 {"providers":[{"provider_id":"minimax","display_name":"MiniMax CN","account_count":1,"quota_pools":[{"quota_pool_id":"pool","name":"shared","plan_id":"plan","state":"AVAILABLE","confidence":"ESTIMATED","measurement_source_type":"PROVIDER_API","observed_at":"2026-08-31T00:00:00Z","windows":[{"window_id":"5h","window_kind":"FIVE_HOUR","state":"AVAILABLE","confidence":"ESTIMATED","remaining_fraction":0.8,"reset_at":null}]}],"execution_targets":[{"execution_target_id":"m3-sub","model_sku_id":"m3","runtime_id":"opencode","enabled":true,"runtime_available":true,"observed_availability":{"state":"EXHAUSTED_OBSERVED","observed_at":"2026-08-31T00:00:00Z","measurement_source":"LOCALLY_MEASURED","confidence":"ESTIMATED","sanitized_reason_code":"USAGE_LIMIT"}}]}]}
 """
 
+let providerDiscoveryStatusBody = """
+{"discovery_state":"DISCOVERED","last_discovered_at":"2026-08-31T00:00:00Z","provider_count":5,"execution_target_count":35,"last_error_code":null,"catalog_snapshot_id":"1.18.25","source_method":"opencode_cli_inspection"}
+"""
+
 let activeStatusBody = """
 {"production_active":"DISABLED_BY_DESIGN","authorized":false,"blocking_reasons":["explicit owner approval missing","P3.5 Shadow evidence not accepted"],"gate":{"owner_approved":false}}
 """
@@ -161,6 +165,8 @@ func registerStandardRoutes(_ daemon: TestDaemon) {
     daemon.route("GET", "/v1/tasks", body: tasksBody)
     daemon.route("GET", "/v1/tasks/t-1/detail", body: taskDetailBody)
     daemon.route("GET", "/v1/providers", body: providersBody)
+    daemon.route("GET", "/v1/providers/status", body: providerDiscoveryStatusBody)
+    daemon.route("POST", "/v1/providers/refresh", body: providerDiscoveryStatusBody)
     daemon.route("GET", "/v1/quota", body: providersBody)
     daemon.route("GET", "/v1/active-status", body: activeStatusBody)
 }

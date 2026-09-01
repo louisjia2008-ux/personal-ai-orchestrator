@@ -189,58 +189,58 @@ private struct OverviewDashboard: View {
     @Binding var stateFilter: String
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                DashboardCard(title: L10n.connectionLabel, symbol: store.statusSummary.systemImage) {
-                    HStack {
-                        StatusBadge(text: L10n.statusTitle(store.statusSummary), kind: store.connection.isConnected ? .good : .bad)
-                        Text(store.connection.isConnected ? L10n.connectedLabel : disconnectedText)
-                            .foregroundStyle(.secondary)
-                    }
-                    DaemonLifecycleLabel(lifecycle: store.daemonLifecycle)
-                    Text(store.socketPath)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+        DashboardPageContainer(
+            title: L10n.dashboardSection(DashboardSection.overview.rawValue),
+            symbol: DashboardSection.overview.symbol
+        ) {
+            DashboardCard(title: L10n.connectionLabel, symbol: store.statusSummary.systemImage) {
+                HStack {
+                    StatusBadge(text: L10n.statusTitle(store.statusSummary), kind: store.connection.isConnected ? .good : .bad)
+                    Text(store.connection.isConnected ? L10n.connectedLabel : disconnectedText)
+                        .foregroundStyle(.secondary)
                 }
-
-                let counts = store.dashboard?.counts
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 5), spacing: 12) {
-                    MetricTile("RUNNING", counts?.running ?? 0, symbol: "gearshape.2") {
-                        navigateToTasks(filter: "RUNNING")
-                    }
-                    MetricTile("READY", counts?.ready ?? 0, symbol: "tray") {
-                        navigateToTasks(filter: "READY")
-                    }
-                    MetricTile("BLOCKED", counts?.blocked ?? 0, symbol: "exclamationmark.octagon") {
-                        navigateToTasks(filter: "BLOCKED")
-                    }
-                    MetricTile("VERIFIED", counts?.verified ?? 0, symbol: "checkmark.seal") {
-                        navigateToTasks(filter: "VERIFIED")
-                    }
-                    MetricTile("COMPLETED", counts?.completed ?? 0, symbol: "checkmark.circle") {
-                        navigateToTasks(filter: "VERIFIED")
-                    }
-                }
-                Text(L10n.metricTileHelp)
-                    .font(.caption)
+                DaemonLifecycleLabel(lifecycle: store.daemonLifecycle)
+                Text(store.socketPath)
+                    .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
 
-                DashboardCard(title: L10n.blockers, symbol: "exclamationmark.triangle") {
-                    if let blockers = store.dashboard?.importantBlockers, !blockers.isEmpty {
-                        ForEach(blockers, id: \.self) { Text($0).foregroundStyle(.secondary) }
-                    } else {
-                        Text(L10n.noBlockers).foregroundStyle(.secondary)
-                    }
-                    StatusBadge(text: store.activeStatus?.productionActive ?? "UNKNOWN", kind: .neutral)
+            let counts = store.dashboard?.counts
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 5), spacing: 12) {
+                MetricTile("RUNNING", counts?.running ?? 0, symbol: "gearshape.2") {
+                    navigateToTasks(filter: "RUNNING")
                 }
-
-                DashboardCard(title: L10n.events, symbol: "clock") {
-                    EventList(events: store.dashboard?.recentEvents ?? [])
+                MetricTile("READY", counts?.ready ?? 0, symbol: "tray") {
+                    navigateToTasks(filter: "READY")
+                }
+                MetricTile("BLOCKED", counts?.blocked ?? 0, symbol: "exclamationmark.octagon") {
+                    navigateToTasks(filter: "BLOCKED")
+                }
+                MetricTile("VERIFIED", counts?.verified ?? 0, symbol: "checkmark.seal") {
+                    navigateToTasks(filter: "VERIFIED")
+                }
+                MetricTile("COMPLETED", counts?.completed ?? 0, symbol: "checkmark.circle") {
+                    navigateToTasks(filter: "VERIFIED")
                 }
             }
-            .padding(20)
+            Text(L10n.metricTileHelp)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+
+            DashboardCard(title: L10n.blockers, symbol: "exclamationmark.triangle") {
+                if let blockers = store.dashboard?.importantBlockers, !blockers.isEmpty {
+                    ForEach(blockers, id: \.self) { Text($0).foregroundStyle(.secondary) }
+                } else {
+                    Text(L10n.noBlockers).foregroundStyle(.secondary)
+                }
+                StatusBadge(text: store.activeStatus?.productionActive ?? "UNKNOWN", kind: .neutral)
+            }
+
+            DashboardCard(title: L10n.events, symbol: "clock") {
+                EventList(events: store.dashboard?.recentEvents ?? [])
+            }
         }
     }
 
@@ -288,69 +288,93 @@ private struct TasksDashboard: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            VStack(spacing: 0) {
-                HStack {
-                    TextField(L10n.search, text: $query)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($searchFocused)
-                    Picker(L10n.stateFilter, selection: $stateFilter) {
-                        Text(L10n.allStates).tag("")
-                        ForEach(states, id: \.self) { Text($0).tag($0) }
+        DashboardPageContainer(
+            title: L10n.taskBrowserTitle,
+            symbol: DashboardSection.tasks.symbol,
+            trailing: {
+                AnyView(
+                    Button {
+                        onNewTask()
+                    } label: {
+                        Label(L10n.newTask, systemImage: "plus")
                     }
-                    .pickerStyle(.menu)
-                    .frame(width: 170)
-                }
-                .padding()
-
-                if allTasks.isEmpty {
-                    tasksEmptyState
-                } else {
-                    taskList
-                }
+                    .buttonStyle(.borderless)
+                    .keyboardShortcut("n", modifiers: .command)
+                    .help(L10n.newTaskHelp)
+                )
             }
-            .navigationSplitViewColumnWidth(min: 260, ideal: 320)
-        } detail: {
-            TaskDetailPanel(
-                detail: store.selectedTaskDetail,
-                selectedTaskId: selectedTaskId,
-                onCopyTaskId: { selectedTaskId.map(Pasteboard.copy) },
-                onReload: {
-                    if let selectedTaskId {
-                        Task { await store.loadTaskDetail(taskId: selectedTaskId) }
+        ) {
+            GeometryReader { proxy in
+                let compact = proxy.size.width < 760
+                HStack(alignment: .top, spacing: 12) {
+                    DashboardBrowserPanel(title: L10n.taskBrowserTitle) {
+                        browserContent
                     }
+                    .frame(
+                        minWidth: compact ? 280 : 300,
+                        idealWidth: compact ? 320 : 340,
+                        maxWidth: 420
+                    )
+                    Divider()
+                    DashboardDetailPanel {
+                        detailContent
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-            )
-            .navigationSplitViewColumnWidth(min: 320, ideal: 540)
+                .padding(.horizontal, 4)
+            }
+            .frame(minHeight: 360)
         }
         .background(hiddenCommands)
     }
 
-    private var taskList: some View {
-        List(selection: $selectedTaskId) {
+    @ViewBuilder
+    private var browserContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                TextField(L10n.search, text: $query)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($searchFocused)
+                Picker(L10n.stateFilter, selection: $stateFilter) {
+                    Text(L10n.allStates).tag("")
+                    ForEach(states, id: \.self) { Text($0).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+            }
+            .padding(10)
+
+            Divider()
+
             if tasks.isEmpty {
                 Text(L10n.tasksNoMatch)
                     .foregroundStyle(.secondary)
+                    .padding(12)
+                Spacer()
             } else {
-                ForEach(tasks) { task in
-                    TaskRow(task: task, isSelected: task.taskId == selectedTaskId)
-                        .tag(task.taskId)
-                        .padding(.vertical, 2)
+                List(selection: $selectedTaskId) {
+                    ForEach(tasks) { task in
+                        TaskRow(task: task, isSelected: task.taskId == selectedTaskId)
+                            .tag(task.taskId)
+                            .padding(.vertical, 2)
+                    }
                 }
+                .listStyle(.inset)
             }
-        }
-        .onChange(of: selectedTaskId) { taskId in
-            guard let taskId else { return }
-            Task { await store.loadTaskDetail(taskId: taskId) }
         }
     }
 
-    private var tasksEmptyState: some View {
-        VStack(spacing: 12) {
+    @ViewBuilder
+    private var detailContent: some View {
+        if allTasks.isEmpty {
             if store.connection.isConnected {
-                EmptyStateView(title: L10n.noTasks, symbol: "checklist", message: L10n.noTasksHint, hint: L10n.tasksEmptyHint) {
-                    Button(L10n.newTask, action: onNewTask)
-                }
+                EmptyStateView(
+                    title: L10n.taskDetail,
+                    symbol: "doc.text",
+                    message: L10n.noTasksHint,
+                    hint: L10n.tasksEmptyHint,
+                    action: onNewTask
+                )
             } else {
                 EmptyStateView(
                     title: L10n.disconnectedLabel,
@@ -358,8 +382,23 @@ private struct TasksDashboard: View {
                     message: L10n.tasksDisconnectedHint
                 )
             }
+        } else if let selectedTaskId {
+            TaskDetailPanel(
+                detail: store.selectedTaskDetail,
+                selectedTaskId: selectedTaskId,
+                onCopyTaskId: { Pasteboard.copy(selectedTaskId) },
+                onReload: {
+                    Task { await store.loadTaskDetail(taskId: selectedTaskId) }
+                }
+            )
+        } else {
+            EmptyStateView(
+                title: L10n.taskDetailCanvasTitle,
+                symbol: "doc.text",
+                message: L10n.selectTaskForDetails,
+                hint: L10n.taskBrowserHint
+            )
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// Hidden commands for keyboard-first navigation. SwiftUI on macOS only
@@ -446,22 +485,26 @@ private struct SelectedTaskDetailDashboard: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                taskPicker
+        DashboardPageContainer(
+            title: mode == .routing
+                ? L10n.dashboardSection(DashboardSection.routing.rawValue)
+                : L10n.dashboardSection(DashboardSection.verification.rawValue),
+            symbol: mode == .routing
+                ? DashboardSection.routing.symbol
+                : DashboardSection.verification.symbol
+        ) {
+            taskPicker
 
-                if let detail = store.selectedTaskDetail {
-                    taskHeader(detail: detail)
-                    if mode == .routing {
-                        RoutingPanel(detail: detail)
-                    } else {
-                        VerificationPanel(detail: detail)
-                    }
+            if let detail = store.selectedTaskDetail {
+                taskHeader(detail: detail)
+                if mode == .routing {
+                    RoutingPanel(detail: detail)
                 } else {
-                    noSelectionState
+                    VerificationPanel(detail: detail)
                 }
+            } else {
+                noSelectionState
             }
-            .padding(20)
         }
         .background(hiddenCommands)
         .onAppear {
@@ -578,18 +621,41 @@ private struct ExecutionTargetsDashboard: View {
     @EnvironmentObject private var store: OrchestratorStore
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
-                let providers = store.providers?.providers ?? []
-                if providers.isEmpty {
-                    EmptyStateView(
-                        title: L10n.agentsTitle,
-                        symbol: "cpu",
-                        message: L10n.noProvidersHint
-                    )
-                } else {
-                    ForEach(providers) { provider in
-                        DashboardCard(title: provider.displayName, symbol: "cpu") {
+        DashboardPageContainer(
+            title: L10n.dashboardSection(DashboardSection.agents.rawValue),
+            symbol: DashboardSection.agents.symbol,
+            trailing: {
+                AnyView(
+                    Button {
+                        Task { await store.refreshProviders() }
+                    } label: {
+                        if store.isRefreshingProviders {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label(L10n.refreshProviders, systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(store.isRefreshingProviders)
+                    .help(L10n.refreshProviders)
+                )
+            }
+        ) {
+            ProviderDiscoveryStatusCard()
+            let providers = store.providers?.providers ?? []
+            if providers.isEmpty {
+                EmptyStateView(
+                    title: L10n.agentsTitle,
+                    symbol: "cpu",
+                    message: L10n.noProvidersHint
+                )
+            } else {
+                ForEach(providers) { provider in
+                    DashboardCard(title: provider.displayName, symbol: "cpu") {
+                        if provider.executionTargets.isEmpty {
+                            Text(L10n.noProvidersHint)
+                                .foregroundStyle(.secondary)
+                        } else {
                             ForEach(provider.executionTargets) { target in
                                 ExecutionTargetDisclosure(target: target)
                             }
@@ -597,7 +663,6 @@ private struct ExecutionTargetsDashboard: View {
                     }
                 }
             }
-            .padding(20)
         }
     }
 }
@@ -649,33 +714,113 @@ private struct ProvidersDashboard: View {
     @EnvironmentObject private var store: OrchestratorStore
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                let providers = store.providers?.providers ?? []
-                if providers.isEmpty {
-                    EmptyStateView(
-                        title: L10n.providersTitle,
-                        symbol: "network",
-                        message: L10n.noProvidersHint
-                    )
-                } else {
-                    ForEach(providers) { provider in
-                        DashboardCard(title: provider.displayName, symbol: "network") {
-                            Text("\(provider.providerId) | \(L10n.accountsCount(provider.accountCount))")
-                                .foregroundStyle(.secondary)
-                            ForEach(provider.quotaPools) { pool in
-                                QuotaPoolDisclosure(pool: pool)
-                            }
-                            ForEach(provider.executionTargets) { target in
-                                Text("\(L10n.providerTargetLabel) \(target.executionTargetId)")
+        DashboardPageContainer(
+            title: L10n.dashboardSection(DashboardSection.providers.rawValue),
+            symbol: DashboardSection.providers.symbol,
+            trailing: {
+                AnyView(
+                    Button {
+                        Task { await store.refreshProviders() }
+                    } label: {
+                        if store.isRefreshingProviders {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label(L10n.refreshProviders, systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(store.isRefreshingProviders)
+                    .help(L10n.refreshProviders)
+                )
+            }
+        ) {
+            ProviderDiscoveryStatusCard()
+            let providers = store.providers?.providers ?? []
+            if providers.isEmpty {
+                EmptyStateView(
+                    title: L10n.providersTitle,
+                    symbol: "network",
+                    message: store.providerDiscoveryStatus?.discoveryState == "PENDING"
+                        ? L10n.discoveryEmpty
+                        : L10n.noProvidersHint
+                )
+            } else {
+                ForEach(providers) { provider in
+                    ProviderCard(provider: provider)
+                }
+            }
+        }
+    }
+}
+
+private struct ProviderCard: View {
+    let provider: ProviderHealthView
+
+    var body: some View {
+        DashboardCard(title: provider.displayName, symbol: "network") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    StatusBadge(text: provider.providerId, kind: .neutral)
+                    Text(L10n.accountsCount(provider.accountCount))
+                        .foregroundStyle(.secondary)
+                    if let evidence = provider.evidenceSource {
+                        StatusBadge(text: evidence, kind: evidenceBadgeKind(evidence))
+                    }
+                }
+                if let authStatus = provider.authStatus {
+                    LabeledContent(L10n.providerAuthStatus, value: authStatus)
+                        .foregroundStyle(.secondary)
+                }
+                if let executionStatus = provider.executionStatus {
+                    LabeledContent(L10n.providerExecutionStatus, value: executionStatus)
+                        .foregroundStyle(.secondary)
+                }
+                if !provider.executionTargets.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L10n.providerExecutionTargets)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        ForEach(provider.executionTargets) { target in
+                            HStack {
+                                Text(target.executionTargetId)
                                     .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer()
+                                if let available = target.runtimeAvailable {
+                                    StatusBadge(
+                                        text: available ? "AVAILABLE" : "UNAVAILABLE",
+                                        kind: available ? .good : .bad
+                                    )
+                                }
                             }
                         }
                     }
                 }
+                if !provider.quotaPools.isEmpty {
+                    Divider()
+                    Text("Quota pools")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(provider.quotaPools) { pool in
+                        QuotaPoolDisclosure(pool: pool)
+                    }
+                }
+                if let lastChecked = provider.lastChecked {
+                    Text(L10n.quotaObservedAt(lastChecked))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
-            .padding(20)
+        }
+    }
+
+    private func evidenceBadgeKind(_ source: String) -> BadgeKind {
+        switch source {
+        case "EXECUTION_PROBE_RUN": return .good
+        case "AUTH_FROM_ENV_PRESENCE": return .warn
+        case "DISCOVERED_FROM_CATALOG": return .neutral
+        default: return .neutral
         }
     }
 }
@@ -714,24 +859,49 @@ private struct QuotaDashboard: View {
     @EnvironmentObject private var store: OrchestratorStore
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                let providers = store.providers?.providers ?? []
-                if providers.isEmpty {
-                    EmptyStateView(
-                        title: L10n.quotaTitle,
-                        symbol: "chart.pie",
-                        message: L10n.noProvidersHint
-                    )
-                } else {
-                    ForEach(providers) { provider in
-                        ForEach(provider.quotaPools) { pool in
-                            QuotaPoolCard(providerName: provider.displayName, pool: pool)
+        DashboardPageContainer(
+            title: L10n.dashboardSection(DashboardSection.quota.rawValue),
+            symbol: DashboardSection.quota.symbol,
+            trailing: {
+                AnyView(
+                    Button {
+                        Task { await store.refreshProviders() }
+                    } label: {
+                        if store.isRefreshingProviders {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label(L10n.refreshProviders, systemImage: "arrow.clockwise")
                         }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(store.isRefreshingProviders)
+                    .help(L10n.refreshProviders)
+                )
+            }
+        ) {
+            ProviderDiscoveryStatusCard()
+            let providers = store.providers?.providers ?? []
+            if providers.isEmpty {
+                EmptyStateView(
+                    title: L10n.quotaTitle,
+                    symbol: "chart.pie",
+                    message: store.providerDiscoveryStatus?.discoveryState == "PENDING"
+                        ? L10n.discoveryEmpty
+                        : L10n.noProvidersHint
+                )
+            } else if providers.allSatisfy({ $0.quotaPools.isEmpty }) {
+                EmptyStateView(
+                    title: L10n.quotaTitle,
+                    symbol: "chart.pie",
+                    message: L10n.noProvidersHint
+                )
+            } else {
+                ForEach(providers) { provider in
+                    ForEach(provider.quotaPools) { pool in
+                        QuotaPoolCard(providerName: provider.displayName, pool: pool)
                     }
                 }
             }
-            .padding(20)
         }
     }
 }
@@ -816,17 +986,64 @@ private struct QuotaWindowDisclosure: View {
     }
 }
 
+/// Diagnostic card that surfaces the discovery lifecycle so the user can
+/// tell at a glance whether the Providers/Agents/Quota pages reflect a
+/// live discovery cycle or just the persisted registry from a prior
+/// launch. Hidden when nothing has been discovered yet, so the cards
+/// stay quiet on a cold start with no providers.
+private struct ProviderDiscoveryStatusCard: View {
+    @EnvironmentObject private var store: OrchestratorStore
+
+    var body: some View {
+        if let status = store.providerDiscoveryStatus {
+            DashboardCard(title: L10n.providerDiscoveryState, symbol: "antenna.radiowaves.left.and.right") {
+                HStack(spacing: 8) {
+                    StatusBadge(text: status.discoveryState, kind: badgeKind(for: status.discoveryState))
+                    if let snapshot = status.catalogSnapshotId {
+                        StatusBadge(text: snapshot, kind: .neutral)
+                    }
+                    if let method = status.sourceMethod {
+                        StatusBadge(text: method, kind: .neutral)
+                    }
+                }
+                if let lastDiscoveredAt = status.lastDiscoveredAt {
+                    Text(L10n.providerLastDiscovered(lastDiscoveredAt))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let errorCode = status.lastErrorCode {
+                    Text(L10n.discoveryError(errorCode))
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+        }
+    }
+
+    private func badgeKind(for state: String) -> BadgeKind {
+        switch state {
+        case "DISCOVERED": return .good
+        case "PENDING": return .warn
+        case "EMPTY": return .neutral
+        case "FAILED": return .bad
+        default: return .neutral
+        }
+    }
+}
+
 // MARK: - History
 
 private struct HistoryDashboard: View {
     @EnvironmentObject private var store: OrchestratorStore
 
     var body: some View {
-        ScrollView {
+        DashboardPageContainer(
+            title: L10n.dashboardSection(DashboardSection.history.rawValue),
+            symbol: DashboardSection.history.symbol
+        ) {
             DashboardCard(title: L10n.history, symbol: "clock.arrow.circlepath") {
                 EventList(events: store.dashboard?.recentEvents ?? [])
             }
-            .padding(20)
         }
     }
 }
@@ -840,8 +1057,11 @@ struct ClientSettingsDashboard: View {
     private let layout = AppSupportLayout.resolve()
 
     var body: some View {
-        Form {
-            Section(L10n.daemonLifecycle) {
+        DashboardPageContainer(
+            title: L10n.dashboardSection(DashboardSection.settings.rawValue),
+            symbol: DashboardSection.settings.symbol
+        ) {
+            DashboardCard(title: L10n.daemonLifecycle, symbol: "gearshape") {
                 Toggle(L10n.launchAtLogin, isOn: $launchAtLogin)
                 Text(L10n.launchAtLoginFooter)
                     .font(.caption)
@@ -854,7 +1074,7 @@ struct ClientSettingsDashboard: View {
                 LabeledContent(L10n.runtimeConfig, value: layout.runtimeConfigPath)
                 DaemonLifecycleLabel(lifecycle: store.daemonLifecycle)
             }
-            Section(L10n.productionActive) {
+            DashboardCard(title: L10n.productionActive, symbol: "lock") {
                 LabeledContent("ACTIVE", value: store.activeStatus?.productionActive ?? "UNKNOWN")
                 if let active = store.activeStatus {
                     Label(
@@ -881,8 +1101,6 @@ struct ClientSettingsDashboard: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .formStyle(.grouped)
-        .padding(20)
     }
 }
 

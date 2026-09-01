@@ -192,6 +192,10 @@ public struct ProviderHealthView: Codable, Equatable, Identifiable, Sendable {
     public let accountCount: Int
     public let quotaPools: [QuotaPoolHealthView]
     public let executionTargets: [ExecutionTargetHealthView]
+    public let evidenceSource: String?
+    public let authStatus: String?
+    public let executionStatus: String?
+    public let lastChecked: String?
 
     public var id: String { providerId }
 
@@ -201,11 +205,89 @@ public struct ProviderHealthView: Codable, Equatable, Identifiable, Sendable {
         case accountCount = "account_count"
         case quotaPools = "quota_pools"
         case executionTargets = "execution_targets"
+        case evidenceSource = "evidence_source"
+        case authStatus = "auth_status"
+        case executionStatus = "execution_status"
+        case lastChecked = "last_checked"
+    }
+
+    public init(
+        providerId: String,
+        displayName: String,
+        accountCount: Int,
+        quotaPools: [QuotaPoolHealthView] = [],
+        executionTargets: [ExecutionTargetHealthView] = [],
+        evidenceSource: String? = nil,
+        authStatus: String? = nil,
+        executionStatus: String? = nil,
+        lastChecked: String? = nil
+    ) {
+        self.providerId = providerId
+        self.displayName = displayName
+        self.accountCount = accountCount
+        self.quotaPools = quotaPools
+        self.executionTargets = executionTargets
+        self.evidenceSource = evidenceSource
+        self.authStatus = authStatus
+        self.executionStatus = executionStatus
+        self.lastChecked = lastChecked
     }
 }
 
 public struct ProviderHealthListView: Codable, Equatable, Sendable {
     public let providers: [ProviderHealthView]
+
+    public init(providers: [ProviderHealthView]) {
+        self.providers = providers
+    }
+}
+
+/// Provider-discovery status projected by the product runtime.
+///
+/// `discoveryState` mirrors the daemon's discovery lifecycle:
+///   PENDING      – product just launched, discovery has not yet completed
+///   DISCOVERED   – at least one provider family is currently registered
+///   EMPTY        – discovery ran and found nothing (e.g. no auth configured)
+///   FAILED       – discovery errored; `lastErrorCode` describes the cause
+///
+/// `lastDiscoveredAt` is the ISO-8601 timestamp of the most recent
+/// successful discovery cycle. It is informational only.
+public struct ProviderDiscoveryStatusView: Codable, Equatable, Sendable {
+    public let discoveryState: String
+    public let lastDiscoveredAt: String?
+    public let providerCount: Int
+    public let executionTargetCount: Int
+    public let lastErrorCode: String?
+    public let catalogSnapshotId: String?
+    public let sourceMethod: String?
+
+    enum CodingKeys: String, CodingKey {
+        case discoveryState = "discovery_state"
+        case lastDiscoveredAt = "last_discovered_at"
+        case providerCount = "provider_count"
+        case executionTargetCount = "execution_target_count"
+        case lastErrorCode = "last_error_code"
+        case catalogSnapshotId = "catalog_snapshot_id"
+        case sourceMethod = "source_method"
+    }
+
+    public init(
+        discoveryState: String,
+        lastDiscoveredAt: String? = nil,
+        providerCount: Int = 0,
+        executionTargetCount: Int = 0,
+        lastErrorCode: String? = nil,
+        catalogSnapshotId: String? = nil,
+        sourceMethod: String? = nil
+    ) {
+        self.discoveryState = discoveryState
+        self.lastDiscoveredAt = lastDiscoveredAt
+        self.providerCount = providerCount
+        self.executionTargetCount = executionTargetCount
+        self.lastErrorCode = lastErrorCode
+        self.catalogSnapshotId = catalogSnapshotId
+        self.sourceMethod = sourceMethod
+    }
 }
 
 public struct ActiveStatusView: Decodable, Equatable, Sendable {

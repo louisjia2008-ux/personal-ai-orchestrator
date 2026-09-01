@@ -187,10 +187,12 @@ A spike may exercise session-scoped `ACTIVE` switching in disposable fixtures; t
 
 ## P4 — Clients / macOS Control Plane
 
-Status: `P4_2_APP_DAEMON_WIDGET_SOURCE_ACCEPTED_APPEX_BLOCKED` (2026-08-31);
+Status: `P4_2_PROVIDER_REGISTRY_IMPLEMENTED_DISPATCH_PENDING` (2026-09-01);
 P4.0 accepted 2026-08-31 and P4.1 merged. A native dashboard, app-owned bundled daemon
-lifecycle, PyInstaller helper packaging, and WidgetKit source/snapshot bridge now exist;
-installable `.appex` packaging/signing and human visual acceptance remain open P4.2 gates.
+lifecycle, PyInstaller helper packaging, and WidgetKit source/snapshot bridge now exist.
+P4.2.3 polished Tasks master/detail shell consistency. P4.2.4-A added the unified
+dashboard shell and the real GLM / MiniMax provider registry; owner-initiated
+execution and OpenCode dispatch remain in P4.2.4-B.
 
 ### Objective
 Expose the same orchestrator state safely to multiple front ends while keeping the core headless.
@@ -225,11 +227,52 @@ Completed foundation:
 - WidgetKit source target plus a sanitized read-only snapshot bridge;
 - local app-bundle assembly script for `Personal AI Orchestrator.app`.
 
+### P4.2.4-A unified shell + real provider registry (2026-09-01)
+
+Added in this phase:
+
+- shared `DashboardPageContainer` chrome used by every primary section
+  (总览 / 任务 / Agents / 提供商 / 额度 / 调度 / 验证 / 历史 / 设置) for a single
+  visual shell;
+- Tasks screen rendered as an HStack master/detail inside the page container
+  instead of a nested `NavigationSplitView`, eliminating the previous
+  sidebar-inside-sidebar appearance while keeping the primary sidebar stable;
+- credential-safe provider discovery
+  (`personal_ai_orchestrator.provider_discovery.discover`) that inspects the
+  local OpenCode runtime via bounded subprocess invocations of
+  `opencode providers list` and `opencode models`, reading provider labels
+  and environment-variable names only — never token values, never
+  `Authorization` headers, never `auth.json`;
+- `ProviderRegistryManager` owns a sanitized dynamic `ModelRegistry` and
+  exposes it to the Control API; refresh coalesces concurrent calls;
+- automatic empty-bootstrap upgrade: legacy `product-bootstrap-empty-registry-v1`
+  static config now triggers a discovery cycle on first launch instead of
+  requiring manual deletion of `runtime.json`;
+- persisted sanitized snapshot at
+  `~/Library/Application Support/Personal AI Orchestrator/provider-registry.json`;
+- `GET /v1/providers/status` and `POST /v1/providers/refresh` typed control
+  endpoints with refresh coalescing;
+- `ProviderHealthView` enriched with `evidence_source`, `auth_status`,
+  `execution_status`, `last_checked` (Dashboard now displays real
+  `GLM / Z.AI`, `MiniMax CN`, `MiniMax CN Coding Plan`, `MiniMax International`,
+  `MiniMax International Coding Plan` from current `opencode models` output);
+- `ProviderDiscoveryStatusCard` surfaces discovery state, last discovered
+, and last error code on Providers / Agents / Quota pages;
+- CN vs international MiniMax distinction surfaced via region tag;
+- secret canary tests prove no token / `Authorization` / `cookie` /
+  `credential_ref` leaks through the persisted snapshot, the Control API,
+  or the Dashboard.
+
+Production ACTIVE remains `DISABLED_BY_DESIGN` and owner approval remains
+`ABSENT`. No owner-initiated dispatch has been implemented yet; that is
+explicitly deferred to P4.2.4-B.
+
 Remaining before full P4.2 acceptance:
 
 - installable WidgetKit `.appex` packaging/signing from an Xcode app-extension target or
   equivalent project migration;
-- Finder/Open launch, real Widget display, and human visual acceptance on the target Mac.
+- Finder/Open launch, real Widget display, and human visual acceptance on the target Mac;
+- P4.2.4-B: owner-initiated execution, OpenCode dispatch, host verifier integration.
 
 ---
 

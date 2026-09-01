@@ -27,6 +27,31 @@ final class ModelAndStatusTests: XCTestCase {
         XCTAssertEqual(target.observedAvailability?.measurementSource, "LOCALLY_MEASURED")
     }
 
+    func testProviderHealthViewDecodesDiscoveryEvidence() throws {
+        let body = """
+        {"providers":[{"provider_id":"zai-coding-plan","display_name":"GLM / Z.AI","account_count":0,"quota_pools":[],"execution_targets":[{"execution_target_id":"zai-coding-plan/glm-5.3","model_sku_id":"zai-coding-plan/glm-5.3","runtime_id":"opencode","enabled":true,"runtime_available":true}],"evidence_source":"DISCOVERED_FROM_CATALOG","auth_status":"AUTH_FROM_ENV_PRESENCE","execution_status":"AVAILABLE_FOR_CATALOG","last_checked":"2026-08-31T00:00:00Z"}]}
+        """
+        let view = try JSONDecoder().decode(ProviderHealthListView.self, from: Data(body.utf8))
+        let provider = try XCTUnwrap(view.providers.first)
+        XCTAssertEqual(provider.evidenceSource, "DISCOVERED_FROM_CATALOG")
+        XCTAssertEqual(provider.authStatus, "AUTH_FROM_ENV_PRESENCE")
+        XCTAssertEqual(provider.executionStatus, "AVAILABLE_FOR_CATALOG")
+        XCTAssertEqual(provider.lastChecked, "2026-08-31T00:00:00Z")
+    }
+
+    func testProviderDiscoveryStatusDecoding() throws {
+        let body = """
+        {"discovery_state":"DISCOVERED","last_discovered_at":"2026-08-31T00:00:00Z","provider_count":5,"execution_target_count":35,"last_error_code":null,"catalog_snapshot_id":"1.18.25","source_method":"opencode_cli_inspection"}
+        """
+        let view = try JSONDecoder().decode(ProviderDiscoveryStatusView.self, from: Data(body.utf8))
+        XCTAssertEqual(view.discoveryState, "DISCOVERED")
+        XCTAssertEqual(view.providerCount, 5)
+        XCTAssertEqual(view.executionTargetCount, 35)
+        XCTAssertEqual(view.catalogSnapshotId, "1.18.25")
+        XCTAssertEqual(view.sourceMethod, "opencode_cli_inspection")
+        XCTAssertNil(view.lastErrorCode)
+    }
+
     func testCredentialLikeFieldsAreIgnoredNotSurfaced() throws {
         let tainted = """
         {"providers":[{"provider_id":"minimax","display_name":"MiniMax CN","account_count":1,
