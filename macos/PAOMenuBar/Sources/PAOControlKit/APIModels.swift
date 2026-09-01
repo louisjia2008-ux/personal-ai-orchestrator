@@ -66,6 +66,7 @@ public struct RunView: Decodable, Equatable, Identifiable, Sendable {
     public let status: String
     public let startedAt: String
     public let finishedAt: String?
+    public let result: [String: RunResultValue]?
 
     public var id: String { runId }
 
@@ -77,11 +78,47 @@ public struct RunView: Decodable, Equatable, Identifiable, Sendable {
         case status
         case startedAt = "started_at"
         case finishedAt = "finished_at"
+        case result
     }
+
+    public var exitCode: Int? { result?["exit_code"]?.intValue }
+    public var stdoutBytes: Int? { result?["stdout_bytes"]?.intValue }
+    public var stderrBytes: Int? { result?["stderr_bytes"]?.intValue }
+    public var stdoutSHA256: String? { result?["stdout_sha256"]?.stringValue }
+    public var stderrSHA256: String? { result?["stderr_sha256"]?.stringValue }
+    public var outputTruncated: Bool? { result?["output_truncated"]?.boolValue }
+    public var timedOut: Bool? { result?["timed_out"]?.boolValue }
 }
 
 public struct RunListView: Decodable, Equatable, Sendable {
     public let runs: [RunView]
+}
+
+public struct RunResultValue: Decodable, Equatable, Sendable {
+    public let stringValue: String?
+    public let intValue: Int?
+    public let boolValue: Bool?
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let string = try? container.decode(String.self) {
+            stringValue = string
+            intValue = nil
+            boolValue = nil
+        } else if let int = try? container.decode(Int.self) {
+            stringValue = nil
+            intValue = int
+            boolValue = nil
+        } else if let bool = try? container.decode(Bool.self) {
+            stringValue = nil
+            intValue = nil
+            boolValue = bool
+        } else {
+            stringValue = nil
+            intValue = nil
+            boolValue = nil
+        }
+    }
 }
 
 public struct ApprovalView: Decodable, Equatable, Identifiable, Sendable {
@@ -313,6 +350,7 @@ public struct VerificationReportView: Decodable, Equatable, Sendable {
     public let status: String
     public let evidenceId: String?
     public let failureReason: String?
+    public let result: VerificationResultView?
 
     enum CodingKeys: String, CodingKey {
         case taskId = "task_id"
@@ -320,6 +358,40 @@ public struct VerificationReportView: Decodable, Equatable, Sendable {
         case status
         case evidenceId = "evidence_id"
         case failureReason = "failure_reason"
+        case result
+    }
+}
+
+public struct VerificationResultView: Decodable, Equatable, Sendable {
+    public let profile: String
+    public let passed: Bool
+    public let changedPaths: [String]
+    public let unexpectedPaths: [String]
+    public let stages: [VerificationStageView]
+    public let evidenceId: String?
+    public let failureReason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case profile
+        case passed
+        case changedPaths = "changed_paths"
+        case unexpectedPaths = "unexpected_paths"
+        case stages
+        case evidenceId = "evidence_id"
+        case failureReason = "failure_reason"
+    }
+}
+
+public struct VerificationStageView: Decodable, Equatable, Identifiable, Sendable {
+    public let name: String
+    public let exitCode: Int
+
+    public var id: String { name }
+    public var passed: Bool { exitCode == 0 }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case exitCode = "returncode"
     }
 }
 

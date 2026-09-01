@@ -29,6 +29,7 @@ from personal_ai_orchestrator.execution_evidence import (
 from personal_ai_orchestrator.process_supervisor import ProcessSupervisor
 
 PROBE_PROMPT = "Reply with exactly: PERSONAL-AI-ORCHESTRATOR-EXECUTION-PROBE-OK"
+PROBE_MARKER = "PERSONAL-AI-ORCHESTRATOR-EXECUTION-PROBE-OK"
 PROBE_TIMEOUT_SECONDS = 300.0
 
 
@@ -92,7 +93,7 @@ def run_execution_probe(
         journal.append(evidence)
         return evidence.model_dump(mode="json")
 
-    if exit_code == 0 and stdout.strip():
+    if exit_code == 0 and PROBE_MARKER.encode("utf-8") in stdout:
         result = ExecutionVerificationOutcome.VERIFIED
         reason = "REAL_WORKER_PROBE_SUCCEEDED"
     else:

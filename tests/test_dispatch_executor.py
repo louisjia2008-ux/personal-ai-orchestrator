@@ -16,7 +16,7 @@ import stat
 import subprocess
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -412,7 +412,7 @@ def test_worker_spawn_failure_blocks_without_ghost_running(tmp_path: Path) -> No
         assert snapshot["run_status"] is None
         assert snapshot["writer_token"] is None
         assert snapshot["dispatch_status"] == "BLOCKED"
-        assert snapshot["dispatch_failure_code"] == "WORKER_SPAWN_FAILED"
+        assert snapshot["dispatch_failure_code"] == "EXECUTION_TARGET_NOT_LAUNCHABLE"
         snapshot["store"].assert_running_invariant("task-1")
     finally:
         _close(snapshot)
@@ -664,6 +664,38 @@ def test_running_invariant_holds_during_execution(tmp_path: Path) -> None:
         _close(snapshot)
 
 
+def test_internal_executor_error_after_running_emergency_repairs_state(
+    tmp_path: Path,
+) -> None:
+    harness = ExecutorHarness(
+        tmp_path,
+        worker_bin=write_worker_script(
+            tmp_path / "bin", name="repair-worker", sleep_seconds=30.0
+        ),
+    )
+    request_id = harness.reserve()
+
+    async def broken_wait(_supervised):
+        raise RuntimeError("injected post-running failure")
+
+    harness.executor._wait_for_worker = broken_wait  # type: ignore[method-assign]
+    harness.run(request_id)
+
+    snapshot = harness.snapshot()
+    try:
+        assert snapshot["task"].state is TaskState.BLOCKED
+        assert snapshot["run_status"] == "FAILED"
+        assert snapshot["writer_token"] is None
+        assert snapshot["dispatch_status"] == "BLOCKED"
+        assert snapshot["dispatch_failure_code"] == "EXECUTOR_INTERNAL_ERROR"
+        snapshot["store"].assert_running_invariant("task-1")
+    finally:
+        _close(snapshot)
+    assert harness.executor._supervisor.owned_pids() == ()
+    assert harness.executor.execution_supervisor.owned_task_ids() == ()
+    assert harness.main_unchanged()
+
+
 def test_full_product_path_over_http_with_cancellation(tmp_path: Path) -> None:
     import tempfile
 
@@ -748,9 +780,10 @@ def test_execution_probe_establishes_verified_only_on_real_success(
     tmp_path: Path,
 ) -> None:
     probe_bin = write_worker_script(tmp_path, name="probe-ok")
-    # The probe judges real worker output, so make it print a line.
+    # The probe judges the exact marker, not merely nonempty worker output.
     probe_bin.write_text(
-        "#!/bin/sh\necho probe-ok\n", encoding="utf-8"
+        "#!/bin/sh\necho PERSONAL-AI-ORCHESTRATOR-EXECUTION-PROBE-OK\n",
+        encoding="utf-8",
     )
     probe_bin.chmod(probe_bin.stat().st_mode | stat.S_IXUSR)
     evidence_root = tmp_path / "evidence"
@@ -781,6 +814,26 @@ def test_execution_probe_establishes_verified_only_on_real_success(
         evidence_root=evidence_root,
     )
     assert rendered_fail["result"] == "UNKNOWN"
+    assert journal.target_has_verified_evidence("zai-coding-plan-glm-5.3") is False
+
+
+def test_execution_probe_rejects_non_marker_stdout(tmp_path: Path) -> None:
+    probe_bin = write_worker_script(tmp_path, name="probe-no-marker")
+    probe_bin.write_text("#!/bin/sh\necho COMPLETE\n", encoding="utf-8")
+    probe_bin.chmod(probe_bin.stat().st_mode | stat.S_IXUSR)
+    evidence_root = tmp_path / "evidence"
+
+    rendered = run_execution_probe(
+        opencode_bin=str(probe_bin),
+        provider_id="zai-coding-plan",
+        execution_target_id="zai-coding-plan-glm-5.3",
+        model_sku_id="zai-coding-plan/glm-5.3",
+        cwd=tmp_path,
+        evidence_root=evidence_root,
+    )
+
+    assert rendered["result"] == "UNKNOWN"
+    journal = ExecutionEvidenceJournal(evidence_root)
     assert journal.target_has_verified_evidence("zai-coding-plan-glm-5.3") is False
 
 
@@ -845,3 +898,45 @@ def test_launch_gate_accepts_evidence_backed_unverified_target(tmp_path: Path) -
         runtime_available=True,
         execution_evidence_journal=journal,
     )
+
+
+def test_launch_gate_rejects_stale_execution_evidence(tmp_path: Path) -> None:
+    from personal_ai_orchestrator.execution_controller import (
+        validate_execution_target_launch,
+    )
+    from personal_ai_orchestrator.execution_evidence import (
+        ExecutionVerificationOutcome,
+    )
+
+    registry = make_registry().model_copy(
+        update={
+            "execution_targets": {
+                "zai-coding-plan-glm-5.3": ExecutionTarget(
+                    id="zai-coding-plan-glm-5.3",
+                    model_sku_id="zai-coding-plan/glm-5.3",
+                    account_id="zai-coding-plan",
+                    runtime_id="opencode",
+                    execution_verified=False,
+                )
+            }
+        }
+    )
+    journal = ExecutionEvidenceJournal(tmp_path)
+    journal.append(
+        build_execution_evidence(
+            provider_id="zai-coding-plan",
+            execution_target_id="zai-coding-plan-glm-5.3",
+            model_sku_id="zai-coding-plan/glm-5.3",
+            observed_at=datetime.now(UTC) - timedelta(days=45),
+            result=ExecutionVerificationOutcome.VERIFIED,
+            reason_code="TEST_STALE_REAL_PROBE",
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="not been runtime-verified"):
+        validate_execution_target_launch(
+            registry,
+            execution_target_id="zai-coding-plan-glm-5.3",
+            runtime_available=True,
+            execution_evidence_journal=journal,
+        )

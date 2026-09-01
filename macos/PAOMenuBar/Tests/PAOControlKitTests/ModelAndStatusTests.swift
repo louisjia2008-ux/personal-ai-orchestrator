@@ -51,6 +51,20 @@ final class ModelAndStatusTests: XCTestCase {
         XCTAssertNil(json["authority"])
     }
 
+    func testTaskDetailDecodesReadOnlyWorkerResultMetadata() throws {
+        let body = """
+        {"task":{"task_id":"t-1","request_id":"r-1","intent":"fix bug","state":"VERIFIED","state_version":5,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:04:00Z"},"runs":[{"run_id":"run-1","task_id":"t-1","worker_id":"m3-sub","pid":123,"status":"FINISHED","started_at":"2026-08-31T00:00:30Z","finished_at":"2026-08-31T00:03:00Z","result":{"exit_code":0,"stdout_bytes":120,"stderr_bytes":0,"stdout_sha256":"abc","stderr_sha256":"def","output_truncated":false,"timed_out":false}}],"routing":null,"verification":{"task_id":"t-1","task_state":"VERIFIED","status":"VERIFIED","evidence_id":"verify-1","failure_reason":null,"result":{"profile":"hello","passed":true,"changed_paths":["hello.txt"],"unexpected_paths":[],"stages":[{"name":"git diff --check","argv":["git","diff"],"returncode":0,"stdout":"","stderr":""}],"evidence_id":"verify-1","failure_reason":null}},"approvals":{"approvals":[]},"workspace":null,"events":[]}
+        """
+        let detail = try JSONDecoder().decode(TaskDetailView.self, from: Data(body.utf8))
+        let run = try XCTUnwrap(detail.runs.first)
+        XCTAssertEqual(run.exitCode, 0)
+        XCTAssertEqual(run.stdoutBytes, 120)
+        XCTAssertEqual(run.stdoutSHA256, "abc")
+        XCTAssertEqual(run.outputTruncated, false)
+        XCTAssertEqual(detail.verification.result?.changedPaths, ["hello.txt"])
+        XCTAssertEqual(detail.verification.result?.stages.first?.exitCode, 0)
+    }
+
     func testProviderAndQuotaDecoding() throws {
         let view = try JSONDecoder().decode(ProviderHealthListView.self, from: Data(providersBody.utf8))
         let provider = try XCTUnwrap(view.providers.first)

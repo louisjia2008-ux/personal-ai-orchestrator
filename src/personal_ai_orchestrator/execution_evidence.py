@@ -153,9 +153,20 @@ class ExecutionEvidenceJournal:
                 latest_key = key
         return latest
 
-    def target_has_verified_evidence(self, execution_target_id: str) -> bool:
+    def target_has_verified_evidence(
+        self,
+        execution_target_id: str,
+        *,
+        max_age_seconds: float | None = None,
+    ) -> bool:
         latest = self.latest_for_target(execution_target_id)
-        return latest is not None and latest.establishes_verified
+        if latest is None or not latest.establishes_verified:
+            return False
+        if max_age_seconds is not None:
+            age = (datetime.now(UTC) - latest.observed_at).total_seconds()
+            if age < 0 or age > max_age_seconds:
+                return False
+        return True
 
 
 __all__ = [
