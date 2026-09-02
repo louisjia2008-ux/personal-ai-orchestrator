@@ -1681,7 +1681,12 @@ private struct QuotaProviderCard: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if card.isObserved {
+                // Plan first. The shared subscription pool is the thing the
+                // owner reconciles against the provider's console; per-model
+                // detail is secondary and clearly separated from it.
+                if let plan = card.plan {
+                    SharedPlanQuotaView(plan: plan)
+                } else if card.isObserved {
                     ForEach(card.quotaPools) { pool in
                         QuotaPoolWindowsView(pool: pool)
                     }
@@ -1703,6 +1708,18 @@ private struct QuotaProviderCard: View {
                     }
                     if let reason = card.failureReason {
                         LabeledContent(L10n.reasonCode, value: reason)
+                    }
+                    LabeledContent(
+                        L10n.quotaPlanCredentialSource,
+                        value: L10n.quotaCredentialSource(card.credentialSource)
+                    )
+                    if let plan = card.plan {
+                        LabeledContent(L10n.quotaPlanPoolId, value: plan.poolId)
+                            .font(.system(.caption, design: .monospaced))
+                        LabeledContent(
+                            L10n.quotaPlanSharedSemantics,
+                            value: plan.quotaSemantics
+                        )
                     }
                     ForEach(card.quotaPools) { pool in
                         LabeledContent(L10n.quotaPoolId, value: pool.quotaPoolId)
@@ -1728,6 +1745,300 @@ private struct QuotaProviderCard: View {
                     .disabled(isRefreshing)
                     .help(L10n.quotaRefreshHelp)
                 }
+            }
+        }
+    }
+}
+
+// MARK: - Shared subscription plan
+
+/// Plan-first rendering of one subscription's quota.
+///
+/// The order and the separation are the point. The shared plan balance leads,
+/// because that is the number the owner reconciles against the provider's own
+/// console. Below it, three visually distinct sections carry three different
+/// kinds of fact, and none of them is allowed to look like the plan balance:
+///
+/// - which models draw on the pool (membership, not quota),
+/// - what each model consumed (contribution, not entitlement),
+/// - roughly how much work is left (an estimate, never a balance).
+private struct SharedPlanQuotaView: View {
+    let plan: QuotaPlanView
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sharedQuotaSection
+            bindingWindowSection
+            coveredModelsSection
+            if !plan.modelEquivalents.isEmpty {
+                modelEquivalentsSection
+            }
+            if !plan.modelConsumption.isEmpty {
+                modelConsumptionSection
+            }
+            estimatedCapacitySection
+        }
+    }
+
+    // MARK: Shared plan balance
+
+    private var sharedQuotaSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+            HStack(spacing: 8) {
+                Text(L10n.quotaPlanSharedQuota)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if let level = plan.planLevel {
+                    StatusBadge(text: level.uppercased(), kind: .neutral)
+                }
+                Spacer()
+            }
+
+            if plan.hasReadableWindow {
+                ForEach(plan.windows) { window in
+                    PlanWindowRow(window: window)
+                }
+            } else {
+                // No fabricated bar. The reason travels with the absence.
+                Label(L10n.quotaPlanNoPlanFigure, systemImage: "questionmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let reason = plan.unknownReason {
+                    Text(L10n.quotaFailureReason(reason))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    // MARK: Binding window
+
+    @ViewBuilder
+    private var bindingWindowSection: some View {
+        if let binding = plan.bindingWindow, let windowId = binding.windowId {
+            HStack(spacing: 8) {
+                Label(L10n.quotaBindingTitle, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                StatusBadge(text: windowId, kind: .warn)
+                Spacer()
+                // Scarcity and urgency are shown side by side rather than
+                // merged: 20% resetting in 30 minutes and 20% resetting in six
+                // days are equally scarce and not equally urgent.
+                if let seconds = binding.secondsUntilReset, seconds > 0 {
+                    Text("\(L10n.quotaBindingResetsIn) \(Self.countdown(seconds))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    // MARK: Pool membership
+
+    private var coveredModelsSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(L10n.quotaPlanSharedModels)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            if plan.coveredModelIds.isEmpty {
+                Text(L10n.quotaNoReliableData)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                // Membership only — deliberately no bars here, so a model can
+                // never be read as owning a balance of its own.
+                FlowingBadges(items: plan.coveredModelIds)
+            }
+        }
+    }
+
+    // MARK: Per-model views of one pool
+
+    private var modelEquivalentsSection: some View {
+        DisclosureGroup(L10n.quotaPlanEquivalents) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(plan.modelEquivalents) { item in
+                    HStack {
+                        Text(item.modelId).font(.caption)
+                        Text(item.windowId)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        Spacer()
+                        if let fraction = item.remainingFraction {
+                            Text(fraction.formatted(.percent.precision(.fractionLength(0))))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Text(L10n.quotaPlanEquivalentsFooter)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.top, 4)
+        }
+        .font(.caption)
+    }
+
+    // MARK: Consumption
+
+    private var modelConsumptionSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(L10n.quotaPlanModelUsage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(plan.modelConsumption) { item in
+                HStack {
+                    Text(item.modelId).font(.caption)
+                    Spacer()
+                    // Consumption is rendered as a bare quantity with its unit.
+                    // It gets no progress bar, because a bar implies a ceiling
+                    // and this figure has none.
+                    Text(
+                        "\(L10n.quotaPlanConsumedLabel) "
+                            + item.consumedUnits.formatted(.number.precision(.fractionLength(0)))
+                            + " " + item.unitKind.lowercased()
+                    )
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                }
+            }
+            Text(L10n.quotaPlanModelUsageFooter)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: Estimated capacity
+
+    private var estimatedCapacitySection: some View {
+        DisclosureGroup(L10n.quotaPlanEstimatedCapacity) {
+            VStack(alignment: .leading, spacing: 6) {
+                if plan.equivalentCapacity.isEmpty {
+                    Text(L10n.quotaPlanInsufficientHistory)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(plan.equivalentCapacity) { item in
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(item.modelId).font(.caption)
+                        Spacer()
+                        if let tasks = item.estimatedRemainingTasks {
+                            VStack(alignment: .trailing, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    // The estimate badge is mandatory: this
+                                    // section must never read as a provider
+                                    // balance.
+                                    StatusBadge(text: L10n.quotaEstimatedBadge, kind: .warn)
+                                    if item.smallSample {
+                                        StatusBadge(
+                                            text: L10n.quotaPlanSmallSample,
+                                            kind: .neutral
+                                        )
+                                    }
+                                }
+                                Text(L10n.quotaCapacityTasks(Int(tasks.rounded())))
+                                    .font(.caption)
+                                Text(L10n.quotaCapacityBasis(item.sampleCount))
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        } else {
+                            // Absence, not zero. "0 tasks remaining" and "we do
+                            // not know yet" mean opposite things.
+                            Text(L10n.quotaPlanInsufficientHistory)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Text(L10n.quotaPlanEstimatedCapacityFooter)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.top, 4)
+        }
+        .font(.caption)
+    }
+
+    private static func countdown(_ seconds: Double) -> String {
+        let total = Int(seconds)
+        let days = total / 86_400
+        let hours = (total % 86_400) / 3_600
+        let minutes = (total % 3_600) / 60
+        if days > 0 { return "\(days)d \(hours)h" }
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        return "\(minutes)m"
+    }
+}
+
+/// One shared-plan window: a real bar when the provider gave us a figure, and
+/// an explicit "no reliable percentage" line when it did not.
+private struct PlanWindowRow: View {
+    let window: QuotaPlanWindowView
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Label(window.windowKind, systemImage: "timer").font(.caption)
+                Spacer()
+                StatusBadge(
+                    text: L10n.quotaConfidenceLevel(window.confidence),
+                    kind: window.confidence == "EXACT"
+                        ? .good
+                        : (window.confidence == "ESTIMATED" ? .warn : .neutral)
+                )
+            }
+            if window.isReadable, let fraction = window.remainingFraction {
+                ProgressView(value: fraction)
+                HStack {
+                    Text(
+                        "\(L10n.quotaRemainingLabel) "
+                            + fraction.formatted(.percent.precision(.fractionLength(0)))
+                    )
+                    if let remaining = window.remainingUnits, let total = window.totalUnits {
+                        Text(
+                            "("
+                                + remaining.formatted(.number.precision(.fractionLength(0)))
+                                + " / "
+                                + total.formatted(.number.precision(.fractionLength(0)))
+                                + ")"
+                        )
+                        .foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                    Text("\(L10n.quotaResetLabel) " + (window.resetAt ?? L10n.quotaResetUnknown))
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            } else {
+                Text(L10n.quotaNoReliablePercentage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+/// Plain wrapped badges for pool membership.
+private struct FlowingBadges: View {
+    let items: [String]
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                ForEach(items, id: \.self) { StatusBadge(text: $0, kind: .neutral) }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(items, id: \.self) { StatusBadge(text: $0, kind: .neutral) }
             }
         }
     }

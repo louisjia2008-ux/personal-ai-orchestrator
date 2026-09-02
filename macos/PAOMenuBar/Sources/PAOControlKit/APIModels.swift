@@ -393,6 +393,352 @@ public struct ProviderHealthListView: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - Quota (shared subscription plan)
+
+/// One quota window of a shared plan pool.
+///
+/// `remainingFraction` is populated only for EXACT/ESTIMATED windows, so the
+/// view layer cannot draw a bar for a figure the provider never gave us.
+public struct QuotaPlanWindowView: Codable, Equatable, Identifiable, Sendable {
+    public let windowId: String
+    public let windowKind: String
+    public let state: String
+    public let confidence: String
+    public let remainingFraction: Double?
+    public let remainingUnits: Double?
+    public let totalUnits: Double?
+    public let unit: String?
+    public let resetAt: String?
+
+    public var id: String { windowId }
+
+    /// A window only draws a bar when the provider actually reported a figure.
+    public var isReadable: Bool { confidence != "UNKNOWN" && remainingFraction != nil }
+
+    enum CodingKeys: String, CodingKey {
+        case windowId = "window_id"
+        case windowKind = "window_kind"
+        case state
+        case confidence
+        case remainingFraction = "remaining_fraction"
+        case remainingUnits = "remaining_units"
+        case totalUnits = "total_units"
+        case unit
+        case resetAt = "reset_at"
+    }
+
+    public init(
+        windowId: String,
+        windowKind: String,
+        state: String,
+        confidence: String,
+        remainingFraction: Double? = nil,
+        remainingUnits: Double? = nil,
+        totalUnits: Double? = nil,
+        unit: String? = nil,
+        resetAt: String? = nil
+    ) {
+        self.windowId = windowId
+        self.windowKind = windowKind
+        self.state = state
+        self.confidence = confidence
+        self.remainingFraction = remainingFraction
+        self.remainingUnits = remainingUnits
+        self.totalUnits = totalUnits
+        self.unit = unit
+        self.resetAt = resetAt
+    }
+}
+
+/// Which window currently limits the plan, and how soon it resets.
+///
+/// Scarcity and reset horizon are separate fields: 20% remaining that resets in
+/// 30 minutes is not the same situation as 20% remaining that resets in six days.
+public struct BindingWindowView: Codable, Equatable, Sendable {
+    public let windowId: String?
+    public let windowKind: String?
+    public let remainingFraction: Double?
+    public let resetAt: String?
+    public let secondsUntilReset: Double?
+    public let reason: String
+    public let confidence: String
+
+    enum CodingKeys: String, CodingKey {
+        case windowId = "window_id"
+        case windowKind = "window_kind"
+        case remainingFraction = "remaining_fraction"
+        case resetAt = "reset_at"
+        case secondsUntilReset = "seconds_until_reset"
+        case reason
+        case confidence
+    }
+
+    public init(
+        windowId: String? = nil,
+        windowKind: String? = nil,
+        remainingFraction: Double? = nil,
+        resetAt: String? = nil,
+        secondsUntilReset: Double? = nil,
+        reason: String = "NO_KNOWN_REMAINING",
+        confidence: String = "UNKNOWN"
+    ) {
+        self.windowId = windowId
+        self.windowKind = windowKind
+        self.remainingFraction = remainingFraction
+        self.resetAt = resetAt
+        self.secondsUntilReset = secondsUntilReset
+        self.reason = reason
+        self.confidence = confidence
+    }
+}
+
+/// What one model consumed of the shared pool.
+///
+/// Contribution, never entitlement — there is deliberately no remaining field,
+/// so the view cannot render this as a per-model balance.
+public struct ModelConsumptionView: Codable, Equatable, Identifiable, Sendable {
+    public let modelId: String
+    public let consumedUnits: Double
+    public let unitKind: String
+    public let providerUnitLabel: String?
+    public let callCount: Int?
+    public let periodStart: String?
+    public let periodEnd: String?
+    public let confidence: String
+    public let measurementSource: String
+
+    public var id: String { modelId }
+
+    enum CodingKeys: String, CodingKey {
+        case modelId = "model_id"
+        case consumedUnits = "consumed_units"
+        case unitKind = "unit_kind"
+        case providerUnitLabel = "provider_unit_label"
+        case callCount = "call_count"
+        case periodStart = "period_start"
+        case periodEnd = "period_end"
+        case confidence
+        case measurementSource = "measurement_source"
+    }
+
+    public init(
+        modelId: String,
+        consumedUnits: Double,
+        unitKind: String,
+        providerUnitLabel: String? = nil,
+        callCount: Int? = nil,
+        periodStart: String? = nil,
+        periodEnd: String? = nil,
+        confidence: String = "UNKNOWN",
+        measurementSource: String = "UNKNOWN"
+    ) {
+        self.modelId = modelId
+        self.consumedUnits = consumedUnits
+        self.unitKind = unitKind
+        self.providerUnitLabel = providerUnitLabel
+        self.callCount = callCount
+        self.periodStart = periodStart
+        self.periodEnd = periodEnd
+        self.confidence = confidence
+        self.measurementSource = measurementSource
+    }
+}
+
+/// A provider's per-model *view* of one shared pool.
+///
+/// MiniMax reports these per model and they differ. They are equivalents, not
+/// balances, and the view layer must label them as such.
+public struct ModelEquivalentWindowView: Codable, Equatable, Identifiable, Sendable {
+    public let modelId: String
+    public let windowId: String
+    public let remainingFraction: Double?
+    public let remainingUnits: Double?
+    public let totalUnits: Double?
+    public let unitKind: String
+    public let confidence: String
+
+    public var id: String { "\(modelId)/\(windowId)" }
+
+    enum CodingKeys: String, CodingKey {
+        case modelId = "model_id"
+        case windowId = "window_id"
+        case remainingFraction = "remaining_fraction"
+        case remainingUnits = "remaining_units"
+        case totalUnits = "total_units"
+        case unitKind = "unit_kind"
+        case confidence
+    }
+
+    public init(
+        modelId: String,
+        windowId: String,
+        remainingFraction: Double? = nil,
+        remainingUnits: Double? = nil,
+        totalUnits: Double? = nil,
+        unitKind: String = "UNKNOWN",
+        confidence: String = "UNKNOWN"
+    ) {
+        self.modelId = modelId
+        self.windowId = windowId
+        self.remainingFraction = remainingFraction
+        self.remainingUnits = remainingUnits
+        self.totalUnits = totalUnits
+        self.unitKind = unitKind
+        self.confidence = confidence
+    }
+}
+
+/// Derived "roughly how many more tasks fit". Always ESTIMATED.
+///
+/// `estimatedRemainingTasks` is nil whenever history cannot support a figure;
+/// `unavailableReason` then says why. Absent is not zero, and the two must
+/// never render the same way.
+public struct EquivalentCapacityView: Codable, Equatable, Identifiable, Sendable {
+    public let modelId: String
+    public let windowId: String
+    public let taskClass: String
+    public let estimatedRemainingTasks: Double?
+    public let sampleCount: Int
+    public let smallSample: Bool
+    public let confidence: String
+    public let unavailableReason: String?
+
+    public var id: String { "\(modelId)/\(windowId)/\(taskClass)" }
+
+    public var hasEstimate: Bool { estimatedRemainingTasks != nil }
+
+    enum CodingKeys: String, CodingKey {
+        case modelId = "model_id"
+        case windowId = "window_id"
+        case taskClass = "task_class"
+        case estimatedRemainingTasks = "estimated_remaining_tasks"
+        case sampleCount = "sample_count"
+        case smallSample = "small_sample"
+        case confidence
+        case unavailableReason = "unavailable_reason"
+    }
+
+    public init(
+        modelId: String,
+        windowId: String,
+        taskClass: String = "default",
+        estimatedRemainingTasks: Double? = nil,
+        sampleCount: Int = 0,
+        smallSample: Bool = false,
+        confidence: String = "ESTIMATED",
+        unavailableReason: String? = nil
+    ) {
+        self.modelId = modelId
+        self.windowId = windowId
+        self.taskClass = taskClass
+        self.estimatedRemainingTasks = estimatedRemainingTasks
+        self.sampleCount = sampleCount
+        self.smallSample = smallSample
+        self.confidence = confidence
+        self.unavailableReason = unavailableReason
+    }
+}
+
+/// Plan-first projection of one connected subscription.
+///
+/// The three concepts stay separate all the way into the view: `windows` is the
+/// shared plan balance, `modelConsumption` is what each model spent, and
+/// `equivalentCapacity` is a derived estimate. Rendering them as one list would
+/// merge facts of different kinds.
+public struct QuotaPlanView: Codable, Equatable, Identifiable, Sendable {
+    public let providerId: String
+    public let planId: String
+    /// The provider's own product name — "GLM Coding Plan", never a renamed
+    /// symmetric label.
+    public let displayName: String
+    public let planLevel: String?
+    public let quotaSemantics: String
+    public let poolId: String
+    public let resourceKind: String
+    public let sharedAcrossModels: Bool
+    public let unitKind: String
+    public let coveredModelIds: [String]
+    public let state: String
+    public let confidence: String
+    public let observedAt: String?
+    public let unknownReason: String?
+    public let windows: [QuotaPlanWindowView]
+    public let bindingWindow: BindingWindowView?
+    public let modelConsumption: [ModelConsumptionView]
+    public let modelEquivalents: [ModelEquivalentWindowView]
+    public let equivalentCapacity: [EquivalentCapacityView]
+
+    public var id: String { poolId }
+
+    /// True when at least one window carries a provider-reported figure.
+    /// A plan can be partially readable: some windows known, others not.
+    public var hasReadableWindow: Bool { windows.contains(where: \.isReadable) }
+
+    enum CodingKeys: String, CodingKey {
+        case providerId = "provider_id"
+        case planId = "plan_id"
+        case displayName = "display_name"
+        case planLevel = "plan_level"
+        case quotaSemantics = "quota_semantics"
+        case poolId = "pool_id"
+        case resourceKind = "resource_kind"
+        case sharedAcrossModels = "shared_across_models"
+        case unitKind = "unit_kind"
+        case coveredModelIds = "covered_model_ids"
+        case state
+        case confidence
+        case observedAt = "observed_at"
+        case unknownReason = "unknown_reason"
+        case windows
+        case bindingWindow = "binding_window"
+        case modelConsumption = "model_consumption"
+        case modelEquivalents = "model_equivalents"
+        case equivalentCapacity = "equivalent_capacity"
+    }
+
+    public init(
+        providerId: String,
+        planId: String,
+        displayName: String,
+        planLevel: String? = nil,
+        quotaSemantics: String = "UNKNOWN",
+        poolId: String,
+        resourceKind: String = "UNKNOWN",
+        sharedAcrossModels: Bool = true,
+        unitKind: String = "UNKNOWN",
+        coveredModelIds: [String] = [],
+        state: String = "UNKNOWN",
+        confidence: String = "UNKNOWN",
+        observedAt: String? = nil,
+        unknownReason: String? = nil,
+        windows: [QuotaPlanWindowView] = [],
+        bindingWindow: BindingWindowView? = nil,
+        modelConsumption: [ModelConsumptionView] = [],
+        modelEquivalents: [ModelEquivalentWindowView] = [],
+        equivalentCapacity: [EquivalentCapacityView] = []
+    ) {
+        self.providerId = providerId
+        self.planId = planId
+        self.displayName = displayName
+        self.planLevel = planLevel
+        self.quotaSemantics = quotaSemantics
+        self.poolId = poolId
+        self.resourceKind = resourceKind
+        self.sharedAcrossModels = sharedAcrossModels
+        self.unitKind = unitKind
+        self.coveredModelIds = coveredModelIds
+        self.state = state
+        self.confidence = confidence
+        self.observedAt = observedAt
+        self.unknownReason = unknownReason
+        self.windows = windows
+        self.bindingWindow = bindingWindow
+        self.modelConsumption = modelConsumption
+        self.modelEquivalents = modelEquivalents
+        self.equivalentCapacity = equivalentCapacity
+    }
+}
+
 // MARK: - Quota (connection-based)
 
 /// One connected provider on the Quota page.
@@ -420,7 +766,14 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
     public let lastRefreshStatus: String?
     public let lastRefreshAt: String?
     public let failureReason: String?
+    /// Sanitized provenance of the credential used for this surface's quota
+    /// read. Never the credential itself.
+    public let credentialSource: String
     public let quotaPools: [QuotaPoolHealthView]
+    /// Plan-first projection. Present whenever any plan evidence exists — the
+    /// plan balance may be UNKNOWN while model consumption is known, and the
+    /// card renders both rather than hiding the pair.
+    public let plan: QuotaPlanView?
 
     public var id: String { providerId }
 
@@ -442,7 +795,9 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
         case lastRefreshStatus = "last_refresh_status"
         case lastRefreshAt = "last_refresh_at"
         case failureReason = "failure_reason"
+        case credentialSource = "credential_source"
         case quotaPools = "quota_pools"
+        case plan
     }
 
     public init(
@@ -461,7 +816,9 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
         lastRefreshStatus: String? = nil,
         lastRefreshAt: String? = nil,
         failureReason: String? = nil,
-        quotaPools: [QuotaPoolHealthView] = []
+        credentialSource: String = "NONE",
+        quotaPools: [QuotaPoolHealthView] = [],
+        plan: QuotaPlanView? = nil
     ) {
         self.providerId = providerId
         self.displayName = displayName
@@ -478,7 +835,46 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
         self.lastRefreshStatus = lastRefreshStatus
         self.lastRefreshAt = lastRefreshAt
         self.failureReason = failureReason
+        self.credentialSource = credentialSource
         self.quotaPools = quotaPools
+        self.plan = plan
+    }
+
+    /// Decodes leniently for the two keys added in P4.2.6.5.
+    ///
+    /// A freshly built app can be pointed at a daemon that predates them —
+    /// during an upgrade, or while the deterministic launcher is reconciling a
+    /// stale daemon. Treating `credential_source` and `plan` as required would
+    /// turn that transient mismatch into a blank Quota page, which is exactly
+    /// the failure mode this page exists to avoid.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        providerId = try container.decode(String.self, forKey: .providerId)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        connectionState = try container.decode(String.self, forKey: .connectionState)
+        authState = try container.decodeIfPresent(String.self, forKey: .authState)
+        planSurface = try container.decodeIfPresent(String.self, forKey: .planSurface)
+        region = try container.decodeIfPresent(String.self, forKey: .region)
+        quotaState = try container.decode(String.self, forKey: .quotaState)
+        confidence = try container.decode(String.self, forKey: .confidence)
+        measurementSource = try container.decodeIfPresent(
+            String.self, forKey: .measurementSource
+        )
+        observedAt = try container.decodeIfPresent(String.self, forKey: .observedAt)
+        readonlySourceAvailable =
+            try container.decodeIfPresent(Bool.self, forKey: .readonlySourceAvailable) ?? false
+        collectorAvailable =
+            try container.decodeIfPresent(Bool.self, forKey: .collectorAvailable) ?? false
+        lastRefreshStatus = try container.decodeIfPresent(
+            String.self, forKey: .lastRefreshStatus
+        )
+        lastRefreshAt = try container.decodeIfPresent(String.self, forKey: .lastRefreshAt)
+        failureReason = try container.decodeIfPresent(String.self, forKey: .failureReason)
+        credentialSource =
+            try container.decodeIfPresent(String.self, forKey: .credentialSource) ?? "NONE"
+        quotaPools =
+            try container.decodeIfPresent([QuotaPoolHealthView].self, forKey: .quotaPools) ?? []
+        plan = try container.decodeIfPresent(QuotaPlanView.self, forKey: .plan)
     }
 }
 
