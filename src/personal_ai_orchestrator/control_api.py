@@ -37,10 +37,6 @@ from personal_ai_orchestrator.execution_controller import validate_execution_tar
 from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
-from personal_ai_orchestrator.scheduling_settings import (
-    SELECTABLE_GLOBAL_POLICIES,
-    SchedulingSettings,
-)
 from personal_ai_orchestrator.provider_registry_manager import (
     ProviderRegistryManager,
 )
@@ -51,6 +47,10 @@ from personal_ai_orchestrator.safety_kernel import (
     ProjectRecord,
     SafetyKernelStore,
     TaskState,
+)
+from personal_ai_orchestrator.scheduling_settings import (
+    SELECTABLE_GLOBAL_POLICIES,
+    SchedulingSettings,
 )
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
 from personal_ai_orchestrator.verifier import VerificationResult

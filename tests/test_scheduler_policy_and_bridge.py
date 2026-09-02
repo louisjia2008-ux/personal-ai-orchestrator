@@ -31,8 +31,8 @@ from personal_ai_orchestrator.scheduler import (
     RoutingPolicy,
     TargetTelemetry,
     TaskProfile,
-    route_task,
     resolve_scheduling_policy,
+    route_task,
 )
 
 NOW = datetime(2026, 8, 30, tzinfo=UTC)

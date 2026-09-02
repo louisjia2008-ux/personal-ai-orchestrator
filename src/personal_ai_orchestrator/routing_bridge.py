@@ -28,14 +28,15 @@ def _scheduler_explanation(
 ) -> dict[str, object]:
     candidates: list[dict[str, object]] = []
     for evaluation in scheduler.evaluations:
-        target = registry.execution_targets.get(evaluation.execution_target_id)
         model = registry.models.get(evaluation.model_sku_id)
         provider = registry.providers.get(model.provider_id) if model is not None else None
         candidates.append(
             {
                 "execution_target_id": evaluation.execution_target_id,
                 "model_sku_id": evaluation.model_sku_id,
-                "model_display_name": model.display_name if model is not None else evaluation.model_sku_id,
+                "model_display_name": (
+                    model.display_name if model is not None else evaluation.model_sku_id
+                ),
                 "provider_id": model.provider_id if model is not None else None,
                 "provider_display_name": provider.display_name if provider is not None else None,
                 "eligible": evaluation.eligible,
