@@ -23,6 +23,7 @@ from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryM
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
 from personal_ai_orchestrator.quota_collectors.minimax import MiniMaxQuotaCollector
 from personal_ai_orchestrator.quota_collectors.zai import ZAIQuotaCollector
+from personal_ai_orchestrator.quota_refresh import QuotaRefreshService
 from personal_ai_orchestrator.routing_service import RoutingService
 from personal_ai_orchestrator.runtime_config import RuntimeConfig
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore
@@ -220,6 +221,17 @@ def build_control_service(
             quota_availability_journal=QuotaAvailabilityJournal(runtime_state_root),
             quota_collectors=quota_collectors or default_quota_collectors(),
         )
+    # Quota observability is connection-scoped: only providers the owner has
+    # explicitly connected are ever contacted, and only through documented
+    # read-only endpoints.
+    quota_refresh_service = QuotaRefreshService(
+        runtime_state_root=runtime_state_root,
+        connected_provider_ids=(
+            provider_registry_manager.connected_provider_ids
+            if provider_registry_manager is not None
+            else tuple
+        ),
+    )
     return ControlPlaneService(
         registry=registry,
         store=SafetyKernelStore(state_db),
@@ -236,6 +248,7 @@ def build_control_service(
         ),
         execution_evidence_journal=execution_evidence_journal,
         dispatch_executor=executor,
+        quota_refresh_service=quota_refresh_service,
     )
 
 

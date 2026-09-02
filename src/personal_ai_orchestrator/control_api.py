@@ -42,6 +42,13 @@ from personal_ai_orchestrator.provider_registry_manager import (
     ProviderRegistryManager,
 )
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
+from personal_ai_orchestrator.quota_refresh import (
+    QuotaObservationState,
+    QuotaPageState,
+    QuotaProviderObservation,
+    QuotaRefreshService,
+    has_readonly_quota_source,
+)
 from personal_ai_orchestrator.safety_kernel import (
     OwnerDispatchRecord,
     ProjectAvailability,
@@ -356,6 +363,71 @@ class ProviderHealthListView(_ViewModel):
     providers: tuple[ProviderHealthView, ...]
 
 
+class QuotaProviderCardView(_ViewModel):
+    """One connected provider on the Quota page.
+
+    A connected provider always renders a card. ``quota_state`` distinguishes
+    "we have reliable evidence" from "we do not"; UNKNOWN never carries a
+    fabricated ``remaining_fraction`` (P4.2.6.4 §13).
+    """
+
+    provider_id: str
+    display_name: str
+    connection_state: str
+    auth_state: str | None = None
+    plan_surface: str | None = None
+    region: str | None = None
+    #: OBSERVED | UNKNOWN
+    quota_state: str
+    #: EXACT | ESTIMATED | UNKNOWN
+    confidence: str
+    measurement_source: str | None = None
+    observed_at: str | None = None
+    #: Whether a documented read-only quota endpoint exists for this surface at
+    #: all, regardless of whether a credential is currently configured.
+    readonly_source_available: bool = False
+    #: Whether a usable collector could be constructed right now.
+    collector_available: bool = False
+    last_refresh_status: str | None = None
+    last_refresh_at: str | None = None
+    failure_reason: str | None = None
+    quota_pools: tuple[QuotaPoolHealthView, ...] = ()
+
+
+class QuotaSummaryView(_ViewModel):
+    """Summary derived from *connected providers*, not merely observed pools.
+
+    A provider with no observation counts as connected but not
+    quota-observable; UNKNOWN is never classified as healthy.
+    """
+
+    connected_provider_count: int
+    quota_observable_provider_count: int
+    quota_unknown_provider_count: int
+    quota_warning_count: int
+    quota_exhausted_count: int
+
+
+class QuotaOverviewView(_ViewModel):
+    #: NO_CONNECTED_PROVIDER | CONNECTED_BUT_QUOTA_UNKNOWN
+    #: | CONNECTED_WITH_QUOTA_OBSERVATIONS
+    state: str
+    summary: QuotaSummaryView
+    providers: tuple[QuotaProviderCardView, ...] = ()
+    history: QuotaHistoryView
+
+
+class QuotaRefreshRequest(_ViewModel):
+    provider_id: str | None = None
+
+
+class QuotaRefreshResultView(_ViewModel):
+    """Typed sanitized outcome of an explicit owner-triggered quota refresh."""
+
+    refreshed_provider_ids: tuple[str, ...] = ()
+    overview: QuotaOverviewView
+
+
 class ProviderConnectionView(_ViewModel):
     provider_id: str
     display_name: str
@@ -564,6 +636,10 @@ class ControlPlaneService:
     scheduling_settings: SchedulingSettings = field(default_factory=SchedulingSettings)
     execution_evidence_journal: ExecutionEvidenceJournal | None = None
     dispatch_executor: Any = None
+    #: Read-only quota collection for connected providers. Optional so the
+    #: control plane still works (reporting UNKNOWN truthfully) before the
+    #: daemon wires a runtime-state root.
+    quota_refresh_service: QuotaRefreshService | None = None
 
     @property
     def owner_initiated_execution_enabled(self) -> bool:
@@ -586,6 +662,7 @@ class ControlPlaneService:
             scheduling_settings=self.scheduling_settings,
             execution_evidence_journal=self.execution_evidence_journal,
             dispatch_executor=self.dispatch_executor,
+            quota_refresh_service=self.quota_refresh_service,
         )
 
     @staticmethod
@@ -1931,8 +2008,220 @@ class ControlPlaneService:
             source_method=status.source_method,
         )
 
-    def quota(self) -> ProviderHealthListView:
-        return self.providers()
+    # ------------------------------------------------------------------
+    # Quota (connection-based)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _quota_pool_views_from_snapshot(
+        observation: QuotaProviderObservation,
+    ) -> tuple[QuotaPoolHealthView, ...]:
+        """Render only values the provider actually reported.
+
+        A window the collector could not read stays UNKNOWN with a null
+        ``remaining_fraction`` so the Dashboard cannot draw a fake bar.
+        """
+
+        snapshot = observation.snapshot
+        if snapshot is None:
+            return ()
+        observed_at = observation.observed_at
+        return (
+            QuotaPoolHealthView(
+                quota_pool_id=snapshot.quota_pool_id or observation.provider_id,
+                name=snapshot.quota_pool_id or observation.provider_id,
+                plan_id=snapshot.plan_id or observation.plan_id or "UNKNOWN",
+                state=snapshot.state.value,
+                confidence=snapshot.confidence.value,
+                measurement_source_type=snapshot.source.source_type.value,
+                observed_at=observed_at,
+                windows=tuple(
+                    QuotaWindowHealthView(
+                        window_id=window.window_id,
+                        window_kind=window.window_kind.value,
+                        state=window.state.value,
+                        confidence=window.confidence.value,
+                        remaining_fraction=(
+                            window.remaining_fraction
+                            if window.confidence.value in {"EXACT", "ESTIMATED"}
+                            else None
+                        ),
+                        reset_at=(
+                            window.reset_at.isoformat()
+                            if window.reset_at is not None
+                            else None
+                        ),
+                    )
+                    for window in snapshot.windows
+                ),
+            ),
+        )
+
+    def _connected_connections(self) -> dict[str, Any]:
+        """Provider connection records the owner has explicitly registered."""
+
+        if self.provider_registry_manager is None:
+            return {}
+        registry = self.provider_registry_manager.connection_registry()
+        return {
+            provider_id: connection
+            for provider_id, connection in registry.connections.items()
+            if connection.scheduler_connected
+        }
+
+    def _quota_provider_card(
+        self,
+        connection,
+        observation: QuotaProviderObservation | None,
+    ) -> QuotaProviderCardView:
+        pools = (
+            self._quota_pool_views_from_snapshot(observation)
+            if observation is not None
+            else ()
+        )
+        return QuotaProviderCardView(
+            provider_id=connection.provider_id,
+            display_name=connection.display_name,
+            connection_state=connection.connection_state.value,
+            auth_state=connection.auth_state.value,
+            plan_surface=connection.plan_surface,
+            region=connection.region,
+            quota_state=(
+                observation.observation_state.value
+                if observation is not None
+                else QuotaObservationState.UNKNOWN.value
+            ),
+            confidence=(
+                observation.confidence if observation is not None else "UNKNOWN"
+            ),
+            measurement_source=(
+                observation.measurement_source if observation is not None else None
+            ),
+            observed_at=observation.observed_at if observation is not None else None,
+            readonly_source_available=has_readonly_quota_source(connection.provider_id),
+            collector_available=(
+                observation.collector_available if observation is not None else False
+            ),
+            last_refresh_status=(
+                observation.last_refresh_status if observation is not None else None
+            ),
+            last_refresh_at=(
+                observation.last_refresh_at if observation is not None else None
+            ),
+            failure_reason=(
+                observation.failure_reason if observation is not None else None
+            ),
+            quota_pools=pools,
+        )
+
+    def quota(self) -> QuotaOverviewView:
+        """Connection-based quota projection.
+
+        The top-level list is built from *connected providers*, never from the
+        subset that happens to carry quota pools. A provider the owner just
+        added is therefore visible immediately, showing UNKNOWN until a real
+        read-only observation exists.
+        """
+
+        connections = self._connected_connections()
+        observations = {
+            item.provider_id: item
+            for item in (
+                self.quota_refresh_service.observations()
+                if self.quota_refresh_service is not None
+                else ()
+            )
+        }
+        cards = tuple(
+            self._quota_provider_card(connection, observations.get(provider_id))
+            for provider_id, connection in sorted(connections.items())
+        )
+
+        observable = sum(
+            1 for card in cards if card.quota_state == QuotaObservationState.OBSERVED.value
+        )
+        warnings = 0
+        exhausted = 0
+        for card in cards:
+            for pool in card.quota_pools:
+                if pool.state in {"EXHAUSTED", "EXHAUSTED_OBSERVED", "COOLDOWN"}:
+                    exhausted += 1
+                for window in pool.windows:
+                    if (
+                        window.confidence in {"EXACT", "ESTIMATED"}
+                        and window.remaining_fraction is not None
+                        and window.remaining_fraction <= 0.15
+                    ):
+                        warnings += 1
+
+        if not cards:
+            state = QuotaPageState.NO_CONNECTED_PROVIDER
+        elif observable:
+            state = QuotaPageState.CONNECTED_WITH_QUOTA_OBSERVATIONS
+        else:
+            state = QuotaPageState.CONNECTED_BUT_QUOTA_UNKNOWN
+
+        return QuotaOverviewView(
+            state=state.value,
+            summary=QuotaSummaryView(
+                connected_provider_count=len(cards),
+                quota_observable_provider_count=observable,
+                quota_unknown_provider_count=len(cards) - observable,
+                quota_warning_count=warnings,
+                quota_exhausted_count=exhausted,
+            ),
+            providers=cards,
+            history=self.quota_history(),
+        )
+
+    def refresh_quota(self, provider_id: str | None = None) -> QuotaRefreshResultView:
+        """Owner-triggered read-only quota collection.
+
+        Distinct from ``refresh_providers`` (catalog/credential discovery):
+        this contacts documented read-only quota endpoints only, and never
+        issues a model generation to discover quota.
+        """
+
+        if provider_id is not None:
+            self._validate_identifier("provider_id", provider_id)
+        refreshed: tuple[str, ...] = ()
+        if self.quota_refresh_service is not None:
+            observations = self.quota_refresh_service.refresh(provider_id)
+            for observation in observations:
+                if observation.snapshot is not None:
+                    self._record_quota_snapshot_history(observation)
+            refreshed = tuple(item.provider_id for item in observations)
+        return QuotaRefreshResultView(
+            refreshed_provider_ids=refreshed,
+            overview=self.quota(),
+        )
+
+    def _record_quota_snapshot_history(self, observation: QuotaProviderObservation) -> None:
+        """Feed the existing bounded history with real observations only."""
+
+        snapshot = observation.snapshot
+        observed_at = observation.observed_at
+        if snapshot is None or observed_at is None:
+            return
+        for window in snapshot.windows:
+            if window.confidence.value == "UNKNOWN":
+                continue
+            try:
+                self.store.record_quota_observation(
+                    provider_id=observation.provider_id,
+                    quota_pool_id=snapshot.quota_pool_id or observation.provider_id,
+                    window_id=window.window_id,
+                    observed_at=observed_at,
+                    remaining_fraction=window.remaining_fraction,
+                    confidence=window.confidence.value,
+                    measurement_source=snapshot.source.source_type.value,
+                    reset_at=(
+                        window.reset_at.isoformat() if window.reset_at is not None else None
+                    ),
+                    state=window.state.value,
+                )
+            except Exception:
+                continue
 
     def active_status(self) -> ActiveStatusView:
         gate = self.activation_gate
@@ -2342,6 +2631,40 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                     self._json(405, {"error": "method_not_allowed"})
                     return
                 self._view(200, request_service.quota())
+                return
+
+            if rest == ("quota", "refresh"):
+                if method != "POST":
+                    self._json(405, {"error": "method_not_allowed"})
+                    return
+                # Idempotent and parameterless by default, like
+                # /v1/providers/refresh: an absent body means "all connected
+                # providers". An explicit body may scope it to one provider.
+                target: str | None = None
+                length = int(self.headers.get("content-length", "0") or 0)
+                if length > 0:
+                    payload = self._read_json()
+                    if payload is None:
+                        return
+                    target = QuotaRefreshRequest.model_validate(payload).provider_id
+                self._view(200, request_service.refresh_quota(target))
+                return
+
+            if (
+                count == 4
+                and rest[0] == "providers"
+                and rest[2] == "quota"
+                and rest[3] == "refresh"
+            ):
+                if method != "POST":
+                    self._json(405, {"error": "method_not_allowed"})
+                    return
+                length = int(self.headers.get("content-length", "0") or 0)
+                if length > 0:
+                    payload = self._read_json()
+                    if payload is None:
+                        return
+                self._view(200, request_service.refresh_quota(rest[1]))
                 return
 
             if rest == ("active-status",):
