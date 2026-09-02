@@ -20,8 +20,9 @@ from personal_ai_orchestrator.control_client import (
     ControlPlaneError,
     ControlPlaneUnavailable,
 )
+from personal_ai_orchestrator.runtime_config import default_application_support_layout
 
-DEFAULT_SOCKET = Path.home() / ".personal-ai-orchestrator" / "control.sock"
+DEFAULT_SOCKET = default_application_support_layout().socket_path
 
 
 def _socket_path(args: argparse.Namespace) -> Path:
@@ -91,6 +92,43 @@ def _render_routing(view) -> None:
     print(f"selected:    {target or 'none'}")
     if decision.get("fallback_reason"):
         print(f"fallback:    {decision['fallback_reason']}")
+
+
+def _render_quota_overview(view) -> None:
+    """Connected providers first; UNKNOWN is reported, never hidden."""
+
+    print(f"quota state: {view.state}")
+    summary = view.summary
+    print(
+        f"  connected={summary.connected_provider_count} "
+        f"observable={summary.quota_observable_provider_count} "
+        f"unknown={summary.quota_unknown_provider_count} "
+        f"warnings={summary.quota_warning_count} "
+        f"exhausted={summary.quota_exhausted_count}"
+    )
+    for provider in view.providers:
+        print(f"provider: {provider.provider_id} ({provider.display_name})")
+        print(
+            f"  connection={provider.connection_state} quota={provider.quota_state} "
+            f"confidence={provider.confidence}"
+        )
+        if provider.failure_reason is not None:
+            print(f"  reason: {provider.failure_reason}")
+        for pool in provider.quota_pools:
+            print(
+                f"  pool: {pool.quota_pool_id} state={pool.state} "
+                f"confidence={pool.confidence} source={pool.measurement_source_type}"
+            )
+            for window in pool.windows:
+                remaining = (
+                    "UNKNOWN"
+                    if window.remaining_fraction is None
+                    else f"{window.remaining_fraction:.1%}"
+                )
+                print(
+                    f"    window: {window.window_id} state={window.state} "
+                    f"confidence={window.confidence} remaining={remaining}"
+                )
 
 
 def _render_provider_health(view) -> None:
@@ -168,6 +206,11 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--task-id", required=True)
     submit.add_argument("--request-id", required=True)
     submit.add_argument(
+        "--project-id",
+        required=True,
+        help="registered project id; terminal cwd is never used as task context",
+    )
+    submit.add_argument(
         "--intent",
         required=True,
         help="natural-language task intent (never executed)",
@@ -211,6 +254,7 @@ def main(argv: list[str] | None = None) -> int:
             view = client.submit(
                 task_id=args.task_id,
                 request_id=args.request_id,
+                project_id=args.project_id,
                 intent=args.intent,
             )
             _emit(view, as_json=args.json, render=_render_task)
@@ -230,9 +274,10 @@ def main(argv: list[str] | None = None) -> int:
             _emit(client.routing_decision(args.task_id), as_json=args.json, render=_render_routing)
         elif args.command == "runs":
             _emit(client.task_runs(args.task_id), as_json=args.json, render=_render_run_list)
-        elif args.command in {"providers", "quota"}:
-            view = client.providers() if args.command == "providers" else client.quota()
-            _emit(view, as_json=args.json, render=_render_provider_health)
+        elif args.command == "providers":
+            _emit(client.providers(), as_json=args.json, render=_render_provider_health)
+        elif args.command == "quota":
+            _emit(client.quota(), as_json=args.json, render=_render_quota_overview)
         elif args.command == "active-status":
             _emit(client.active_status(), as_json=args.json, render=_render_active_status)
         elif args.command == "approvals":

@@ -33,7 +33,7 @@ def snapshot():
             ]
         },
         observed_at=NOW,
-    )
+    ).to_snapshot()
 
 
 class StaticCollector:

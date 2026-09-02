@@ -5,6 +5,7 @@ import PAOControlKit
 
 struct MenuBarContentView: View {
     @EnvironmentObject private var store: OrchestratorStore
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -162,6 +163,11 @@ struct MenuBarContentView: View {
                 .truncationMode(.middle)
                 .foregroundStyle(.tertiary)
             Spacer()
+            Button(L10n.openDashboard) {
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: "dashboard")
+            }
+            .controlSize(.mini)
             Button(L10n.refresh) {
                 Task { await store.refreshNow() }
             }

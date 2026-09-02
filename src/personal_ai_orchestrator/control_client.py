@@ -10,6 +10,7 @@ from __future__ import annotations
 import http.client
 import json
 import socket
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -21,11 +22,22 @@ from personal_ai_orchestrator.control_api import (
     ApprovalView,
     CancelView,
     ControlPlaneError,
+    DashboardSummaryView,
+    DispatchTaskView,
     HealthView,
+    ImportConnectionsView,
+    OwnerExecutionSettingsView,
+    ProjectListView,
+    ProjectRemoveView,
+    ProjectView,
     ProviderHealthListView,
+    QuotaOverviewView,
+    QuotaRefreshResultView,
     RoutingDecisionView,
     RunListView,
     RunView,
+    SchedulingSettingsView,
+    TaskDetailView,
     TaskListView,
     TaskSubmitRequest,
     TaskView,
@@ -98,10 +110,57 @@ class ControlPlaneClient:
     def health(self) -> HealthView:
         return self._get("/v1/health", HealthView)  # type: ignore[return-value]
 
+    def resolve_project(self, *, path: str) -> ProjectView:
+        rendered = self._request("POST", "/v1/projects/resolve", payload={"path": path})
+        return ProjectView.model_validate(rendered)
+
+    def register_project(
+        self,
+        *,
+        path: str,
+        display_name: str | None = None,
+        security_bookmark_b64: str | None = None,
+    ) -> ProjectView:
+        payload: dict[str, Any] = {"path": path}
+        if display_name is not None:
+            payload["display_name"] = display_name
+        if security_bookmark_b64 is not None:
+            payload["security_bookmark_b64"] = security_bookmark_b64
+        rendered = self._request("POST", "/v1/projects", payload=payload)
+        return ProjectView.model_validate(rendered)
+
+    def list_projects(self) -> ProjectListView:
+        return self._get("/v1/projects", ProjectListView)  # type: ignore[return-value]
+
+    def get_project(self, project_id: str) -> ProjectView:
+        return self._get(f"/v1/projects/{project_id}", ProjectView)  # type: ignore[return-value]
+
+    def mark_project_opened(self, project_id: str) -> ProjectView:
+        rendered = self._request("POST", f"/v1/projects/{project_id}/opened", payload={})
+        return ProjectView.model_validate(rendered)
+
+    def remove_project(self, project_id: str) -> ProjectRemoveView:
+        rendered = self._request("POST", f"/v1/projects/{project_id}/remove", payload={})
+        return ProjectRemoveView.model_validate(rendered)
+
     def submit(
-        self, *, task_id: str, request_id: str, intent: str
+        self,
+        *,
+        task_id: str,
+        request_id: str,
+        project_id: str,
+        intent: str,
+        scheduling_policy: str | None = None,
+        manual_execution_target_id: str | None = None,
     ) -> TaskView:
-        payload = TaskSubmitRequest(task_id=task_id, request_id=request_id, intent=intent)
+        payload = TaskSubmitRequest(
+            task_id=task_id,
+            request_id=request_id,
+            project_id=project_id,
+            intent=intent,
+            scheduling_policy=scheduling_policy,
+            manual_execution_target_id=manual_execution_target_id,
+        )
         rendered = self._request(
             "POST",
             "/v1/tasks",
@@ -116,6 +175,12 @@ class ControlPlaneClient:
         path = "/v1/tasks" if limit is None else f"/v1/tasks?limit={int(limit)}"
         return self._get(path, TaskListView)  # type: ignore[return-value]
 
+    def dashboard(self) -> DashboardSummaryView:
+        return self._get("/v1/dashboard", DashboardSummaryView)  # type: ignore[return-value]
+
+    def task_detail(self, task_id: str) -> TaskDetailView:
+        return self._get(f"/v1/tasks/{task_id}/detail", TaskDetailView)  # type: ignore[return-value]
+
     def task_runs(self, task_id: str) -> RunListView:
         return self._get(f"/v1/tasks/{task_id}/runs", RunListView)  # type: ignore[return-value]
 
@@ -126,6 +191,84 @@ class ControlPlaneClient:
         payload = {"request_id": request_id} if request_id is not None else {}
         rendered = self._request("POST", f"/v1/tasks/{task_id}/cancel", payload=payload)
         return CancelView.model_validate(rendered)
+
+    def dispatch(
+        self,
+        task_id: str,
+        *,
+        request_id: str,
+        task_state_version: int,
+        execution_target_id: str,
+    ) -> DispatchTaskView:
+        rendered = self._request(
+            "POST",
+            f"/v1/tasks/{task_id}/dispatch",
+            payload={
+                "request_id": request_id,
+                "task_state_version": task_state_version,
+                "execution_target_id": execution_target_id,
+            },
+        )
+        return DispatchTaskView.model_validate(rendered)
+
+    def owner_execution_settings(self) -> OwnerExecutionSettingsView:
+        return self._get(  # type: ignore[return-value]
+            "/v1/settings/owner-execution",
+            OwnerExecutionSettingsView,
+        )
+
+    def set_owner_execution_enabled(self, enabled: bool) -> OwnerExecutionSettingsView:
+        rendered = self._request(
+            "PUT",
+            "/v1/settings/owner-execution",
+            payload={"owner_initiated_execution_enabled": bool(enabled)},
+        )
+        return OwnerExecutionSettingsView.model_validate(rendered)
+
+    def scheduling_settings(self) -> SchedulingSettingsView:
+        return self._get(  # type: ignore[return-value]
+            "/v1/settings/scheduling",
+            SchedulingSettingsView,
+        )
+
+    def set_default_scheduling_policy(self, policy: str) -> SchedulingSettingsView:
+        rendered = self._request(
+            "PUT",
+            "/v1/settings/scheduling",
+            payload={"default_scheduling_policy": policy},
+        )
+        return SchedulingSettingsView.model_validate(rendered)
+
+    def set_project_scheduling_policy(
+        self,
+        project_id: str,
+        *,
+        scheduling_policy: str | None,
+        manual_execution_target_id: str | None = None,
+    ) -> ProjectView:
+        rendered = self._request(
+            "PUT",
+            f"/v1/projects/{project_id}/scheduling",
+            payload={
+                "scheduling_policy": scheduling_policy,
+                "manual_execution_target_id": manual_execution_target_id,
+            },
+        )
+        return ProjectView.model_validate(rendered)
+
+    def import_provider_connections(
+        self,
+        provider_ids: Sequence[str],
+    ) -> ImportConnectionsView:
+        rendered = self._request(
+            "POST",
+            "/v1/provider-connections/import",
+            payload={"provider_ids": list(provider_ids)},
+        )
+        return ImportConnectionsView.model_validate(rendered)
+
+    def get_dispatch(self, request_id: str) -> DispatchTaskView:
+        return self._get(f"/v1/dispatches/{request_id}", DispatchTaskView)  # type: ignore[return-value]
 
     def verification_report(self, task_id: str) -> VerificationReportView:
         return self._get(  # type: ignore[return-value]
@@ -142,8 +285,20 @@ class ControlPlaneClient:
     def providers(self) -> ProviderHealthListView:
         return self._get("/v1/providers", ProviderHealthListView)  # type: ignore[return-value]
 
-    def quota(self) -> ProviderHealthListView:
-        return self._get("/v1/quota", ProviderHealthListView)  # type: ignore[return-value]
+    def quota(self) -> QuotaOverviewView:
+        """Connection-based quota projection (connected providers, not pools)."""
+
+        return self._get("/v1/quota", QuotaOverviewView)  # type: ignore[return-value]
+
+    def refresh_quota(self, provider_id: str | None = None) -> QuotaRefreshResultView:
+        """Explicit read-only quota collection, distinct from provider discovery."""
+
+        path = (
+            f"/v1/providers/{provider_id}/quota/refresh"
+            if provider_id is not None
+            else "/v1/quota/refresh"
+        )
+        return QuotaRefreshResultView.model_validate(self._request("POST", path, payload={}))
 
     def active_status(self) -> ActiveStatusView:
         return self._get("/v1/active-status", ActiveStatusView)  # type: ignore[return-value]

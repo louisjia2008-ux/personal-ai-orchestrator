@@ -19,20 +19,20 @@ final class OrchestratorStoreTests: XCTestCase {
             generated += 1
             return "id\(generated)"
         })
-        await store.quickSubmit(intent: "demo intent")
+        await store.quickSubmit(projectId: "project-fixture", intent: "demo intent")
         XCTAssertEqual(store.lastSubmittedTaskId, "menubar-abc")
         XCTAssertEqual(store.submitNotice, .submitted(taskId: "menubar-abc", state: "SUBMITTED"))
 
         // Duplicate guard: identical intent inside the window must not hit the daemon again.
         let postsBefore = daemon.receivedRequests.filter { $0.method == "POST" && $0.path == "/v1/tasks" }.count
-        await store.quickSubmit(intent: "demo intent")
+        await store.quickSubmit(projectId: "project-fixture", intent: "demo intent")
         let postsAfter = daemon.receivedRequests.filter { $0.method == "POST" && $0.path == "/v1/tasks" }.count
         XCTAssertEqual(postsBefore, postsAfter)
         XCTAssertEqual(postsAfter, 1)
         XCTAssertEqual(store.submitNotice, .duplicateBlocked(windowSeconds: 5))
 
         // A different intent submits again with a fresh idempotent request pair.
-        await store.quickSubmit(intent: "another intent")
+        await store.quickSubmit(projectId: "project-fixture", intent: "another intent")
         let postsFinal = daemon.receivedRequests.filter { $0.method == "POST" && $0.path == "/v1/tasks" }.count
         XCTAssertEqual(postsFinal, 2)
         let bodies = daemon.receivedRequests
@@ -88,6 +88,8 @@ final class OrchestratorStoreTests: XCTestCase {
         await store.refreshNow()
         XCTAssertEqual(store.connection, .connected)
         XCTAssertEqual(store.tasks?.total, 2)
+        XCTAssertEqual(store.dashboard?.counts.running, 1)
+        XCTAssertEqual(store.projects?.projects.first?.projectId, "project-fixture")
         XCTAssertEqual(store.activeStatus?.productionActive, "DISABLED_BY_DESIGN")
         XCTAssertNotNil(store.providers)
         XCTAssertEqual(store.statusSummary, .blocked)
@@ -114,6 +116,8 @@ final class OrchestratorStoreTests: XCTestCase {
         XCTAssertFalse(store.connection.isConnected)
         // Assumptions are discarded: no stale task/provider/ACTIVE data remains.
         XCTAssertNil(store.tasks)
+        XCTAssertNil(store.dashboard)
+        XCTAssertNil(store.selectedTaskDetail)
         XCTAssertNil(store.providers)
         XCTAssertNil(store.activeStatus)
         XCTAssertEqual(store.statusSummary, .disconnected(.daemonNotRunning))
@@ -130,7 +134,7 @@ final class OrchestratorStoreTests: XCTestCase {
         try daemon.start(socketPath: path)
 
         let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
-        await store.quickSubmit(intent: "acceptance intent")
+        await store.quickSubmit(projectId: "project-fixture", intent: "acceptance intent")
 
         // Banner is current and authoritative while connected.
         XCTAssertEqual(store.connection, .connected)
@@ -145,12 +149,27 @@ final class OrchestratorStoreTests: XCTestCase {
         XCTAssertEqual(store.statusSummary, .disconnected(.socketInvalid))
         // Authoritative task cache discarded...
         XCTAssertNil(store.tasks)
+        XCTAssertNil(store.dashboard)
+        XCTAssertNil(store.selectedTaskDetail)
         XCTAssertNil(store.providers)
         XCTAssertNil(store.activeStatus)
         // ...and the ephemeral success banner no longer presented as current state.
         XCTAssertNil(store.lastSubmittedTaskId)
         XCTAssertNil(store.submitNotice)
         XCTAssertNil(store.cancellationNotice)
+    }
+
+    func testTaskDetailLoadsThroughSharedStore() async throws {
+        let daemon = TestDaemon()
+        registerStandardRoutes(daemon)
+        let path = temporarySocketPath("detail")
+        try daemon.start(socketPath: path)
+        defer { daemon.stop() }
+
+        let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
+        await store.loadTaskDetail(taskId: "t-1")
+        XCTAssertEqual(store.selectedTaskDetail?.task.taskId, "t-1")
+        XCTAssertEqual(store.selectedTaskDetail?.routing?.fallbackReason, "quota confidence remained UNKNOWN")
     }
 
     func testAPIVersionMismatchIsAConnectionState() async throws {
@@ -163,5 +182,24 @@ final class OrchestratorStoreTests: XCTestCase {
         let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
         await store.refreshNow()
         XCTAssertEqual(store.connection, .disconnected(reason: .apiVersionMismatch(version: "v9")))
+    }
+
+    func testProviderDiscoveryStatusIsLoadedAndRefreshable() async throws {
+        let daemon = TestDaemon()
+        registerStandardRoutes(daemon)
+        let path = temporarySocketPath("discovery")
+        try daemon.start(socketPath: path)
+        defer { daemon.stop() }
+
+        let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
+        await store.refreshNow()
+        let status = try XCTUnwrap(store.providerDiscoveryStatus)
+        XCTAssertEqual(status.discoveryState, "DISCOVERED")
+        XCTAssertEqual(status.providerCount, 5)
+        XCTAssertEqual(status.executionTargetCount, 35)
+
+        // Coalesced refresh: a rapid second refresh must not stall the test.
+        await store.refreshProviders()
+        XCTAssertEqual(store.providerDiscoveryStatus?.discoveryState, "DISCOVERED")
     }
 }

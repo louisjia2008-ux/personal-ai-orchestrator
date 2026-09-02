@@ -90,7 +90,9 @@ Any stage may transition to:
 
 ## Worktree model
 
-For an implementation task the host resolves a base SHA and creates the worktree before launching a worker.
+For an implementation task the host resolves a registered project, records that project's
+authoritative base SHA on the task, and creates the task worktree before launching a worker.
+The user's terminal working directory is never task context.
 
 Example conceptual layout:
 
@@ -106,7 +108,42 @@ Example conceptual layout:
   logs/
 ```
 
-The worker receives only the task worktree as its writable project workspace.
+The worker receives only the task worktree as its writable project workspace. The worker must not
+normally run with `cwd` equal to the original writable source checkout.
+
+## Project Registry
+
+The host owns a credential-free Project Registry. A coding task is dispatchable only when it
+durably references an explicit registered `project_id` and the host-recorded `base_sha`.
+
+Registered project records include:
+
+- `project_id`
+- `display_name`
+- `canonical_repo_root`
+- `git_root`
+- `default_branch`
+- `last_known_head`
+- `created_at`
+- `updated_at`
+- optional `working_subpath`
+- optional `remote_url`
+- optional `last_opened_at`
+- `storage_availability`
+
+The macOS app selects projects explicitly. `Projects -> Add Project` uses a native folder picker;
+the daemon canonicalizes the selected path, resolves symlinks, detects the git root with
+host-owned read-only git commands, and shows the detected repository before registration.
+Sandboxed macOS builds persist access intent through security-scoped bookmark data. No credentials
+are stored.
+
+Project availability is typed as `ONLINE`, `OFFLINE`, `MISSING`, or `INVALID_REPOSITORY`. If an
+external volume disappears, the daemon marks the registered project unavailable, blocks dispatch
+with a typed reason, preserves the task, and never substitutes another path. Availability returns
+only when the same registered path/bookmark identity is safely reachable again.
+
+Monorepos distinguish `git_root` from `working_subpath`. Worktrees are always created from
+`git_root`; `working_subpath` only narrows worker focus inside that worktree.
 
 ## Verification model
 
@@ -207,6 +244,108 @@ Authority rules:
 The daemon gains an optional `--control-socket` flag; both surfaces can run side by side
 against the same durable state.
 
+## P4.2 native dashboard read models
+
+P4.2 adds dashboard-oriented read views without changing authority ownership:
+
+```text
+Personal AI Orchestrator.app
+        |
+MenuBarExtra + Dashboard Window + Settings Scene
+        |
+Shared OrchestratorStore (auto-refresh /v1/dashboard + /v1/providers/status)
+        |
+PAOControlClient
+        |
+/v1/dashboard, /v1/providers, /v1/providers/status, /v1/providers/refresh
+        |
+ControlPlaneService projections over Safety Kernel truth + ProviderRegistryManager
+```
+
+`/v1/dashboard` composes health, task counts, recent tasks, provider/quota health,
+Production ACTIVE status, blockers, and recent audit events. `/v1/tasks/<id>/detail`
+composes the task, run history, latest routing decision, verification report, approvals,
+workspace metadata, and task audit events. Both are read-only, sanitized view models; they
+do not expose credential references, API keys, raw logs, database internals, or mutation
+handles.
+
+The dashboard makes Shadow semantics explicit. `WOULD_SELECT` presentation stays distinct
+from the actual execution target, and `UNKNOWN` quota never renders as a numeric remaining
+percentage. Production ACTIVE remains `DISABLED_BY_DESIGN` unless the daemon activation
+authority reports otherwise; the app has no enable, force, or override button.
+
+### P4.2.4-B app and worker contract
+
+The native macOS app is the owner control surface. A normal owner should be able to create
+a task, watch execution progress, stop a running task, inspect changed files, and read
+verification status without opening OpenCode directly.
+
+```text
+Personal AI Orchestrator
+  = control plane + scheduler + safety authority + observability UI
+
+OpenCode
+  = execution harness
+
+GLM / MiniMax / Codex / future models
+  = compute workers
+
+Host verifier
+  = completion authority
+```
+
+OpenCode output is observable evidence, not authority. The app may show a read-only
+execution console with bounded, sanitized worker metadata and task events, but it must not
+offer an interactive shell for normal operation and must never treat model prose such as
+`COMPLETE` as `VERIFIED`. Only the daemon-owned verifier and Safety Kernel transitions can
+advance task authority.
+
+### P4.2.4-A real provider registry
+
+The bundled daemon owns a dynamic `ProviderRegistryManager` that performs
+credential-safe provider discovery against the local OpenCode CLI:
+
+```text
+provider_discovery.discover()
+        |
+spawns `opencode providers list` + `opencode models <family>`
+        |
+parses provider labels + env-var names only (no token values)
+        |
+returns sanitized ProviderDiscovery records
+        |
+ProviderRegistryManager persists provider-registry.json
+        |
+ControlPlaneService projects through /v1/providers/status
+        |
+Dashboard Provider / Agents / Quota pages render real GLM / MiniMax rows
+```
+
+The discovery subprocess is bounded (8 s timeout, 256 KB stdout cap), never
+spawns a shell, and redacts any token-shaped substring from captured output.
+The Dashboard surfaces `evidence_source`, `auth_status`, `execution_status`,
+and `last_checked` for every provider, with a CN vs international region tag
+for MiniMax surfaces.
+
+Runtime bootstrap now has a macOS application-support layout:
+
+```text
+~/Library/Application Support/Personal AI Orchestrator/
+  runtime.json
+  state.sqlite3
+  runtime-state/
+  provider-registry.json (sanitized dynamic registry; credential-free)
+  logs/
+
+~/Library/Caches/Personal AI Orchestrator/control.sock
+```
+
+The socket lives under Caches to keep the AF_UNIX path below macOS limits. Runtime config
+bootstrap validates schema versioning, writes atomically, and rejects static config that
+contains `credential_ref` values. The legacy `product-bootstrap-empty-registry-v1`
+bootstrap snapshot is upgraded in place by the discovery cycle on first launch;
+user-authored registries are preserved.
+
 ## P4.1 native macOS menu bar client
 
 The menu-bar app (`macos/PAOMenuBar/`, SwiftPM) is a control-plane CLIENT, never the
@@ -237,6 +376,6 @@ Client-side rules:
   `SOCKET_PATH_TOO_LONG`, `ACCESS_DENIED`, `API_VERSION_MISMATCH`, `MALFORMED_RESPONSE`)
   with exponential backoff (2 s → 60 s) while disconnected;
 - socket discovery is deterministic (UserDefaults `controlSocketPath` → `PAO_CONTROL_SOCKET`
-  → `~/.personal-ai-orchestrator/control.sock`); no filesystem scanning;
+  → `~/Library/Caches/Personal AI Orchestrator/control.sock`); no filesystem scanning;
 - logging is privacy-conscious: connection transitions, operation categories and sanitized
   codes only (`PAO_MENUBAR_STDERR_LOG=1` mirrors them to stderr for acceptance evidence).

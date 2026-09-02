@@ -21,6 +21,7 @@ from personal_ai_orchestrator.quota_collectors.zai import (
     normalize_zai_quota,
 )
 from personal_ai_orchestrator.quota_observability import QuotaWindowKind
+from personal_ai_orchestrator.quota_plan import PlanQuotaSemantics
 
 NOW = datetime(2026, 8, 28, 12, tzinfo=UTC)
 
@@ -78,7 +79,8 @@ def test_minimax_region_endpoints_are_provider_published_surfaces() -> None:
 
 
 def test_minimax_fixture_normalizes_two_exact_windows() -> None:
-    snapshot = normalize_minimax_quota(minimax_payload(), observed_at=NOW)
+    projection = normalize_minimax_quota(minimax_payload(), observed_at=NOW)
+    snapshot = projection.to_snapshot()
 
     five_hour, weekly = snapshot.windows
     assert snapshot.confidence is EvidenceConfidence.EXACT
@@ -91,13 +93,18 @@ def test_minimax_fixture_normalizes_two_exact_windows() -> None:
     assert weekly.pace() == pytest.approx(0.4)
     assert snapshot.effective_pace() == pytest.approx(0.4)
     assert snapshot.source.reference == MINIMAX_CN_QUOTA_ENDPOINT
+    # The Token Plan is one shared bar; both windows belong to one pool.
+    assert projection.plan.quota_semantics is PlanQuotaSemantics.SHARED_POOL
+    assert projection.pool.shared_across_models is True
+    # Weekly is scarcer, so it binds — not simply the shortest window.
+    assert projection.binding_window.window_id == "weekly"
 
 
 def test_minimax_missing_weekly_percentage_does_not_invent_precision() -> None:
     payload = minimax_payload()
     payload["model_remains"][0].pop("current_weekly_remaining_percent")
 
-    snapshot = normalize_minimax_quota(payload, observed_at=NOW)
+    snapshot = normalize_minimax_quota(payload, observed_at=NOW).to_snapshot()
 
     assert snapshot.confidence is EvidenceConfidence.UNKNOWN
     assert snapshot.windows[0].confidence is EvidenceConfidence.EXACT
@@ -109,7 +116,7 @@ def test_minimax_collector_requires_explicit_supported_credential_input() -> Non
     result = MiniMaxQuotaCollector(bearer_token=None, transport=FakeTransport()).collect()
 
     assert result.status is QuotaCollectionStatus.AUTH_REQUIRED
-    assert result.error_category == "AUTHENTICATION_INTEGRATION_BLOCKED"
+    assert result.error_category == "CREDENTIAL_NOT_AVAILABLE"
     assert result.snapshot is None
 
 
@@ -165,19 +172,19 @@ def test_provider_error_is_not_converted_to_exhausted_quota() -> None:
     assert result.error_category == "PROVIDER_UNAVAILABLE"
 
 
-def test_zai_mocked_fixture_preserves_derived_confidence() -> None:
+def test_zai_rounded_percentage_only_is_estimated_not_exact() -> None:
+    """Without counts, only the integer percentage is available — that is ESTIMATED."""
+
     payload = {
         "data": {
             "limits": [
-                {
-                    "type": "TOKENS_LIMIT",
-                    "percentage": 60,
-                }
+                {"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 60}
             ]
         }
     }
 
-    snapshot = normalize_zai_quota(payload, observed_at=NOW)
+    projection = normalize_zai_quota(payload, observed_at=NOW)
+    snapshot = projection.to_snapshot()
 
     window = snapshot.windows[0]
     assert snapshot.confidence is EvidenceConfidence.ESTIMATED
@@ -189,14 +196,31 @@ def test_zai_mocked_fixture_preserves_derived_confidence() -> None:
 
 
 def test_zai_missing_percentage_stays_unknown() -> None:
-    snapshot = normalize_zai_quota(
-        {"data": {"limits": [{"type": "TOKENS_LIMIT"}]}},
+    projection = normalize_zai_quota(
+        {"data": {"limits": [{"type": "CREDIT_LIMIT", "unit": 3, "number": 5}]}},
         observed_at=NOW,
     )
+    snapshot = projection.to_snapshot()
 
     assert snapshot.confidence is EvidenceConfidence.UNKNOWN
     assert snapshot.state is QuotaState.UNKNOWN
     assert snapshot.windows[0].remaining_fraction is None
+
+
+def test_zai_entry_without_window_dimension_is_not_guessed_to_be_five_hour() -> None:
+    """An entry whose unit/number we do not recognize is dropped, not relabelled.
+
+    The previous implementation took the first ``TOKENS_LIMIT`` entry and called
+    it the 5-hour window. That is how the weekly window went missing.
+    """
+
+    projection = normalize_zai_quota(
+        {"data": {"limits": [{"type": "CREDIT_LIMIT", "percentage": 60}]}},
+        observed_at=NOW,
+    )
+
+    assert projection.windows == ()
+    assert projection.unknown_reason == "PROVIDER_WINDOW_DIMENSION_UNRECOGNIZED"
 
 
 def test_zai_runtime_auth_is_deferred_without_token() -> None:
@@ -206,4 +230,4 @@ def test_zai_runtime_auth_is_deferred_without_token() -> None:
     ).collect()
 
     assert result.status is QuotaCollectionStatus.AUTH_REQUIRED
-    assert result.error_category == "AUTHENTICATION_INTEGRATION_BLOCKED"
+    assert result.error_category == "CREDENTIAL_NOT_AVAILABLE"

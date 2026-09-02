@@ -103,6 +103,16 @@ final class ControlPlaneClientTests: XCTestCase {
         XCTAssertEqual(tasks.total, 2)
         XCTAssertEqual(tasks.tasks.first?.state, "RUNNING")
 
+        let dashboard = try await client.dashboard()
+        XCTAssertEqual(dashboard.counts.running, 1)
+        XCTAssertEqual(dashboard.activeStatus.productionActive, "DISABLED_BY_DESIGN")
+        XCTAssertEqual(dashboard.recentEvents.first?.eventType, "TASK_SUBMITTED")
+
+        let detail = try await client.taskDetail("t-1")
+        XCTAssertEqual(detail.task.taskId, "t-1")
+        XCTAssertEqual(detail.routing?.mode, "SHADOW")
+        XCTAssertEqual(detail.verification.status, "NOT_VERIFIED")
+
         let providers = try await client.providers()
         XCTAssertEqual(providers.providers.first?.displayName, "MiniMax CN")
 
@@ -110,7 +120,12 @@ final class ControlPlaneClientTests: XCTestCase {
         XCTAssertEqual(active.productionActive, "DISABLED_BY_DESIGN")
 
         let submitted = try await client.submit(
-            SubmitRequest(taskId: "menubar-abc", requestId: "menubar-req-abc", intent: "demo")
+            SubmitRequest(
+                taskId: "menubar-abc",
+                requestId: "menubar-req-abc",
+                projectId: "project-fixture",
+                intent: "demo"
+            )
         )
         XCTAssertEqual(submitted.taskId, "menubar-abc")
 
@@ -118,6 +133,7 @@ final class ControlPlaneClientTests: XCTestCase {
         XCTAssertNotNil(posted)
         XCTAssertTrue(posted!.body.contains("\"task_id\":\"menubar-abc\""))
         XCTAssertTrue(posted!.body.contains("\"request_id\":\"menubar-req-abc\""))
+        XCTAssertTrue(posted!.body.contains("\"project_id\":\"project-fixture\""))
     }
 
     func testHTTPErrorSurfacesSanitizedCode() async throws {

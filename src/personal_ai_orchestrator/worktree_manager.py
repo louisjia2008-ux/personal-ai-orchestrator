@@ -55,8 +55,11 @@ class WorktreeManager:
 
     def create(self, *, repo_path: Path, task_id: str, base_sha: str) -> ManagedWorktree:
         repo = repo_path.expanduser().resolve()
-        if not (repo / ".git").exists():
+        if self._git(repo, "rev-parse", "--is-inside-work-tree") != "true":
             raise ValueError("repo_path must be a Git checkout")
+        top = Path(self._git(repo, "rev-parse", "--show-toplevel")).resolve()
+        if top != repo:
+            raise ValueError("repo_path must be the Git root")
         if task_id in self._owned:
             existing = self._owned[task_id]
             if existing.base_sha != base_sha or existing.repo_path != repo:

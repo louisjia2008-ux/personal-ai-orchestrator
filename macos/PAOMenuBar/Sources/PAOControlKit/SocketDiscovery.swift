@@ -4,21 +4,21 @@ import Foundation
 public enum SocketDiscovery {
     public static let userDefaultsKey = "controlSocketPath"
     public static let environmentKey = "PAO_CONTROL_SOCKET"
-    public static let defaultRelative = ".personal-ai-orchestrator/control.sock"
 
     public static let maximumPathBytes = 104
 
-    /// Resolution order: explicit UserDefaults override, then environment, then default
-    /// location under the user's home directory.
+    /// Resolution order: explicit UserDefaults override, then environment, then app-support
+    /// layout socket under `~/Library/Caches` to respect macOS AF_UNIX path limits.
     public static func resolve(userDefaults: UserDefaults = .standard,
-                               environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
+                               environment: [String: String] = ProcessInfo.processInfo.environment,
+                               defaultLayout: AppSupportLayout = .resolve()) -> String {
         if let configured = userDefaults.string(forKey: userDefaultsKey), !configured.isEmpty {
             return configured
         }
         if let fromEnvironment = environment[environmentKey], !fromEnvironment.isEmpty {
             return fromEnvironment
         }
-        return NSString(string: NSHomeDirectory()).appendingPathComponent(defaultRelative)
+        return defaultLayout.socketPath
     }
 
     public enum Validation: Equatable {

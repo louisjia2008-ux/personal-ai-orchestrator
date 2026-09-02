@@ -89,12 +89,13 @@ python -m personal_ai_orchestrator.daemon \
   --config runtime.json \
   --state-db state.sqlite3 \
   --runtime-state-root runtime-state \
-  --control-socket ~/.personal-ai-orchestrator/control.sock
+  --control-socket ~/Library/Caches/Personal\ AI\ Orchestrator/control.sock
 ```
 
 The `pao` console script (or `python -m personal_ai_orchestrator.cli`) submits structured
 requests only; CLI arguments never become shell commands. Socket resolution order:
-`--socket`, then `PAO_CONTROL_SOCKET`, then `~/.personal-ai-orchestrator/control.sock`.
+`--socket`, then `PAO_CONTROL_SOCKET`, then
+`~/Library/Caches/Personal AI Orchestrator/control.sock`.
 
 ```bash
 pao submit --task-id T1 --request-id R1 --intent "natural-language intent"
@@ -128,10 +129,58 @@ PAO_CONTROL_SOCKET=/path/to/c.sock .build/release/PAOMenuBar
 - Deployment target: macOS 13 (SwiftUI `MenuBarExtra`); built and tested on macOS 26.5 /
   Swift 6.3.
 - Socket resolution: `defaults write PAOMenuBar controlSocketPath /abs/path.sock`
-  (app domain), then `PAO_CONTROL_SOCKET`, then `~/.personal-ai-orchestrator/control.sock`.
+  (app domain), then `PAO_CONTROL_SOCKET`, then
+  `~/Library/Caches/Personal AI Orchestrator/control.sock`.
 - `PAO_MENUBAR_STDERR_LOG=1` mirrors sanitized connection/op logs to stderr for acceptance
   evidence.
 - Refresh: 2 s while the menu is open, 15 s in background, exponential backoff (2 s → 60 s)
   while disconnected. No high-frequency polling.
 - The app requests no entitlements and no Accessibility/Screen/Full-Disk permissions; it is
   a plain (unsigned, local) SwiftPM executable talking to one UDS endpoint.
+
+## Native macOS dashboard bundle (P4.2)
+
+```bash
+cd macos/PAOMenuBar
+swift test
+bash scripts/build_app_bundle.sh
+open "dist/Personal AI Orchestrator.app"
+```
+
+The bundle script performs a SwiftPM release build, builds a project-local PyInstaller
+`pao-daemon` helper, and assembles `dist/Personal AI Orchestrator.app`. The SwiftUI client
+starts the bundled helper with `Process` when the typed control socket is unavailable; the
+daemon remains external and authoritative. P4.2.3 polished Tasks shell consistency.
+P4.2.4-A added the unified dashboard shell and the real GLM / MiniMax provider
+registry: `/v1/dashboard`, `/v1/providers`, `/v1/providers/status`, and
+`/v1/providers/refresh` so the shared store can refresh one aggregate dashboard view
+rather than polling each screen independently.
+P4.2.4-B added owner-initiated OpenCode dispatch, host verifier integration, and
+the Project Registry. Product task creation now requires an explicit registered
+project; terminal `cwd` is not task context.
+
+Runtime state for product launches should be bootstrapped outside source worktrees:
+
+```text
+~/Library/Application Support/Personal AI Orchestrator/
+  runtime.json
+  state.sqlite3
+  runtime-state/
+  provider-registry.json  # sanitized dynamic registry (credential-free)
+  logs/
+~/Library/Caches/Personal AI Orchestrator/control.sock
+```
+
+`bootstrap_application_support()` writes `runtime.json` atomically and fails if the static
+runtime config contains provider credential references. Static config still cannot enable
+Production ACTIVE. The legacy empty-bootstrap snapshot id
+(`product-bootstrap-empty-registry-v1`) triggers a credential-safe discovery cycle on
+first launch; user-authored registries are preserved.
+
+Current P4.2 limitations:
+
+- the app-owned daemon uses direct `Process` launch and an app-support lock, not a LaunchAgent
+  or `SMAppService`;
+- the bundled helper is PyInstaller-based and built from project-local packaging dependencies;
+- WidgetKit source and a sanitized shared snapshot bridge exist, but producing an installable
+  `.appex` still requires an Xcode app-extension packaging/signing path.

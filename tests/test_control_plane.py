@@ -1,6 +1,7 @@
 import json
 import shutil
 import stat
+import subprocess
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -41,6 +42,7 @@ from personal_ai_orchestrator.model_registry import (
     QuotaWindowKind,
     QuotaWindowSnapshot,
 )
+from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
 from personal_ai_orchestrator.quota_availability import (
     QuotaAvailabilityJournal,
     unknown_availability,
@@ -121,9 +123,31 @@ def _registry() -> ModelRegistry:
                 model_sku_id="m3",
                 account_id="account",
                 runtime_id="opencode",
+                execution_verified=True,
             )
         },
     )
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    ).stdout.strip()
+
+
+def _make_repo(path: Path) -> Path:
+    path.mkdir(parents=True)
+    _git(path, "init", "-q", "-b", "main")
+    _git(path, "config", "user.email", "control@example.invalid")
+    _git(path, "config", "user.name", "Control")
+    (path / "README.md").write_text("# fixture\n", encoding="utf-8")
+    _git(path, "add", "README.md")
+    _git(path, "commit", "-q", "-m", "initial")
+    return path
 
 
 @pytest.fixture
@@ -147,10 +171,13 @@ def harness(tmp_path):
         runtime_availability={"m3-sub": True},
         verification_journal=VerificationEvidenceJournal(tmp_path),
         quota_availability_journal=availability,
+        owner_execution=OwnerExecutionSettings(tmp_path / "owner-execution.json", initial=True),
     )
     server = ControlPlaneServer(service, socket_path)
     server.start_background()
     client = ControlPlaneClient(socket_path)
+    repo = _make_repo(tmp_path / "project")
+    project = client.register_project(path=str(repo), display_name="Fixture")
     try:
         yield type(
             "Harness",
@@ -163,6 +190,8 @@ def harness(tmp_path):
                 "tmp_path": tmp_path,
                 "socket_path": socket_path,
                 "availability": availability,
+                "repo": repo,
+                "project": project,
             },
         )()
     finally:
@@ -181,8 +210,20 @@ def _raw_request(socket_path, method, path, *, headers=None, body=None):
         connection.close()
 
 
-def _submit(harness, *, task_id="task-1", request_id="req-1", intent="fix the bug"):
-    return harness.client.submit(task_id=task_id, request_id=request_id, intent=intent)
+def _submit(
+    harness,
+    *,
+    task_id="task-1",
+    request_id="req-1",
+    intent="fix the bug",
+    project_id=None,
+):
+    return harness.client.submit(
+        task_id=task_id,
+        request_id=request_id,
+        project_id=project_id or harness.project.project_id,
+        intent=intent,
+    )
 
 
 def test_health_roundtrip(harness):
@@ -205,14 +246,67 @@ def test_submit_get_list_roundtrip(harness):
     view = _submit(harness)
     assert view.state == TaskState.SUBMITTED.value
     assert view.state_version == 0
+    assert view.project_id == harness.project.project_id
+    assert view.base_sha == _git(harness.repo, "rev-parse", "HEAD")
 
     fetched = harness.client.get_task("task-1")
     assert fetched.task_id == "task-1"
     assert fetched.intent == "fix the bug"
+    assert fetched.working_subpath is None
 
     listed = harness.client.list_tasks()
     assert listed.total == 1
     assert listed.tasks[0].task_id == "task-1"
+
+
+def test_project_registry_resolves_registers_and_lists_git_roots(harness):
+    nested = harness.repo / "apps" / "desktop"
+    nested.mkdir(parents=True)
+    preview = harness.client.resolve_project(path=str(nested))
+    assert preview.git_root == str(harness.repo.resolve())
+    assert preview.canonical_repo_root == str(nested.resolve())
+    assert preview.working_subpath == "apps/desktop"
+    assert preview.storage_availability == "ONLINE"
+
+    project = harness.client.register_project(path=str(nested), display_name="Desktop")
+    assert project.display_name == "Desktop"
+    assert project.working_subpath == "apps/desktop"
+    listed = harness.client.list_projects()
+    assert {item.project_id for item in listed.projects} >= {
+        harness.project.project_id,
+        project.project_id,
+    }
+
+
+def test_project_registration_rejects_invalid_repositories(harness, tmp_path):
+    invalid = tmp_path / "not-a-repo"
+    invalid.mkdir()
+    with pytest.raises(ControlPlaneError) as error:
+        harness.client.resolve_project(path=str(invalid))
+    assert error.value.status == 400
+    assert error.value.code == "invalid_repository"
+
+
+def test_project_removal_only_forgets_registration(harness):
+    removed = harness.client.remove_project(harness.project.project_id)
+    assert removed.removed_from_orchestrator is True
+    assert harness.repo.exists()
+    assert (harness.repo / "README.md").exists()
+    assert harness.project.project_id not in {
+        project.project_id for project in harness.client.list_projects().projects
+    }
+
+
+def test_submit_requires_registered_project(harness):
+    with pytest.raises(ControlPlaneError) as error:
+        harness.client.submit(
+            task_id="task-missing-project",
+            request_id="req-missing-project",
+            project_id="project-not-registered",
+            intent="fix",
+        )
+    assert error.value.status == 400
+    assert error.value.code == "project_not_registered"
 
 
 def test_submit_is_idempotent_by_request_id(harness):
@@ -235,6 +329,216 @@ def test_submit_conflicting_request_id_rejected(harness):
         _submit(harness, request_id="req-1", intent="different intent")
     assert error.value.status == 400
     assert error.value.code == "conflicting_request_id"
+
+
+def test_owner_dispatch_accepts_verified_target_and_is_idempotent(harness):
+    task = _submit(harness)
+
+    first = harness.client.dispatch(
+        "task-1",
+        request_id="dispatch-1",
+        task_state_version=task.state_version,
+        execution_target_id="m3-sub",
+    )
+    second = harness.client.dispatch(
+        "task-1",
+        request_id="dispatch-1",
+        task_state_version=task.state_version,
+        execution_target_id="m3-sub",
+    )
+
+    assert first.accepted is True
+    assert first.authority == "OWNER_INITIATED_EXECUTION"
+    assert first.status == "RESERVED"
+    assert first.task.state == TaskState.READY.value
+    assert second.model_dump() == first.model_dump()
+    assert harness.client.active_status().production_active == "DISABLED_BY_DESIGN"
+    rows = harness.store.connection.execute(
+        "SELECT COUNT(*) AS n FROM routing_decisions WHERE request_id='dispatch-1'"
+    ).fetchone()
+    assert rows["n"] == 0
+    rows = harness.store.connection.execute(
+        "SELECT COUNT(*) AS n FROM owner_dispatches WHERE request_id='dispatch-1'"
+    ).fetchone()
+    assert rows["n"] == 1
+
+
+def test_owner_dispatch_fails_closed_when_owner_execution_setting_is_off(harness):
+    harness.service.owner_execution.set_enabled(False)
+    task = _submit(harness)
+
+    with pytest.raises(ControlPlaneError) as error:
+        harness.client.dispatch(
+            "task-1",
+            request_id="dispatch-disabled",
+            task_state_version=task.state_version,
+            execution_target_id="m3-sub",
+        )
+
+    assert error.value.status == 403
+    assert error.value.code == "owner_initiated_execution_disabled"
+    assert harness.client.owner_execution_settings().owner_initiated_execution_enabled is False
+    rows = harness.store.connection.execute(
+        "SELECT COUNT(*) AS n FROM owner_dispatches WHERE request_id='dispatch-disabled'"
+    ).fetchone()
+    assert rows["n"] == 0
+
+
+def test_owner_dispatch_rejects_stale_task_version(harness):
+    _submit(harness)
+
+    with pytest.raises(ControlPlaneError) as error:
+        harness.client.dispatch(
+            "task-1",
+            request_id="dispatch-stale",
+            task_state_version=99,
+            execution_target_id="m3-sub",
+        )
+
+    assert error.value.status == 409
+    assert error.value.code == "stale_task_state_version"
+    dispatch = harness.client.get_dispatch("dispatch-stale")
+    assert dispatch.status == "BLOCKED"
+    assert dispatch.failure_code == "STALE_TASK_STATE_VERSION"
+
+
+def test_owner_dispatch_request_id_conflicts_on_semantic_payload_changes(harness):
+    task = _submit(harness)
+    harness.client.dispatch(
+        "task-1",
+        request_id="dispatch-conflict",
+        task_state_version=task.state_version,
+        execution_target_id="m3-sub",
+    )
+
+    with pytest.raises(ControlPlaneError) as version_error:
+        harness.client.dispatch(
+            "task-1",
+            request_id="dispatch-conflict",
+            task_state_version=task.state_version + 1,
+            execution_target_id="m3-sub",
+        )
+    assert version_error.value.status == 409
+    assert version_error.value.code == "conflicting_dispatch_request_id"
+
+    with pytest.raises(ControlPlaneError) as target_error:
+        harness.client.dispatch(
+            "task-1",
+            request_id="dispatch-conflict",
+            task_state_version=task.state_version,
+            execution_target_id="different-target",
+        )
+    assert target_error.value.status == 409
+    assert target_error.value.code == "conflicting_dispatch_request_id"
+
+    other = _submit(harness, task_id="task-2", request_id="req-2")
+    with pytest.raises(ControlPlaneError) as task_error:
+        harness.client.dispatch(
+            "task-2",
+            request_id="dispatch-conflict",
+            task_state_version=other.state_version,
+            execution_target_id="m3-sub",
+        )
+    assert task_error.value.status == 409
+    assert task_error.value.code == "conflicting_dispatch_request_id"
+
+
+def test_owner_dispatch_rejects_client_supplied_authority_or_mode(harness):
+    task = _submit(harness)
+    status, body = _raw_request(
+        harness.socket_path,
+        "POST",
+        "/v1/tasks/task-1/dispatch",
+        headers={"content-type": "application/json"},
+        body=json.dumps(
+            {
+                "request_id": "dispatch-authority",
+                "task_state_version": task.state_version,
+                "execution_target_id": "m3-sub",
+                "authority": "OWNER_INITIATED_EXECUTION",
+            }
+        ).encode(),
+    )
+    assert status == 400
+    assert json.loads(body) == {"error": "invalid_json_schema"}
+
+    status, body = _raw_request(
+        harness.socket_path,
+        "POST",
+        "/v1/tasks/task-1/dispatch",
+        headers={"content-type": "application/json"},
+        body=json.dumps(
+            {
+                "request_id": "dispatch-mode",
+                "task_state_version": task.state_version,
+                "execution_target_id": "m3-sub",
+                "mode": "ACTIVE",
+            }
+        ).encode(),
+    )
+    assert status == 400
+    assert json.loads(body) == {"error": "invalid_json_schema"}
+
+
+def test_owner_dispatch_is_separate_from_routing_decisions(harness):
+    task = _submit(harness)
+    decision = {
+        "decision_id": "route-before-dispatch",
+        "request_id": "route-request",
+        "mode": "SHADOW",
+        "selected_execution_target_id": None,
+        "fallback_reason": "quota confidence remained UNKNOWN",
+    }
+    harness.store.record_routing_decision(
+        decision_id="route-before-dispatch",
+        request_id="route-request",
+        task_id="task-1",
+        payload=decision,
+    )
+
+    dispatch = harness.client.dispatch(
+        "task-1",
+        request_id="dispatch-after-route",
+        task_state_version=task.state_version,
+        execution_target_id="m3-sub",
+    )
+
+    routing = harness.client.routing_decision("task-1")
+    assert routing.decision_id == "route-before-dispatch"
+    assert routing.request_id == "route-request"
+    assert dispatch.request_id == "dispatch-after-route"
+    assert harness.client.get_dispatch("dispatch-after-route").dispatch_id == dispatch.dispatch_id
+    rows = harness.store.connection.execute(
+        "SELECT COUNT(*) AS n FROM routing_decisions WHERE request_id='dispatch-after-route'"
+    ).fetchone()
+    assert rows["n"] == 0
+
+
+def test_owner_dispatch_denies_catalog_only_target(harness):
+    target = harness.service.registry.execution_targets["m3-sub"].model_copy(
+        update={"enabled": True, "execution_verified": False}
+    )
+    harness.service.registry = harness.service.registry.model_copy(
+        update={"execution_targets": {"m3-sub": target}}
+    )
+    task = _submit(harness)
+
+    with pytest.raises(ControlPlaneError) as error:
+        harness.client.dispatch(
+            "task-1",
+            request_id="dispatch-catalog-only",
+            task_state_version=task.state_version,
+            execution_target_id="m3-sub",
+        )
+
+    assert error.value.status == 409
+    assert error.value.code == "execution_target_not_launchable"
+    assert harness.client.get_task("task-1").state == TaskState.SUBMITTED.value
+    dispatch = harness.client.get_dispatch("dispatch-catalog-only")
+    assert dispatch.status == "BLOCKED"
+    assert dispatch.failure_code == "EXECUTION_TARGET_NOT_LAUNCHABLE"
+    events = harness.store.audit_events("task-1")
+    assert any(event["event_type"] == "OWNER_DISPATCH_BLOCKED" for event in events)
 
 
 def test_submit_rejects_unknown_fields(harness):
@@ -261,6 +565,7 @@ def test_submit_rejects_unsafe_task_id(harness):
         harness.client.submit(
             task_id="../escape",
             request_id="req-2",
+            project_id=harness.project.project_id,
             intent="text",
         )
     assert error.value.status == 400
@@ -323,6 +628,34 @@ def test_unknown_task_returns_sanitized_404(harness):
         harness.client.get_task("missing-task")
     assert error.value.status == 404
     assert error.value.code == "task_not_found"
+
+
+def test_build_endpoint_reports_daemon_identity(harness):
+    """The daemon must be able to state which commit produced it."""
+    status, body = _raw_request(harness.socket_path, "GET", "/v1/build")
+
+    assert status == 200
+    payload = json.loads(body)
+    assert set(payload) == {
+        "commit_sha",
+        "short_sha",
+        "api_version",
+        "configuration",
+        "built_at",
+    }
+    assert payload["api_version"] == "v1"
+    # Running from a checkout, identity resolves; either way it is never blank.
+    assert payload["commit_sha"]
+    if payload["commit_sha"] != "unknown":
+        assert len(payload["commit_sha"]) == 40
+        assert payload["short_sha"] == payload["commit_sha"][:7]
+
+
+def test_build_endpoint_rejects_writes(harness):
+    status, body = _raw_request(harness.socket_path, "POST", "/v1/build", body=b"{}")
+
+    assert status == 405
+    assert json.loads(body) == {"error": "method_not_allowed"}
 
 
 def test_unknown_path_returns_404(harness):
@@ -486,6 +819,127 @@ def test_routing_decision_view(harness):
     assert view.decision["fallback_reason"] == "quota confidence remained UNKNOWN"
 
 
+def test_dashboard_summary_composes_sanitized_authoritative_state(harness):
+    harness.store.submit_task(task_id="task-dash", request_id="req-dash", intent="dashboard")
+    harness.store.transition_task("task-dash", TaskState.READY)
+    harness.store.transition_task("task-dash", TaskState.RUNNING)
+
+    view = harness.client.dashboard()
+    assert view.connection.status == "ok"
+    assert view.counts.running == 1
+    assert view.counts.verifying == 0
+    assert view.counts.total == 1
+    assert view.recent_tasks[0].task_id == "task-dash"
+    assert view.basic_info.registered_projects == 1
+    assert view.basic_info.discovered_providers == 1
+    assert view.basic_info.running_tasks == 1
+    assert view.basic_info.tasks_today >= 0
+    assert view.task_trend
+    assert any(bucket.submitted >= 1 for bucket in view.task_trend)
+    assert any(
+        slice.state == TaskState.RUNNING.value and slice.count == 1
+        for slice in view.task_state_distribution
+    )
+    assert view.active_status.production_active == "DISABLED_BY_DESIGN"
+    assert "explicit owner approval missing" in view.important_blockers
+    assert any(risk.title == "Production automation is not authorized" for risk in view.risks)
+    assert all(
+        risk.raw_code is None or "credential" not in risk.raw_code.lower()
+        for risk in view.risks
+    )
+    assert view.quota_history.retention_limit == 500
+    assert view.quota_history.observations
+    assert any(event.event_type == "TASK_STATE_CHANGED" for event in view.recent_events)
+
+    raw = view.model_dump_json().lower()
+    assert SECRET_MARKER not in raw
+    assert "credential_ref" not in raw
+
+
+def test_quota_history_is_bounded_and_deduplicated(harness):
+    for index in range(505):
+        harness.store.record_quota_observation(
+            provider_id="minimax",
+            quota_pool_id="pool",
+            window_id="5h",
+            observed_at=f"2026-08-31T00:{index:03d}:00Z",
+            remaining_fraction=0.8,
+            confidence="ESTIMATED",
+            measurement_source="PROVIDER_API",
+            reset_at=None,
+            state="AVAILABLE",
+        )
+
+    harness.store.record_quota_observation(
+        provider_id="minimax",
+        quota_pool_id="pool",
+        window_id="5h",
+        observed_at="2026-08-31T00:504:00Z",
+        remaining_fraction=0.8,
+        confidence="ESTIMATED",
+        measurement_source="PROVIDER_API",
+        reset_at=None,
+        state="AVAILABLE",
+    )
+
+    rows = harness.store.quota_observation_history(limit=600)
+    assert len(rows) == 500
+    assert sum(1 for row in rows if row["observed_at"] == "2026-08-31T00:504:00Z") == 1
+
+
+def test_dashboard_summary_is_read_only(harness):
+    status, body = _raw_request(
+        harness.socket_path,
+        "POST",
+        "/v1/dashboard",
+        headers={"content-type": "application/json"},
+        body=b"{}",
+    )
+    assert status == 405
+    assert json.loads(body) == {"error": "method_not_allowed"}
+
+
+def test_task_detail_composes_runs_routing_verification_approvals_and_events(harness):
+    harness.store.submit_task(task_id="task-detail", request_id="req-detail", intent="detail")
+    harness.store.register_workspace(
+        task_id="task-detail",
+        repo_path="/repo",
+        worktree_path="/repo-worktree",
+        branch="codex/task-detail",
+        base_sha="abc123",
+    )
+    harness.store.record_routing_decision(
+        decision_id="route-detail",
+        request_id="route-req-detail",
+        task_id="task-detail",
+        payload={
+            "mode": "SHADOW",
+            "selected_execution_target_id": None,
+            "fallback_reason": "quota confidence remained UNKNOWN",
+        },
+    )
+    harness.store.transition_task("task-detail", TaskState.READY)
+    harness.store.transition_task("task-detail", TaskState.RUNNING)
+    harness.store.start_run(run_id="run-detail", task_id="task-detail", worker_id="m3-sub")
+    authority = ApprovalAuthority(harness.store)
+    authority.request(
+        approval_id="approval-detail",
+        task_id="task-detail",
+        kind=ApprovalKind.HIGH_RISK_EXECUTION,
+    )
+
+    view = harness.client.task_detail("task-detail")
+    assert view.task.task_id == "task-detail"
+    assert view.runs[0].run_id == "run-detail"
+    assert view.routing is not None
+    assert view.routing.decision_id == "route-detail"
+    assert view.verification.status == "NOT_VERIFIED"
+    assert view.approvals.approvals[0].approval_id == "approval-detail"
+    assert view.workspace is not None
+    assert view.workspace.writer_locked is False
+    assert [event.event_type for event in view.events][0] == "TASK_SUBMITTED"
+
+
 def test_routing_decision_missing_404(harness):
     _submit(harness)
     with pytest.raises(ControlPlaneError) as error:
@@ -537,8 +991,21 @@ def test_provider_health_is_sanitized(harness):
     assert target.observed_availability.confidence == EvidenceConfidence.UNKNOWN.value
 
 
-def test_quota_alias_matches_providers(harness):
-    assert harness.client.quota().providers == harness.client.providers().providers
+def test_quota_is_connection_based_not_pool_based(harness):
+    """Quota enumerates connected providers, never merely providers with pools.
+
+    This harness has a catalog provider carrying a real quota pool but no
+    connection registry, so the page must report NO_CONNECTED_PROVIDER rather
+    than borrowing the catalog list.
+    """
+
+    view = harness.client.quota()
+    assert view.state == "NO_CONNECTED_PROVIDER"
+    assert view.providers == ()
+    assert view.summary.connected_provider_count == 0
+    assert view.summary.quota_observable_provider_count == 0
+    # The catalog provider is still visible on the Providers page.
+    assert harness.client.providers().providers[0].quota_pools
 
 
 def test_active_status_fail_closed(harness):
@@ -628,7 +1095,8 @@ def test_cli_submit_status_active_status(harness, capsys):
     socket_value = str(harness.socket_path)
 
     assert cli_main([socket_arg, socket_value, "submit", "--task-id", "cli-1",
-                     "--request-id", "cli-req-1", "--intent", "cli driven task"]) == 0
+                     "--request-id", "cli-req-1", "--project-id", harness.project.project_id,
+                     "--intent", "cli driven task"]) == 0
     out = capsys.readouterr().out
     assert "SUBMITTED" in out
 
@@ -680,7 +1148,14 @@ def test_daemon_control_service_wiring(tmp_path):
     server.start_background()
     client = ControlPlaneClient(socket_path)
     try:
-        view = client.submit(task_id="wire-1", request_id="wire-req-1", intent="wired")
+        repo = _make_repo(tmp_path / "wired-project")
+        project = client.register_project(path=str(repo), display_name="Wired")
+        view = client.submit(
+            task_id="wire-1",
+            request_id="wire-req-1",
+            project_id=project.project_id,
+            intent="wired",
+        )
         assert view.state == TaskState.SUBMITTED.value
         status = client.active_status()
         assert status.production_active == "DISABLED_BY_DESIGN"

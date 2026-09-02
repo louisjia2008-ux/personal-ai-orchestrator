@@ -2,7 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
+from personal_ai_orchestrator.safety_kernel import (
+    OwnerDispatchStatus,
+    SafetyKernelStore,
+    TaskState,
+)
 
 
 def _running_store(path: Path) -> SafetyKernelStore:
@@ -67,6 +71,105 @@ def test_routing_decision_rolls_back_if_audit_write_fails(tmp_path: Path, monkey
         "SELECT decision_id FROM routing_decisions WHERE request_id='request-1'"
     ).fetchone()
     assert row is None
+
+
+def test_owner_dispatched_worker_starts_run_and_running_state_atomically(
+    tmp_path: Path,
+) -> None:
+    store = SafetyKernelStore(tmp_path / "state.sqlite3")
+    store.submit_task(task_id="t1", request_id="r1", intent="implement")
+    store.reserve_owner_dispatch(
+        dispatch_id="dispatch-1",
+        request_id="dispatch-request-1",
+        task_id="t1",
+        task_state_version=0,
+        execution_target_id="m3-sub",
+        authority="OWNER_INITIATED_EXECUTION",
+    )
+    store.register_workspace(
+        task_id="t1",
+        repo_path=str(tmp_path / "repo"),
+        worktree_path=str(tmp_path / "worktree"),
+        branch="codex/t1",
+        base_sha="abc123",
+    )
+    store.acquire_writer("t1", "writer-1")
+    ready = store.transition_task("t1", TaskState.READY, expected_version=0)
+
+    running = store.start_dispatched_worker(
+        dispatch_id="dispatch-1",
+        task_id="t1",
+        expected_task_version=ready.state_version,
+        run_id="run-1",
+        worker_id="m3-sub",
+        writer_token="writer-1",
+        pid=1234,
+    )
+
+    assert running.state is TaskState.RUNNING
+    assert running.state_version == ready.state_version + 1
+    assert _run_status(store, "run-1") == "RUNNING"
+    dispatch = store.get_owner_dispatch_by_request_id("dispatch-request-1")
+    assert dispatch.status is OwnerDispatchStatus.STARTED
+    assert dispatch.started_at is not None
+    store.assert_running_invariant("t1")
+
+
+def test_owner_dispatched_worker_requires_writer_lock_before_running(
+    tmp_path: Path,
+) -> None:
+    store = SafetyKernelStore(tmp_path / "state.sqlite3")
+    store.submit_task(task_id="t1", request_id="r1", intent="implement")
+    store.reserve_owner_dispatch(
+        dispatch_id="dispatch-1",
+        request_id="dispatch-request-1",
+        task_id="t1",
+        task_state_version=0,
+        execution_target_id="m3-sub",
+        authority="OWNER_INITIATED_EXECUTION",
+    )
+    store.register_workspace(
+        task_id="t1",
+        repo_path=str(tmp_path / "repo"),
+        worktree_path=str(tmp_path / "worktree"),
+        branch="codex/t1",
+        base_sha="abc123",
+    )
+    ready = store.transition_task("t1", TaskState.READY, expected_version=0)
+
+    with pytest.raises(RuntimeError, match="active writer lock"):
+        store.start_dispatched_worker(
+            dispatch_id="dispatch-1",
+            task_id="t1",
+            expected_task_version=ready.state_version,
+            run_id="run-1",
+            worker_id="m3-sub",
+            writer_token="writer-1",
+        )
+
+    assert store.get_task("t1").state is TaskState.READY
+    row = store.connection.execute("SELECT run_id FROM runs WHERE run_id='run-1'").fetchone()
+    assert row is None
+    dispatch = store.get_owner_dispatch_by_request_id("dispatch-request-1")
+    assert dispatch.status is OwnerDispatchStatus.RESERVED
+
+
+def test_running_invariant_rejects_running_task_without_active_run(tmp_path: Path) -> None:
+    store = SafetyKernelStore(tmp_path / "state.sqlite3")
+    store.submit_task(task_id="t1", request_id="r1", intent="implement")
+    store.register_workspace(
+        task_id="t1",
+        repo_path=str(tmp_path / "repo"),
+        worktree_path=str(tmp_path / "worktree"),
+        branch="codex/t1",
+        base_sha="abc123",
+    )
+    store.acquire_writer("t1", "writer-1")
+    store.transition_task("t1", TaskState.READY)
+    store.transition_task("t1", TaskState.RUNNING)
+
+    with pytest.raises(RuntimeError, match="exactly one active run"):
+        store.assert_running_invariant("t1")
 
 
 def test_startup_reconciliation_rolls_back_as_one_unit_on_audit_failure(
