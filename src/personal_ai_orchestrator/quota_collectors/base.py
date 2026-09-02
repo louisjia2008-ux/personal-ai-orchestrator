@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, ConfigDict
 
 from personal_ai_orchestrator.quota_observability import QuotaSnapshot
+from personal_ai_orchestrator.quota_plan import PlanQuotaProjection
 
 
 class QuotaCollectionStatus(StrEnum):
@@ -29,6 +30,11 @@ class QuotaCollectionResult(BaseModel):
     snapshot: QuotaSnapshot | None = None
     last_known_good: QuotaSnapshot | None = None
     error_category: str | None = None
+    #: Shared-plan view of the same observation: pool identity, covered models,
+    #: per-model consumption, and per-model equivalents. Carried beside the
+    #: snapshot rather than inside it so the scheduler's authoritative inputs
+    #: stay exactly the provider-reported windows they were.
+    projection: PlanQuotaProjection | None = None
 
 
 class QuotaCollector(Protocol):

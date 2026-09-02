@@ -33,6 +33,7 @@
 
 "notice.submitted" = "Submitted task %@ (state %@).";
 "notice.duplicateBlocked" = "Duplicate submission blocked (same intent within %d s).";
+"notice.projectRequired" = "Select a registered project before submitting.";
 "notice.submitFailed" = "Submit failed: %@";
 "notice.submitMalformed" = "Submit failed: malformed response.";
 "notice.cancelled" = "Task %@ cancelled.";
@@ -50,3 +51,470 @@
 
 "help.taskCounts" = "Running / Ready+Submitted / Blocked / Verified+Completed";
 "help.cancel" = "Cancel via POST /v1/tasks/{id}/cancel; RUNNING tasks fail closed (409).";
+
+"app.dashboard" = "Dashboard";
+"action.openDashboard" = "Open Dashboard";
+"dashboard.overview" = "Overview";
+"dashboard.projects" = "Projects";
+"dashboard.tasks" = "Tasks";
+"dashboard.agents" = "Execution targets";
+"dashboard.providers" = "Models & Providers";
+"dashboard.quota" = "Quota";
+"dashboard.routing" = "Routing";
+"dashboard.verification" = "Verification";
+"dashboard.history" = "History";
+"dashboard.settings" = "Settings";
+"label.connection" = "Connection";
+"label.systemHealth" = "System health";
+"label.blockers" = "Blockers";
+"label.events" = "Events";
+"label.search" = "Search";
+"label.stateFilter" = "State";
+"label.allStates" = "All states";
+"label.taskDetail" = "Task detail";
+"label.routingExplanation" = "Routing explanation";
+"label.actualExecutionTarget" = "Actual execution target";
+"label.wouldSelect" = "Shadow WOULD_SELECT";
+"label.verification" = "Verification";
+"label.history" = "History";
+"label.daemonLifecycle" = "Daemon lifecycle";
+"label.socket" = "Socket";
+"label.runtimeConfig" = "Runtime config";
+"label.autoStartDaemon" = "Auto-start daemon";
+"label.launchAtLogin" = "Launch at login";
+"empty.unsupported" = "Unavailable from the current daemon API.";
+"empty.selectTask" = "Select a task to inspect authoritative detail.";
+
+/* P4.2.3 interactive dashboard. */
+
+"action.newTask" = "New Task";
+"action.newTask.help" = "Create a new structured task (⌘N)";
+"action.newTask.title" = "New Task";
+"action.newTask.subtitle" = "Your input becomes a structured task intent submitted through the typed API; it is never executed as a shell command.";
+"action.submitting" = "Submitting…";
+
+"help.metricTile" = "Click a metric to view matching tasks (navigation only; authoritative state is never mutated).";
+"empty.noBlockers" = "No important blockers right now.";
+"empty.noEvents" = "No events yet.";
+
+"empty.noTasks" = "No tasks";
+"empty.noTasks.hint" = "Create your first task; the authoritative task list will appear here.";
+"empty.tasksNoMatch" = "No tasks match the current search or state filter.";
+"empty.disconnectedTitle" = "Disconnected";
+"empty.tasksDisconnected.hint" = "The daemon is unavailable; the task list refreshes automatically once the connection recovers.";
+
+"label.taskContext" = "Task";
+"label.pickerNoSelection" = "None selected";
+"label.pickerChangeHint" = "Switch the picker above to inspect another task.";
+"label.routingTitle" = "Routing";
+"label.verificationTitle" = "Verification";
+"empty.routingNeedsTask" = "A task must be created and scheduled before a routing decision exists.";
+"empty.verificationNeedsTask" = "A task must exist and host verification must run before results appear.";
+"empty.routingNoSelection" = "Pick a task above to inspect its routing decisions.";
+"empty.verificationNoSelection" = "Pick a task above to inspect its verification status.";
+"empty.routingNotYetDecided" = "No routing decision yet for this task; details appear once it is scheduled.";
+
+"label.agentsTitle" = "Agents / execution targets";
+"label.providersTitle" = "Providers";
+"label.quotaTitle" = "Quota";
+"empty.noProviders.hint" = "No providers registered; provider health appears here once the daemon has provider configuration.";
+
+"label.modelSku" = "Model SKU";
+"label.runtimeId" = "Runtime";
+"label.runtimeAvailability" = "Runtime availability";
+"label.executionVerified" = "Execution verified";
+"label.ownerDispatch" = "Owner Dispatch";
+"label.ownerExecutionSetting" = "Owner-Initiated Execution";
+"label.ownerExecutionToggle" = "Allow owner-initiated dispatch";
+"label.ownerExecutionState" = "State";
+"label.ownerExecutionMeaning" = "Allows only the local owner to explicitly dispatch a task. Never autonomous execution or Production ACTIVE.";
+"label.ownerExecutionDisabled" = "Owner-initiated execution is OFF in Settings.";
+"label.ownerExecutionFooter" = "Explicit owner dispatch only; Production ACTIVE stays disabled by design.";
+"label.executionTarget" = "Execution target";
+"label.providerModel" = "Provider / model";
+"label.dispatch" = "Dispatch";
+"label.dispatchHelp" = "Dispatch this task to the selected verified execution target.";
+"label.dispatchBlockedHint" = "Dispatch is unavailable while safety gates fail.";
+"label.dispatchStatus" = "Dispatch status";
+"label.failureCode" = "Failure code";
+"label.worktree" = "Worktree";
+"label.branch" = "Branch";
+"label.writerLock" = "Writer lock";
+"label.workerRun" = "Worker run";
+"label.noVerifiedTargets" = "No execution-verified target available.";
+"label.ownerDispatchFooter" = "Worker runs inside the task worktree; the main repository stays untouched. Only deterministic host verification can produce VERIFIED.";
+"label.taskNotDispatchable" = "Task state %@ is not dispatchable.";
+"label.observedState" = "Observed state";
+"label.measurementSource" = "Measurement source";
+"label.confidence" = "Confidence";
+"label.observedAt" = "Observed at";
+"label.reasonCode" = "Reason code";
+"empty.availabilityUnknown" = "Availability unknown (not yet observed).";
+"label.evidence" = "Evidence";
+
+"settings.launchAtLogin.footer" = "Preference recorded; the system login item is not wired up yet (P4.2 stores the setting only and does not change system behavior).";
+"settings.autoStartDaemon.footer" = "Takes effect on next app launch: when off, the app will not start the daemon (an already-running daemon is left untouched).";
+"settings.activeReadOnly" = "ACTIVE is read-only; P4.2 provides no enable, force, or override path.";
+
+"quota.resetUnknown" = "Reset time unknown";
+"quota.observedAt" = "Last observed: %@";
+
+"quota.explain.exact" = "The provider reports the exact remaining quota.";
+"quota.explain.estimated" = "Remaining quota is measured or inferred locally and may deviate from the actual value.";
+"quota.explain.unknown" = "No reliable remaining-quota number exists; a fake percentage is never shown.";
+
+"quota.source.providerExact" = "Evidence source: exact provider report.";
+"quota.source.locallyMeasured" = "Evidence source: locally measured.";
+"quota.source.locallyInferred" = "Evidence source: locally inferred.";
+"quota.source.unknown" = "Evidence source unknown.";
+
+"quota.state.exhausted" = "This quota pool is exhausted; scheduling may be blocked.";
+"quota.state.recovered" = "Quota has recovered.";
+"quota.state.unknown" = "Quota pool state unknown; scheduling treats it cautiously.";
+
+/* P4.2.3 polish. */
+
+"action.copyTaskId" = "Copy task ID";
+"action.copyTaskId.help" = "Copy the authoritative task ID to the clipboard (⌘⌥C).";
+"action.reload" = "Reload";
+"action.reload.help" = "Re-fetch the authoritative detail for the current task (⌘⌥R).";
+
+"empty.tasksHint" = "Press ⌘F to focus search, or ⌘N to create a new task.";
+"empty.taskContextHint" = "Pick a task from the menu above to inspect the matching panel; ⌘[ / ⌘] navigates between tasks.";
+"empty.taskDetailHint" = "Select a task on the left, or search by task ID.";
+
+"settings.activeAuthorized" = "ACTIVE authorized: yes";
+"settings.activeNotAuthorized" = "ACTIVE authorized: no";
+"settings.activeGateLabel" = "ACTIVE gate";
+"settings.activeGate.open" = "OPEN";
+"settings.activeGate.closed" = "CLOSED";
+
+/* P4.2.4-A unified shell. */
+
+"label.taskBrowser" = "Tasks";
+"label.taskDetailCanvas" = "Task detail";
+"label.taskBrowserHint" = "Search and filter by state; ⌘[ / ⌘] navigates.";
+"empty.selectTaskForDetails" = "Select a task to view authoritative details.";
+"action.backToTasks" = "Back to tasks";
+"action.refreshProviders" = "Refresh providers";
+
+"provider.authStatus" = "Auth status";
+"provider.executionStatus" = "Execution status";
+"provider.executionTargets" = "Execution targets";
+"provider.quotaState" = "Quota state";
+"provider.lastChecked" = "Last checked";
+"provider.evidenceSource" = "Evidence source";
+
+"evidence.discoveredFromCatalog" = "DISCOVERED_FROM_CATALOG";
+"evidence.authFromEnvPresence" = "AUTH_FROM_ENV_PRESENCE";
+"evidence.executionProbeNotRun" = "EXECUTION_PROBE_NOT_RUN";
+"evidence.executionProbeRun" = "EXECUTION_PROBE_RUN";
+
+"label.providerDiscoveryState" = "Discovery state";
+"label.providerLastDiscovered" = "Last discovered at %@";
+"label.discoveryEmpty" = "No providers discovered yet. Run Refresh providers to inspect the local runtime.";
+"label.discoveryError" = "Discovery error: %@";
+
+/* P4.2.6 overview KPI */
+"kpi.running" = "Running";
+"kpi.ready" = "Ready";
+"kpi.blocked" = "Blocked";
+"kpi.verification" = "Verification";
+"kpi.completed" = "Completed";
+"kpi.verificationDetail" = "Verifying %d · Verified %d";
+
+/* P4.2.6 scheduling policy */
+"policy.balanced" = "Smart Balance";
+"policy.qualityFirst" = "Quality First";
+"policy.quotaSaver" = "Quota First";
+"policy.speedFirst" = "Speed First";
+"policy.manual" = "Manual";
+"policy.balanced.detail" = "Weighs task fit, reliability, quota, and speed together";
+"policy.qualityFirst.detail" = "Emphasises capability, reliability, and verification quality";
+"policy.quotaSaver.detail" = "Protects quota health and slow-reset scarcity while still meeting the task's minimum capability";
+"policy.speedFirst.detail" = "Emphasises runtime availability and observed latency while respecting capability and safety";
+"policy.manual.detail" = "You choose the execution target. If it cannot run, the task blocks — no silent substitution";
+"policy.title" = "Scheduling policy";
+"policy.change" = "Change policy";
+"policy.useGlobalDefault" = "Use global default";
+"policy.globalDefault" = "Global default";
+"policy.resolutionSource" = "Policy source";
+"policy.source.task" = "Task override";
+"policy.source.project" = "Project override";
+"policy.source.global" = "Global default";
+
+/* P4.2.6 provider connections */
+"providers.tab.connected" = "Connected";
+"providers.tab.available" = "Available to Add";
+"providers.connectedEmpty.title" = "No AI providers connected yet";
+"providers.connectedEmpty.message" = "Only connected providers can take part in scheduling.";
+"providers.addProvider" = "Add Provider";
+"providers.importExisting" = "Import Existing Connections";
+"providers.importTitle" = "Existing AI connections detected";
+"providers.importFooter" = "Importing records the connection only. No credential value is ever read or stored.";
+"providers.availableEmpty.message" = "No discovered provider surfaces are currently available to add.";
+"providers.connectedNotAuthenticated" = "Sign-in state not confirmed";
+"providers.connectedNotVerified" = "Real execution not yet verified";
+"providers.executionVerified" = "Real execution verified";
+"providers.available" = "Available";
+"providers.unavailable" = "Currently unavailable";
+
+/* P4.2.6 routing explanation */
+"routing.activePolicy" = "Active scheduling policy";
+"routing.modes" = "Available policies";
+"routing.whySelected" = "Why this model?";
+"routing.whyNotSelected" = "Not selected";
+"routing.candidates" = "Candidate models";
+"routing.noTaskSelected" = "Select a task to see its scheduling decision.";
+"routing.considers" = "The system weighs task type, connected models, quota, runtime state, and the scheduling policy.";
+"routing.noConnectedProviders" = "No connected AI provider can take part in scheduling.";
+"routing.noEligibleTargets" = "No model can currently execute.";
+"routing.selectedModel" = "Selected model";
+"routing.decidedAt" = "Decided at";
+"routing.resolvedPolicy" = "Resolved policy";
+
+/* P4.2.6 settings and new task */
+"settings.defaultSchedulingPolicy" = "Default scheduling policy";
+"settings.defaultSchedulingPolicy.footer" = "Affects only future undecided tasks. Historical routing decisions are never rewritten.";
+"newTask.schedulingPolicy" = "Scheduling policy";
+"newTask.manualModel" = "Model";
+"newTask.chooseModel" = "Choose model";
+
+"notice.manualTargetRequired" = "Manual policy requires choosing an execution model first.";
+"providers.disconnect" = "Disconnect Provider";
+
+/* Build identity */
+"build.title" = "Build Information";
+"build.version" = "Version";
+"build.commit" = "Commit";
+"build.short" = "Build";
+"build.configuration" = "Configuration";
+"build.timestamp" = "Built";
+"build.daemon" = "Daemon";
+"build.advanced" = "Advanced Details";
+"build.unknown" = "UNKNOWN";
+"build.mismatchTitle" = "Version mismatch";
+"build.mismatchApp" = "App";
+"build.mismatchDaemon" = "Daemon";
+"build.mismatchFooter" = "The dashboard and the daemon were built from different commits. Displayed data may not reflect this build.";
+"build.matched" = "App and daemon match";
+"build.indeterminate" = "Build identity unavailable";
+"action.restartDaemon" = "Restart Daemon";
+
+/* P4.2.6.4 sidebar groups */
+"sidebar.group.work" = "Work";
+"sidebar.group.aiResources" = "AI Resources";
+"sidebar.group.execution" = "Execution";
+"sidebar.group.system" = "System";
+
+/* P4.2.6.4 shared labels */
+"common.advancedDetails" = "Advanced Details";
+"common.never" = "Never";
+"common.reason" = "Reason";
+"common.plan" = "Plan";
+"common.region" = "Region";
+"common.retry" = "Retry";
+
+/* P4.2.6.4 overview */
+"overview.basicInfo" = "Basic Information";
+"overview.connection" = "Connection";
+"overview.projects" = "Projects";
+"overview.providers" = "Providers";
+"overview.runnableTargets" = "Runnable models";
+"overview.runningTasks" = "Running";
+"overview.tasksToday" = "Tasks today";
+"overview.routingToday" = "Routing today";
+"overview.quotaWarnings" = "Quota warnings";
+"overview.lastRefresh" = "Last refresh: %@";
+"overview.taskTrend" = "Task Trend";
+"overview.taskTrend.empty" = "Historical data is still being collected.";
+"overview.taskTrend.help" = "Submitted %1$d, completed %2$d, blocked %3$d";
+"overview.taskStates" = "Task States";
+"overview.taskStates.empty" = "No task state data yet.";
+"overview.risks" = "Risks";
+"overview.recentActivity" = "Recent Activity";
+
+/* P4.2.6.4 risks (localized from raw_code) */
+"risk.projectUnavailable.title" = "%d project(s) unavailable";
+"risk.projectUnavailable.detail" = "Tasks for missing or invalid projects cannot be dispatched.";
+"risk.executionTargetUnverified.title" = "%d execution target(s) are not verified";
+"risk.executionTargetUnverified.detail" = "Unverified targets cannot run real owner-dispatched tasks.";
+"risk.quotaExhausted.title" = "%d quota pool(s) are blocked";
+"risk.quotaExhausted.detail" = "Some models may be unavailable until quota recovers.";
+"risk.quotaUnknown.title" = "%d quota pool(s) have unknown limits";
+"risk.quotaUnknown.detail" = "Unknown quota is valid, but the UI cannot show reliable percentages.";
+"risk.ownerApproval.title" = "Production automation is not authorized";
+"risk.ownerApproval.detail" = "Owner approval is still required before ACTIVE mode.";
+"risk.shadowEvidence.title" = "Shadow evidence is still incomplete";
+"risk.shadowEvidence.detail" = "Production routing remains disabled until acceptance evidence is complete.";
+
+/* P4.2.6.4 projects */
+"projects.add" = "Add Project";
+"projects.detectedRepository" = "Detected Repository";
+"projects.register" = "Register";
+"projects.empty" = "No registered projects.";
+"projects.revealInFinder" = "Reveal in Finder";
+"projects.open" = "Open project";
+"projects.remove" = "Remove from Orchestrator";
+"projects.gitRoot" = "Git root";
+"projects.workingSubpath" = "Working subpath";
+"projects.branch" = "Branch";
+"projects.recentTasks" = "Recent tasks";
+"projects.lastUsed" = "Last used";
+
+/* P4.2.6.4 new task sheet */
+"newTask.project" = "Project";
+"newTask.selectProject" = "Select project";
+"newTask.execution" = "Execution";
+"newTask.executionAuto" = "Auto";
+
+/* P4.2.6.4 providers and models */
+"providers.pickerTitle" = "Models & Providers";
+"providers.notConnected" = "Not Connected";
+"providers.surface" = "Surface";
+"providers.providerId" = "Provider ID";
+"providers.credentialReference" = "Credential reference";
+"providers.runtime" = "Runtime";
+"providers.connectionLabel" = "Connection";
+"providers.accountsLabel" = "Accounts";
+"providers.executionTargetsLabel" = "Execution targets";
+"providers.quotaPoolsLabel" = "Quota pools";
+"providers.modelCount" = "%d models";
+"providers.quotaPoolCount" = "%d quota pools";
+"providers.catalogModelCount" = "%d catalog models";
+"models.title" = "Models";
+"models.empty" = "No runnable models have been discovered yet.";
+"models.ready" = "Ready";
+"models.needsVerification" = "Needs verification";
+"models.noExecutionTargets" = "No execution targets discovered.";
+
+/* P4.2.6.4 provider state labels */
+"auth.authenticated" = "Signed in";
+"auth.required" = "Sign-in required";
+"auth.unknown" = "Sign-in state not confirmed";
+"connectionState.connected" = "Connected";
+"connectionState.disconnected" = "Disconnected";
+"connectionState.discovered" = "Available to add";
+"runtimeState.available" = "Runtime available";
+"runtimeState.unavailable" = "Runtime unavailable";
+"runtimeState.unknown" = "Runtime unknown";
+
+/* P4.2.6.4 quota page */
+"quota.refresh" = "Refresh Quota";
+"quota.refresh.help" = "Reads connected providers' quota through documented read-only endpoints. No model quota is spent.";
+"quota.empty.title" = "No provider connected for quota";
+"quota.empty.message" = "Connect an AI provider first; its quota then appears here.";
+"quota.status" = "Quota";
+"quota.statusTitle" = "Quota status";
+"quota.noReliableData" = "No reliable quota data yet";
+"quota.unreadable" = "Temporarily unreadable";
+"quota.lastChecked" = "Last checked";
+"quota.neverChecked" = "Not checked yet";
+"quota.lastAttempt" = "Last attempt";
+"quota.connectionStatus" = "Status";
+"quota.summary.connected" = "Connected providers";
+"quota.summary.observable" = "Observable quota";
+"quota.summary.warnings" = "Quota warnings";
+"quota.summary.exhausted" = "Exhausted";
+"quota.windows" = "Quota windows";
+"quota.windowDetails" = "Window Details";
+"quota.poolId" = "Quota pool ID";
+"quota.limitingWindow" = "Limiting Window";
+"quota.limitingWindow.empty" = "No limiting window can be derived from current observations.";
+"quota.provider" = "Provider";
+"quota.window" = "Window";
+"quota.remainingLabel" = "Remaining";
+"quota.resetLabel" = "Resets";
+"quota.estimatedBadge" = "Estimated";
+"quota.history.title" = "Quota History";
+"quota.history.empty" = "Quota history is still being collected.";
+"quota.history.footer" = "Showing recorded quota observations only. Retention limit: %d.";
+"quota.noReliablePercentage" = "No reliable remaining percentage is available for this quota pool.";
+
+/* P4.2.6.4 quota failure reasons (sanitized codes) */
+"quota.reason.noReadonlySource" = "This provider offers no read-only quota source.";
+"quota.reason.credentialMissing" = "No credential is configured for this provider, so its quota cannot be read.";
+"quota.reason.authRequired" = "The provider rejected the read-only quota request; sign-in may have expired.";
+"quota.reason.rateLimited" = "The provider is rate-limiting quota reads right now.";
+"quota.reason.providerError" = "Reliable quota data could not be read from the provider right now.";
+"quota.reason.notConnected" = "This provider is not connected.";
+
+/* P4.2.6.4 task detail */
+"detail.currentPhase" = "Current phase";
+"detail.elapsed" = "Elapsed";
+"detail.stop" = "Stop";
+"detail.stop.help" = "Cancel through the authoritative host execution path.";
+"detail.filesChanged" = "Files changed";
+"detail.noWorktree" = "No task worktree has been registered yet.";
+"detail.verifierProfile" = "Verifier profile";
+"detail.noWorkerRun" = "No worker run has started.";
+"detail.rawWorkerOutput" = "Raw Worker Output";
+"detail.taskId" = "Task ID";
+"detail.requestId" = "Request ID";
+"detail.routingDecision" = "Routing decision";
+"detail.routingRequest" = "Routing request";
+"detail.baseSha" = "Base SHA";
+"detail.runId" = "Run ID";
+"detail.runStatus" = "Run status";
+"detail.quotaEvidence" = "Quota evidence";
+
+/* P4.2.6.4 keyboard commands */
+"command.focusSearch" = "Focus search";
+"command.previousTask" = "Previous task";
+"command.nextTask" = "Next task";
+"command.copyTaskId" = "Copy task ID";
+"command.reloadDetail" = "Reload detail";
+
+/* P4.2.6.4 quota reasons for a successful read with no usable figure */
+"quota.reason.noEntries" = "The provider returned no quota entries for this plan.";
+"quota.reason.fieldsUnavailable" = "The provider's quota response did not include a readable remaining figure.";
+"quota.reason.notInterpretable" = "The provider replied, but its quota data could not be interpreted reliably.";
+
+/* P4.2.6.5 shared-plan quota */
+"quota.plan.sharedQuota" = "Shared plan quota";
+"quota.plan.sharedModels" = "Models sharing this quota";
+"quota.plan.modelUsage" = "Model usage";
+"quota.plan.modelUsageFooter" = "Consumption of the shared pool — not each model's own remaining quota.";
+"quota.plan.equivalents" = "Per-model view of the shared pool";
+"quota.plan.equivalentsFooter" = "The provider reports the shared remainder through each model. These are equivalents, not separate balances.";
+"quota.plan.estimatedCapacity" = "Estimated remaining capacity";
+"quota.plan.estimatedCapacityFooter" = "Derived from local execution history. Always an estimate, never a provider balance.";
+"quota.plan.insufficientHistory" = "Not enough history yet — no estimate";
+"quota.plan.level" = "Plan tier";
+"quota.plan.poolId" = "Quota pool";
+"quota.plan.sharedSemantics" = "Shared across models";
+"quota.plan.noPlanFigure" = "No reliable plan-level figure";
+"quota.plan.credentialSource" = "Credential source";
+"quota.plan.unitLabel" = "Unit";
+"quota.plan.consumedLabel" = "Consumed";
+"quota.plan.samplesLabel" = "Based on";
+"quota.plan.smallSample" = "Small sample";
+"quota.binding.title" = "Currently limiting";
+"quota.binding.resetsIn" = "Resets in";
+"quota.binding.none" = "No comparable window";
+"quota.confidence.exact" = "Official · exact";
+"quota.confidence.estimated" = "Estimated";
+"quota.confidence.unknownData" = "No reliable data";
+"quota.reason.limitTypeUnrecognized" = "The provider returned a quota type this version does not recognize.";
+"quota.reason.windowUnrecognized" = "The provider returned a quota window this version does not recognize.";
+"quota.reason.providerReportedFailure" = "The provider accepted the request but reported a failure.";
+"quota.capacity.tasks" = "about %d similar tasks remaining";
+"quota.capacity.basis" = "based on %d recent similar tasks";
+"quota.credential.environment" = "Environment variable";
+"quota.credential.authStore" = "OpenCode sign-in";
+"quota.credential.none" = "Not available";
+
+/* P4.2.6.5.1 workload-scope projection: which provider scope the coding
+   dashboard reads, and why an observed scope is absent from it */
+"quota.plan.workloadScopeLabel" = "Used for";
+"quota.plan.workload.codingText" = "Coding / text";
+"quota.plan.workload.video" = "Video generation";
+"quota.plan.workload.image" = "Image generation";
+"quota.plan.workload.audio" = "Speech / audio";
+"quota.plan.workload.unknown" = "Unclassified";
+"quota.plan.otherScopes" = "Other provider quota scopes";
+"quota.plan.otherScopesFooter" = "Real provider balances for work this orchestrator does not schedule. They do not affect coding availability, scheduling, or reset windows.";
+"quota.reason.codingScopeUnavailable" = "The provider reported no remaining figure for the coding/text scope this orchestrator schedules.";
+"quota.reason.codingScopeUnreadable" = "The coding/text scope carried a remaining figure that could not be read, so nothing is shown for it.";
+"quota.reason.codingWindowSemanticsUnknown" = "One window of the coding/text scope is readable; the other window could not be identified in this response and is not guessed at.";
+"quota.reason.codingScopeDisagree" = "Several coding/text scopes report different values for the same window, so no single figure can be derived from them.";

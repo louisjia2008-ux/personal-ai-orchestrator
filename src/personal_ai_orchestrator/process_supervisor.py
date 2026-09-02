@@ -72,6 +72,19 @@ class ProcessSupervisor:
         self._children.pop(pid, None)
         return supervised.process.returncode or 0
 
+    def emergency_kill(self, supervised: SupervisedProcess) -> None:
+        """Best-effort synchronous cleanup for executor teardown paths."""
+
+        pid = supervised.pid
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except Exception:
+            try:
+                supervised.process.kill()
+            except Exception:
+                pass
+        self._children.pop(pid, None)
+
     def owned_pids(self) -> tuple[int, ...]:
         return tuple(sorted(self._children))
 

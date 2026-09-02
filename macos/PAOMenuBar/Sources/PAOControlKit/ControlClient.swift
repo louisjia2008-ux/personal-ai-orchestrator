@@ -23,13 +23,58 @@ public struct PAOControlClient: Sendable {
         try await get("/v1/health")
     }
 
+    public func build() async throws -> BuildView {
+        try await get("/v1/build")
+    }
+
     public func listTasks(limit: Int? = nil) async throws -> TaskListView {
         let path = limit.map { "/v1/tasks?limit=\($0)" } ?? "/v1/tasks"
         return try await get(path)
     }
 
+    public func dashboard() async throws -> DashboardSummaryView {
+        try await get("/v1/dashboard")
+    }
+
+    public func projects() async throws -> ProjectListView {
+        try await get("/v1/projects")
+    }
+
+    public func resolveProject(path: String) async throws -> ProjectView {
+        try await post("/v1/projects/resolve", body: ProjectPathRequest(path: path))
+    }
+
+    public func registerProject(
+        path: String,
+        displayName: String? = nil,
+        securityBookmarkB64: String? = nil
+    ) async throws -> ProjectView {
+        try await post(
+            "/v1/projects",
+            body: ProjectRegisterRequest(
+                path: path,
+                displayName: displayName,
+                securityBookmarkB64: securityBookmarkB64
+            )
+        )
+    }
+
+    public func markProjectOpened(_ projectId: String) async throws -> ProjectView {
+        struct EmptyBody: Encodable {}
+        return try await post("/v1/projects/\(projectId)/opened", body: EmptyBody())
+    }
+
+    public func removeProject(_ projectId: String) async throws -> ProjectRemoveView {
+        struct EmptyBody: Encodable {}
+        return try await post("/v1/projects/\(projectId)/remove", body: EmptyBody())
+    }
+
     public func getTask(_ taskId: String) async throws -> TaskView {
         try await get("/v1/tasks/\(taskId)")
+    }
+
+    public func taskDetail(_ taskId: String) async throws -> TaskDetailView {
+        try await get("/v1/tasks/\(taskId)/detail")
     }
 
     public func runs(taskId: String) async throws -> RunListView {
@@ -59,16 +104,177 @@ public struct PAOControlClient: Sendable {
         return try await post("/v1/tasks/\(taskId)/cancel", body: CancelBody(requestId: requestId))
     }
 
+    public func dispatch(taskId: String, request: DispatchRequest) async throws -> DispatchTaskView {
+        try await post("/v1/tasks/\(taskId)/dispatch", body: request)
+    }
+
+    public func getDispatch(requestId: String) async throws -> DispatchTaskView {
+        try await get("/v1/dispatches/\(requestId)")
+    }
+
+    public func ownerExecutionSettings() async throws -> OwnerExecutionSettingsView {
+        try await get("/v1/settings/owner-execution")
+    }
+
+    public func setOwnerExecutionEnabled(_ enabled: Bool) async throws -> OwnerExecutionSettingsView {
+        struct EnabledBody: Encodable {
+            let ownerInitiatedExecutionEnabled: Bool
+
+            enum CodingKeys: String, CodingKey {
+                case ownerInitiatedExecutionEnabled = "owner_initiated_execution_enabled"
+            }
+        }
+        let body = EnabledBody(ownerInitiatedExecutionEnabled: enabled)
+        let data = try await rawRequest(
+            method: "PUT",
+            path: "/v1/settings/owner-execution",
+            body: JSONEncoder().encode(body)
+        )
+        do {
+            return try JSONDecoder().decode(OwnerExecutionSettingsView.self, from: data)
+        } catch {
+            throw PAOClientError.malformedResponse
+        }
+    }
+
     public func providers() async throws -> ProviderHealthListView {
         try await get("/v1/providers")
     }
 
-    public func quota() async throws -> ProviderHealthListView {
+    public func providerConnections() async throws -> ProviderConnectionListView {
+        try await get("/v1/provider-connections")
+    }
+
+    public func connectProvider(providerId: String) async throws -> ProviderConnectionView {
+        struct ConnectBody: Encodable {
+            let providerId: String
+
+            enum CodingKeys: String, CodingKey {
+                case providerId = "provider_id"
+            }
+        }
+        return try await post(
+            "/v1/provider-connections",
+            body: ConnectBody(providerId: providerId)
+        )
+    }
+
+    public func disconnectProvider(providerId: String) async throws -> ProviderConnectionView {
+        struct DisconnectBody: Encodable {
+            let confirm: Bool
+        }
+        return try await post(
+            "/v1/provider-connections/\(providerId)/disconnect",
+            body: DisconnectBody(confirm: true)
+        )
+    }
+
+    /// Materialise owner-approved import candidates as real connections.
+    ///
+    /// The daemon re-validates every id against current evidence, so a stale App
+    /// view cannot import a surface whose evidence has since disappeared.
+    public func importProviderConnections(
+        providerIds: [String]
+    ) async throws -> ImportConnectionsView {
+        struct ImportBody: Encodable {
+            let providerIds: [String]
+
+            enum CodingKeys: String, CodingKey {
+                case providerIds = "provider_ids"
+            }
+        }
+        return try await post(
+            "/v1/provider-connections/import",
+            body: ImportBody(providerIds: providerIds)
+        )
+    }
+
+    public func schedulingSettings() async throws -> SchedulingSettingsView {
+        try await get("/v1/settings/scheduling")
+    }
+
+    public func setDefaultSchedulingPolicy(
+        _ policy: String
+    ) async throws -> SchedulingSettingsView {
+        struct PolicyBody: Encodable {
+            let defaultSchedulingPolicy: String
+
+            enum CodingKeys: String, CodingKey {
+                case defaultSchedulingPolicy = "default_scheduling_policy"
+            }
+        }
+        let data = try await rawRequest(
+            method: "PUT",
+            path: "/v1/settings/scheduling",
+            body: JSONEncoder().encode(PolicyBody(defaultSchedulingPolicy: policy))
+        )
+        do {
+            return try JSONDecoder().decode(SchedulingSettingsView.self, from: data)
+        } catch {
+            throw PAOClientError.malformedResponse
+        }
+    }
+
+    /// `schedulingPolicy: nil` clears the project override, restoring the global default.
+    public func setProjectSchedulingPolicy(
+        projectId: String,
+        schedulingPolicy: String?,
+        manualExecutionTargetId: String? = nil
+    ) async throws -> ProjectView {
+        struct ProjectPolicyBody: Encodable {
+            let schedulingPolicy: String?
+            let manualExecutionTargetId: String?
+
+            enum CodingKeys: String, CodingKey {
+                case schedulingPolicy = "scheduling_policy"
+                case manualExecutionTargetId = "manual_execution_target_id"
+            }
+        }
+        let body = ProjectPolicyBody(
+            schedulingPolicy: schedulingPolicy,
+            manualExecutionTargetId: manualExecutionTargetId
+        )
+        let data = try await rawRequest(
+            method: "PUT",
+            path: "/v1/projects/\(projectId)/scheduling",
+            body: JSONEncoder().encode(body)
+        )
+        do {
+            return try JSONDecoder().decode(ProjectView.self, from: data)
+        } catch {
+            throw PAOClientError.malformedResponse
+        }
+    }
+
+    public func providerDiscoveryStatus() async throws -> ProviderDiscoveryStatusView {
+        try await get("/v1/providers/status")
+    }
+
+    public func refreshProviders() async throws -> ProviderDiscoveryStatusView {
+        struct EmptyBody: Encodable {}
+        return try await post("/v1/providers/refresh", body: EmptyBody())
+    }
+
+    /// Connection-based quota projection: every connected provider is present,
+    /// including ones with no quota evidence yet.
+    public func quota() async throws -> QuotaOverviewView {
         try await get("/v1/quota")
+    }
+
+    /// Explicit read-only quota collection. Distinct from `refreshProviders()`,
+    /// which only re-runs catalog/credential discovery and reads no quota.
+    public func refreshQuota(providerId: String? = nil) async throws -> QuotaRefreshResultView {
+        struct EmptyBody: Encodable {}
+        let path = providerId.map { "/v1/providers/\($0)/quota/refresh" } ?? "/v1/quota/refresh"
+        return try await post(path, body: EmptyBody())
     }
 
     public func activeStatus() async throws -> ActiveStatusView {
         try await get("/v1/active-status")
+    }
+
+    public func approvals(taskId: String) async throws -> ApprovalListView {
+        try await get("/v1/tasks/\(taskId)/approvals")
     }
 
     // MARK: - Transport

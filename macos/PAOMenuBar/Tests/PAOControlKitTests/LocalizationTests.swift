@@ -59,12 +59,11 @@ final class LocalizationTests: XCTestCase {
     }
 
     func testQuotaRenderingPreservesConfidenceSemanticsWhenLocalized() {
-        // The localized renderer still refuses percentages unless EXACT.
+        // Observed exact/estimated quota may show a percentage; UNKNOWN may not.
         let exact = L10n.quotaRemaining(fraction: 0.8123, confidence: "EXACT")
         XCTAssertTrue(exact.hasSuffix("%"))
         let estimated = L10n.quotaRemaining(fraction: 0.8, confidence: "ESTIMATED")
-        XCTAssertTrue(estimated.contains("ESTIMATED"))
-        XCTAssertFalse(estimated.contains("%"))
+        XCTAssertTrue(estimated.hasSuffix("%"))
         let unknown = L10n.quotaRemaining(fraction: nil, confidence: "UNKNOWN")
         XCTAssertFalse(unknown.contains("%"))
     }

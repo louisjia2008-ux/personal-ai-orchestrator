@@ -6,6 +6,16 @@ import SwiftUI
 public enum SubmitNotice: Equatable, Sendable {
     case submitted(taskId: String, state: String)
     case duplicateBlocked(windowSeconds: Int)
+    case projectRequired
+    case manualTargetRequired
+    case failed(detail: String)
+    case malformedResponse
+}
+
+public enum ProjectNotice: Equatable, Sendable {
+    case resolved(projectId: String)
+    case registered(projectId: String)
+    case removed(projectId: String)
     case failed(detail: String)
     case malformedResponse
 }
@@ -19,21 +29,61 @@ public enum CancelNotice: Equatable, Sendable {
     case malformedResponse
 }
 
+/// Structured owner-dispatch outcome; sanitized daemon codes surface verbatim.
+public enum DispatchNotice: Equatable, Sendable {
+    case dispatched(taskId: String, dispatchId: String, status: String)
+    case blocked(taskId: String, code: String)
+    case failed(detail: String)
+    case malformedResponse
+}
+
 /// Client-side display state. Authoritative state is always reloaded from the daemon;
 /// this store keeps no durable task database of its own.
 @MainActor
 public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var connection: ConnectionState = .disconnected(reason: .daemonNotRunning)
     @Published public private(set) var tasks: TaskListView?
+    @Published public private(set) var dashboard: DashboardSummaryView?
+    @Published public private(set) var projects: ProjectListView?
+    @Published public private(set) var pendingProjectPreview: ProjectView?
+    @Published public private(set) var selectedTaskDetail: TaskDetailView?
     @Published public private(set) var providers: ProviderHealthListView?
+    @Published public private(set) var providerConnections: ProviderConnectionListView?
+    @Published public private(set) var providerDiscoveryStatus: ProviderDiscoveryStatusView?
+    @Published public private(set) var isRefreshingProviders: Bool = false
+    /// Connection-based quota projection. Separate from `providers` because a
+    /// connected provider must stay visible here even with zero quota evidence.
+    @Published public private(set) var quota: QuotaOverviewView?
+    @Published public private(set) var isRefreshingQuota: Bool = false
     @Published public private(set) var activeStatus: ActiveStatusView?
+    @Published public private(set) var ownerExecutionSettings: OwnerExecutionSettingsView?
+    @Published public private(set) var schedulingSettings: SchedulingSettingsView?
+    @Published public private(set) var lastDispatch: DispatchTaskView?
+    @Published public private(set) var dispatchNotice: DispatchNotice?
+    @Published public private(set) var daemonBuild: BuildView?
     @Published public private(set) var lastError: PAOClientError?
     @Published public private(set) var lastSubmittedTaskId: String?
     @Published public private(set) var submitNotice: SubmitNotice?
+    @Published public private(set) var projectNotice: ProjectNotice?
     @Published public private(set) var cancellationNotice: CancelNotice?
     @Published public var menuVisible: Bool = false
+    @Published public var dashboardVisible: Bool = false
+    @Published public private(set) var isRefreshing: Bool = false
+    @Published public var selectedTaskId: String?
+    @Published public var selectedProjectId: String?
+    @Published public var selectedSchedulingPolicy: String = "BALANCED"
+    @Published public var selectedManualExecutionTargetId: String?
+
+    /// Whether the dashboard binary and the connected daemon came from the same
+    /// commit. Surfaced in Settings so stale-stack truth is never presented as live.
+    public var buildCompatibility: BuildCompatibility {
+        BuildCompatibility.compare(app: BuildIdentity.current, daemonCommitSHA: daemonBuild?.commitSHA)
+    }
 
     public let socketPath: String
+    public let daemonLifecycle: DaemonLifecycleController
+    public let widgetSnapshotBridge: WidgetSnapshotBridge
+    public let widgetSnapshotWriter: WidgetSnapshotWriter
     private let client: PAOControlClient
     private var refreshTask: Task<Void, Never>?
     private var backoffSeconds: Double = 2.0
@@ -41,15 +91,33 @@ public final class OrchestratorStore: ObservableObject {
     private let idFactory: () -> String
 
     public static let menuOpenInterval: TimeInterval = 2.0
+    public static let activeTaskInterval: TimeInterval = 1.0
     public static let backgroundInterval: TimeInterval = 15.0
     public static let maximumBackoff: TimeInterval = 60.0
     public static let duplicateSubmitWindow: TimeInterval = 5.0
 
     public init(socketPath: String,
+                daemonConfiguration: DaemonLaunchConfiguration? = nil,
+                widgetSnapshotBridge: WidgetSnapshotBridge? = nil,
+                autoStartDaemon: Bool = true,
                 idFactory: @escaping () -> String = { UUID().uuidString.prefix(12).lowercased() }) {
         self.socketPath = socketPath
-        self.client = PAOControlClient(socketPath: socketPath)
+        let client = PAOControlClient(socketPath: socketPath)
+        self.client = client
+        let configuration = daemonConfiguration ?? DaemonLaunchConfiguration()
+        self.daemonLifecycle = DaemonLifecycleController(
+            configuration: configuration,
+            client: client
+        )
+        self.widgetSnapshotBridge = widgetSnapshotBridge ?? .appOwned(layout: configuration.layout)
+        self.widgetSnapshotWriter = WidgetSnapshotWriter(
+            primary: self.widgetSnapshotBridge,
+            fallback: .appOwned(layout: configuration.layout)
+        )
         self.idFactory = idFactory
+        if autoStartDaemon {
+            daemonLifecycle.ensureStarted()
+        }
         startRefreshing()
     }
 
@@ -88,14 +156,29 @@ public final class OrchestratorStore: ObservableObject {
     private func nextInterval() -> TimeInterval {
         if connection.isConnected {
             backoffSeconds = 2.0
-            return menuVisible ? Self.menuOpenInterval : Self.backgroundInterval
+            if let detail = selectedTaskDetail,
+               detail.task.state == "RUNNING" || detail.task.state == "VERIFYING" {
+                return Self.activeTaskInterval
+            }
+            return (menuVisible || dashboardVisible) ? Self.menuOpenInterval : Self.backgroundInterval
+        }
+        switch daemonLifecycle.status {
+        case .alreadyRunning, .starting, .startedByApp, .healthyStartedByApp, .healthyPreexisting:
+            return 1.0
+        default:
+            break
         }
         let current = backoffSeconds
         backoffSeconds = min(backoffSeconds * 2, Self.maximumBackoff)
         return current
     }
 
+    /// User-triggered refresh. Re-entrant clicks coalesce into one underlying
+    /// refresh so rapid toolbar clicks cannot spawn concurrent polls.
     public func refreshNow() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
         await refreshOnce()
     }
 
@@ -118,24 +201,60 @@ public final class OrchestratorStore: ObservableObject {
                 return
             }
             transition(.connected)
-            async let tasks = client.listTasks(limit: 20)
-            async let providers = client.providers()
-            async let active = client.activeStatus()
-            self.tasks = try await tasks
-            self.providers = try await providers
-            self.activeStatus = try await active
+            // A daemon predating this endpoint simply reports nothing; the UI
+            // then shows the comparison as indeterminate rather than matched.
+            self.daemonBuild = try? await client.build()
+            let dashboard = try await client.dashboard()
+            self.dashboard = dashboard
+            self.tasks = TaskListView(tasks: dashboard.recentTasks, total: dashboard.counts.total)
+            self.projects = dashboard.projects
+            if selectedProjectId == nil {
+                selectedProjectId = dashboard.projects.projects.first(where: \.isOnline)?.projectId
+            }
+            self.providers = dashboard.providers
+            if let providerConnections = try? await client.providerConnections() {
+                self.providerConnections = providerConnections
+            }
+            // Read-only projection; it never triggers provider collection.
+            if let quota = try? await client.quota() {
+                self.quota = quota
+            }
+            self.activeStatus = dashboard.activeStatus
+            if let settings = try? await client.ownerExecutionSettings() {
+                self.ownerExecutionSettings = settings
+            }
+            if let scheduling = try? await client.schedulingSettings() {
+                self.schedulingSettings = scheduling
+            }
             self.lastError = nil
+            await refreshProviderStatusSilently()
+            if let selectedTaskId {
+                await loadTaskDetail(taskId: selectedTaskId)
+            }
             let counts = taskCounts()
             ClientLog.taskCounts(running: counts.running, ready: counts.ready,
                                  blocked: counts.blocked, verified: counts.verified)
+            writeWidgetSnapshot()
         } catch let error as PAOClientError {
             self.lastError = error
             transition(.disconnected(reason: Self.disconnectionReason(for: error)))
+            writeWidgetSnapshot()
             ClientLog.operation("refresh", outcome: error.logCode)
         } catch {
             transition(.disconnected(reason: .malformedResponse))
+            writeWidgetSnapshot()
             ClientLog.operation("refresh", outcome: "malformed")
         }
+    }
+
+    private func writeWidgetSnapshot() {
+        let snapshot = WidgetSnapshot(
+            generatedAt: Date(),
+            connection: connection,
+            daemonLifecycle: daemonLifecycle.status,
+            dashboard: dashboard
+        )
+        widgetSnapshotWriter.write(snapshot)
     }
 
     private static func disconnectionReason(for error: PAOClientError) -> ConnectionState.DisconnectionReason {
@@ -158,23 +277,152 @@ public final class OrchestratorStore: ObservableObject {
         }
         if !newState.isConnected {
             tasks = nil
+            dashboard = nil
+            projects = nil
+            pendingProjectPreview = nil
+            selectedTaskDetail = nil
             providers = nil
+            providerConnections = nil
             activeStatus = nil
+            ownerExecutionSettings = nil
+            schedulingSettings = nil
+            lastDispatch = nil
             // Ephemeral operation success state claims daemon authority; once the
             // connection is gone it must not linger as if still authoritative.
             lastSubmittedTaskId = nil
             submitNotice = nil
+            projectNotice = nil
             cancellationNotice = nil
+            dispatchNotice = nil
         }
     }
 
     // MARK: - Operations
 
+    /// Owner-initiated dispatch: explicit, one task at a time, through
+    /// the Safety Kernel gates. Client supplies no authority field; the
+    /// daemon derives OWNER_INITIATED_EXECUTION itself.
+    public func dispatch(taskId: String, executionTargetId: String) async {
+        let suffix = idFactory()
+        do {
+            // Fetch the authoritative state version right before dispatch;
+            // stale versions are rejected by the daemon with 409.
+            let task = try await client.getTask(taskId)
+            let request = DispatchRequest(
+                requestId: "dispatch-\(suffix)",
+                taskStateVersion: task.stateVersion,
+                executionTargetId: executionTargetId
+            )
+            let result = try await client.dispatch(taskId: taskId, request: request)
+            lastDispatch = result
+            dispatchNotice = result.accepted
+                ? .dispatched(taskId: taskId, dispatchId: result.dispatchId, status: result.status)
+                : .blocked(taskId: taskId, code: result.failureCode ?? "BLOCKED")
+            ClientLog.operation("dispatch", outcome: "ok")
+            await loadTaskDetail(taskId: taskId)
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            dispatchNotice = .blocked(taskId: taskId, code: error.displayDetail)
+            ClientLog.operation("dispatch", outcome: error.logCode)
+        } catch {
+            dispatchNotice = .malformedResponse
+            ClientLog.operation("dispatch", outcome: "malformed")
+        }
+    }
+
+    /// Toggle the persisted Owner-Initiated Execution setting. This is a
+    /// separate concept from Production ACTIVE (disabled by design).
+    public func setOwnerExecution(enabled: Bool) async {
+        do {
+            ownerExecutionSettings = try await client.setOwnerExecutionEnabled(enabled)
+            ClientLog.operation("owner-execution", outcome: "ok")
+        } catch let error as PAOClientError {
+            lastError = error
+            ClientLog.operation("owner-execution", outcome: error.logCode)
+        } catch {
+            ClientLog.operation("owner-execution", outcome: "malformed")
+        }
+    }
+
     /// Quick submit: input becomes a structured task intent through POST /v1/tasks.
     /// It is never interpreted as a shell command.
-    public func quickSubmit(intent: String) async {
+    public func resolveProject(path: String) async {
+        do {
+            pendingProjectPreview = try await client.resolveProject(path: path)
+            if let preview = pendingProjectPreview {
+                projectNotice = .resolved(projectId: preview.projectId)
+            }
+            ClientLog.operation("project-resolve", outcome: "ok")
+        } catch let error as PAOClientError {
+            projectNotice = .failed(detail: error.displayDetail)
+            ClientLog.operation("project-resolve", outcome: error.logCode)
+        } catch {
+            projectNotice = .malformedResponse
+            ClientLog.operation("project-resolve", outcome: "malformed")
+        }
+    }
+
+    public func registerProject(path: String, displayName: String? = nil, bookmarkData: Data? = nil) async {
+        do {
+            let bookmark = bookmarkData?.base64EncodedString()
+            let project = try await client.registerProject(
+                path: path,
+                displayName: displayName,
+                securityBookmarkB64: bookmark
+            )
+            selectedProjectId = project.projectId
+            pendingProjectPreview = nil
+            projectNotice = .registered(projectId: project.projectId)
+            ClientLog.operation("project-register", outcome: "ok")
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            projectNotice = .failed(detail: error.displayDetail)
+            ClientLog.operation("project-register", outcome: error.logCode)
+        } catch {
+            projectNotice = .malformedResponse
+            ClientLog.operation("project-register", outcome: "malformed")
+        }
+    }
+
+    public func removeProject(projectId: String) async {
+        do {
+            _ = try await client.removeProject(projectId)
+            if selectedProjectId == projectId {
+                selectedProjectId = nil
+            }
+            projectNotice = .removed(projectId: projectId)
+            ClientLog.operation("project-remove", outcome: "ok")
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            projectNotice = .failed(detail: error.displayDetail)
+            ClientLog.operation("project-remove", outcome: error.logCode)
+        } catch {
+            projectNotice = .malformedResponse
+            ClientLog.operation("project-remove", outcome: "malformed")
+        }
+    }
+
+    public func markProjectOpened(projectId: String) async {
+        do {
+            _ = try await client.markProjectOpened(projectId)
+            ClientLog.operation("project-opened", outcome: "ok")
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            projectNotice = .failed(detail: error.displayDetail)
+            ClientLog.operation("project-opened", outcome: error.logCode)
+        } catch {
+            projectNotice = .malformedResponse
+            ClientLog.operation("project-opened", outcome: "malformed")
+        }
+    }
+
+    public func quickSubmit(projectId: String?, intent: String) async {
         let trimmed = intent.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        guard let projectId, !projectId.isEmpty else {
+            submitNotice = .projectRequired
+            return
+        }
         if let last = lastSubmit,
            last.intent == trimmed,
            Date().timeIntervalSince(last.at) < Self.duplicateSubmitWindow {
@@ -182,10 +430,21 @@ public final class OrchestratorStore: ObservableObject {
             return
         }
         let suffix = idFactory()
+        // The picked policy must reach the daemon: an App-local selection that never
+        // leaves SwiftUI state is indistinguishable from not choosing at all.
+        let policy = selectedSchedulingPolicy
+        let manualTarget = policy == "MANUAL" ? selectedManualExecutionTargetId : nil
+        if policy == "MANUAL", manualTarget == nil {
+            submitNotice = .manualTargetRequired
+            return
+        }
         let request = SubmitRequest(
             taskId: "menubar-\(suffix)",
             requestId: "menubar-req-\(suffix)",
-            intent: trimmed
+            projectId: projectId,
+            intent: trimmed,
+            schedulingPolicy: policy,
+            manualExecutionTargetId: manualTarget
         )
         do {
             let task = try await client.submit(request)
@@ -222,6 +481,193 @@ public final class OrchestratorStore: ObservableObject {
         } catch {
             cancellationNotice = .malformedResponse
             ClientLog.operation("cancel", outcome: "malformed")
+        }
+    }
+
+    public func loadTaskDetail(taskId: String) async {
+        do {
+            selectedTaskDetail = try await client.taskDetail(taskId)
+            lastError = nil
+        } catch let error as PAOClientError {
+            lastError = error
+            ClientLog.operation("task-detail", outcome: error.logCode)
+        } catch {
+            lastError = .malformedResponse
+            ClientLog.operation("task-detail", outcome: "malformed")
+        }
+    }
+
+    /// Convenience: returns the cached task list (does not refresh).
+    public var cachedTasks: [TaskView] {
+        tasks?.tasks ?? []
+    }
+
+    /// Move `selectedTaskId` to the neighbour of the current selection in the
+    /// supplied list (filtered/searched scope). Returns the new selection or
+    /// `nil` when there is nothing navigable. Pure presentation navigation:
+    /// authoritative state is never mutated.
+    @discardableResult
+    public func navigateToNeighbour(current: String?, in scope: [TaskView], offset: Int) -> String? {
+        guard !scope.isEmpty else { return current }
+        let ids = scope.map(\.taskId)
+        let next: String?
+        if let current, let idx = ids.firstIndex(of: current) {
+            let count = ids.count
+            let target = ((idx + offset) % count + count) % count
+            next = ids[target]
+        } else {
+            next = offset >= 0 ? ids.first : ids.last
+        }
+        selectedTaskId = next
+        if let next {
+            Task { await loadTaskDetail(taskId: next) }
+        } else {
+            selectedTaskDetail = nil
+        }
+        return next
+    }
+
+    /// User-triggered provider-discovery refresh. Coalesces rapid clicks into a
+    /// single bounded call against `/v1/providers/refresh`.
+    public func refreshProviders() async {
+        guard !isRefreshingProviders else { return }
+        isRefreshingProviders = true
+        defer { isRefreshingProviders = false }
+        do {
+            let status = try await client.refreshProviders()
+            providerDiscoveryStatus = status
+            let providers = try? await client.providers()
+            if let providers { self.providers = providers }
+            let providerConnections = try? await client.providerConnections()
+            if let providerConnections { self.providerConnections = providerConnections }
+            // Provider discovery reads no quota; this only re-reads the
+            // projection so newly visible connections get a card.
+            if let quota = try? await client.quota() { self.quota = quota }
+            ClientLog.operation("refresh_providers", outcome: status.discoveryState.lowercased())
+        } catch let error as PAOClientError {
+            self.lastError = error
+            ClientLog.operation("refresh_providers", outcome: error.logCode)
+        } catch {
+            ClientLog.operation("refresh_providers", outcome: "malformed")
+        }
+    }
+
+    /// Owner-triggered read-only quota collection.
+    ///
+    /// Deliberately separate from ``refreshProviders()``: that re-runs catalog
+    /// and credential discovery and reads no quota at all. This contacts each
+    /// connected provider's documented read-only quota endpoint. No model
+    /// generation is ever issued to discover quota.
+    public func refreshQuota(providerId: String? = nil) async {
+        guard !isRefreshingQuota else { return }
+        isRefreshingQuota = true
+        defer { isRefreshingQuota = false }
+        do {
+            let result = try await client.refreshQuota(providerId: providerId)
+            self.quota = result.overview
+            ClientLog.operation("refresh_quota", outcome: result.overview.state.lowercased())
+        } catch let error as PAOClientError {
+            self.lastError = error
+            // A failed refresh must not blank the page: keep the last
+            // projection and let the card report the failure.
+            self.quota = try? await client.quota()
+            ClientLog.operation("refresh_quota", outcome: error.logCode)
+        } catch {
+            ClientLog.operation("refresh_quota", outcome: "malformed")
+        }
+    }
+
+    public func connectProvider(providerId: String) async {
+        do {
+            _ = try await client.connectProvider(providerId: providerId)
+            providerConnections = try? await client.providerConnections()
+            providers = try? await client.providers()
+            quota = try? await client.quota()
+            ClientLog.operation("connect_provider", outcome: "connected")
+        } catch let error as PAOClientError {
+            self.lastError = error
+            ClientLog.operation("connect_provider", outcome: error.logCode)
+        } catch {
+            ClientLog.operation("connect_provider", outcome: "malformed")
+        }
+    }
+
+    public func disconnectProvider(providerId: String) async {
+        do {
+            _ = try await client.disconnectProvider(providerId: providerId)
+            providerConnections = try? await client.providerConnections()
+            providers = try? await client.providers()
+            quota = try? await client.quota()
+            ClientLog.operation("disconnect_provider", outcome: "disconnected")
+        } catch let error as PAOClientError {
+            self.lastError = error
+            ClientLog.operation("disconnect_provider", outcome: error.logCode)
+        } catch {
+            ClientLog.operation("disconnect_provider", outcome: "malformed")
+        }
+    }
+
+    /// Import owner-approved existing connections.
+    ///
+    /// Explicitly owner-triggered: nothing here runs on refresh or startup.
+    public func importProviderConnections(providerIds: [String]) async {
+        guard !providerIds.isEmpty else { return }
+        do {
+            _ = try await client.importProviderConnections(providerIds: providerIds)
+            providerConnections = try? await client.providerConnections()
+            providers = try? await client.providers()
+            quota = try? await client.quota()
+            ClientLog.operation("import_provider_connections", outcome: "imported")
+        } catch let error as PAOClientError {
+            self.lastError = error
+            ClientLog.operation("import_provider_connections", outcome: error.logCode)
+        } catch {
+            ClientLog.operation("import_provider_connections", outcome: "malformed")
+        }
+    }
+
+    public func loadSchedulingSettings() async {
+        schedulingSettings = try? await client.schedulingSettings()
+    }
+
+    public func setDefaultSchedulingPolicy(_ policy: String) async {
+        do {
+            schedulingSettings = try await client.setDefaultSchedulingPolicy(policy)
+            ClientLog.operation("set_scheduling_policy", outcome: "ok")
+        } catch let error as PAOClientError {
+            self.lastError = error
+            ClientLog.operation("set_scheduling_policy", outcome: error.logCode)
+        } catch {
+            ClientLog.operation("set_scheduling_policy", outcome: "malformed")
+        }
+    }
+
+    public func setProjectSchedulingPolicy(projectId: String, policy: String?) async {
+        do {
+            _ = try await client.setProjectSchedulingPolicy(
+                projectId: projectId,
+                schedulingPolicy: policy
+            )
+            projects = try? await client.projects()
+            ClientLog.operation("set_project_scheduling_policy", outcome: "ok")
+        } catch let error as PAOClientError {
+            self.lastError = error
+            ClientLog.operation("set_project_scheduling_policy", outcome: error.logCode)
+        } catch {
+            ClientLog.operation("set_project_scheduling_policy", outcome: "malformed")
+        }
+    }
+
+    /// Internal: fetch provider-discovery status without surfacing a
+    /// spinner. Called after each successful dashboard refresh so the
+    /// Providers/Agents/Quota cards reflect the most recent discovery
+    /// cycle even when the user has not clicked the explicit refresh.
+    private func refreshProviderStatusSilently() async {
+        do {
+            let status = try await client.providerDiscoveryStatus()
+            providerDiscoveryStatus = status
+        } catch {
+            // Silent: dashboard already reports connection health.
         }
     }
 }

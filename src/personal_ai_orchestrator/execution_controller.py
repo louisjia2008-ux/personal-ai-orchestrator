@@ -10,6 +10,7 @@ from typing import Any
 
 from personal_ai_orchestrator.process_supervisor import ProcessSupervisor, SupervisedProcess
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
+from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.shadow_evidence import (
     ShadowEvidenceJournal,
     ShadowFailureClass,
@@ -23,9 +24,51 @@ from personal_ai_orchestrator.verifier import VerificationResult
 
 _TERMINAL_STATES = {TaskState.FAILED, TaskState.CANCELLED, TaskState.COMPLETED}
 
+# Execution-verification evidence older than this no longer authorizes
+# launch; the runtime surface must be re-proven by a fresh real worker
+# invocation.
+EXECUTION_EVIDENCE_MAX_AGE_SECONDS = 30 * 24 * 3600.0
+
 
 def _render_result(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def validate_execution_target_launch(
+    registry: ModelRegistry,
+    *,
+    execution_target_id: str,
+    runtime_available: bool,
+    execution_evidence_journal: Any = None,
+) -> None:
+    """Fail closed unless the selected target is actually launchable.
+
+    ``execution_verified`` defaults to False everywhere; the only
+    launch-authorizing alternative is durable evidence that a REAL worker
+    invocation on this exact target previously succeeded.
+    """
+
+    try:
+        target = registry.execution_targets[execution_target_id]
+    except KeyError:
+        raise RuntimeError("execution target is not in the registry") from None
+    if not target.enabled:
+        raise RuntimeError("execution target is disabled")
+    if not target.execution_verified:
+        journal = execution_evidence_journal
+        evidence_ok = False
+        if journal is not None:
+            try:
+                evidence_ok = journal.target_has_verified_evidence(
+                    execution_target_id,
+                    max_age_seconds=EXECUTION_EVIDENCE_MAX_AGE_SECONDS,
+                )
+            except Exception:
+                evidence_ok = False
+        if not evidence_ok:
+            raise RuntimeError("execution target has not been runtime-verified")
+    if not runtime_available:
+        raise RuntimeError("execution runtime is unavailable")
 
 
 def start_worker_run(
@@ -405,4 +448,5 @@ __all__ = [
     "record_worker_exit",
     "reconcile_workspace_truth",
     "start_worker_run",
+    "validate_execution_target_launch",
 ]

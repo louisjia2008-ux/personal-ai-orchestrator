@@ -5,6 +5,10 @@ let package = Package(
     name: "PAOMenuBar",
     defaultLocalization: "en",
     platforms: [.macOS(.v13)],
+    products: [
+        .library(name: "PAOControlKit", targets: ["PAOControlKit"]),
+        .executable(name: "PAOWidgetExtension", targets: ["PAOWidgetExtension"]),
+    ],
     targets: [
         .target(
             name: "PAOControlKit",
@@ -20,6 +24,11 @@ let package = Package(
             name: "PAOMenuBar",
             dependencies: ["PAOControlKit"],
             path: "Sources/PAOMenuBar"
+        ),
+        .executableTarget(
+            name: "PAOWidgetExtension",
+            dependencies: ["PAOControlKit"],
+            path: "Sources/PAOWidgetExtension"
         ),
         .testTarget(
             name: "PAOControlKitTests",

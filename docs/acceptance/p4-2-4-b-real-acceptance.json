@@ -1,0 +1,109 @@
+{
+  "base_sha": "933536a61a8ff3d6797423887eddb5e0baceb0dc",
+  "dispatch_failure_code": null,
+  "dispatch_id": "owner-dispatch-acceptance-p424b-131628-dispatch",
+  "dispatch_record": {
+    "authority": "OWNER_INITIATED_EXECUTION",
+    "created_at": "2026-09-01T13:16:28.679800+00:00",
+    "dispatch_id": "owner-dispatch-acceptance-p424b-131628-dispatch",
+    "execution_target_id": "zai-coding-plan-glm-5.3",
+    "failure_code": null,
+    "failure_reason": null,
+    "finished_at": "2026-09-01T13:16:42.544011+00:00",
+    "request_id": "acceptance-p424b-131628-dispatch",
+    "started_at": "2026-09-01T13:16:28.750228+00:00",
+    "status": "FINISHED",
+    "task_id": "acceptance-p424b-131628",
+    "task_state_version": 0
+  },
+  "dispatch_status": "FINISHED",
+  "execution_evidence": {
+    "evidence_id": "exec-verify-2e135f05e1495bc0c56598cc",
+    "execution_target_id": "zai-coding-plan-glm-5.3",
+    "model_sku_id": "zai-coding-plan/glm-5.3",
+    "observed_at": "2026-09-01T13:16:42.543247Z",
+    "provider_id": "zai-coding-plan",
+    "reason_code": "REAL_WORKER_DISPATCH_SUCCEEDED",
+    "result": "VERIFIED",
+    "verification_method": "REAL_WORKER_INVOCATION"
+  },
+  "execution_evidence_all_for_target": [
+    {
+      "evidence_id": "exec-verify-2e135f05e1495bc0c56598cc",
+      "observed_at": "2026-09-01T13:16:42.543247Z",
+      "reason_code": "REAL_WORKER_DISPATCH_SUCCEEDED",
+      "result": "VERIFIED"
+    },
+    {
+      "evidence_id": "exec-verify-4a3e993c28b09ba5038e34c2",
+      "observed_at": "2026-09-01T13:15:41.977117Z",
+      "reason_code": "REAL_WORKER_DISPATCH_SUCCEEDED",
+      "result": "VERIFIED"
+    },
+    {
+      "evidence_id": "exec-verify-521ce6ed460ba4bd84129b55",
+      "observed_at": "2026-09-01T13:02:43.492282Z",
+      "reason_code": "REAL_WORKER_PROBE_SUCCEEDED",
+      "result": "VERIFIED"
+    },
+    {
+      "evidence_id": "exec-verify-7ca2d78b489b6b9fa933566f",
+      "observed_at": "2026-09-01T13:04:25.064088Z",
+      "reason_code": "WORKER_OUTCOME_BLOCKED",
+      "result": "UNKNOWN"
+    },
+    {
+      "evidence_id": "exec-verify-b7b49a3d84f18a7765378f42",
+      "observed_at": "2026-09-01T13:15:01.925194Z",
+      "reason_code": "REAL_WORKER_PROBE_SUCCEEDED",
+      "result": "VERIFIED"
+    }
+  ],
+  "execution_target_id": "zai-coding-plan-glm-5.3",
+  "final_task_state": "VERIFIED",
+  "finished_at": "2026-09-01T13:16:42.770745+00:00",
+  "hello_content": "Personal AI Orchestrator real worker acceptance.",
+  "hello_exists": true,
+  "main_repo_head_after": "933536a61a8ff3d6797423887eddb5e0baceb0dc",
+  "main_repo_head_before": "933536a61a8ff3d6797423887eddb5e0baceb0dc",
+  "main_repo_status_after": "",
+  "main_repo_status_before": "",
+  "main_repo_unchanged": true,
+  "model": "zai-coding-plan/glm-5.3",
+  "owner_execution_before": false,
+  "provider": "zai-coding-plan",
+  "quota_evidence": {
+    "confidence": "UNKNOWN",
+    "observed_at": "2026-09-01T13:16:28.747245Z",
+    "sanitized_reason_code": null,
+    "state": "UNKNOWN"
+  },
+  "request_id": "acceptance-p424b-131628-dispatch",
+  "run_id": "run-owner-dispatch-acceptance-p424b-131628-dispatch",
+  "run_records": [
+    {
+      "finished_at": "2026-09-01T13:16:42.494310+00:00",
+      "pid": 34781,
+      "run_id": "run-owner-dispatch-acceptance-p424b-131628-dispatch",
+      "started_at": "2026-09-01T13:16:28.750228+00:00",
+      "status": "FINISHED",
+      "worker_id": "zai-coding-plan-glm-5.3"
+    }
+  ],
+  "run_status": "FINISHED",
+  "running_invariant_ok": true,
+  "schema": "p4-2-4-b-real-acceptance-v1",
+  "state_timeline": [
+    "READY",
+    "RUNNING",
+    "VERIFIED"
+  ],
+  "task_id": "acceptance-p424b-131628",
+  "verification_evidence_id": "verify-6925b9fdc649d003bbe2cf68",
+  "verification_failure_reason": null,
+  "verification_status": "VERIFIED",
+  "worker_pid": 34781,
+  "worktree_branch": "task/acceptance-p424b-131628",
+  "worktree_path": "/private/tmp/opencode/pao-acceptance/worktrees/acceptance-p424b-131628",
+  "writer_locked_after": false
+}

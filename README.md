@@ -197,11 +197,28 @@ Disposable integration spikes may exercise session-scoped ACTIVE switching witho
 
 The orchestrator core remains headless and cross-client.
 
-A first-party macOS client is planned with three complementary surfaces:
+A first-party macOS client is being built with three complementary surfaces:
 
-- **Menu Bar** — live status and quick safe routing controls;
-- **Desktop / Notification Center Widgets** — glanceable quota health, current model/target, and current run;
-- **Full App** — providers, plans, model SKUs, execution targets, pools, routing rules, runs, and analytics.
+- **Menu Bar** — live status, quick safe submission, bounded cancellation, and an
+  `Open Dashboard` command;
+- **Full Dashboard** — native `NavigationSplitView` sections for overview, tasks,
+  execution targets, providers, quota, routing, verification, history, and settings;
+- **Desktop / Notification Center Widgets** — read-only snapshot source/bridge, pending
+  installable `.appex` packaging.
+
+P4.2 introduces a local app-bundle builder:
+
+```bash
+cd macos/PAOMenuBar
+bash scripts/build_app_bundle.sh
+open "dist/Personal AI Orchestrator.app"
+```
+
+The bundle contains `Contents/Helpers/pao-daemon`; the app starts that helper without manual
+Terminal daemon bootstrap when its typed control socket is unavailable.
+
+The dashboard is still a client. It reads typed `/v1` daemon views and never reads
+Safety Kernel SQLite, credentials, provider auth files, or browser/session stores directly.
 
 DeskPet is an optional client, not a dependency of the project.
 

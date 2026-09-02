@@ -64,7 +64,7 @@ def test_cli_loader_accepts_atomic_cache_wrapper(tmp_path) -> None:
             ]
         },
         observed_at=NOW,
-    )
+    ).to_snapshot()
     path = tmp_path / "quota.json"
     path.write_text(
         json.dumps({"schema_version": 1, "snapshot": snapshot.model_dump(mode="json")}),

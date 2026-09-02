@@ -90,6 +90,7 @@ def test_missing_configured_weekly_window_fails_admission() -> None:
                 model_sku_id="m",
                 account_id="a",
                 runtime_id="opencode",
+                execution_verified=True,
             )
         },
         quota_bindings=(
