@@ -308,6 +308,13 @@ def build_import_candidates(
     ``catalog_discovered`` alone is explicitly insufficient, and no evidence is ever
     transferred between surfaces: Z.AI evidence cannot admit MiniMax, and MiniMax CN
     Coding Plan evidence cannot admit MiniMax International or its Token Plan.
+
+    Catalog discovery is also not *required*. A surface the owner demonstrably used
+    can be missing from the current ``opencode models`` snapshot, and excluding it
+    would recreate the very problem this exists to solve. Such a surface is offered
+    for import but never appears under available-to-add, and importing it grants no
+    scheduling reach on its own: with no execution targets in the registry it simply
+    has nothing to schedule.
     """
 
     if discovery is None:

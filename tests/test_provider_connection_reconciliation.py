@@ -212,6 +212,42 @@ def test_region_evidence_alone_does_not_admit_a_plan_distinguished_surface() -> 
     assert build_import_candidates(ProviderConnectionRegistry(), discovery) == ()
 
 
+def test_uncatalogued_surface_with_scoped_evidence_is_still_importable() -> None:
+    """Evidence, not the current catalog snapshot, decides candidacy.
+
+    A surface the owner demonstrably used can drop out of ``opencode models``.
+    Requiring catalog presence here would recreate the disappearing-connection
+    defect, so candidacy is deliberately catalog-independent.
+    """
+
+    discovery = _discovery(
+        _provider(
+            "minimax-cn",
+            region="CN",
+            catalog_discovered=False,
+            credential_region_verified=True,
+            credential_plan_surface_verified=True,
+            credential_scope_verified=True,
+        )
+    )
+
+    candidates = build_import_candidates(ProviderConnectionRegistry(), discovery)
+    projection = project_connections(ProviderConnectionRegistry(), discovery)
+
+    assert [candidate.provider_id for candidate in candidates] == ["minimax-cn"]
+    # ...but it is not something to "add" from the catalog, because it is not in one.
+    assert projection.available_to_add == ()
+
+
+def test_uncatalogued_surface_without_evidence_stays_invisible() -> None:
+    discovery = _discovery(_provider("minimax", catalog_discovered=False))
+
+    projection = project_connections(ProviderConnectionRegistry(), discovery)
+
+    assert projection.available_to_add == ()
+    assert projection.import_candidates == ()
+
+
 def test_plan_surfaces_are_labelled_distinctly() -> None:
     discovery = _discovery(
         _provider("minimax-cn", region="CN"),
