@@ -24,12 +24,25 @@ sanitized snapshot without re-running OpenCode CLI inspection.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from personal_ai_orchestrator.model_registry import ModelRegistry
+from personal_ai_orchestrator.provider_connections import (
+    ProviderConnection,
+    ProviderConnectionRegistry,
+    ProviderImportCandidate,
+    build_import_candidates,
+    connect_from_discovery,
+    disconnect_provider,
+    import_connections,
+    load_connections,
+    project_connections,
+    save_connections,
+)
 from personal_ai_orchestrator.provider_discovery import (
     DiscoveryCycleOutcome,
     DiscoveryResult,
@@ -123,6 +136,10 @@ class ProviderRegistryManager:
         self._lock = threading.RLock()
         self._refresh_in_flight = False
         self._discovery_cycle_count = 0
+        self._connections = load_connections(runtime_state_root)
+        # Injected by the runtime once the execution-evidence journal exists. Kept
+        # optional so discovery still works before any real execution has happened.
+        self._verified_execution_lookup: Callable[[str], datetime | None] | None = None
         self._state = self._rehydrate_state()
 
     def _rehydrate_state(self) -> _RuntimeState:
@@ -247,6 +264,80 @@ class ProviderRegistryManager:
     def last_discovery_result(self) -> DiscoveryResult | None:
         with self._lock:
             return self._state.last_result
+
+    def connection_registry(self) -> ProviderConnectionRegistry:
+        with self._lock:
+            return self._connections
+
+    def connected_provider_ids(self) -> frozenset[str]:
+        with self._lock:
+            return self._connections.connected_provider_ids()
+
+    def connect_provider(self, provider_id: str) -> ProviderConnection:
+        with self._lock:
+            if self._state.last_result is None:
+                raise LookupError("provider_catalog_unavailable")
+            next_registry = connect_from_discovery(
+                self._connections,
+                self._state.last_result,
+                provider_id=provider_id,
+            )
+            save_connections(next_registry, runtime_state_root=self._runtime_state_root)
+            self._connections = next_registry
+            return self._connections.connections[provider_id]
+
+    def disconnect_provider(self, provider_id: str) -> ProviderConnection:
+        with self._lock:
+            next_registry = disconnect_provider(
+                self._connections,
+                provider_id=provider_id,
+            )
+            save_connections(next_registry, runtime_state_root=self._runtime_state_root)
+            self._connections = next_registry
+            return self._connections.connections[provider_id]
+
+    def set_verified_execution_lookup(
+        self,
+        lookup: Callable[[str], datetime | None] | None,
+    ) -> None:
+        """Attach the scoped prior-execution evidence source used for import candidates."""
+
+        with self._lock:
+            self._verified_execution_lookup = lookup
+
+    def import_candidates(self) -> tuple[ProviderImportCandidate, ...]:
+        with self._lock:
+            return build_import_candidates(
+                self._connections,
+                self._state.last_result,
+                verified_execution_lookup=self._verified_execution_lookup,
+            )
+
+    def import_connections(self, provider_ids: Sequence[str]) -> tuple[ProviderConnection, ...]:
+        """Materialise owner-approved import candidates as real connection records."""
+
+        with self._lock:
+            if self._state.last_result is None:
+                raise LookupError("provider_catalog_unavailable")
+            next_registry = import_connections(
+                self._connections,
+                self._state.last_result,
+                provider_ids=provider_ids,
+                verified_execution_lookup=self._verified_execution_lookup,
+            )
+            save_connections(next_registry, runtime_state_root=self._runtime_state_root)
+            self._connections = next_registry
+            return tuple(
+                self._connections.connections[provider_id] for provider_id in provider_ids
+            )
+
+    def connection_projection(self):
+        with self._lock:
+            return project_connections(
+                self._connections,
+                self._state.last_result,
+                verified_execution_lookup=self._verified_execution_lookup,
+            )
 
     def discovery_cycle_count(self) -> int:
         """Return the cumulative number of ``refresh`` invocations.

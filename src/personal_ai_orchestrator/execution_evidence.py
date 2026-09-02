@@ -153,6 +153,41 @@ class ExecutionEvidenceJournal:
                 latest_key = key
         return latest
 
+    def latest_verified_for_provider(
+        self,
+        provider_id: str,
+    ) -> ExecutionVerificationEvidence | None:
+        """Return the newest VERIFIED evidence recorded for exactly this provider surface.
+
+        The match is on the literal ``provider_id``, which already encodes region and
+        plan surface (``minimax-cn-coding-plan`` is not ``minimax-coding-plan``). No
+        prefix or family matching is performed, so evidence never promotes a sibling
+        surface it did not actually exercise.
+        """
+
+        if not self.directory.exists():
+            return None
+        latest: ExecutionVerificationEvidence | None = None
+        latest_key: tuple[datetime, int] | None = None
+        for path in sorted(self.directory.glob("exec-verify-*.json")):
+            try:
+                evidence = ExecutionVerificationEvidence.model_validate_json(
+                    path.read_text(encoding="utf-8")
+                )
+            except Exception:
+                continue
+            if evidence.provider_id != provider_id or not evidence.establishes_verified:
+                continue
+            try:
+                mtime_ns = path.stat().st_mtime_ns
+            except OSError:
+                mtime_ns = 0
+            key = (evidence.observed_at, mtime_ns)
+            if latest_key is None or key > latest_key:
+                latest = evidence
+                latest_key = key
+        return latest
+
     def target_has_verified_evidence(
         self,
         execution_target_id: str,
