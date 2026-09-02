@@ -99,6 +99,21 @@ def normalize_zai_quota(
     )
 
 
+def zai_unknown_reason(payload: dict[str, Any]) -> str:
+    """Explain a successful read that produced no usable quota figure."""
+
+    data = payload.get("data", payload)
+    limits = data.get("limits") if isinstance(data, dict) else None
+    entries = (
+        [item for item in limits if isinstance(item, dict)]
+        if isinstance(limits, list)
+        else []
+    )
+    if not entries:
+        return "PROVIDER_REPORTED_NO_QUOTA_ENTRIES"
+    return "PROVIDER_FIELDS_UNAVAILABLE"
+
+
 class ZAIQuotaCollector:
     def __init__(
         self,
@@ -136,9 +151,15 @@ class ZAIQuotaCollector:
             observed_at=datetime.now(tz=UTC),
             quota_pool_id=self._quota_pool_id,
         )
-        status = (
-            QuotaCollectionStatus.SUCCESS
-            if snapshot.confidence is not EvidenceConfidence.UNKNOWN
-            else QuotaCollectionStatus.UNKNOWN
+        if snapshot.confidence is not EvidenceConfidence.UNKNOWN:
+            return QuotaCollectionResult(
+                status=QuotaCollectionStatus.SUCCESS,
+                snapshot=snapshot,
+            )
+        # A successful read that carries no usable figure still owes the owner a
+        # reason; UNKNOWN with a blank explanation reads as breakage.
+        return QuotaCollectionResult(
+            status=QuotaCollectionStatus.UNKNOWN,
+            snapshot=snapshot,
+            error_category=zai_unknown_reason(payload),
         )
-        return QuotaCollectionResult(status=status, snapshot=snapshot)

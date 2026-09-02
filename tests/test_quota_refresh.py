@@ -500,6 +500,106 @@ def test_refresh_of_unconnected_provider_is_a_no_op(tmp_path: Path, manager) -> 
     assert collector.calls == 0
 
 
+def test_successful_read_with_no_usable_figure_reports_why(
+    tmp_path: Path, manager
+) -> None:
+    """§19 — UNKNOWN must never come back with a blank reason.
+
+    Real MiniMax accounts report quota per model. When two models disagree the
+    collector correctly refuses to invent a single plan-level percentage, but
+    the owner must be told that is what happened.
+    """
+
+    transport = _RecordingTransport(
+        {
+            "model_remains": [
+                {
+                    "model_name": "general",
+                    "current_interval_remaining_percent": 95,
+                    "current_weekly_remaining_percent": 60,
+                },
+                {
+                    "model_name": "video",
+                    "current_interval_remaining_percent": 100,
+                    "current_weekly_remaining_percent": 100,
+                },
+            ],
+            "base_resp": {"status_code": 0, "status_msg": "success"},
+        }
+    )
+    collector = MiniMaxQuotaCollector(
+        bearer_token="token-not-persisted", region="cn", transport=transport
+    )
+    service = _service(
+        tmp_path, manager, collectors={"minimax-cn-coding-plan": collector}
+    )
+    service.connect_provider({"provider_id": "minimax-cn-coding-plan"})
+    card = service.refresh_quota().overview.providers[0]
+
+    assert card.quota_state == "UNKNOWN"
+    # No fabricated aggregate...
+    assert card.quota_pools == ()
+    # ...but a truthful, sanitized explanation.
+    assert card.failure_reason == "QUOTA_VARIES_BY_MODEL"
+    assert card.last_refresh_status == "UNKNOWN"
+    assert card.last_refresh_at is not None
+
+
+def test_empty_provider_payload_reports_no_entries(tmp_path: Path, manager) -> None:
+    collector = MiniMaxQuotaCollector(
+        bearer_token="t", region="cn", transport=_RecordingTransport({"model_remains": []})
+    )
+    service = _service(
+        tmp_path, manager, collectors={"minimax-cn-coding-plan": collector}
+    )
+    service.connect_provider({"provider_id": "minimax-cn-coding-plan"})
+    card = service.refresh_quota().overview.providers[0]
+    assert card.failure_reason == "PROVIDER_REPORTED_NO_QUOTA_ENTRIES"
+
+
+def test_zai_empty_limits_reports_no_entries(tmp_path: Path, manager) -> None:
+    collector = ZAIQuotaCollector(
+        authorization_token="t", transport=_RecordingTransport({"data": {"limits": []}})
+    )
+    service = _service(tmp_path, manager, collectors={"zai-coding-plan": collector})
+    service.connect_provider({"provider_id": "zai-coding-plan"})
+    card = service.refresh_quota().overview.providers[0]
+    assert card.failure_reason == "PROVIDER_REPORTED_NO_QUOTA_ENTRIES"
+
+
+def test_unknown_status_without_category_still_reports_a_reason(
+    tmp_path: Path, manager
+) -> None:
+    collector = _StubCollector(
+        QuotaCollectionResult(status=QuotaCollectionStatus.UNKNOWN, error_category=None)
+    )
+    service = _service(tmp_path, manager, collectors={"zai-coding-plan": collector})
+    service.connect_provider({"provider_id": "zai-coding-plan"})
+    card = service.refresh_quota().overview.providers[0]
+    assert card.failure_reason == "PROVIDER_QUOTA_NOT_INTERPRETABLE"
+
+
+def test_agreeing_models_still_produce_an_exact_figure(tmp_path: Path, manager) -> None:
+    """Disagreement is what blocks an aggregate — agreement must still work."""
+
+    entry = {
+        "current_interval_remaining_percent": 80.0,
+        "current_weekly_remaining_percent": 80.0,
+    }
+    collector = MiniMaxQuotaCollector(
+        bearer_token="t",
+        region="cn",
+        transport=_RecordingTransport({"model_remains": [dict(entry), dict(entry)]}),
+    )
+    service = _service(
+        tmp_path, manager, collectors={"minimax-cn-coding-plan": collector}
+    )
+    service.connect_provider({"provider_id": "minimax-cn-coding-plan"})
+    card = service.refresh_quota().overview.providers[0]
+    assert card.quota_state == "OBSERVED"
+    assert card.confidence == "EXACT"
+
+
 # ---------------------------------------------------------------------------
 # Source table and credential handling
 # ---------------------------------------------------------------------------

@@ -464,3 +464,9 @@
 "command.nextTask" = "下一个任务";
 "command.copyTaskId" = "复制任务 ID";
 "command.reloadDetail" = "重新加载详情";
+
+/* P4.2.6.4 quota reasons for a successful read with no usable figure */
+"quota.reason.variesByModel" = "该提供商按模型分别统计额度，因此没有统一的套餐级数值。逐模型信息见高级详情。";
+"quota.reason.noEntries" = "该提供商没有返回此套餐的额度条目。";
+"quota.reason.fieldsUnavailable" = "提供商返回的额度数据中没有可读的剩余量。";
+"quota.reason.notInterpretable" = "提供商已响应，但其额度数据无法被可靠解读。";

@@ -162,7 +162,9 @@ public enum L10n {
         "quota.limitingWindow.empty", "quota.provider", "quota.window", "quota.remainingLabel",
         "quota.resetLabel", "quota.estimatedBadge", "quota.history.title",
         "quota.history.empty", "quota.history.footer", "quota.noReliablePercentage",
-        "quota.reason.noReadonlySource", "quota.reason.credentialMissing",
+        "quota.reason.noReadonlySource", "quota.reason.variesByModel",
+        "quota.reason.noEntries", "quota.reason.fieldsUnavailable",
+        "quota.reason.notInterpretable", "quota.reason.credentialMissing",
         "quota.reason.authRequired", "quota.reason.rateLimited", "quota.reason.providerError",
         "quota.reason.notConnected", "detail.currentPhase", "detail.elapsed", "detail.stop",
         "detail.stop.help", "detail.filesChanged", "detail.noWorktree",
@@ -871,6 +873,12 @@ public enum L10n {
         case "AUTHENTICATION_INTEGRATION_BLOCKED", "HTTP_401", "HTTP_403":
             return tr("quota.reason.authRequired")
         case "HTTP_429": return tr("quota.reason.rateLimited")
+        // A read that succeeded but yielded no single honest figure is a
+        // different truth from a read that failed.
+        case "QUOTA_VARIES_BY_MODEL": return tr("quota.reason.variesByModel")
+        case "PROVIDER_REPORTED_NO_QUOTA_ENTRIES": return tr("quota.reason.noEntries")
+        case "PROVIDER_FIELDS_UNAVAILABLE": return tr("quota.reason.fieldsUnavailable")
+        case "PROVIDER_QUOTA_NOT_INTERPRETABLE": return tr("quota.reason.notInterpretable")
         default: return tr("quota.reason.providerError")
         }
     }
