@@ -25,7 +25,15 @@ from personal_ai_orchestrator.model_registry import (
 from personal_ai_orchestrator.opencode_contract import RoutingMode, RoutingRequest
 from personal_ai_orchestrator.quota_availability import observe_exhaustion, observe_success
 from personal_ai_orchestrator.routing_bridge import build_routing_decision
-from personal_ai_orchestrator.scheduler import RiskClass, TargetTelemetry, TaskProfile, route_task
+from personal_ai_orchestrator.scheduler import (
+    RiskClass,
+    RoutingObjective,
+    RoutingPolicy,
+    TargetTelemetry,
+    TaskProfile,
+    route_task,
+    resolve_scheduling_policy,
+)
 
 NOW = datetime(2026, 8, 30, tzinfo=UTC)
 
@@ -221,6 +229,79 @@ def test_catalog_only_execution_target_enabled_flag_does_not_allow_launch() -> N
     assert decision.selected_execution_target_id is None
 
 
+def test_catalog_discovered_but_unconnected_provider_never_competes() -> None:
+    decision = route_task(
+        _registry(),
+        task=_task(),
+        now=NOW,
+        known_at=NOW,
+        runtime_availability={"m3-sub": True},
+        connected_provider_ids=frozenset(),
+    )
+
+    candidate = decision.evaluations[0]
+    assert candidate.eligible is False
+    assert candidate.admitted is False
+    assert candidate.score is None
+    assert candidate.reasons == ("provider not connected by owner",)
+    assert decision.selected_execution_target_id is None
+
+
+def test_connected_provider_can_compete_after_owner_registration() -> None:
+    decision = route_task(
+        _registry(),
+        task=_task(),
+        now=NOW,
+        known_at=NOW,
+        runtime_availability={"m3-sub": True},
+        connected_provider_ids=frozenset({"minimax"}),
+    )
+
+    assert decision.selected_execution_target_id == "m3-sub"
+    assert decision.policy_id == "BALANCED"
+    assert decision.evaluations[0].score_components
+
+
+def test_manual_policy_blocks_unavailable_selection_without_fallback() -> None:
+    decision = route_task(
+        _registry(),
+        task=_task(),
+        now=NOW,
+        known_at=NOW,
+        runtime_availability={"m3-sub": False},
+        connected_provider_ids=frozenset({"minimax"}),
+        policy=RoutingPolicy(
+            objective=RoutingObjective.MANUAL,
+            manual_execution_target_id="m3-sub",
+        ),
+    )
+
+    assert decision.policy_id == "MANUAL"
+    assert decision.selected_execution_target_id is None
+    assert any("runtime unavailable" in reason for reason in decision.evaluations[0].reasons)
+
+
+def test_policy_precedence_is_task_then_project_then_global() -> None:
+    global_default = RoutingPolicy(objective=RoutingObjective.BALANCED)
+    project_override = RoutingPolicy(objective=RoutingObjective.QUOTA_SAVER)
+    task_override = RoutingPolicy(objective=RoutingObjective.SPEED_FIRST)
+
+    assert resolve_scheduling_policy(global_default=global_default).policy.objective is (
+        RoutingObjective.BALANCED
+    )
+    assert resolve_scheduling_policy(
+        global_default=global_default,
+        project_override=project_override,
+    ).policy.objective is RoutingObjective.QUOTA_SAVER
+    resolved = resolve_scheduling_policy(
+        global_default=global_default,
+        project_override=project_override,
+        task_override=task_override,
+    )
+    assert resolved.policy.objective is RoutingObjective.SPEED_FIRST
+    assert resolved.resolved_level == "TASK_OVERRIDE"
+
+
 def test_bridge_freezes_snapshot_refs_and_blocks_unapproved_active() -> None:
     registry = _registry()
     request = RoutingRequest(
@@ -243,6 +324,10 @@ def test_bridge_freezes_snapshot_refs_and_blocks_unapproved_active() -> None:
     assert decision.selected_model is not None
     assert decision.task_state_version == 3
     assert decision.quota_snapshot_ids == ("quota-1",)
+    assert decision.explanation is not None
+    assert decision.explanation["policy_id"] == "BALANCED"
+    assert decision.explanation["selected_execution_target_id"] == "m3-sub"
+    assert decision.explanation["candidates"]
     assert decision.switch_requested is False
     assert "ACTIVE gate" in (decision.fallback_reason or "")
 
