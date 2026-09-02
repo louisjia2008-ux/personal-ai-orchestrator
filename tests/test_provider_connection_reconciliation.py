@@ -183,7 +183,11 @@ def test_minimax_region_and_plan_scope_is_preserved() -> None:
             credential_plan_surface_verified=True,
             credential_scope_verified=True,
         ),
-        _provider("minimax-coding-plan", display_name="MiniMax International", region="International"),
+        _provider(
+            "minimax-coding-plan",
+            display_name="MiniMax International",
+            region="International",
+        ),
         _provider("minimax-cn", display_name="MiniMax CN", region="CN"),
     )
 

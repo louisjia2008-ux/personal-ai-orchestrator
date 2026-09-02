@@ -18,7 +18,6 @@ from personal_ai_orchestrator.execution_controller import reconcile_workspace_tr
 from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
 from personal_ai_orchestrator.local_api import serve
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
-from personal_ai_orchestrator.scheduling_settings import SchedulingSettings
 from personal_ai_orchestrator.policy_snapshot import PolicySnapshotJournal
 from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryManager
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
@@ -27,6 +26,7 @@ from personal_ai_orchestrator.quota_collectors.zai import ZAIQuotaCollector
 from personal_ai_orchestrator.routing_service import RoutingService
 from personal_ai_orchestrator.runtime_config import RuntimeConfig
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore
+from personal_ai_orchestrator.scheduling_settings import SchedulingSettings
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
 
 

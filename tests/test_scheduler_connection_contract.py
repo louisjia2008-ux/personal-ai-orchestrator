@@ -34,6 +34,7 @@ from personal_ai_orchestrator.model_registry import (
     QuotaWindowKind,
     QuotaWindowSnapshot,
 )
+from personal_ai_orchestrator.opencode_contract import RoutingMode, RoutingRequest
 from personal_ai_orchestrator.provider_discovery import (
     AuthStatus,
     DiscoveryCycleOutcome,
@@ -45,7 +46,6 @@ from personal_ai_orchestrator.provider_discovery import (
 from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryManager
 from personal_ai_orchestrator.provider_registry_store import save
 from personal_ai_orchestrator.routing_bridge import build_routing_decision
-from personal_ai_orchestrator.opencode_contract import RoutingMode, RoutingRequest
 from personal_ai_orchestrator.scheduler import TaskProfile, route_task
 
 NOW = datetime(2026, 8, 30, tzinfo=UTC)
