@@ -40,6 +40,10 @@ from personal_ai_orchestrator.quota_observability import (
 
 class RoutingObjective(StrEnum):
     BALANCED = "BALANCED"
+    QUALITY_FIRST = "QUALITY_FIRST"
+    QUOTA_SAVER = "QUOTA_SAVER"
+    SPEED_FIRST = "SPEED_FIRST"
+    MANUAL = "MANUAL"
     MAX_QUALITY = "MAX_QUALITY"
     SAVE_QUOTA = "SAVE_QUOTA"
     LOW_LATENCY = "LOW_LATENCY"
@@ -90,6 +94,7 @@ class TargetTelemetry(RegistryModel):
 
 class RoutingPolicy(RegistryModel):
     objective: RoutingObjective = RoutingObjective.BALANCED
+    manual_execution_target_id: str | None = None
     max_quota_age_seconds: float = Field(default=600.0, gt=0.0)
     uncertainty_margin_fraction: float = Field(default=0.02, ge=0.0, le=1.0)
     require_burn_estimate_for_subscription: bool = True
@@ -99,6 +104,31 @@ class RoutingPolicy(RegistryModel):
     failure_escalation_after: int = Field(default=2, ge=1)
     failure_escalation_capability: str = Field(default="reasoning", min_length=1)
     failure_escalation_floor: float = Field(default=0.75, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_manual_target(self) -> RoutingPolicy:
+        if self.objective is RoutingObjective.MANUAL and not self.manual_execution_target_id:
+            raise ValueError("MANUAL policy requires manual_execution_target_id")
+        return self
+
+
+class SchedulingPolicyLevel(StrEnum):
+    GLOBAL_DEFAULT = "GLOBAL_DEFAULT"
+    PROJECT_OVERRIDE = "PROJECT_OVERRIDE"
+    TASK_OVERRIDE = "TASK_OVERRIDE"
+
+
+class SchedulingPolicyResolution(RegistryModel):
+    policy: RoutingPolicy
+    resolved_level: SchedulingPolicyLevel
+
+
+class ScoreComponent(RegistryModel):
+    name: str
+    value: float | str | None = None
+    confidence: EvidenceConfidence = EvidenceConfidence.UNKNOWN
+    source: str = "UNKNOWN"
+    weight: float | None = None
 
 
 class CandidateEvaluation(RegistryModel):
@@ -116,10 +146,13 @@ class CandidateEvaluation(RegistryModel):
     usable_headroom_fraction: float | None = None
     predicted_burn_fraction: float | None = None
     observed_availability_state: str | None = None
+    score_components: tuple[ScoreComponent, ...] = ()
 
 
 class SchedulerDecision(RegistryModel):
     task_id: str
+    policy_id: str
+    policy_objective: RoutingObjective
     selected_execution_target_id: str | None
     selected_model_sku_id: str | None
     evaluations: tuple[CandidateEvaluation, ...]
@@ -129,13 +162,67 @@ class SchedulerDecision(RegistryModel):
 def _objective_weights(objective: RoutingObjective) -> tuple[float, float, float, float]:
     """Return quality, quota, latency, cost weights after hard gates have passed."""
 
-    if objective is RoutingObjective.MAX_QUALITY:
+    if objective in {RoutingObjective.QUALITY_FIRST, RoutingObjective.MAX_QUALITY}:
         return (1.4, 0.5, 0.4, 0.4)
-    if objective is RoutingObjective.SAVE_QUOTA:
+    if objective in {RoutingObjective.QUOTA_SAVER, RoutingObjective.SAVE_QUOTA}:
         return (0.9, 1.5, 0.5, 0.8)
-    if objective is RoutingObjective.LOW_LATENCY:
+    if objective in {RoutingObjective.SPEED_FIRST, RoutingObjective.LOW_LATENCY}:
         return (0.9, 0.7, 1.6, 0.5)
+    if objective is RoutingObjective.MANUAL:
+        return (1.0, 1.0, 1.0, 1.0)
     return (1.0, 1.0, 1.0, 1.0)
+
+
+def policy_from_name(
+    name: str | None,
+    *,
+    manual_execution_target_id: str | None = None,
+    base: RoutingPolicy | None = None,
+) -> RoutingPolicy | None:
+    """Build a RoutingPolicy from a durable owner-facing policy name.
+
+    Returns ``None`` for ``None``, which callers read as "no override at this level".
+    Non-objective policy knobs (quota freshness, risk floors, escalation) are carried
+    over from ``base`` so that choosing a scheduling objective never silently relaxes
+    an unrelated safety threshold.
+    """
+
+    if name is None:
+        return None
+    objective = RoutingObjective(name)
+    template = base or RoutingPolicy()
+    return template.model_copy(
+        update={
+            "objective": objective,
+            "manual_execution_target_id": (
+                manual_execution_target_id
+                if objective is RoutingObjective.MANUAL
+                else None
+            ),
+        }
+    )
+
+
+def resolve_scheduling_policy(
+    *,
+    global_default: RoutingPolicy,
+    project_override: RoutingPolicy | None = None,
+    task_override: RoutingPolicy | None = None,
+) -> SchedulingPolicyResolution:
+    if task_override is not None:
+        return SchedulingPolicyResolution(
+            policy=task_override,
+            resolved_level=SchedulingPolicyLevel.TASK_OVERRIDE,
+        )
+    if project_override is not None:
+        return SchedulingPolicyResolution(
+            policy=project_override,
+            resolved_level=SchedulingPolicyLevel.PROJECT_OVERRIDE,
+        )
+    return SchedulingPolicyResolution(
+        policy=global_default,
+        resolved_level=SchedulingPolicyLevel.GLOBAL_DEFAULT,
+    )
 
 
 def _capability_fit(registry: ModelRegistry, task: TaskProfile, model_sku_id: str) -> float:
@@ -275,7 +362,28 @@ def evaluate_target(
     telemetry: TargetTelemetry,
     policy: RoutingPolicy,
     observed_availability: QuotaAvailabilityEvidence | None = None,
+    connected_provider_ids: frozenset[str] | None = None,
 ) -> CandidateEvaluation:
+    model = registry.models[target.model_sku_id]
+    if connected_provider_ids is not None and model.provider_id not in connected_provider_ids:
+        return CandidateEvaluation(
+            execution_target_id=target.id,
+            model_sku_id=model.id,
+            eligible=False,
+            admitted=False,
+            reasons=("provider not connected by owner",),
+        )
+    if (
+        policy.objective is RoutingObjective.MANUAL
+        and policy.manual_execution_target_id != target.id
+    ):
+        return CandidateEvaluation(
+            execution_target_id=target.id,
+            model_sku_id=model.id,
+            eligible=False,
+            admitted=False,
+            reasons=("manual policy selected another execution target",),
+        )
     reasons = _hard_requirement_reasons(
         registry,
         task=task,
@@ -284,7 +392,6 @@ def evaluate_target(
         telemetry=telemetry,
         policy=policy,
     )
-    model = registry.models[target.model_sku_id]
 
     if reasons:
         return CandidateEvaluation(
@@ -418,6 +525,51 @@ def evaluate_target(
         telemetry=telemetry,
         objective=policy.objective,
     )
+    quality_weight, quota_weight, latency_weight, cost_weight = _objective_weights(
+        policy.objective
+    )
+    score_components = (
+        ScoreComponent(
+            name="task_capability_fit",
+            value=round(capability_fit, 6),
+            confidence=EvidenceConfidence.ESTIMATED,
+            source="model_registry_capability_profile",
+            weight=quality_weight,
+        ),
+        ScoreComponent(
+            name="quota_pace",
+            value=round(pace, 6) if pace is not None else "UNKNOWN",
+            confidence=snapshot.confidence,
+            source=snapshot.source.source_type.value,
+            weight=quota_weight,
+        ),
+        ScoreComponent(
+            name="latency",
+            value=round(telemetry.expected_latency_ms, 3)
+            if telemetry.expected_latency_ms is not None
+            else "UNKNOWN",
+            confidence=(
+                EvidenceConfidence.ESTIMATED
+                if telemetry.expected_latency_ms is not None
+                else EvidenceConfidence.UNKNOWN
+            ),
+            source="target_telemetry",
+            weight=latency_weight,
+        ),
+        ScoreComponent(
+            name="cost_to_green",
+            value=round(telemetry.expected_cost_to_green_usd, 6)
+            if telemetry.expected_cost_to_green_usd is not None
+            else "UNKNOWN",
+            confidence=(
+                EvidenceConfidence.ESTIMATED
+                if telemetry.expected_cost_to_green_usd is not None
+                else EvidenceConfidence.UNKNOWN
+            ),
+            source="target_telemetry",
+            weight=cost_weight,
+        ),
+    )
     reasons.extend(
         [
             "hard eligibility gates passed",
@@ -448,6 +600,7 @@ def evaluate_target(
         observed_availability_state=observed_availability.state_at(now=now).value
         if observed_availability is not None
         else None,
+        score_components=score_components,
     )
 
 
@@ -461,6 +614,7 @@ def route_task(
     telemetry: dict[str, TargetTelemetry] | None = None,
     observed_availability: dict[str, QuotaAvailabilityEvidence] | None = None,
     policy: RoutingPolicy | None = None,
+    connected_provider_ids: frozenset[str] | None = None,
 ) -> SchedulerDecision:
     """Return one deterministic recommendation without applying any runtime switch."""
 
@@ -490,6 +644,7 @@ def route_task(
                 telemetry=telemetry.get(target.id, TargetTelemetry()),
                 observed_availability=observed_availability.get(target.id),
                 policy=policy,
+                connected_provider_ids=connected_provider_ids,
             )
 
     evaluations = tuple(
@@ -503,6 +658,8 @@ def route_task(
     if not admitted:
         return SchedulerDecision(
             task_id=task.task_id,
+            policy_id=policy.objective.value,
+            policy_objective=policy.objective,
             selected_execution_target_id=None,
             selected_model_sku_id=None,
             evaluations=evaluations,
@@ -519,6 +676,8 @@ def route_task(
     )
     return SchedulerDecision(
         task_id=task.task_id,
+        policy_id=policy.objective.value,
+        policy_objective=policy.objective,
         selected_execution_target_id=selected.execution_target_id,
         selected_model_sku_id=selected.model_sku_id,
         evaluations=evaluations,
@@ -534,9 +693,14 @@ __all__ = [
     "RiskClass",
     "RoutingObjective",
     "RoutingPolicy",
+    "SchedulingPolicyLevel",
+    "policy_from_name",
+    "SchedulingPolicyResolution",
     "SchedulerDecision",
+    "ScoreComponent",
     "TargetTelemetry",
     "TaskProfile",
     "evaluate_target",
     "route_task",
+    "resolve_scheduling_policy",
 ]

@@ -57,6 +57,7 @@ class RoutingDecision(FrozenModel):
     switch_requested: bool = False
     task_state_version: int | None = Field(default=None, ge=0)
     explanation_ref: str | None = None
+    explanation: dict[str, object] | None = None
     catalog_snapshot_id: str | None = None
     policy_snapshot_id: str | None = None
     quota_snapshot_ids: tuple[str, ...] = ()

@@ -33,7 +33,7 @@ from personal_ai_orchestrator.opencode_contract import RoutingMode, RoutingReque
 from personal_ai_orchestrator.quota_collectors.base import QuotaCollectionStatus
 from personal_ai_orchestrator.routing_service import RoutingService
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
-from personal_ai_orchestrator.scheduler import TaskProfile
+from personal_ai_orchestrator.scheduler import RoutingObjective, RoutingPolicy, TaskProfile
 from personal_ai_orchestrator.shadow_evidence import ShadowEvidenceJournal
 
 NOW = datetime(2026, 8, 30, tzinfo=UTC)
@@ -315,6 +315,115 @@ def test_non_routable_task_state_fails_closed(tmp_path) -> None:
     )
     assert decision.selected_model is None
     assert "not eligible for model routing" in (decision.fallback_reason or "")
+
+
+def test_task_policy_override_wins_and_is_persisted_with_decision(tmp_path) -> None:
+    service = RoutingService(
+        registry=_registry(),
+        store=SafetyKernelStore(tmp_path / "state.sqlite3"),
+        catalog_snapshot_id="catalog-1",
+        policy=RoutingPolicy(objective=RoutingObjective.BALANCED),
+        project_policy_overrides={
+            "project-1": RoutingPolicy(objective=RoutingObjective.QUOTA_SAVER)
+        },
+        task_policy_overrides={
+            "task-1": RoutingPolicy(objective=RoutingObjective.SPEED_FIRST)
+        },
+        runtime_availability={"m3-sub": True},
+    )
+    service.set_task_profile(
+        TaskProfile(
+            task_id="task-1",
+            required_capabilities={"debugging": 0.8},
+            predicted_quota_fraction_p90=0.05,
+        )
+    )
+    service.store.register_project(
+        project_id="project-1",
+        display_name="Project",
+        canonical_repo_root=str(tmp_path),
+        git_root=str(tmp_path),
+        default_branch="main",
+        last_known_head="abc123",
+    )
+    service.store.submit_task(
+        task_id="task-1",
+        request_id="task-submit",
+        intent="implement",
+        project_id="project-1",
+        base_sha="abc123",
+    )
+    ready = service.store.transition_task("task-1", TaskState.READY)
+
+    decision = service.route(
+        RoutingRequest(
+            request_id="req-policy-override",
+            session_id="session-1",
+            task_id="task-1",
+            task_state_version=ready.state_version,
+            mode=RoutingMode.SHADOW,
+            requested_at=NOW,
+        ),
+        now=NOW,
+    )
+
+    assert decision.explanation is not None
+    assert decision.explanation["policy_id"] == "SPEED_FIRST"
+    row = service.store.connection.execute(
+        "SELECT payload_json FROM routing_decisions WHERE request_id=?",
+        ("req-policy-override",),
+    ).fetchone()
+    payload = json.loads(row["payload_json"])
+    assert payload["explanation"]["policy_id"] == "SPEED_FIRST"
+
+
+def test_connected_provider_callback_is_live_for_disconnects(tmp_path) -> None:
+    connected = {"minimax"}
+    service = RoutingService(
+        registry=_registry(),
+        store=SafetyKernelStore(tmp_path / "state.sqlite3"),
+        catalog_snapshot_id="catalog-1",
+        runtime_availability={"m3-sub": True},
+        connected_provider_ids_provider=lambda: frozenset(connected),
+    )
+    service.set_task_profile(
+        TaskProfile(
+            task_id="task-1",
+            required_capabilities={"debugging": 0.8},
+            predicted_quota_fraction_p90=0.05,
+        )
+    )
+    service.store.submit_task(task_id="task-1", request_id="task-submit", intent="implement")
+    ready = service.store.transition_task("task-1", TaskState.READY)
+    first = service.route(
+        RoutingRequest(
+            request_id="req-connected",
+            session_id="session-1",
+            task_id="task-1",
+            task_state_version=ready.state_version,
+            mode=RoutingMode.SHADOW,
+            requested_at=NOW,
+        ),
+        now=NOW,
+    )
+    connected.clear()
+    second = service.route(
+        RoutingRequest(
+            request_id="req-disconnected",
+            session_id="session-1",
+            task_id="task-1",
+            task_state_version=ready.state_version,
+            mode=RoutingMode.SHADOW,
+            requested_at=NOW,
+        ),
+        now=NOW,
+    )
+
+    assert first.selected_execution_target_id == "m3-sub"
+    assert second.selected_execution_target_id is None
+    assert second.explanation is not None
+    candidate = second.explanation["ineligible_candidates"][0]
+    assert candidate["reasons"] == ["provider not connected by owner"]
 
 
 def test_shadow_route_writes_pending_observation_when_actual_target_is_known(tmp_path) -> None:

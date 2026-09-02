@@ -25,6 +25,8 @@ class RuntimeConfig(BaseModel):
     catalog_snapshot_id: str = Field(min_length=1)
     registry: ModelRegistry
     policy: RoutingPolicy = Field(default_factory=RoutingPolicy)
+    project_policy_overrides: dict[str, RoutingPolicy] = Field(default_factory=dict)
+    task_policy_overrides: dict[str, RoutingPolicy] = Field(default_factory=dict)
     task_profiles: tuple[TaskProfile, ...] = ()
     runtime_availability: dict[str, bool] = Field(default_factory=dict)
     telemetry: dict[str, TargetTelemetry] = Field(default_factory=dict)

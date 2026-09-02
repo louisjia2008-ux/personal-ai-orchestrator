@@ -17,6 +17,74 @@ from personal_ai_orchestrator.opencode_contract import (
 from personal_ai_orchestrator.scheduler import SchedulerDecision
 
 
+def _scheduler_explanation(
+    scheduler: SchedulerDecision,
+    registry: ModelRegistry,
+    *,
+    catalog_snapshot_id: str,
+    policy_snapshot_id: str,
+    quota_snapshot_ids: tuple[str, ...],
+    policy_resolution: dict[str, object] | None = None,
+) -> dict[str, object]:
+    candidates: list[dict[str, object]] = []
+    for evaluation in scheduler.evaluations:
+        target = registry.execution_targets.get(evaluation.execution_target_id)
+        model = registry.models.get(evaluation.model_sku_id)
+        provider = registry.providers.get(model.provider_id) if model is not None else None
+        candidates.append(
+            {
+                "execution_target_id": evaluation.execution_target_id,
+                "model_sku_id": evaluation.model_sku_id,
+                "model_display_name": model.display_name if model is not None else evaluation.model_sku_id,
+                "provider_id": model.provider_id if model is not None else None,
+                "provider_display_name": provider.display_name if provider is not None else None,
+                "eligible": evaluation.eligible,
+                "admitted": evaluation.admitted,
+                "selected": evaluation.execution_target_id
+                == scheduler.selected_execution_target_id,
+                "score": evaluation.score,
+                "reasons": list(evaluation.reasons),
+                "why_not_selected": None
+                if evaluation.execution_target_id == scheduler.selected_execution_target_id
+                else (
+                    "; ".join(evaluation.reasons)
+                    if evaluation.reasons
+                    else "lower score under resolved scheduling policy"
+                ),
+                "quota_pool_id": evaluation.quota_pool_id,
+                "quota_snapshot_id": evaluation.quota_snapshot_id,
+                "availability_evidence_state": evaluation.observed_availability_state,
+                "scarcity_class": evaluation.scarcity_class.value,
+                "score_components": [
+                    component.model_dump(mode="json")
+                    for component in evaluation.score_components
+                ],
+            }
+        )
+    selected = next((item for item in candidates if item["selected"]), None)
+    return {
+        "policy_id": scheduler.policy_id,
+        "policy_objective": scheduler.policy_objective.value,
+        "policy_resolution": policy_resolution,
+        "decision_reason": scheduler.decision_reason,
+        "catalog_snapshot_id": catalog_snapshot_id,
+        "policy_snapshot_id": policy_snapshot_id,
+        "quota_snapshot_ids": list(quota_snapshot_ids),
+        "selected_execution_target_id": scheduler.selected_execution_target_id,
+        "selected_model_sku_id": scheduler.selected_model_sku_id,
+        "why_selected": (
+            "; ".join(selected["reasons"]) if selected is not None and selected["reasons"] else None
+        ),
+        "eligible_candidates": [
+            item for item in candidates if item["eligible"] and item["admitted"]
+        ],
+        "ineligible_candidates": [
+            item for item in candidates if not item["eligible"] or not item["admitted"]
+        ],
+        "candidates": candidates,
+    }
+
+
 def _decision_id(
     request: RoutingRequest,
     scheduler: SchedulerDecision,
@@ -47,6 +115,7 @@ def build_routing_decision(
     policy_snapshot_id: str,
     activation_gate: ActiveRoutingGate | None = None,
     decided_at: datetime | None = None,
+    policy_resolution: dict[str, object] | None = None,
 ) -> RoutingDecision:
     """Create the adapter-facing immutable decision from one scheduler recommendation.
 
@@ -85,6 +154,14 @@ def build_routing_decision(
         "policy_snapshot_id": policy_snapshot_id,
         "quota_snapshot_ids": quota_snapshot_ids,
         "decided_at": decided_at or datetime.now(UTC),
+        "explanation": _scheduler_explanation(
+            scheduler,
+            registry,
+            catalog_snapshot_id=catalog_snapshot_id,
+            policy_snapshot_id=policy_snapshot_id,
+            quota_snapshot_ids=quota_snapshot_ids,
+            policy_resolution=policy_resolution,
+        ),
     }
 
     if request.mode is RoutingMode.BYPASS:
