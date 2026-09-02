@@ -6,6 +6,16 @@ import SwiftUI
 public enum SubmitNotice: Equatable, Sendable {
     case submitted(taskId: String, state: String)
     case duplicateBlocked(windowSeconds: Int)
+    case projectRequired
+    case manualTargetRequired
+    case failed(detail: String)
+    case malformedResponse
+}
+
+public enum ProjectNotice: Equatable, Sendable {
+    case resolved(projectId: String)
+    case registered(projectId: String)
+    case removed(projectId: String)
     case failed(detail: String)
     case malformedResponse
 }
@@ -34,22 +44,30 @@ public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var connection: ConnectionState = .disconnected(reason: .daemonNotRunning)
     @Published public private(set) var tasks: TaskListView?
     @Published public private(set) var dashboard: DashboardSummaryView?
+    @Published public private(set) var projects: ProjectListView?
+    @Published public private(set) var pendingProjectPreview: ProjectView?
     @Published public private(set) var selectedTaskDetail: TaskDetailView?
     @Published public private(set) var providers: ProviderHealthListView?
+    @Published public private(set) var providerConnections: ProviderConnectionListView?
     @Published public private(set) var providerDiscoveryStatus: ProviderDiscoveryStatusView?
     @Published public private(set) var isRefreshingProviders: Bool = false
     @Published public private(set) var activeStatus: ActiveStatusView?
     @Published public private(set) var ownerExecutionSettings: OwnerExecutionSettingsView?
+    @Published public private(set) var schedulingSettings: SchedulingSettingsView?
     @Published public private(set) var lastDispatch: DispatchTaskView?
     @Published public private(set) var dispatchNotice: DispatchNotice?
     @Published public private(set) var lastError: PAOClientError?
     @Published public private(set) var lastSubmittedTaskId: String?
     @Published public private(set) var submitNotice: SubmitNotice?
+    @Published public private(set) var projectNotice: ProjectNotice?
     @Published public private(set) var cancellationNotice: CancelNotice?
     @Published public var menuVisible: Bool = false
     @Published public var dashboardVisible: Bool = false
     @Published public private(set) var isRefreshing: Bool = false
     @Published public var selectedTaskId: String?
+    @Published public var selectedProjectId: String?
+    @Published public var selectedSchedulingPolicy: String = "BALANCED"
+    @Published public var selectedManualExecutionTargetId: String?
 
     public let socketPath: String
     public let daemonLifecycle: DaemonLifecycleController
@@ -175,10 +193,20 @@ public final class OrchestratorStore: ObservableObject {
             let dashboard = try await client.dashboard()
             self.dashboard = dashboard
             self.tasks = TaskListView(tasks: dashboard.recentTasks, total: dashboard.counts.total)
+            self.projects = dashboard.projects
+            if selectedProjectId == nil {
+                selectedProjectId = dashboard.projects.projects.first(where: \.isOnline)?.projectId
+            }
             self.providers = dashboard.providers
+            if let providerConnections = try? await client.providerConnections() {
+                self.providerConnections = providerConnections
+            }
             self.activeStatus = dashboard.activeStatus
             if let settings = try? await client.ownerExecutionSettings() {
                 self.ownerExecutionSettings = settings
+            }
+            if let scheduling = try? await client.schedulingSettings() {
+                self.schedulingSettings = scheduling
             }
             self.lastError = nil
             await refreshProviderStatusSilently()
@@ -232,15 +260,20 @@ public final class OrchestratorStore: ObservableObject {
         if !newState.isConnected {
             tasks = nil
             dashboard = nil
+            projects = nil
+            pendingProjectPreview = nil
             selectedTaskDetail = nil
             providers = nil
+            providerConnections = nil
             activeStatus = nil
             ownerExecutionSettings = nil
+            schedulingSettings = nil
             lastDispatch = nil
             // Ephemeral operation success state claims daemon authority; once the
             // connection is gone it must not linger as if still authoritative.
             lastSubmittedTaskId = nil
             submitNotice = nil
+            projectNotice = nil
             cancellationNotice = nil
             dispatchNotice = nil
         }
@@ -295,9 +328,83 @@ public final class OrchestratorStore: ObservableObject {
 
     /// Quick submit: input becomes a structured task intent through POST /v1/tasks.
     /// It is never interpreted as a shell command.
-    public func quickSubmit(intent: String) async {
+    public func resolveProject(path: String) async {
+        do {
+            pendingProjectPreview = try await client.resolveProject(path: path)
+            if let preview = pendingProjectPreview {
+                projectNotice = .resolved(projectId: preview.projectId)
+            }
+            ClientLog.operation("project-resolve", outcome: "ok")
+        } catch let error as PAOClientError {
+            projectNotice = .failed(detail: error.displayDetail)
+            ClientLog.operation("project-resolve", outcome: error.logCode)
+        } catch {
+            projectNotice = .malformedResponse
+            ClientLog.operation("project-resolve", outcome: "malformed")
+        }
+    }
+
+    public func registerProject(path: String, displayName: String? = nil, bookmarkData: Data? = nil) async {
+        do {
+            let bookmark = bookmarkData?.base64EncodedString()
+            let project = try await client.registerProject(
+                path: path,
+                displayName: displayName,
+                securityBookmarkB64: bookmark
+            )
+            selectedProjectId = project.projectId
+            pendingProjectPreview = nil
+            projectNotice = .registered(projectId: project.projectId)
+            ClientLog.operation("project-register", outcome: "ok")
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            projectNotice = .failed(detail: error.displayDetail)
+            ClientLog.operation("project-register", outcome: error.logCode)
+        } catch {
+            projectNotice = .malformedResponse
+            ClientLog.operation("project-register", outcome: "malformed")
+        }
+    }
+
+    public func removeProject(projectId: String) async {
+        do {
+            _ = try await client.removeProject(projectId)
+            if selectedProjectId == projectId {
+                selectedProjectId = nil
+            }
+            projectNotice = .removed(projectId: projectId)
+            ClientLog.operation("project-remove", outcome: "ok")
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            projectNotice = .failed(detail: error.displayDetail)
+            ClientLog.operation("project-remove", outcome: error.logCode)
+        } catch {
+            projectNotice = .malformedResponse
+            ClientLog.operation("project-remove", outcome: "malformed")
+        }
+    }
+
+    public func markProjectOpened(projectId: String) async {
+        do {
+            _ = try await client.markProjectOpened(projectId)
+            ClientLog.operation("project-opened", outcome: "ok")
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            projectNotice = .failed(detail: error.displayDetail)
+            ClientLog.operation("project-opened", outcome: error.logCode)
+        } catch {
+            projectNotice = .malformedResponse
+            ClientLog.operation("project-opened", outcome: "malformed")
+        }
+    }
+
+    public func quickSubmit(projectId: String?, intent: String) async {
         let trimmed = intent.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        guard let projectId, !projectId.isEmpty else {
+            submitNotice = .projectRequired
+            return
+        }
         if let last = lastSubmit,
            last.intent == trimmed,
            Date().timeIntervalSince(last.at) < Self.duplicateSubmitWindow {
@@ -305,10 +412,21 @@ public final class OrchestratorStore: ObservableObject {
             return
         }
         let suffix = idFactory()
+        // The picked policy must reach the daemon: an App-local selection that never
+        // leaves SwiftUI state is indistinguishable from not choosing at all.
+        let policy = selectedSchedulingPolicy
+        let manualTarget = policy == "MANUAL" ? selectedManualExecutionTargetId : nil
+        if policy == "MANUAL", manualTarget == nil {
+            submitNotice = .manualTargetRequired
+            return
+        }
         let request = SubmitRequest(
             taskId: "menubar-\(suffix)",
             requestId: "menubar-req-\(suffix)",
-            intent: trimmed
+            projectId: projectId,
+            intent: trimmed,
+            schedulingPolicy: policy,
+            manualExecutionTargetId: manualTarget
         )
         do {
             let task = try await client.submit(request)
@@ -402,12 +520,92 @@ public final class OrchestratorStore: ObservableObject {
             providerDiscoveryStatus = status
             let providers = try? await client.providers()
             if let providers { self.providers = providers }
+            let providerConnections = try? await client.providerConnections()
+            if let providerConnections { self.providerConnections = providerConnections }
             ClientLog.operation("refresh_providers", outcome: status.discoveryState.lowercased())
         } catch let error as PAOClientError {
             self.lastError = error
             ClientLog.operation("refresh_providers", outcome: error.logCode)
         } catch {
             ClientLog.operation("refresh_providers", outcome: "malformed")
+        }
+    }
+
+    public func connectProvider(providerId: String) async {
+        do {
+            _ = try await client.connectProvider(providerId: providerId)
+            providerConnections = try? await client.providerConnections()
+            providers = try? await client.providers()
+            ClientLog.operation("connect_provider", outcome: "connected")
+        } catch let error as PAOClientError {
+            self.lastError = error
+            ClientLog.operation("connect_provider", outcome: error.logCode)
+        } catch {
+            ClientLog.operation("connect_provider", outcome: "malformed")
+        }
+    }
+
+    public func disconnectProvider(providerId: String) async {
+        do {
+            _ = try await client.disconnectProvider(providerId: providerId)
+            providerConnections = try? await client.providerConnections()
+            providers = try? await client.providers()
+            ClientLog.operation("disconnect_provider", outcome: "disconnected")
+        } catch let error as PAOClientError {
+            self.lastError = error
+            ClientLog.operation("disconnect_provider", outcome: error.logCode)
+        } catch {
+            ClientLog.operation("disconnect_provider", outcome: "malformed")
+        }
+    }
+
+    /// Import owner-approved existing connections.
+    ///
+    /// Explicitly owner-triggered: nothing here runs on refresh or startup.
+    public func importProviderConnections(providerIds: [String]) async {
+        guard !providerIds.isEmpty else { return }
+        do {
+            _ = try await client.importProviderConnections(providerIds: providerIds)
+            providerConnections = try? await client.providerConnections()
+            providers = try? await client.providers()
+            ClientLog.operation("import_provider_connections", outcome: "imported")
+        } catch let error as PAOClientError {
+            self.lastError = error
+            ClientLog.operation("import_provider_connections", outcome: error.logCode)
+        } catch {
+            ClientLog.operation("import_provider_connections", outcome: "malformed")
+        }
+    }
+
+    public func loadSchedulingSettings() async {
+        schedulingSettings = try? await client.schedulingSettings()
+    }
+
+    public func setDefaultSchedulingPolicy(_ policy: String) async {
+        do {
+            schedulingSettings = try await client.setDefaultSchedulingPolicy(policy)
+            ClientLog.operation("set_scheduling_policy", outcome: "ok")
+        } catch let error as PAOClientError {
+            self.lastError = error
+            ClientLog.operation("set_scheduling_policy", outcome: error.logCode)
+        } catch {
+            ClientLog.operation("set_scheduling_policy", outcome: "malformed")
+        }
+    }
+
+    public func setProjectSchedulingPolicy(projectId: String, policy: String?) async {
+        do {
+            _ = try await client.setProjectSchedulingPolicy(
+                projectId: projectId,
+                schedulingPolicy: policy
+            )
+            projects = try? await client.projects()
+            ClientLog.operation("set_project_scheduling_policy", outcome: "ok")
+        } catch let error as PAOClientError {
+            self.lastError = error
+            ClientLog.operation("set_project_scheduling_policy", outcome: error.logCode)
+        } catch {
+            ClientLog.operation("set_project_scheduling_policy", outcome: "malformed")
         }
     }
 

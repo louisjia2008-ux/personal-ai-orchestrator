@@ -120,7 +120,12 @@ final class ControlPlaneClientTests: XCTestCase {
         XCTAssertEqual(active.productionActive, "DISABLED_BY_DESIGN")
 
         let submitted = try await client.submit(
-            SubmitRequest(taskId: "menubar-abc", requestId: "menubar-req-abc", intent: "demo")
+            SubmitRequest(
+                taskId: "menubar-abc",
+                requestId: "menubar-req-abc",
+                projectId: "project-fixture",
+                intent: "demo"
+            )
         )
         XCTAssertEqual(submitted.taskId, "menubar-abc")
 
@@ -128,6 +133,7 @@ final class ControlPlaneClientTests: XCTestCase {
         XCTAssertNotNil(posted)
         XCTAssertTrue(posted!.body.contains("\"task_id\":\"menubar-abc\""))
         XCTAssertTrue(posted!.body.contains("\"request_id\":\"menubar-req-abc\""))
+        XCTAssertTrue(posted!.body.contains("\"project_id\":\"project-fixture\""))
     }
 
     func testHTTPErrorSurfacesSanitizedCode() async throws {

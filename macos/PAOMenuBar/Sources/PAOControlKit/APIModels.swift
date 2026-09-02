@@ -25,6 +25,9 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
     public let taskId: String
     public let requestId: String
     public let intent: String
+    public let projectId: String?
+    public let baseSha: String?
+    public let workingSubpath: String?
     public let state: String
     public let stateVersion: Int
     public let createdAt: String
@@ -36,6 +39,9 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
         case taskId = "task_id"
         case requestId = "request_id"
         case intent
+        case projectId = "project_id"
+        case baseSha = "base_sha"
+        case workingSubpath = "working_subpath"
         case state
         case stateVersion = "state_version"
         case createdAt = "created_at"
@@ -46,6 +52,57 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
 public struct TaskListView: Decodable, Equatable, Sendable {
     public let tasks: [TaskView]
     public let total: Int
+}
+
+public struct ProjectView: Decodable, Equatable, Identifiable, Sendable {
+    public let projectId: String
+    public let displayName: String
+    public let canonicalRepoRoot: String
+    public let gitRoot: String
+    public let defaultBranch: String
+    public let lastKnownHead: String
+    public let createdAt: String
+    public let updatedAt: String
+    public let workingSubpath: String?
+    public let remoteUrl: String?
+    public let lastOpenedAt: String?
+    public let storageAvailability: String
+    public let recentTaskCount: Int
+    public let currentBranch: String?
+
+    public var id: String { projectId }
+    public var isOnline: Bool { storageAvailability == "ONLINE" }
+
+    enum CodingKeys: String, CodingKey {
+        case projectId = "project_id"
+        case displayName = "display_name"
+        case canonicalRepoRoot = "canonical_repo_root"
+        case gitRoot = "git_root"
+        case defaultBranch = "default_branch"
+        case lastKnownHead = "last_known_head"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case workingSubpath = "working_subpath"
+        case remoteUrl = "remote_url"
+        case lastOpenedAt = "last_opened_at"
+        case storageAvailability = "storage_availability"
+        case recentTaskCount = "recent_task_count"
+        case currentBranch = "current_branch"
+    }
+}
+
+public struct ProjectListView: Decodable, Equatable, Sendable {
+    public let projects: [ProjectView]
+}
+
+public struct ProjectRemoveView: Decodable, Equatable, Sendable {
+    public let project: ProjectView
+    public let removedFromOrchestrator: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case project
+        case removedFromOrchestrator = "removed_from_orchestrator"
+    }
 }
 
 public struct CancelView: Decodable, Equatable, Sendable {
@@ -235,6 +292,11 @@ public struct ProviderHealthView: Codable, Equatable, Identifiable, Sendable {
     public let evidenceSource: String?
     public let authStatus: String?
     public let executionStatus: String?
+    public let connectionState: String?
+    public let authState: String?
+    public let runtimeState: String?
+    public let planSurface: String?
+    public let region: String?
     public let lastChecked: String?
 
     public var id: String { providerId }
@@ -248,6 +310,11 @@ public struct ProviderHealthView: Codable, Equatable, Identifiable, Sendable {
         case evidenceSource = "evidence_source"
         case authStatus = "auth_status"
         case executionStatus = "execution_status"
+        case connectionState = "connection_state"
+        case authState = "auth_state"
+        case runtimeState = "runtime_state"
+        case planSurface = "plan_surface"
+        case region
         case lastChecked = "last_checked"
     }
 
@@ -260,6 +327,11 @@ public struct ProviderHealthView: Codable, Equatable, Identifiable, Sendable {
         evidenceSource: String? = nil,
         authStatus: String? = nil,
         executionStatus: String? = nil,
+        connectionState: String? = nil,
+        authState: String? = nil,
+        runtimeState: String? = nil,
+        planSurface: String? = nil,
+        region: String? = nil,
         lastChecked: String? = nil
     ) {
         self.providerId = providerId
@@ -270,6 +342,11 @@ public struct ProviderHealthView: Codable, Equatable, Identifiable, Sendable {
         self.evidenceSource = evidenceSource
         self.authStatus = authStatus
         self.executionStatus = executionStatus
+        self.connectionState = connectionState
+        self.authState = authState
+        self.runtimeState = runtimeState
+        self.planSurface = planSurface
+        self.region = region
         self.lastChecked = lastChecked
     }
 }
@@ -279,6 +356,149 @@ public struct ProviderHealthListView: Codable, Equatable, Sendable {
 
     public init(providers: [ProviderHealthView]) {
         self.providers = providers
+    }
+}
+
+public struct ProviderConnectionView: Codable, Equatable, Identifiable, Sendable {
+    public let providerId: String
+    public let displayName: String
+    public let connectionState: String
+    public let authState: String
+    public let executionVerified: Bool
+    public let runtimeState: String
+    public let credentialReferenceType: String
+    public let region: String?
+    public let planSurface: String?
+    public let modelSkus: [String]
+    public let connectedAt: String?
+    public let lastValidatedAt: String?
+    public let lastReasonCode: String?
+
+    public var id: String { providerId }
+
+    enum CodingKeys: String, CodingKey {
+        case providerId = "provider_id"
+        case displayName = "display_name"
+        case connectionState = "connection_state"
+        case authState = "auth_state"
+        case executionVerified = "execution_verified"
+        case runtimeState = "runtime_state"
+        case credentialReferenceType = "credential_reference_type"
+        case region
+        case planSurface = "plan_surface"
+        case modelSkus = "model_skus"
+        case connectedAt = "connected_at"
+        case lastValidatedAt = "last_validated_at"
+        case lastReasonCode = "last_reason_code"
+    }
+}
+
+public struct AvailableProviderView: Codable, Equatable, Identifiable, Sendable {
+    public let providerId: String
+    public let displayName: String
+    public let connectionState: String
+    public let authState: String
+    public let executionVerified: Bool
+    public let runtimeState: String
+    public let region: String?
+    public let planSurface: String?
+    public let modelSkus: [String]
+    public let lastChecked: String?
+
+    public var id: String { providerId }
+
+    enum CodingKeys: String, CodingKey {
+        case providerId = "provider_id"
+        case displayName = "display_name"
+        case connectionState = "connection_state"
+        case authState = "auth_state"
+        case executionVerified = "execution_verified"
+        case runtimeState = "runtime_state"
+        case region
+        case planSurface = "plan_surface"
+        case modelSkus = "model_skus"
+        case lastChecked = "last_checked"
+    }
+}
+
+/// One sanitized reason a historical provider surface may be offered for import.
+/// Carries a human-readable detail only — never a credential value or path.
+public struct ImportEvidenceItemView: Codable, Equatable, Identifiable, Sendable {
+    public let kind: String
+    public let detail: String
+    public let observedAt: String?
+
+    public var id: String { "\(kind)-\(detail)" }
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case detail
+        case observedAt = "observed_at"
+    }
+}
+
+/// A surface the owner plausibly already uses, offered for one-click import.
+/// Being listed here grants no scheduling eligibility until the owner imports it.
+public struct ProviderImportCandidateView: Codable, Equatable, Identifiable, Sendable {
+    public let providerId: String
+    public let displayName: String
+    public let region: String?
+    public let planSurface: String?
+    public let modelSkus: [String]
+    public let executionVerified: Bool
+    public let authState: String
+    public let credentialReferenceType: String
+    public let evidence: [ImportEvidenceItemView]
+
+    public var id: String { providerId }
+
+    enum CodingKeys: String, CodingKey {
+        case providerId = "provider_id"
+        case displayName = "display_name"
+        case region
+        case planSurface = "plan_surface"
+        case modelSkus = "model_skus"
+        case executionVerified = "execution_verified"
+        case authState = "auth_state"
+        case credentialReferenceType = "credential_reference_type"
+        case evidence
+    }
+}
+
+public struct ProviderConnectionListView: Codable, Equatable, Sendable {
+    public let connected: [ProviderConnectionView]
+    public let availableToAdd: [AvailableProviderView]
+    public let importCandidates: [ProviderImportCandidateView]
+
+    enum CodingKeys: String, CodingKey {
+        case connected
+        case availableToAdd = "available_to_add"
+        case importCandidates = "import_candidates"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        connected = try container.decode([ProviderConnectionView].self, forKey: .connected)
+        availableToAdd = try container.decode([AvailableProviderView].self, forKey: .availableToAdd)
+        // Tolerated as absent so a newer App still reads an older daemon's payload.
+        importCandidates = try container.decodeIfPresent(
+            [ProviderImportCandidateView].self,
+            forKey: .importCandidates
+        ) ?? []
+    }
+}
+
+public struct ImportConnectionsView: Codable, Equatable, Sendable {
+    public let imported: [ProviderConnectionView]
+}
+
+public struct SchedulingSettingsView: Codable, Equatable, Sendable {
+    public let defaultSchedulingPolicy: String
+    public let selectablePolicies: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case defaultSchedulingPolicy = "default_scheduling_policy"
+        case selectablePolicies = "selectable_policies"
     }
 }
 
@@ -415,15 +635,123 @@ public struct DashboardCountsView: Decodable, Equatable, Sendable {
     public let running: Int
     public let ready: Int
     public let blocked: Int
+    public let verifying: Int
     public let verified: Int
     public let completed: Int
     public let total: Int
+}
+
+public struct TaskTrendBucketView: Decodable, Equatable, Identifiable, Sendable {
+    public let bucketStart: String
+    public let submitted: Int
+    public let completed: Int
+    public let blocked: Int
+
+    public var id: String { bucketStart }
+
+    enum CodingKeys: String, CodingKey {
+        case bucketStart = "bucket_start"
+        case submitted
+        case completed
+        case blocked
+    }
+}
+
+public struct TaskStateSliceView: Decodable, Equatable, Identifiable, Sendable {
+    public let state: String
+    public let count: Int
+
+    public var id: String { state }
+}
+
+public struct DashboardBasicInfoView: Decodable, Equatable, Sendable {
+    public let daemonConnection: String
+    public let registeredProjects: Int
+    public let discoveredProviders: Int
+    public let availableExecutionTargets: Int
+    public let runningTasks: Int
+    public let tasksToday: Int
+    public let routingDecisionsToday: Int
+    public let quotaWarningCount: Int
+    public let lastRefreshSync: String
+
+    enum CodingKeys: String, CodingKey {
+        case daemonConnection = "daemon_connection"
+        case registeredProjects = "registered_projects"
+        case discoveredProviders = "discovered_providers"
+        case availableExecutionTargets = "available_execution_targets"
+        case runningTasks = "running_tasks"
+        case tasksToday = "tasks_today"
+        case routingDecisionsToday = "routing_decisions_today"
+        case quotaWarningCount = "quota_warning_count"
+        case lastRefreshSync = "last_refresh_sync"
+    }
+}
+
+public struct RiskItemView: Decodable, Equatable, Identifiable, Sendable {
+    public let title: String
+    public let detail: String
+    public let severity: String
+    public let destination: String?
+    public let rawCode: String?
+
+    public var id: String { "\(severity)-\(title)-\(rawCode ?? "")" }
+
+    enum CodingKeys: String, CodingKey {
+        case title
+        case detail
+        case severity
+        case destination
+        case rawCode = "raw_code"
+    }
+}
+
+public struct QuotaObservationView: Decodable, Equatable, Identifiable, Sendable {
+    public let providerId: String
+    public let quotaPoolId: String
+    public let windowId: String
+    public let observedAt: String
+    public let remainingFraction: Double?
+    public let confidence: String
+    public let measurementSource: String
+    public let resetAt: String?
+    public let state: String
+
+    public var id: String { "\(providerId)-\(quotaPoolId)-\(windowId)-\(observedAt)" }
+
+    enum CodingKeys: String, CodingKey {
+        case providerId = "provider_id"
+        case quotaPoolId = "quota_pool_id"
+        case windowId = "window_id"
+        case observedAt = "observed_at"
+        case remainingFraction = "remaining_fraction"
+        case confidence
+        case measurementSource = "measurement_source"
+        case resetAt = "reset_at"
+        case state
+    }
+}
+
+public struct QuotaHistoryView: Decodable, Equatable, Sendable {
+    public let observations: [QuotaObservationView]
+    public let retentionLimit: Int
+
+    enum CodingKeys: String, CodingKey {
+        case observations
+        case retentionLimit = "retention_limit"
+    }
 }
 
 public struct DashboardSummaryView: Decodable, Equatable, Sendable {
     public let connection: HealthView
     public let counts: DashboardCountsView
     public let recentTasks: [TaskView]
+    public let projects: ProjectListView
+    public let basicInfo: DashboardBasicInfoView
+    public let taskTrend: [TaskTrendBucketView]
+    public let taskStateDistribution: [TaskStateSliceView]
+    public let risks: [RiskItemView]
+    public let quotaHistory: QuotaHistoryView
     public let providers: ProviderHealthListView
     public let activeStatus: ActiveStatusView
     public let importantBlockers: [String]
@@ -433,6 +761,12 @@ public struct DashboardSummaryView: Decodable, Equatable, Sendable {
         case connection
         case counts
         case recentTasks = "recent_tasks"
+        case projects
+        case basicInfo = "basic_info"
+        case taskTrend = "task_trend"
+        case taskStateDistribution = "task_state_distribution"
+        case risks
+        case quotaHistory = "quota_history"
         case providers
         case activeStatus = "active_status"
         case importantBlockers = "important_blockers"
@@ -451,13 +785,49 @@ public struct RoutingDecisionView: Decodable, Equatable, Sendable {
     /// client only renders selected known string fields.
     public struct StringValue: Decodable, Equatable, Sendable {
         public let value: String?
+        public let boolValue: Bool?
+        public let doubleValue: Double?
+        public let objectValue: [String: StringValue]?
+        public let arrayValue: [StringValue]?
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.singleValueContainer()
             if let string = try? container.decode(String.self) {
                 value = string
+                boolValue = nil
+                doubleValue = nil
+                objectValue = nil
+                arrayValue = nil
+            } else if let bool = try? container.decode(Bool.self) {
+                value = bool ? "true" : "false"
+                boolValue = bool
+                doubleValue = nil
+                objectValue = nil
+                arrayValue = nil
+            } else if let double = try? container.decode(Double.self) {
+                value = "\(double)"
+                boolValue = nil
+                doubleValue = double
+                objectValue = nil
+                arrayValue = nil
+            } else if let object = try? container.decode([String: StringValue].self) {
+                value = nil
+                boolValue = nil
+                doubleValue = nil
+                objectValue = object
+                arrayValue = nil
+            } else if let array = try? container.decode([StringValue].self) {
+                value = nil
+                boolValue = nil
+                doubleValue = nil
+                objectValue = nil
+                arrayValue = array
             } else {
                 value = nil
+                boolValue = nil
+                doubleValue = nil
+                objectValue = nil
+                arrayValue = nil
             }
         }
     }
@@ -475,22 +845,44 @@ public struct RoutingDecisionView: Decodable, Equatable, Sendable {
         decision["selected_execution_target_id"]?.value
     }
     public var fallbackReason: String? { decision["fallback_reason"]?.value }
+    public var explanation: [String: StringValue]? { decision["explanation"]?.objectValue }
+    public var policyId: String? { explanation?["policy_id"]?.value }
+    public var whySelected: String? { explanation?["why_selected"]?.value }
+    public var candidates: [[String: StringValue]] {
+        explanation?["candidates"]?.arrayValue?.compactMap(\.objectValue) ?? []
+    }
+
+    /// How the policy for this decision was resolved, frozen at decision time.
+    public var policyResolution: [String: StringValue]? {
+        explanation?["policy_resolution"]?.objectValue
+    }
+    public var resolvedPolicy: String? { policyResolution?["resolved_policy"]?.value }
+    public var policyResolutionSource: String? {
+        policyResolution?["resolution_source"]?.value
+    }
+    public var manualExecutionTargetId: String? {
+        policyResolution?["manual_execution_target_id"]?.value
+    }
 }
 
 public struct WorkspaceView: Decodable, Equatable, Sendable {
     public let taskId: String
+    public let projectId: String?
     public let repoPath: String
     public let worktreePath: String
     public let branch: String
     public let baseSha: String
+    public let workingSubpath: String?
     public let writerLocked: Bool
 
     enum CodingKeys: String, CodingKey {
         case taskId = "task_id"
+        case projectId = "project_id"
         case repoPath = "repo_path"
         case worktreePath = "worktree_path"
         case branch
         case baseSha = "base_sha"
+        case workingSubpath = "working_subpath"
         case writerLocked = "writer_locked"
     }
 }
@@ -508,18 +900,62 @@ public struct TaskDetailView: Decodable, Equatable, Sendable {
 public struct SubmitRequest: Encodable, Equatable, Sendable {
     public let taskId: String
     public let requestId: String
+    public let projectId: String
     public let intent: String
+    /// `nil` means "no task override" — the daemon then resolves project, then global.
+    public let schedulingPolicy: String?
+    /// Only ever set alongside a `MANUAL` policy; the daemon rejects other pairings.
+    public let manualExecutionTargetId: String?
 
     enum CodingKeys: String, CodingKey {
         case taskId = "task_id"
         case requestId = "request_id"
+        case projectId = "project_id"
         case intent
+        case schedulingPolicy = "scheduling_policy"
+        case manualExecutionTargetId = "manual_execution_target_id"
     }
 
-    public init(taskId: String, requestId: String, intent: String) {
+    public init(
+        taskId: String,
+        requestId: String,
+        projectId: String,
+        intent: String,
+        schedulingPolicy: String? = nil,
+        manualExecutionTargetId: String? = nil
+    ) {
         self.taskId = taskId
         self.requestId = requestId
+        self.projectId = projectId
         self.intent = intent
+        self.schedulingPolicy = schedulingPolicy
+        self.manualExecutionTargetId = manualExecutionTargetId
+    }
+}
+
+public struct ProjectPathRequest: Encodable, Equatable, Sendable {
+    public let path: String
+
+    public init(path: String) {
+        self.path = path
+    }
+}
+
+public struct ProjectRegisterRequest: Encodable, Equatable, Sendable {
+    public let path: String
+    public let displayName: String?
+    public let securityBookmarkB64: String?
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case displayName = "display_name"
+        case securityBookmarkB64 = "security_bookmark_b64"
+    }
+
+    public init(path: String, displayName: String? = nil, securityBookmarkB64: String? = nil) {
+        self.path = path
+        self.displayName = displayName
+        self.securityBookmarkB64 = securityBookmarkB64
     }
 }
 

@@ -33,6 +33,7 @@
 
 "notice.submitted" = "Submitted task %@ (state %@).";
 "notice.duplicateBlocked" = "Duplicate submission blocked (same intent within %d s).";
+"notice.projectRequired" = "Select a registered project before submitting.";
 "notice.submitFailed" = "Submit failed: %@";
 "notice.submitMalformed" = "Submit failed: malformed response.";
 "notice.cancelled" = "Task %@ cancelled.";
@@ -54,9 +55,10 @@
 "app.dashboard" = "Dashboard";
 "action.openDashboard" = "Open Dashboard";
 "dashboard.overview" = "Overview";
+"dashboard.projects" = "Projects";
 "dashboard.tasks" = "Tasks";
-"dashboard.agents" = "Agents / execution targets";
-"dashboard.providers" = "Providers";
+"dashboard.agents" = "Execution targets";
+"dashboard.providers" = "Models & Providers";
 "dashboard.quota" = "Quota";
 "dashboard.routing" = "Routing";
 "dashboard.verification" = "Verification";
@@ -212,3 +214,71 @@
 "label.providerLastDiscovered" = "Last discovered at %@";
 "label.discoveryEmpty" = "No providers discovered yet. Run Refresh providers to inspect the local runtime.";
 "label.discoveryError" = "Discovery error: %@";
+
+/* P4.2.6 overview KPI */
+"kpi.running" = "Running";
+"kpi.ready" = "Ready";
+"kpi.blocked" = "Blocked";
+"kpi.verification" = "Verification";
+"kpi.completed" = "Completed";
+"kpi.verificationDetail" = "Verifying %d · Verified %d";
+
+/* P4.2.6 scheduling policy */
+"policy.balanced" = "Smart Balance";
+"policy.qualityFirst" = "Quality First";
+"policy.quotaSaver" = "Quota First";
+"policy.speedFirst" = "Speed First";
+"policy.manual" = "Manual";
+"policy.balanced.detail" = "Weighs task fit, reliability, quota, and speed together";
+"policy.qualityFirst.detail" = "Emphasises capability, reliability, and verification quality";
+"policy.quotaSaver.detail" = "Protects quota health and slow-reset scarcity while still meeting the task's minimum capability";
+"policy.speedFirst.detail" = "Emphasises runtime availability and observed latency while respecting capability and safety";
+"policy.manual.detail" = "You choose the execution target. If it cannot run, the task blocks — no silent substitution";
+"policy.title" = "Scheduling policy";
+"policy.change" = "Change policy";
+"policy.useGlobalDefault" = "Use global default";
+"policy.globalDefault" = "Global default";
+"policy.resolutionSource" = "Policy source";
+"policy.source.task" = "Task override";
+"policy.source.project" = "Project override";
+"policy.source.global" = "Global default";
+
+/* P4.2.6 provider connections */
+"providers.tab.connected" = "Connected";
+"providers.tab.available" = "Available to Add";
+"providers.connectedEmpty.title" = "No AI providers connected yet";
+"providers.connectedEmpty.message" = "Only connected providers can take part in scheduling.";
+"providers.addProvider" = "Add Provider";
+"providers.importExisting" = "Import Existing Connections";
+"providers.importTitle" = "Existing AI connections detected";
+"providers.importFooter" = "Importing records the connection only. No credential value is ever read or stored.";
+"providers.availableEmpty.message" = "No discovered provider surfaces are currently available to add.";
+"providers.connectedNotAuthenticated" = "Sign-in state not confirmed";
+"providers.connectedNotVerified" = "Real execution not yet verified";
+"providers.executionVerified" = "Real execution verified";
+"providers.available" = "Available";
+"providers.unavailable" = "Currently unavailable";
+
+/* P4.2.6 routing explanation */
+"routing.activePolicy" = "Active scheduling policy";
+"routing.modes" = "Available policies";
+"routing.whySelected" = "Why this model?";
+"routing.whyNotSelected" = "Not selected";
+"routing.candidates" = "Candidate models";
+"routing.noTaskSelected" = "Select a task to see its scheduling decision.";
+"routing.considers" = "The system weighs task type, connected models, quota, runtime state, and the scheduling policy.";
+"routing.noConnectedProviders" = "No connected AI provider can take part in scheduling.";
+"routing.noEligibleTargets" = "No model can currently execute.";
+"routing.selectedModel" = "Selected model";
+"routing.decidedAt" = "Decided at";
+"routing.resolvedPolicy" = "Resolved policy";
+
+/* P4.2.6 settings and new task */
+"settings.defaultSchedulingPolicy" = "Default scheduling policy";
+"settings.defaultSchedulingPolicy.footer" = "Affects only future undecided tasks. Historical routing decisions are never rewritten.";
+"newTask.schedulingPolicy" = "Scheduling policy";
+"newTask.manualModel" = "Model";
+"newTask.chooseModel" = "Choose model";
+
+"notice.manualTargetRequired" = "Manual policy requires choosing an execution model first.";
+"providers.disconnect" = "Disconnect Provider";

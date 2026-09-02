@@ -11,7 +11,7 @@ import XCTest
 final class InteractiveDashboardTests: XCTestCase {
     func testDashboardSectionsAreCompleteAndStable() {
         XCTAssertEqual(DashboardSection.allCases.map(\.rawValue), [
-            "overview", "tasks", "agents", "providers", "quota",
+            "overview", "projects", "tasks", "providers", "quota",
             "routing", "verification", "history", "settings",
         ])
         for section in DashboardSection.allCases {
@@ -107,9 +107,13 @@ final class InteractiveDashboardTests: XCTestCase {
         // regardless of whether a numeric fraction happens to be present.
         let withFraction = L10n.quotaRemaining(fraction: 0.42, confidence: "UNKNOWN")
         let withoutFraction = L10n.quotaRemaining(fraction: nil, confidence: "UNKNOWN")
+        let estimated = L10n.quotaRemaining(fraction: 0.42, confidence: "ESTIMATED")
+        let exact = L10n.quotaRemaining(fraction: 0.42, confidence: "EXACT")
         XCTAssertFalse(withFraction.contains("%"))
         XCTAssertFalse(withoutFraction.contains("%"))
         XCTAssertFalse(withFraction.contains("42"))
+        XCTAssertTrue(estimated.contains("%"))
+        XCTAssertTrue(exact.contains("%"))
     }
 
     func testInteractiveDashboardKeysExistInBothLanguages() {

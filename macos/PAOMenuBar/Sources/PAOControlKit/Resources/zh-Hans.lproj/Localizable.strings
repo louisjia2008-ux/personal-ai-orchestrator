@@ -33,6 +33,7 @@
 
 "notice.submitted" = "已提交任务 %@（状态 %@）。";
 "notice.duplicateBlocked" = "已阻止重复提交（%d 秒内意图相同）。";
+"notice.projectRequired" = "请先选择一个已注册项目。";
 "notice.submitFailed" = "提交失败：%@";
 "notice.submitMalformed" = "提交失败：响应格式错误。";
 "notice.cancelled" = "任务 %@ 已取消。";
@@ -54,9 +55,10 @@
 "app.dashboard" = "总览面板";
 "action.openDashboard" = "打开总览面板";
 "dashboard.overview" = "总览";
+"dashboard.projects" = "项目";
 "dashboard.tasks" = "任务";
-"dashboard.agents" = "Agents / 执行目标";
-"dashboard.providers" = "提供商";
+"dashboard.agents" = "执行目标";
+"dashboard.providers" = "模型与服务";
 "dashboard.quota" = "额度";
 "dashboard.routing" = "调度决策";
 "dashboard.verification" = "验证";
@@ -212,3 +214,71 @@
 "label.providerLastDiscovered" = "最近发现于 %@";
 "label.discoveryEmpty" = "尚未发现任何提供商。请执行「刷新提供商」以检查本地运行时。";
 "label.discoveryError" = "发现错误：%@";
+
+/* P4.2.6 概览 KPI */
+"kpi.running" = "运行中";
+"kpi.ready" = "就绪";
+"kpi.blocked" = "阻塞";
+"kpi.verification" = "验证";
+"kpi.completed" = "已完成";
+"kpi.verificationDetail" = "验证中 %d · 已验证 %d";
+
+/* P4.2.6 调度策略 */
+"policy.balanced" = "智能平衡";
+"policy.qualityFirst" = "质量优先";
+"policy.quotaSaver" = "额度优先";
+"policy.speedFirst" = "速度优先";
+"policy.manual" = "手动指定";
+"policy.balanced.detail" = "综合考虑：任务适配、可靠性、额度与速度";
+"policy.qualityFirst.detail" = "优先考虑：能力匹配、可靠性与验证质量";
+"policy.quotaSaver.detail" = "优先保留额度：关注额度健康与恢复速度，同时满足任务的最低能力要求";
+"policy.speedFirst.detail" = "优先考虑：运行环境可用性与已观测的启动/响应速度，同时满足任务能力与安全要求";
+"policy.manual.detail" = "由你指定执行目标。若该目标不可执行，任务会被阻塞，不会自动更换模型";
+"policy.title" = "调度策略";
+"policy.change" = "修改策略";
+"policy.useGlobalDefault" = "使用全局默认";
+"policy.globalDefault" = "全局默认";
+"policy.resolutionSource" = "策略来源";
+"policy.source.task" = "任务级指定";
+"policy.source.project" = "项目级指定";
+"policy.source.global" = "全局默认";
+
+/* P4.2.6 提供商连接 */
+"providers.tab.connected" = "已连接";
+"providers.tab.available" = "可添加";
+"providers.connectedEmpty.title" = "尚未连接 AI 提供商";
+"providers.connectedEmpty.message" = "连接后的提供商才能参与任务调度。";
+"providers.addProvider" = "添加提供商";
+"providers.importExisting" = "导入已有连接";
+"providers.importTitle" = "检测到已有 AI 连接";
+"providers.importFooter" = "导入只会记录连接关系，不会读取或保存任何密钥内容。";
+"providers.availableEmpty.message" = "当前没有可添加的已发现提供商。";
+"providers.connectedNotAuthenticated" = "登录状态尚未确认";
+"providers.connectedNotVerified" = "尚未完成真实执行验证";
+"providers.executionVerified" = "真实执行已验证";
+"providers.available" = "可用";
+"providers.unavailable" = "当前不可用";
+
+/* P4.2.6 调度解释 */
+"routing.activePolicy" = "当前调度策略";
+"routing.modes" = "可选策略";
+"routing.whySelected" = "为什么选择它？";
+"routing.whyNotSelected" = "未选择原因";
+"routing.candidates" = "候选模型";
+"routing.noTaskSelected" = "选择一个任务以查看具体调度决策。";
+"routing.considers" = "系统会综合考虑：任务类型、已连接模型、额度、运行状态与调度策略。";
+"routing.noConnectedProviders" = "没有已连接的 AI 提供商可以参与调度。";
+"routing.noEligibleTargets" = "没有当前可执行的模型。";
+"routing.selectedModel" = "已选择模型";
+"routing.decidedAt" = "决策时间";
+"routing.resolvedPolicy" = "生效策略";
+
+/* P4.2.6 设置与新建任务 */
+"settings.defaultSchedulingPolicy" = "默认调度策略";
+"settings.defaultSchedulingPolicy.footer" = "仅影响之后新提交且尚未决策的任务，不会改写历史调度记录。";
+"newTask.schedulingPolicy" = "调度策略";
+"newTask.manualModel" = "指定模型";
+"newTask.chooseModel" = "选择模型";
+
+"notice.manualTargetRequired" = "手动指定策略需要先选择一个执行模型。";
+"providers.disconnect" = "断开连接";

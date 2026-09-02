@@ -69,10 +69,10 @@ extension ProviderHealthListView {
 
 /// Rendering rules that preserve quota-confidence semantics.
 public enum QuotaRendering {
-    /// ESTIMATED/UNKNOWN never render as a precise percentage. Only EXACT may.
+    /// EXACT and ESTIMATED may render observed percentages. UNKNOWN never does.
     public static func remainingText(fraction: Double?, confidence: String) -> String {
         guard let fraction else { return "unknown" }
-        if confidence == "EXACT" {
+        if confidence == "EXACT" || confidence == "ESTIMATED" {
             return String(format: "%.1f%%", fraction * 100)
         }
         return "unknown (confidence: \(confidence))"
