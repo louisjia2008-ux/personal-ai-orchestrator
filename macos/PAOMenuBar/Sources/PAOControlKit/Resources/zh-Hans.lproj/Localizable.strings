@@ -300,3 +300,167 @@
 "build.matched" = "应用与守护进程一致";
 "build.indeterminate" = "无法获取构建标识";
 "action.restartDaemon" = "重启守护进程";
+
+/* P4.2.6.4 sidebar groups */
+"sidebar.group.work" = "工作";
+"sidebar.group.aiResources" = "AI 资源";
+"sidebar.group.execution" = "执行";
+"sidebar.group.system" = "系统";
+
+/* P4.2.6.4 shared labels */
+"common.advancedDetails" = "高级详情";
+"common.never" = "从未";
+"common.reason" = "原因";
+"common.plan" = "套餐";
+"common.region" = "区域";
+"common.retry" = "重试";
+
+/* P4.2.6.4 overview */
+"overview.basicInfo" = "基本信息";
+"overview.connection" = "连接状态";
+"overview.projects" = "项目";
+"overview.providers" = "提供商";
+"overview.runnableTargets" = "可执行模型";
+"overview.runningTasks" = "运行中任务";
+"overview.tasksToday" = "今日任务";
+"overview.routingToday" = "今日调度";
+"overview.quotaWarnings" = "额度警告";
+"overview.lastRefresh" = "最近刷新：%@";
+"overview.taskTrend" = "任务趋势";
+"overview.taskTrend.empty" = "正在收集历史任务数据。";
+"overview.taskTrend.help" = "提交 %1$d，完成 %2$d，阻塞 %3$d";
+"overview.taskStates" = "任务状态";
+"overview.taskStates.empty" = "暂无任务状态数据。";
+"overview.risks" = "风险提醒";
+"overview.recentActivity" = "最近活动";
+
+/* P4.2.6.4 risks (localized from raw_code) */
+"risk.projectUnavailable.title" = "%d 个项目当前不可用";
+"risk.projectUnavailable.detail" = "项目缺失或无效时，相关任务无法派发。";
+"risk.executionTargetUnverified.title" = "%d 个执行目标尚未验证";
+"risk.executionTargetUnverified.detail" = "未验证的执行目标无法运行真实派发任务。";
+"risk.quotaExhausted.title" = "%d 个额度池已受限";
+"risk.quotaExhausted.detail" = "部分模型在额度恢复前可能不可用。";
+"risk.quotaUnknown.title" = "%d 个额度池的余量未知";
+"risk.quotaUnknown.detail" = "额度未知是合法状态，但界面无法显示可靠的百分比。";
+"risk.ownerApproval.title" = "生产自动化尚未获得授权";
+"risk.ownerApproval.detail" = "进入 ACTIVE 模式前仍需所有者批准。";
+"risk.shadowEvidence.title" = "影子运行证据尚不完整";
+"risk.shadowEvidence.detail" = "在验收证据补齐前，生产调度保持关闭。";
+
+/* P4.2.6.4 projects */
+"projects.add" = "添加项目";
+"projects.detectedRepository" = "已识别的代码仓库";
+"projects.register" = "注册";
+"projects.empty" = "尚未注册任何项目。";
+"projects.revealInFinder" = "在访达中显示";
+"projects.open" = "打开项目";
+"projects.remove" = "从编排器移除";
+"projects.gitRoot" = "Git 根目录";
+"projects.workingSubpath" = "工作子路径";
+"projects.branch" = "分支";
+"projects.recentTasks" = "最近任务数";
+"projects.lastUsed" = "最近使用";
+
+/* P4.2.6.4 new task sheet */
+"newTask.project" = "项目";
+"newTask.selectProject" = "选择项目";
+"newTask.execution" = "执行目标";
+"newTask.executionAuto" = "自动";
+
+/* P4.2.6.4 providers and models */
+"providers.pickerTitle" = "模型与服务";
+"providers.notConnected" = "未连接";
+"providers.surface" = "服务形态";
+"providers.providerId" = "提供商 ID";
+"providers.credentialReference" = "凭据来源";
+"providers.runtime" = "运行环境";
+"providers.connectionLabel" = "连接状态";
+"providers.accountsLabel" = "账户数";
+"providers.executionTargetsLabel" = "执行目标数";
+"providers.quotaPoolsLabel" = "额度池";
+"providers.modelCount" = "%d 个模型";
+"providers.quotaPoolCount" = "%d 个额度池";
+"providers.catalogModelCount" = "%d 个目录模型";
+"models.title" = "模型";
+"models.empty" = "尚未发现可运行的模型。";
+"models.ready" = "可用";
+"models.needsVerification" = "待验证";
+"models.noExecutionTargets" = "未发现执行目标。";
+
+/* P4.2.6.4 provider state labels */
+"auth.authenticated" = "已确认登录";
+"auth.required" = "需要登录";
+"auth.unknown" = "尚未确认登录状态";
+"connectionState.connected" = "已连接";
+"connectionState.disconnected" = "已断开";
+"connectionState.discovered" = "可添加";
+"runtimeState.available" = "当前运行环境可用";
+"runtimeState.unavailable" = "当前运行环境不可用";
+"runtimeState.unknown" = "运行环境未知";
+
+/* P4.2.6.4 quota page */
+"quota.refresh" = "刷新额度";
+"quota.refresh.help" = "通过官方只读接口读取已连接提供商的额度，不会消耗模型额度。";
+"quota.empty.title" = "尚未连接可查看额度的提供商";
+"quota.empty.message" = "请先连接 AI 提供商，其额度会显示在这里。";
+"quota.status" = "额度";
+"quota.statusTitle" = "额度状态";
+"quota.noReliableData" = "暂无可靠额度数据";
+"quota.unreadable" = "暂不可读取";
+"quota.lastChecked" = "最近检查";
+"quota.neverChecked" = "尚未检查";
+"quota.lastAttempt" = "最近尝试";
+"quota.connectionStatus" = "状态";
+"quota.summary.connected" = "已连接提供商";
+"quota.summary.observable" = "可观测额度";
+"quota.summary.warnings" = "额度警告";
+"quota.summary.exhausted" = "额度已耗尽";
+"quota.windows" = "额度窗口";
+"quota.windowDetails" = "窗口详情";
+"quota.poolId" = "额度池 ID";
+"quota.limitingWindow" = "最紧的额度窗口";
+"quota.limitingWindow.empty" = "当前观测无法推导出最紧的额度窗口。";
+"quota.provider" = "提供商";
+"quota.window" = "窗口";
+"quota.remainingLabel" = "剩余";
+"quota.resetLabel" = "重置";
+"quota.estimatedBadge" = "估算";
+"quota.history.title" = "额度历史";
+"quota.history.empty" = "正在收集额度历史数据。";
+"quota.history.footer" = "仅展示已记录的额度观测。保留上限：%d 条。";
+"quota.noReliablePercentage" = "该额度池当前没有可靠的剩余百分比。";
+
+/* P4.2.6.4 quota failure reasons (sanitized codes) */
+"quota.reason.noReadonlySource" = "当前提供商没有可用的只读额度来源。";
+"quota.reason.credentialMissing" = "未检测到该提供商的凭据，因此无法读取额度。";
+"quota.reason.authRequired" = "提供商拒绝了只读额度请求，登录状态可能已过期。";
+"quota.reason.rateLimited" = "提供商当前限制了额度查询频率。";
+"quota.reason.providerError" = "当前无法从提供商获取可靠额度数据。";
+"quota.reason.notConnected" = "该提供商尚未连接。";
+
+/* P4.2.6.4 task detail */
+"detail.currentPhase" = "当前阶段";
+"detail.elapsed" = "耗时";
+"detail.stop" = "停止";
+"detail.stop.help" = "通过宿主权威执行路径取消。";
+"detail.filesChanged" = "变更文件";
+"detail.noWorktree" = "尚未为该任务注册工作树。";
+"detail.verifierProfile" = "验证配置";
+"detail.noWorkerRun" = "尚未启动任何工作进程。";
+"detail.rawWorkerOutput" = "原始工作输出";
+"detail.taskId" = "任务 ID";
+"detail.requestId" = "请求 ID";
+"detail.routingDecision" = "调度决策 ID";
+"detail.routingRequest" = "调度请求 ID";
+"detail.baseSha" = "基线 SHA";
+"detail.runId" = "运行 ID";
+"detail.runStatus" = "运行状态";
+"detail.quotaEvidence" = "额度证据";
+
+/* P4.2.6.4 keyboard commands */
+"command.focusSearch" = "聚焦搜索";
+"command.previousTask" = "上一个任务";
+"command.nextTask" = "下一个任务";
+"command.copyTaskId" = "复制任务 ID";
+"command.reloadDetail" = "重新加载详情";

@@ -255,8 +255,18 @@ public struct PAOControlClient: Sendable {
         return try await post("/v1/providers/refresh", body: EmptyBody())
     }
 
-    public func quota() async throws -> ProviderHealthListView {
+    /// Connection-based quota projection: every connected provider is present,
+    /// including ones with no quota evidence yet.
+    public func quota() async throws -> QuotaOverviewView {
         try await get("/v1/quota")
+    }
+
+    /// Explicit read-only quota collection. Distinct from `refreshProviders()`,
+    /// which only re-runs catalog/credential discovery and reads no quota.
+    public func refreshQuota(providerId: String? = nil) async throws -> QuotaRefreshResultView {
+        struct EmptyBody: Encodable {}
+        let path = providerId.map { "/v1/providers/\($0)/quota/refresh" } ?? "/v1/quota/refresh"
+        return try await post(path, body: EmptyBody())
     }
 
     public func activeStatus() async throws -> ActiveStatusView {

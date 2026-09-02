@@ -231,11 +231,20 @@ class DashboardBasicInfoView(_ViewModel):
 
 
 class RiskItemView(_ViewModel):
+    """A dashboard risk.
+
+    ``title``/``detail`` carry an English fallback so non-UI clients (CLI,
+    scripts) stay readable. Owner-facing clients localize from ``raw_code``
+    plus ``count`` instead, so the risk text follows the product language.
+    """
+
     title: str
     detail: str
     severity: str
     destination: str | None = None
     raw_code: str | None = None
+    #: How many entities the risk covers, when it is a counting risk.
+    count: int | None = None
 
 
 class QuotaObservationView(_ViewModel):
@@ -1520,6 +1529,7 @@ class ControlPlaneService:
                     severity="BLOCKED",
                     destination="projects",
                     raw_code="PROJECT_UNAVAILABLE",
+                    count=len(unavailable_projects),
                 )
             )
         unverified_targets = [
@@ -1536,6 +1546,7 @@ class ControlPlaneService:
                     severity="WARNING",
                     destination="models_providers",
                     raw_code="EXECUTION_TARGET_UNVERIFIED",
+                    count=len(unverified_targets),
                 )
             )
         exhausted = [
@@ -1552,6 +1563,7 @@ class ControlPlaneService:
                     severity="BLOCKED",
                     destination="quota",
                     raw_code="QUOTA_EXHAUSTED",
+                    count=len(exhausted),
                 )
             )
         unknown = [
@@ -1568,6 +1580,7 @@ class ControlPlaneService:
                     severity="UNKNOWN",
                     destination="quota",
                     raw_code="QUOTA_UNKNOWN",
+                    count=len(unknown),
                 )
             )
         for raw in blockers:

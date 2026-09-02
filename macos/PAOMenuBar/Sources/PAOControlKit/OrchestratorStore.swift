@@ -51,6 +51,10 @@ public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var providerConnections: ProviderConnectionListView?
     @Published public private(set) var providerDiscoveryStatus: ProviderDiscoveryStatusView?
     @Published public private(set) var isRefreshingProviders: Bool = false
+    /// Connection-based quota projection. Separate from `providers` because a
+    /// connected provider must stay visible here even with zero quota evidence.
+    @Published public private(set) var quota: QuotaOverviewView?
+    @Published public private(set) var isRefreshingQuota: Bool = false
     @Published public private(set) var activeStatus: ActiveStatusView?
     @Published public private(set) var ownerExecutionSettings: OwnerExecutionSettingsView?
     @Published public private(set) var schedulingSettings: SchedulingSettingsView?
@@ -210,6 +214,10 @@ public final class OrchestratorStore: ObservableObject {
             self.providers = dashboard.providers
             if let providerConnections = try? await client.providerConnections() {
                 self.providerConnections = providerConnections
+            }
+            // Read-only projection; it never triggers provider collection.
+            if let quota = try? await client.quota() {
+                self.quota = quota
             }
             self.activeStatus = dashboard.activeStatus
             if let settings = try? await client.ownerExecutionSettings() {
@@ -532,6 +540,9 @@ public final class OrchestratorStore: ObservableObject {
             if let providers { self.providers = providers }
             let providerConnections = try? await client.providerConnections()
             if let providerConnections { self.providerConnections = providerConnections }
+            // Provider discovery reads no quota; this only re-reads the
+            // projection so newly visible connections get a card.
+            if let quota = try? await client.quota() { self.quota = quota }
             ClientLog.operation("refresh_providers", outcome: status.discoveryState.lowercased())
         } catch let error as PAOClientError {
             self.lastError = error
@@ -541,11 +552,37 @@ public final class OrchestratorStore: ObservableObject {
         }
     }
 
+    /// Owner-triggered read-only quota collection.
+    ///
+    /// Deliberately separate from ``refreshProviders()``: that re-runs catalog
+    /// and credential discovery and reads no quota at all. This contacts each
+    /// connected provider's documented read-only quota endpoint. No model
+    /// generation is ever issued to discover quota.
+    public func refreshQuota(providerId: String? = nil) async {
+        guard !isRefreshingQuota else { return }
+        isRefreshingQuota = true
+        defer { isRefreshingQuota = false }
+        do {
+            let result = try await client.refreshQuota(providerId: providerId)
+            self.quota = result.overview
+            ClientLog.operation("refresh_quota", outcome: result.overview.state.lowercased())
+        } catch let error as PAOClientError {
+            self.lastError = error
+            // A failed refresh must not blank the page: keep the last
+            // projection and let the card report the failure.
+            self.quota = try? await client.quota()
+            ClientLog.operation("refresh_quota", outcome: error.logCode)
+        } catch {
+            ClientLog.operation("refresh_quota", outcome: "malformed")
+        }
+    }
+
     public func connectProvider(providerId: String) async {
         do {
             _ = try await client.connectProvider(providerId: providerId)
             providerConnections = try? await client.providerConnections()
             providers = try? await client.providers()
+            quota = try? await client.quota()
             ClientLog.operation("connect_provider", outcome: "connected")
         } catch let error as PAOClientError {
             self.lastError = error
@@ -560,6 +597,7 @@ public final class OrchestratorStore: ObservableObject {
             _ = try await client.disconnectProvider(providerId: providerId)
             providerConnections = try? await client.providerConnections()
             providers = try? await client.providers()
+            quota = try? await client.quota()
             ClientLog.operation("disconnect_provider", outcome: "disconnected")
         } catch let error as PAOClientError {
             self.lastError = error
@@ -578,6 +616,7 @@ public final class OrchestratorStore: ObservableObject {
             _ = try await client.importProviderConnections(providerIds: providerIds)
             providerConnections = try? await client.providerConnections()
             providers = try? await client.providers()
+            quota = try? await client.quota()
             ClientLog.operation("import_provider_connections", outcome: "imported")
         } catch let error as PAOClientError {
             self.lastError = error

@@ -28,8 +28,8 @@ struct QuickSubmitView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(L10n.quickSubmit).font(.subheadline).foregroundStyle(.secondary)
-            Picker("Project", selection: $store.selectedProjectId) {
-                Text("Select project").tag(String?.none)
+            Picker(L10n.newTaskProject, selection: $store.selectedProjectId) {
+                Text(L10n.newTaskSelectProject).tag(String?.none)
                 ForEach(onlineProjects) { project in
                     Text(project.displayName).tag(String?.some(project.projectId))
                 }

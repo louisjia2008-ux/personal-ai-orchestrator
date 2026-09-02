@@ -56,20 +56,20 @@ struct DashboardView: View {
             get: { activeSection },
             set: { section = $0 ?? .overview }
         )) {
-            Section("Work") {
+            Section(L10n.sidebarWork) {
                 sidebarItem(.overview)
                 sidebarItem(.projects)
                 sidebarItem(.tasks)
             }
-            Section("AI Resources") {
+            Section(L10n.sidebarAIResources) {
                 sidebarItem(.providers)
                 sidebarItem(.quota)
             }
-            Section("Execution") {
+            Section(L10n.sidebarExecution) {
                 sidebarItem(.routing)
                 sidebarItem(.verification)
             }
-            Section("System") {
+            Section(L10n.sidebarSystem) {
                 sidebarItem(.history)
                 sidebarItem(.settings)
             }
@@ -139,7 +139,7 @@ struct DashboardView: View {
         case .providers:
             ProvidersDashboard()
         case .quota:
-            QuotaDashboard()
+            QuotaDashboard(section: $section)
         case .routing:
             SelectedTaskDetailDashboard(
                 selectedTaskId: taskSelection,
@@ -204,16 +204,16 @@ private struct NewTaskSheet: View {
             Text(L10n.newTaskSubtitle)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            Picker("Project", selection: $store.selectedProjectId) {
-                Text("Select project").tag(String?.none)
+            Picker(L10n.newTaskProject, selection: $store.selectedProjectId) {
+                Text(L10n.newTaskSelectProject).tag(String?.none)
                 ForEach(onlineProjects) { project in
                     Text(project.displayName).tag(String?.some(project.projectId))
                 }
             }
             .pickerStyle(.menu)
 
-            Picker("Execution", selection: $executionTargetId) {
-                Text("Auto").tag("")
+            Picker(L10n.newTaskExecution, selection: $executionTargetId) {
+                Text(L10n.newTaskExecutionAuto).tag("")
                 ForEach(verifiedTargets) { target in
                     Text(target.modelSkuId).tag(target.executionTargetId)
                 }
@@ -316,14 +316,14 @@ private struct ProjectsDashboard: View {
                     Button {
                         pickProjectFolder()
                     } label: {
-                        Label("Add Project", systemImage: "folder.badge.plus")
+                        Label(L10n.projectsAdd, systemImage: "folder.badge.plus")
                     }
                     .buttonStyle(.borderless)
                 )
             }
         ) {
             if let preview = store.pendingProjectPreview {
-                DashboardCard(title: "Detected Repository", symbol: "checkmark.seal") {
+                DashboardCard(title: L10n.projectsDetectedRepository, symbol: "checkmark.seal") {
                     ProjectFacts(project: preview)
                     HStack {
                         Button {
@@ -342,7 +342,7 @@ private struct ProjectsDashboard: View {
                                 )
                             }
                         } label: {
-                            Label("Register", systemImage: "plus.circle")
+                            Label(L10n.projectsRegister, systemImage: "plus.circle")
                         }
                         .buttonStyle(.borderedProminent)
                     }
@@ -351,9 +351,9 @@ private struct ProjectsDashboard: View {
 
             if projects.isEmpty {
                 EmptyStateView(
-                    title: "Projects",
+                    title: L10n.dashboardSection(DashboardSection.projects.rawValue),
                     symbol: DashboardSection.projects.symbol,
-                    message: "No registered projects."
+                    message: L10n.projectsEmpty
                 )
             } else {
                 ForEach(projects) { project in
@@ -369,7 +369,7 @@ private struct ProjectsDashboard: View {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = false
-        panel.prompt = "Add Project"
+        panel.prompt = L10n.projectsAdd
         let response = panel.runModal()
         guard response == .OK, let url = panel.url else { return }
         selectedURL = url
@@ -406,7 +406,7 @@ private struct ProjectCard: View {
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: project.gitRoot)])
                     Task { await store.markProjectOpened(projectId: project.projectId) }
                 } label: {
-                    Label("Reveal in Finder", systemImage: "finder")
+                    Label(L10n.projectsRevealInFinder, systemImage: "finder")
                 }
                 .controlSize(.small)
 
@@ -414,7 +414,7 @@ private struct ProjectCard: View {
                     NSWorkspace.shared.open(URL(fileURLWithPath: project.canonicalRepoRoot))
                     Task { await store.markProjectOpened(projectId: project.projectId) }
                 } label: {
-                    Label("Open project", systemImage: "arrow.up.forward.app")
+                    Label(L10n.projectsOpen, systemImage: "arrow.up.forward.app")
                 }
                 .controlSize(.small)
                 .disabled(project.storageAvailability != "ONLINE")
@@ -430,7 +430,7 @@ private struct ProjectCard: View {
                 Button(role: .destructive) {
                     Task { await store.removeProject(projectId: project.projectId) }
                 } label: {
-                    Label("Remove from Orchestrator", systemImage: "minus.circle")
+                    Label(L10n.projectsRemove, systemImage: "minus.circle")
                 }
                 .controlSize(.small)
             }
@@ -443,14 +443,14 @@ private struct ProjectFacts: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            LabeledContent("Git root", value: project.gitRoot)
+            LabeledContent(L10n.projectsGitRoot, value: project.gitRoot)
             if let workingSubpath = project.workingSubpath {
-                LabeledContent("Working subpath", value: workingSubpath)
+                LabeledContent(L10n.projectsWorkingSubpath, value: workingSubpath)
             }
-            LabeledContent("Branch", value: project.currentBranch ?? project.defaultBranch)
+            LabeledContent(L10n.projectsBranch, value: project.currentBranch ?? project.defaultBranch)
             LabeledContent("HEAD", value: short(project.lastKnownHead))
-            LabeledContent("Recent tasks", value: "\(project.recentTaskCount)")
-            LabeledContent("Last used", value: project.lastOpenedAt ?? "Never")
+            LabeledContent(L10n.projectsRecentTasks, value: "\(project.recentTaskCount)")
+            LabeledContent(L10n.projectsLastUsed, value: project.lastOpenedAt ?? L10n.never)
         }
         .font(.caption)
     }
@@ -504,46 +504,46 @@ private struct OverviewDashboard: View {
             .fixedSize(horizontal: false, vertical: true)
 
             if let info = store.dashboard?.basicInfo {
-                DashboardCard(title: "Basic Information", symbol: "info.circle") {
+                DashboardCard(title: L10n.overviewBasicInfo, symbol: "info.circle") {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 10)], spacing: 10) {
-                        BasicInfoCell("Connection", info.daemonConnection)
-                        BasicInfoCell("Projects", "\(info.registeredProjects)")
-                        BasicInfoCell("Providers", "\(info.discoveredProviders)")
-                        BasicInfoCell("Runnable targets", "\(info.availableExecutionTargets)")
-                        BasicInfoCell("Running", "\(info.runningTasks)")
-                        BasicInfoCell("Tasks today", "\(info.tasksToday)")
-                        BasicInfoCell("Routing today", "\(info.routingDecisionsToday)")
-                        BasicInfoCell("Quota warnings", "\(info.quotaWarningCount)")
+                        BasicInfoCell(L10n.overviewConnection, info.daemonConnection)
+                        BasicInfoCell(L10n.overviewProjects, "\(info.registeredProjects)")
+                        BasicInfoCell(L10n.overviewProviders, "\(info.discoveredProviders)")
+                        BasicInfoCell(L10n.overviewRunnableTargets, "\(info.availableExecutionTargets)")
+                        BasicInfoCell(L10n.overviewRunningTasks, "\(info.runningTasks)")
+                        BasicInfoCell(L10n.overviewTasksToday, "\(info.tasksToday)")
+                        BasicInfoCell(L10n.overviewRoutingToday, "\(info.routingDecisionsToday)")
+                        BasicInfoCell(L10n.overviewQuotaWarnings, "\(info.quotaWarningCount)")
                     }
-                    Text("Last refresh: \(info.lastRefreshSync)")
+                    Text(L10n.overviewLastRefresh(info.lastRefreshSync))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
             }
 
             HStack(alignment: .top, spacing: 12) {
-                DashboardCard(title: "Task Trend", symbol: "chart.xyaxis.line") {
+                DashboardCard(title: L10n.overviewTaskTrend, symbol: "chart.xyaxis.line") {
                     if let trend = store.dashboard?.taskTrend, trend.count >= 2 {
                         TaskTrendChart(buckets: trend)
                     } else {
-                        EmptyChartState("Historical data is still being collected.")
+                        EmptyChartState(L10n.overviewTaskTrendEmpty)
                     }
                 }
-                DashboardCard(title: "Task States", symbol: "chart.pie") {
+                DashboardCard(title: L10n.overviewTaskStates, symbol: "chart.pie") {
                     if let slices = store.dashboard?.taskStateDistribution, !slices.isEmpty {
                         StateDistributionChart(slices: slices)
                     } else {
-                        EmptyChartState("No task state data yet.")
+                        EmptyChartState(L10n.overviewTaskStatesEmpty)
                     }
                 }
             }
 
-            DashboardCard(title: "Risks", symbol: "exclamationmark.triangle") {
+            DashboardCard(title: L10n.overviewRisks, symbol: "exclamationmark.triangle") {
                 if let risks = store.dashboard?.risks, !risks.isEmpty {
                     ForEach(risks) { risk in
                         RiskRow(risk: risk, section: $section)
                     }
-                    DisclosureGroup("Advanced Details") {
+                    DisclosureGroup(L10n.advancedDetails) {
                         ForEach(store.dashboard?.importantBlockers ?? [], id: \.self) { raw in
                             Text(raw)
                                 .font(.system(.caption, design: .monospaced))
@@ -556,7 +556,7 @@ private struct OverviewDashboard: View {
                 }
             }
 
-            DashboardCard(title: L10n.events, symbol: "clock") {
+            DashboardCard(title: L10n.overviewRecentActivity, symbol: "clock") {
                 EventList(events: store.dashboard?.recentEvents ?? [])
             }
         }
@@ -727,26 +727,26 @@ private struct TasksDashboard: View {
     /// invisible but routable shortcuts.
     private var hiddenCommands: some View {
         Group {
-            Button("Focus search") { searchFocused = true }
+            Button(L10n.commandFocusSearch) { searchFocused = true }
                 .keyboardShortcut("f", modifiers: .command)
                 .hidden()
-            Button("Previous task") {
+            Button(L10n.commandPreviousTask) {
                 _ = store.navigateToNeighbour(current: selectedTaskId, in: tasks, offset: -1)
             }
             .keyboardShortcut("[", modifiers: .command)
             .disabled(tasks.isEmpty)
             .hidden()
-            Button("Next task") {
+            Button(L10n.commandNextTask) {
                 _ = store.navigateToNeighbour(current: selectedTaskId, in: tasks, offset: 1)
             }
             .keyboardShortcut("]", modifiers: .command)
             .disabled(tasks.isEmpty)
             .hidden()
-            Button("Copy task ID") { selectedTaskId.map(Pasteboard.copy) }
+            Button(L10n.commandCopyTaskId) { selectedTaskId.map(Pasteboard.copy) }
                 .keyboardShortcut("c", modifiers: [.command, .option])
                 .disabled(selectedTaskId == nil)
                 .hidden()
-            Button("Reload detail") {
+            Button(L10n.commandReloadDetail) {
                 if let selectedTaskId {
                     Task { await store.loadTaskDetail(taskId: selectedTaskId) }
                 }
@@ -940,13 +940,13 @@ private struct SelectedTaskDetailDashboard: View {
 
     private var hiddenCommands: some View {
         Group {
-            Button("Previous task") {
+            Button(L10n.commandPreviousTask) {
                 _ = store.navigateToNeighbour(current: selectedTaskId, in: tasks, offset: -1)
             }
             .keyboardShortcut("[", modifiers: .command)
             .disabled(tasks.isEmpty)
             .hidden()
-            Button("Next task") {
+            Button(L10n.commandNextTask) {
                 _ = store.navigateToNeighbour(current: selectedTaskId, in: tasks, offset: 1)
             }
             .keyboardShortcut("]", modifiers: .command)
@@ -1084,7 +1084,7 @@ private struct ProvidersDashboard: View {
             }
         ) {
             ProviderDiscoveryStatusCard()
-            Picker("Models & Providers", selection: $tab) {
+            Picker(L10n.providersPickerTitle, selection: $tab) {
                 ForEach(ModelsProvidersTab.allCases) { tab in
                     Text(tab.title).tag(tab)
                 }
@@ -1276,8 +1276,8 @@ private struct ConnectedProviderCard: View {
         DashboardCard(title: connection.displayName, symbol: "link") {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    StatusBadge(text: readableConnection(connection.connectionState), kind: .good)
-                    StatusBadge(text: readableAuth(connection.authState), kind: authBadge(connection.authState))
+                    StatusBadge(text: L10n.connectionStateLabel(connection.connectionState), kind: .good)
+                    StatusBadge(text: L10n.authStateLabel(connection.authState), kind: authBadge(connection.authState))
                     StatusBadge(
                         text: connection.executionVerified
                             ? L10n.providerExecutionVerified
@@ -1286,32 +1286,32 @@ private struct ConnectedProviderCard: View {
                     )
                 }
                 if let plan = connection.planSurface {
-                    LabeledContent("Plan", value: plan)
+                    LabeledContent(L10n.planLabel, value: plan)
                         .foregroundStyle(.secondary)
                 }
                 if let region = connection.region {
-                    LabeledContent("Region", value: region)
+                    LabeledContent(L10n.regionLabel, value: region)
                         .foregroundStyle(.secondary)
                 }
                 HStack(spacing: 8) {
-                    Label("\(connection.modelSkus.count) models", systemImage: "cpu")
+                    Label(L10n.modelCount(connection.modelSkus.count), systemImage: "cpu")
                     if let poolCount = provider?.quotaPools.count {
-                        Label("\(poolCount) quota pools", systemImage: "chart.pie")
+                        Label(L10n.quotaPoolCount(poolCount), systemImage: "chart.pie")
                     }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                DisclosureGroup("Advanced Details") {
-                    LabeledContent("Provider ID", value: connection.providerId)
-                    LabeledContent("Credential reference", value: connection.credentialReferenceType)
-                    LabeledContent("Runtime", value: readableRuntime(connection.runtimeState))
+                DisclosureGroup(L10n.advancedDetails) {
+                    LabeledContent(L10n.providersProviderId, value: connection.providerId)
+                    LabeledContent(L10n.providersCredentialReference, value: connection.credentialReferenceType)
+                    LabeledContent(L10n.providersRuntime, value: L10n.runtimeStateLabel(connection.runtimeState))
                     if let reason = connection.lastReasonCode {
-                        LabeledContent("Reason", value: reason)
+                        LabeledContent(L10n.reasonLabel, value: reason)
                     }
                     if let provider {
-                        LabeledContent("Accounts", value: "\(provider.accountCount)")
-                        LabeledContent("Execution targets", value: "\(provider.executionTargets.count)")
-                        LabeledContent("Quota pools", value: "\(provider.quotaPools.count)")
+                        LabeledContent(L10n.providersAccountsLabel, value: "\(provider.accountCount)")
+                        LabeledContent(L10n.providersExecutionTargetsLabel, value: "\(provider.executionTargets.count)")
+                        LabeledContent(L10n.providersQuotaPoolsLabel, value: "\(provider.quotaPools.count)")
                     }
                 }
                 HStack {
@@ -1341,8 +1341,8 @@ private struct AvailableProviderCard: View {
         DashboardCard(title: provider.displayName, symbol: "plus.circle") {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    StatusBadge(text: "Not Connected", kind: .neutral)
-                    StatusBadge(text: readableAuth(provider.authState), kind: authBadge(provider.authState))
+                    StatusBadge(text: L10n.providersNotConnected, kind: .neutral)
+                    StatusBadge(text: L10n.authStateLabel(provider.authState), kind: authBadge(provider.authState))
                     StatusBadge(
                         text: provider.executionVerified
                             ? L10n.providerExecutionVerified
@@ -1351,20 +1351,20 @@ private struct AvailableProviderCard: View {
                     )
                 }
                 if let plan = provider.planSurface {
-                    LabeledContent("Surface", value: plan)
+                    LabeledContent(L10n.providersSurface, value: plan)
                         .foregroundStyle(.secondary)
                 }
                 if let region = provider.region {
-                    LabeledContent("Region", value: region)
+                    LabeledContent(L10n.regionLabel, value: region)
                         .foregroundStyle(.secondary)
                 }
-                Label("\(provider.modelSkus.count) catalog models", systemImage: "list.bullet")
+                Label(L10n.catalogModelCount(provider.modelSkus.count), systemImage: "list.bullet")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                DisclosureGroup("Advanced Details") {
-                    LabeledContent("Provider ID", value: provider.providerId)
-                    LabeledContent("Connection", value: provider.connectionState)
-                    LabeledContent("Runtime", value: readableRuntime(provider.runtimeState))
+                DisclosureGroup(L10n.advancedDetails) {
+                    LabeledContent(L10n.providersProviderId, value: provider.providerId)
+                    LabeledContent(L10n.providersConnectionLabel, value: L10n.connectionStateLabel(provider.connectionState))
+                    LabeledContent(L10n.providersRuntime, value: L10n.runtimeStateLabel(provider.runtimeState))
                 }
                 HStack {
                     if let checked = provider.lastChecked {
@@ -1382,33 +1382,6 @@ private struct AvailableProviderCard: View {
                 }
             }
         }
-    }
-}
-
-private func readableAuth(_ value: String) -> String {
-    switch value {
-    case "AUTHENTICATED": return "已确认登录"
-    case "AUTH_REQUIRED": return "需要登录"
-    case "AUTH_UNKNOWN": return "尚未确认登录状态"
-    default: return value
-    }
-}
-
-private func readableConnection(_ value: String) -> String {
-    switch value {
-    case "CONNECTED": return "已连接"
-    case "DISCONNECTED": return "已断开"
-    case "DISCOVERED": return "可添加"
-    default: return value
-    }
-}
-
-private func readableRuntime(_ value: String) -> String {
-    switch value {
-    case "AVAILABLE": return "当前运行环境可用"
-    case "UNAVAILABLE": return "当前运行环境不可用"
-    case "UNKNOWN": return "运行环境未知"
-    default: return value
     }
 }
 
@@ -1442,13 +1415,13 @@ private struct ProviderCard: View {
                         .foregroundStyle(.secondary)
                 }
                 HStack(spacing: 8) {
-                    Label("\(provider.executionTargets.count) models", systemImage: "cpu")
-                    Label("\(provider.quotaPools.count) quota pools", systemImage: "chart.pie")
+                    Label(L10n.modelCount(provider.executionTargets.count), systemImage: "cpu")
+                    Label(L10n.quotaPoolCount(provider.quotaPools.count), systemImage: "chart.pie")
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                DisclosureGroup("Advanced Details") {
-                    LabeledContent("Provider ID", value: provider.providerId)
+                DisclosureGroup(L10n.advancedDetails) {
+                    LabeledContent(L10n.providersProviderId, value: provider.providerId)
                     if !provider.executionTargets.isEmpty {
                         Divider()
                         Text(L10n.providerExecutionTargets)
@@ -1460,7 +1433,7 @@ private struct ProviderCard: View {
                     }
                     if !provider.quotaPools.isEmpty {
                         Divider()
-                        Text("Quota pools")
+                        Text(L10n.providersQuotaPoolsLabel)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                         ForEach(provider.quotaPools) { pool in
@@ -1498,9 +1471,9 @@ private struct ModelsSection: View {
 
     var body: some View {
         if targets.isEmpty {
-            EmptyStateView(title: "Models", symbol: "cpu", message: "No runnable models have been discovered yet.")
+            EmptyStateView(title: L10n.modelsTitle, symbol: "cpu", message: L10n.modelsEmpty)
         } else {
-            DashboardCard(title: "Models", symbol: "cpu") {
+            DashboardCard(title: L10n.modelsTitle, symbol: "cpu") {
                 ForEach(targets) { item in
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -1512,7 +1485,9 @@ private struct ModelsSection: View {
                         }
                         Spacer()
                         StatusBadge(
-                            text: item.target.enabled && item.target.isExecutionVerified ? "Ready" : "Needs verification",
+                            text: item.target.enabled && item.target.isExecutionVerified
+                                ? L10n.modelsReady
+                                : L10n.modelsNeedsVerification,
                             kind: item.target.enabled && item.target.isExecutionVerified ? .good : .warn
                         )
                     }
@@ -1538,7 +1513,7 @@ private struct ExecutionTargetsSection: View {
         ForEach(providers) { provider in
             DashboardCard(title: provider.displayName, symbol: "bolt.horizontal.circle") {
                 if provider.executionTargets.isEmpty {
-                    Text("No execution targets discovered.")
+                    Text(L10n.modelsNoExecutionTargets)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(provider.executionTargets) { target in
@@ -1580,18 +1555,21 @@ private struct QuotaPoolDisclosure: View {
     }
 }
 
+/// Connection-based Quota page.
+///
+/// The provider list comes from *connected providers*, never from the subset
+/// that happens to already carry quota pools — otherwise adding a provider
+/// produces a blank page. Three states are kept distinct:
+///
+/// - `noConnectedProvider`: nothing to show yet; route the owner to Add Provider.
+/// - `connectedButQuotaUnknown`: cards render with UNKNOWN and an explanation.
+/// - `connectedWithQuotaObservations`: real windows, progress, and history.
 private struct QuotaDashboard: View {
     @EnvironmentObject private var store: OrchestratorStore
+    @Binding var section: DashboardSection?
 
-    private var providers: [ProviderHealthView] {
-        store.providers?.providers ?? []
-    }
-
-    private var pools: [QuotaPoolContext] {
-        providers.flatMap { provider in
-            provider.quotaPools.map { QuotaPoolContext(provider: provider, pool: $0) }
-        }
-    }
+    private var overview: QuotaOverviewView? { store.quota }
+    private var cards: [QuotaProviderCardView] { overview?.providers ?? [] }
 
     var body: some View {
         DashboardPageContainer(
@@ -1599,192 +1577,243 @@ private struct QuotaDashboard: View {
             symbol: DashboardSection.quota.symbol,
             trailing: {
                 AnyView(
+                    // "Refresh Quota" is a different operation from
+                    // "Refresh Providers": it reads quota, discovery does not.
                     Button {
-                        Task { await store.refreshProviders() }
+                        Task { await store.refreshQuota() }
                     } label: {
-                        if store.isRefreshingProviders {
+                        if store.isRefreshingQuota {
                             ProgressView().controlSize(.small)
                         } else {
-                            Label(L10n.refreshProviders, systemImage: "arrow.clockwise")
+                            Label(L10n.quotaRefresh, systemImage: "arrow.clockwise")
                         }
                     }
                     .buttonStyle(.borderless)
-                    .disabled(store.isRefreshingProviders)
-                    .help(L10n.refreshProviders)
+                    .disabled(store.isRefreshingQuota || cards.isEmpty)
+                    .help(L10n.quotaRefreshHelp)
                 )
             }
         ) {
-            ProviderDiscoveryStatusCard()
-            if providers.isEmpty {
+            if cards.isEmpty {
                 EmptyStateView(
-                    title: L10n.quotaTitle,
+                    title: L10n.quotaEmptyTitle,
                     symbol: "chart.pie",
-                    message: store.providerDiscoveryStatus?.discoveryState == "PENDING"
-                        ? L10n.discoveryEmpty
-                        : L10n.noProvidersHint
-                )
-            } else if pools.isEmpty {
-                EmptyStateView(
-                    title: L10n.quotaTitle,
-                    symbol: "chart.pie",
-                    message: L10n.noProvidersHint
-                )
+                    message: L10n.quotaEmptyMessage,
+                    hint: L10n.providersAddProvider
+                ) {
+                    section = .providers
+                }
             } else {
-                QuotaSummaryCard(providers: providers)
-                QuotaComparisonCard(pools: pools)
-                LimitingQuotaWindowCard(pools: pools)
-                QuotaHistoryCard(history: store.dashboard?.quotaHistory)
+                if let summary = overview?.summary {
+                    QuotaSummaryCard(summary: summary)
+                }
+                ForEach(cards) { card in
+                    QuotaProviderCard(card: card)
+                }
+                QuotaHistoryCard(history: overview?.history)
             }
         }
     }
 }
 
+/// Summary derived from connected providers. UNKNOWN is reported as
+/// "not observable", never folded into a healthy-looking count.
 private struct QuotaSummaryCard: View {
-    let providers: [ProviderHealthView]
-
-    private var pools: [QuotaPoolHealthView] {
-        providers.flatMap(\.quotaPools)
-    }
-
-    private var nearLimit: Int {
-        pools.flatMap(\.windows).filter { window in
-            window.confidence != "UNKNOWN"
-                && window.remainingFraction.map { $0 <= 0.15 } == true
-        }.count
-    }
-
-    private var exhausted: Int {
-        pools.filter { ["EXHAUSTED", "EXHAUSTED_OBSERVED", "COOLDOWN"].contains($0.state) }.count
-    }
-
-    private var schedulableTargets: Int {
-        providers.flatMap(\.executionTargets).filter {
-            $0.enabled && $0.isExecutionVerified && $0.runtimeAvailable == true
-        }.count
-    }
+    let summary: QuotaSummaryView
 
     var body: some View {
-        DashboardCard(title: "Quota Summary", symbol: "chart.pie") {
+        DashboardCard(title: L10n.quotaStatus, symbol: "chart.pie") {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 10)], spacing: 10) {
-                BasicInfoCell("Available providers", "\(providers.filter { !$0.quotaPools.isEmpty || !$0.executionTargets.isEmpty }.count)")
-                BasicInfoCell("Near limit", "\(nearLimit)")
-                BasicInfoCell("Exhausted or blocked", "\(exhausted)")
-                BasicInfoCell("Schedulable targets", "\(schedulableTargets)")
+                BasicInfoCell(L10n.quotaSummaryConnected, "\(summary.connectedProviderCount)")
+                BasicInfoCell(
+                    L10n.quotaSummaryObservable,
+                    "\(summary.quotaObservableProviderCount)"
+                )
+                BasicInfoCell(L10n.quotaSummaryWarnings, "\(summary.quotaWarningCount)")
+                BasicInfoCell(L10n.quotaSummaryExhausted, "\(summary.quotaExhaustedCount)")
             }
         }
     }
 }
 
-private struct QuotaPoolContext: Identifiable {
-    let provider: ProviderHealthView
-    let pool: QuotaPoolHealthView
+/// One connected provider. Renders whether or not quota evidence exists.
+private struct QuotaProviderCard: View {
+    @EnvironmentObject private var store: OrchestratorStore
+    let card: QuotaProviderCardView
 
-    var id: String { pool.quotaPoolId }
-}
-
-private struct QuotaComparisonCard: View {
-    let pools: [QuotaPoolContext]
+    private var isRefreshing: Bool { store.isRefreshingQuota }
 
     var body: some View {
-        DashboardCard(title: "Provider Comparison", symbol: "list.bullet.rectangle") {
-            ForEach(pools) { item in
-                QuotaPoolComparisonRow(provider: item.provider, pool: item.pool)
-                Divider()
+        DashboardCard(title: card.displayName, symbol: "chart.pie") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    StatusBadge(
+                        text: L10n.connectionStateLabel(card.connectionState),
+                        kind: card.connectionState == "CONNECTED" ? .good : .neutral
+                    )
+                    if let plan = card.planSurface {
+                        StatusBadge(text: plan, kind: .neutral)
+                    }
+                    if let region = card.region {
+                        StatusBadge(text: region, kind: .neutral)
+                    }
+                }
+
+                LabeledContent(L10n.quotaConnectionStatus) {
+                    Text(L10n.connectionStateLabel(card.connectionState))
+                }
+                LabeledContent(L10n.quotaStatusTitle) {
+                    Text(card.isObserved ? L10n.quotaStatus : L10n.quotaNoReliableData)
+                        .foregroundStyle(card.isObserved ? .primary : .secondary)
+                }
+                // The raw confidence enum stays verbatim; only the surrounding
+                // label is localized.
+                LabeledContent(L10n.quotaConfidenceLabel) {
+                    StatusBadge(
+                        text: card.confidence,
+                        kind: card.confidence == "EXACT"
+                            ? .good
+                            : (card.confidence == "ESTIMATED" ? .warn : .neutral)
+                    )
+                }
+                LabeledContent(L10n.quotaLastChecked) {
+                    Text(card.observedAt ?? card.lastRefreshAt ?? L10n.quotaNeverChecked)
+                        .foregroundStyle(.secondary)
+                }
+
+                if card.isObserved {
+                    ForEach(card.quotaPools) { pool in
+                        QuotaPoolWindowsView(pool: pool)
+                    }
+                } else {
+                    UnknownQuotaExplanation(card: card)
+                }
+
+                DisclosureGroup(L10n.advancedDetails) {
+                    LabeledContent(L10n.providersProviderId, value: card.providerId)
+                    if let authState = card.authState {
+                        LabeledContent(L10n.providerAuthStatus, value: authState)
+                    }
+                    if let source = card.measurementSource {
+                        LabeledContent(L10n.measurementSource, value: source)
+                    }
+                    LabeledContent(L10n.confidenceLabel, value: card.confidence)
+                    if let status = card.lastRefreshStatus {
+                        LabeledContent(L10n.quotaLastAttempt, value: status)
+                    }
+                    if let reason = card.failureReason {
+                        LabeledContent(L10n.reasonCode, value: reason)
+                    }
+                    ForEach(card.quotaPools) { pool in
+                        LabeledContent(L10n.quotaPoolId, value: pool.quotaPoolId)
+                            .font(.system(.caption, design: .monospaced))
+                    }
+                }
+
+                HStack {
+                    Spacer()
+                    Button {
+                        Task { await store.refreshQuota(providerId: card.providerId) }
+                    } label: {
+                        if isRefreshing {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label(
+                                card.isObserved ? L10n.quotaRefresh : L10n.retry,
+                                systemImage: "arrow.clockwise"
+                            )
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isRefreshing)
+                    .help(L10n.quotaRefreshHelp)
+                }
             }
         }
     }
 }
 
-private struct QuotaPoolComparisonRow: View {
-    let provider: ProviderHealthView
-    let pool: QuotaPoolHealthView
+/// UNKNOWN state: an explanation and a route forward, never a fabricated bar.
+private struct UnknownQuotaExplanation: View {
+    let card: QuotaProviderCardView
 
-    private var limitingWindow: QuotaWindowHealthView? {
-        pool.windows
-            .filter { $0.confidence != "UNKNOWN" && $0.remainingFraction != nil }
-            .min { ($0.remainingFraction ?? 1) < ($1.remainingFraction ?? 1) }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label(L10n.quotaNoReliableData, systemImage: "questionmark.circle")
+                .foregroundStyle(.secondary)
+            Label(L10n.quotaFailureReason(card.failureReason), systemImage: "info.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let attemptedAt = card.lastRefreshAt {
+                Label(L10n.quotaObservedAt(attemptedAt), systemImage: "clock")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
     }
+}
+
+/// Real observed windows. Only EXACT/ESTIMATED windows draw a progress bar;
+/// ESTIMATED is visibly labelled so a derived number is never read as exact.
+private struct QuotaPoolWindowsView: View {
+    let pool: QuotaPoolHealthView
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(provider.displayName)
-                        .font(.body.weight(.medium))
-                    Text("\(pool.name) / \(pool.planId)")
+            Divider()
+            Text(L10n.quotaWindows)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(pool.windows, id: \.windowId) { window in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Label(window.windowKind, systemImage: "timer")
+                            .font(.caption)
+                        Spacer()
+                        if window.confidence == "ESTIMATED" {
+                            StatusBadge(text: L10n.quotaEstimatedBadge, kind: .warn)
+                        }
+                        StatusBadge(
+                            text: window.state,
+                            kind: windowBadgeKind(window.state)
+                        )
+                    }
+                    if window.confidence != "UNKNOWN", let fraction = window.remainingFraction {
+                        ProgressView(value: fraction)
+                        HStack {
+                            Text(
+                                "\(L10n.quotaRemainingLabel) "
+                                    + L10n.quotaRemaining(
+                                        fraction: fraction,
+                                        confidence: window.confidence
+                                    )
+                            )
+                            Spacer()
+                            Text(
+                                "\(L10n.quotaResetLabel) "
+                                    + (window.resetAt ?? L10n.quotaResetUnknown)
+                            )
+                        }
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    } else {
+                        // UNKNOWN: no percentage, no bar.
+                        Text(L10n.quotaNoReliablePercentage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                Spacer()
-                StatusBadge(text: pool.state, kind: badgeKind(for: pool.state))
-                StatusBadge(text: pool.confidence, kind: pool.confidence == "UNKNOWN" ? .neutral : .good)
-            }
-
-            if let limitingWindow {
-                HStack(spacing: 10) {
-                    Label(limitingWindow.windowKind, systemImage: "timer")
-                    Text(L10n.quotaRemaining(fraction: limitingWindow.remainingFraction, confidence: limitingWindow.confidence))
-                    Text(limitingWindow.resetAt ?? L10n.quotaResetUnknown)
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            } else {
-                Text("No reliable remaining percentage is available for this quota pool.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            DisclosureGroup("Window Details") {
-                ForEach(pool.windows, id: \.windowId) { window in
-                    QuotaWindowDisclosure(window: window)
-                }
-                Divider()
-                LabeledContent(L10n.measurementSource, value: pool.measurementSourceType)
-                if let observedAt = pool.observedAt {
-                    LabeledContent(L10n.observedAt, value: observedAt)
-                }
-                LabeledContent("Quota pool ID", value: pool.quotaPoolId)
-                    .font(.system(.caption, design: .monospaced))
+                .padding(.vertical, 2)
             }
         }
-        .padding(.vertical, 4)
     }
 
-    private func badgeKind(for state: String) -> BadgeKind {
+    private func windowBadgeKind(_ state: String) -> BadgeKind {
         switch state {
         case "EXHAUSTED", "EXHAUSTED_OBSERVED", "COOLDOWN": return .bad
-        case "RECOVERED", "AVAILABLE": return .good
-        default: return .warn
-        }
-    }
-}
-
-private struct LimitingQuotaWindowCard: View {
-    let pools: [QuotaPoolContext]
-
-    private var limiting: (ProviderHealthView, QuotaPoolHealthView, QuotaWindowHealthView)? {
-        pools.compactMap { item -> (ProviderHealthView, QuotaPoolHealthView, QuotaWindowHealthView)? in
-            guard let window = item.pool.windows
-                .filter({ $0.confidence != "UNKNOWN" && $0.remainingFraction != nil })
-                .min(by: { ($0.remainingFraction ?? 1) < ($1.remainingFraction ?? 1) })
-            else { return nil }
-            return (item.provider, item.pool, window)
-        }
-        .min { ($0.2.remainingFraction ?? 1) < ($1.2.remainingFraction ?? 1) }
-    }
-
-    var body: some View {
-        DashboardCard(title: "Limiting Window", symbol: "hourglass") {
-            if let limiting {
-                LabeledContent("Provider", value: limiting.0.displayName)
-                LabeledContent("Plan", value: limiting.1.planId)
-                LabeledContent("Window", value: limiting.2.windowKind)
-                LabeledContent("Remaining", value: L10n.quotaRemaining(fraction: limiting.2.remainingFraction, confidence: limiting.2.confidence))
-                LabeledContent("Confidence", value: limiting.2.confidence)
-                LabeledContent("Reset", value: limiting.2.resetAt ?? L10n.quotaResetUnknown)
-            } else {
-                EmptyChartState("No limiting window can be derived from current observations.")
-            }
+        case "AVAILABLE", "RECOVERED": return .good
+        default: return .neutral
         }
     }
 }
@@ -1799,14 +1828,14 @@ private struct QuotaHistoryCard: View {
     }
 
     var body: some View {
-        DashboardCard(title: "Quota History", symbol: "chart.xyaxis.line") {
+        DashboardCard(title: L10n.quotaHistoryTitle, symbol: "chart.xyaxis.line") {
             if observations.count >= 2 {
                 QuotaHistoryChart(observations: observations)
-                Text("Showing recorded quota observations only. Retention limit: \(history?.retentionLimit ?? 0).")
+                Text(L10n.quotaHistoryFooter(retentionLimit: history?.retentionLimit ?? 0))
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             } else {
-                EmptyChartState("Historical quota data is still being collected.")
+                EmptyChartState(L10n.quotaHistoryEmpty)
             }
         }
     }
@@ -1826,33 +1855,6 @@ private struct QuotaHistoryChart: View {
             }
         }
         .frame(maxWidth: .infinity, minHeight: 130, alignment: .bottomLeading)
-    }
-}
-
-private struct QuotaPoolCard: View {
-    let providerName: String
-    let pool: QuotaPoolHealthView
-
-    var body: some View {
-        DashboardCard(title: "\(providerName) / \(pool.name)", symbol: "chart.pie") {
-            HStack {
-                StatusBadge(text: pool.confidence, kind: pool.confidence == "EXACT" ? .good : .neutral)
-                StatusBadge(text: pool.measurementSourceType, kind: .neutral)
-                StatusBadge(text: pool.state, kind: badgeKind(for: pool.state))
-            }
-            QuotaExplanation(pool: pool)
-            ForEach(pool.windows, id: \.windowId) { window in
-                QuotaWindowDisclosure(window: window)
-            }
-        }
-    }
-
-    private func badgeKind(for state: String) -> BadgeKind {
-        switch state {
-        case "EXHAUSTED": return .bad
-        case "RECOVERED": return .good
-        default: return .warn
-        }
     }
 }
 
@@ -2158,18 +2160,18 @@ private struct TaskSummaryPanel: View {
                 )
             }
             LabeledContent(L10n.providerModel, value: providerModel)
-            LabeledContent("Current phase", value: currentPhase)
-            LabeledContent("Elapsed", value: elapsedText(start: detail.task.createdAt, end: detail.task.updatedAt))
+            LabeledContent(L10n.detailCurrentPhase, value: currentPhase)
+            LabeledContent(L10n.detailElapsed, value: elapsedText(start: detail.task.createdAt, end: detail.task.updatedAt))
             HStack(spacing: 8) {
                 if detail.task.state == "RUNNING" || detail.task.state == "VERIFYING" {
                     Button(role: .destructive) {
                         onStop()
                     } label: {
-                        Label("Stop", systemImage: "stop.fill")
+                        Label(L10n.detailStop, systemImage: "stop.fill")
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                    .help("Cancel through the authoritative host execution path.")
+                    .help(L10n.detailStopHelp)
                 }
                 Button {
                     onReload()
@@ -2274,9 +2276,9 @@ private struct ChangesPanel: View {
                 LabeledContent(L10n.worktree, value: workspace.worktreePath)
                     .font(.system(.caption, design: .monospaced))
                 LabeledContent(L10n.branch, value: workspace.branch)
-                LabeledContent("Files changed", value: changedFileText)
+                LabeledContent(L10n.detailFilesChanged, value: changedFileText)
             } else {
-                Label("No task worktree has been registered yet.", systemImage: "tray")
+                Label(L10n.detailNoWorktree, systemImage: "tray")
                     .foregroundStyle(.secondary)
             }
         }
@@ -2297,7 +2299,7 @@ private struct TestsVerificationPanel: View {
             StatusBadge(text: detail.verification.status, kind: detail.verification.status == "VERIFIED" ? .good : .neutral)
             LabeledContent(L10n.evidenceLabel, value: detail.verification.evidenceId ?? "none")
             if let result = detail.verification.result {
-                LabeledContent("Verifier profile", value: result.profile)
+                LabeledContent(L10n.detailVerifierProfile, value: result.profile)
                 ForEach(result.stages) { stage in
                     LabeledContent(stage.name, value: stage.passed ? "passed" : "failed")
                 }
@@ -2500,9 +2502,9 @@ private struct RoutingPanel: View {
                 if let reason = routing.fallbackReason {
                     Text(reason).foregroundStyle(.secondary)
                 }
-                DisclosureGroup("Advanced Details") {
-                    LabeledContent("Routing decision", value: routing.decisionId)
-                    LabeledContent("Routing request", value: routing.requestId)
+                DisclosureGroup(L10n.advancedDetails) {
+                    LabeledContent(L10n.detailRoutingDecision, value: routing.decisionId)
+                    LabeledContent(L10n.detailRoutingRequest, value: routing.requestId)
                 }
             } else {
                 Label(L10n.routingNotYetDecided, systemImage: "clock")
@@ -2547,15 +2549,15 @@ private struct RoutingCandidateRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            DisclosureGroup("Advanced Details") {
+            DisclosureGroup(L10n.advancedDetails) {
                 if let target = candidate["execution_target_id"]?.value {
-                    LabeledContent("Execution target", value: target)
+                    LabeledContent(L10n.executionTarget, value: target)
                 }
                 if let providerId = candidate["provider_id"]?.value {
-                    LabeledContent("Provider ID", value: providerId)
+                    LabeledContent(L10n.providersProviderId, value: providerId)
                 }
                 if let quota = candidate["quota_snapshot_id"]?.value {
-                    LabeledContent("Quota evidence", value: quota)
+                    LabeledContent(L10n.detailQuotaEvidence, value: quota)
                 }
             }
         }
@@ -2721,31 +2723,31 @@ private struct AdvancedDetailsPanel: View {
     var body: some View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 8) {
-                LabeledContent("Task ID", value: detail.task.taskId)
-                LabeledContent("Request ID", value: detail.task.requestId)
+                LabeledContent(L10n.detailTaskId, value: detail.task.taskId)
+                LabeledContent(L10n.detailRequestId, value: detail.task.requestId)
                 if let routing = detail.routing {
-                    LabeledContent("Routing decision", value: routing.decisionId)
-                    LabeledContent("Routing request", value: routing.requestId)
+                    LabeledContent(L10n.detailRoutingDecision, value: routing.decisionId)
+                    LabeledContent(L10n.detailRoutingRequest, value: routing.requestId)
                 }
                 if let workspace = detail.workspace {
                     LabeledContent(L10n.worktree, value: workspace.worktreePath)
                         .font(.system(.caption, design: .monospaced))
-                    LabeledContent("Base SHA", value: workspace.baseSha)
+                    LabeledContent(L10n.detailBaseSha, value: workspace.baseSha)
                     LabeledContent(L10n.writerLock, value: workspace.writerLocked ? "HELD" : "RELEASED")
                 }
                 ForEach(detail.runs) { run in
                     VStack(alignment: .leading, spacing: 4) {
-                        LabeledContent("Run ID", value: run.runId)
-                        LabeledContent("Execution target", value: run.workerId)
+                        LabeledContent(L10n.detailRunId, value: run.runId)
+                        LabeledContent(L10n.executionTarget, value: run.workerId)
                         LabeledContent("PID", value: run.pid.map(String.init) ?? "-")
-                        LabeledContent("Run status", value: run.status)
+                        LabeledContent(L10n.detailRunStatus, value: run.status)
                     }
                     .padding(.vertical, 4)
                     Divider()
                 }
             }
         } label: {
-            Label("Advanced Details", systemImage: "gearshape.2")
+            Label(L10n.advancedDetails, systemImage: "gearshape.2")
                 .font(.headline)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2761,7 +2763,7 @@ private struct RawWorkerConsolePanel: View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 10) {
                 if detail.runs.isEmpty {
-                    Label("No worker run has started.", systemImage: "tray")
+                    Label(L10n.detailNoWorkerRun, systemImage: "tray")
                         .foregroundStyle(.secondary)
                 }
                 ForEach(detail.runs) { run in
@@ -2798,7 +2800,7 @@ private struct RawWorkerConsolePanel: View {
                 }
             }
         } label: {
-            Label("Raw Worker Output", systemImage: "terminal")
+            Label(L10n.detailRawWorkerOutput, systemImage: "terminal")
                 .font(.headline)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3004,7 +3006,7 @@ private struct TaskTrendChart: View {
         }
         .frame(width: 12, height: 120, alignment: .bottom)
         .clipShape(RoundedRectangle(cornerRadius: 3))
-        .help("Submitted \(bucket.submitted), completed \(bucket.completed), blocked \(bucket.blocked)")
+        .help(L10n.taskTrendHelp(submitted: bucket.submitted, completed: bucket.completed, blocked: bucket.blocked))
     }
 
     private func hour(_ value: String) -> String {
@@ -3078,9 +3080,9 @@ private struct RiskRow: View {
                 .foregroundStyle(color)
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 3) {
-                Text(risk.title)
+                Text(L10n.riskTitle(rawCode: risk.rawCode, count: risk.count, fallback: risk.title))
                     .font(.body.weight(.medium))
-                Text(risk.detail)
+                Text(L10n.riskDetail(rawCode: risk.rawCode, fallback: risk.detail))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

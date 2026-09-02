@@ -393,6 +393,175 @@ public struct ProviderHealthListView: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - Quota (connection-based)
+
+/// One connected provider on the Quota page.
+///
+/// A connected provider always renders, even with zero quota evidence:
+/// `quotaState == "UNKNOWN"` is a truthful state, not an absence. UNKNOWN
+/// never carries a fabricated `remainingFraction`.
+public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable {
+    public let providerId: String
+    public let displayName: String
+    public let connectionState: String
+    public let authState: String?
+    public let planSurface: String?
+    public let region: String?
+    /// OBSERVED | UNKNOWN
+    public let quotaState: String
+    /// EXACT | ESTIMATED | UNKNOWN
+    public let confidence: String
+    public let measurementSource: String?
+    public let observedAt: String?
+    /// Whether a documented read-only quota endpoint exists for this surface
+    /// at all, independent of whether a credential is configured right now.
+    public let readonlySourceAvailable: Bool
+    public let collectorAvailable: Bool
+    public let lastRefreshStatus: String?
+    public let lastRefreshAt: String?
+    public let failureReason: String?
+    public let quotaPools: [QuotaPoolHealthView]
+
+    public var id: String { providerId }
+
+    public var isObserved: Bool { quotaState == "OBSERVED" }
+
+    enum CodingKeys: String, CodingKey {
+        case providerId = "provider_id"
+        case displayName = "display_name"
+        case connectionState = "connection_state"
+        case authState = "auth_state"
+        case planSurface = "plan_surface"
+        case region
+        case quotaState = "quota_state"
+        case confidence
+        case measurementSource = "measurement_source"
+        case observedAt = "observed_at"
+        case readonlySourceAvailable = "readonly_source_available"
+        case collectorAvailable = "collector_available"
+        case lastRefreshStatus = "last_refresh_status"
+        case lastRefreshAt = "last_refresh_at"
+        case failureReason = "failure_reason"
+        case quotaPools = "quota_pools"
+    }
+
+    public init(
+        providerId: String,
+        displayName: String,
+        connectionState: String,
+        authState: String? = nil,
+        planSurface: String? = nil,
+        region: String? = nil,
+        quotaState: String,
+        confidence: String,
+        measurementSource: String? = nil,
+        observedAt: String? = nil,
+        readonlySourceAvailable: Bool = false,
+        collectorAvailable: Bool = false,
+        lastRefreshStatus: String? = nil,
+        lastRefreshAt: String? = nil,
+        failureReason: String? = nil,
+        quotaPools: [QuotaPoolHealthView] = []
+    ) {
+        self.providerId = providerId
+        self.displayName = displayName
+        self.connectionState = connectionState
+        self.authState = authState
+        self.planSurface = planSurface
+        self.region = region
+        self.quotaState = quotaState
+        self.confidence = confidence
+        self.measurementSource = measurementSource
+        self.observedAt = observedAt
+        self.readonlySourceAvailable = readonlySourceAvailable
+        self.collectorAvailable = collectorAvailable
+        self.lastRefreshStatus = lastRefreshStatus
+        self.lastRefreshAt = lastRefreshAt
+        self.failureReason = failureReason
+        self.quotaPools = quotaPools
+    }
+}
+
+/// Summary derived from connected providers, not merely observed pools.
+/// UNKNOWN is never counted as healthy.
+public struct QuotaSummaryView: Codable, Equatable, Sendable {
+    public let connectedProviderCount: Int
+    public let quotaObservableProviderCount: Int
+    public let quotaUnknownProviderCount: Int
+    public let quotaWarningCount: Int
+    public let quotaExhaustedCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case connectedProviderCount = "connected_provider_count"
+        case quotaObservableProviderCount = "quota_observable_provider_count"
+        case quotaUnknownProviderCount = "quota_unknown_provider_count"
+        case quotaWarningCount = "quota_warning_count"
+        case quotaExhaustedCount = "quota_exhausted_count"
+    }
+
+    public init(
+        connectedProviderCount: Int,
+        quotaObservableProviderCount: Int,
+        quotaUnknownProviderCount: Int,
+        quotaWarningCount: Int,
+        quotaExhaustedCount: Int
+    ) {
+        self.connectedProviderCount = connectedProviderCount
+        self.quotaObservableProviderCount = quotaObservableProviderCount
+        self.quotaUnknownProviderCount = quotaUnknownProviderCount
+        self.quotaWarningCount = quotaWarningCount
+        self.quotaExhaustedCount = quotaExhaustedCount
+    }
+}
+
+/// The three distinct owner-facing states of the Quota page.
+public enum QuotaPageState: String, Codable, Sendable {
+    case noConnectedProvider = "NO_CONNECTED_PROVIDER"
+    case connectedButQuotaUnknown = "CONNECTED_BUT_QUOTA_UNKNOWN"
+    case connectedWithQuotaObservations = "CONNECTED_WITH_QUOTA_OBSERVATIONS"
+}
+
+public struct QuotaOverviewView: Codable, Equatable, Sendable {
+    public let state: String
+    public let summary: QuotaSummaryView
+    public let providers: [QuotaProviderCardView]
+    public let history: QuotaHistoryView
+
+    /// Unrecognized daemon states fail safe to "connected but unknown" rather
+    /// than pretending the page is empty.
+    public var pageState: QuotaPageState {
+        QuotaPageState(rawValue: state)
+            ?? (providers.isEmpty ? .noConnectedProvider : .connectedButQuotaUnknown)
+    }
+
+    public init(
+        state: String,
+        summary: QuotaSummaryView,
+        providers: [QuotaProviderCardView],
+        history: QuotaHistoryView
+    ) {
+        self.state = state
+        self.summary = summary
+        self.providers = providers
+        self.history = history
+    }
+}
+
+public struct QuotaRefreshResultView: Codable, Equatable, Sendable {
+    public let refreshedProviderIds: [String]
+    public let overview: QuotaOverviewView
+
+    enum CodingKeys: String, CodingKey {
+        case refreshedProviderIds = "refreshed_provider_ids"
+        case overview
+    }
+
+    public init(refreshedProviderIds: [String], overview: QuotaOverviewView) {
+        self.refreshedProviderIds = refreshedProviderIds
+        self.overview = overview
+    }
+}
+
 public struct ProviderConnectionView: Codable, Equatable, Identifiable, Sendable {
     public let providerId: String
     public let displayName: String
@@ -723,11 +892,15 @@ public struct DashboardBasicInfoView: Decodable, Equatable, Sendable {
 }
 
 public struct RiskItemView: Decodable, Equatable, Identifiable, Sendable {
+    /// English fallback from the daemon. Owner-facing UI localizes from
+    /// `rawCode` + `count` instead, so risks follow the product language.
     public let title: String
     public let detail: String
     public let severity: String
     public let destination: String?
     public let rawCode: String?
+    /// How many entities the risk covers, when it is a counting risk.
+    public let count: Int?
 
     public var id: String { "\(severity)-\(title)-\(rawCode ?? "")" }
 
@@ -737,10 +910,27 @@ public struct RiskItemView: Decodable, Equatable, Identifiable, Sendable {
         case severity
         case destination
         case rawCode = "raw_code"
+        case count
+    }
+
+    public init(
+        title: String,
+        detail: String,
+        severity: String,
+        destination: String? = nil,
+        rawCode: String? = nil,
+        count: Int? = nil
+    ) {
+        self.title = title
+        self.detail = detail
+        self.severity = severity
+        self.destination = destination
+        self.rawCode = rawCode
+        self.count = count
     }
 }
 
-public struct QuotaObservationView: Decodable, Equatable, Identifiable, Sendable {
+public struct QuotaObservationView: Codable, Equatable, Identifiable, Sendable {
     public let providerId: String
     public let quotaPoolId: String
     public let windowId: String
@@ -766,13 +956,18 @@ public struct QuotaObservationView: Decodable, Equatable, Identifiable, Sendable
     }
 }
 
-public struct QuotaHistoryView: Decodable, Equatable, Sendable {
+public struct QuotaHistoryView: Codable, Equatable, Sendable {
     public let observations: [QuotaObservationView]
     public let retentionLimit: Int
 
     enum CodingKeys: String, CodingKey {
         case observations
         case retentionLimit = "retention_limit"
+    }
+
+    public init(observations: [QuotaObservationView], retentionLimit: Int) {
+        self.observations = observations
+        self.retentionLimit = retentionLimit
     }
 }
 
