@@ -572,12 +572,14 @@ def test_disagreeing_model_views_keep_the_plan_evidence_they_do_support(
     # ...and no discarding of the weekly window they agree on.
     assert weekly.remaining_fraction == pytest.approx(0.60)
     assert weekly.confidence is EvidenceConfidence.EXACT
-    # The per-model views are preserved as equivalents, never as balances.
-    assert {view.model_id for view in projection.model_equivalents} == {
+    # The per-scope views are preserved as equivalents, never as balances.
+    assert {view.scope_id for view in projection.model_equivalents} == {
         "general",
         "video",
     }
-    assert projection.covered_model_ids() == ("general", "video")
+    # ...and are not promoted into the list of models the owner can route to:
+    # "general" and "video" are MiniMax resource categories, not models.
+    assert projection.covered_model_ids() == ()
 
 
 def test_all_models_agreeing_yields_one_exact_plan_figure(

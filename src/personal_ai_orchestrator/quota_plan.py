@@ -99,6 +99,21 @@ class ConsumptionUnitKind(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class EquivalentScopeKind(StrEnum):
+    """What a provider's per-entry quota view is actually scoped to.
+
+    MiniMax returns ``model_remains`` entries named ``general`` and ``video`` on
+    this account, while its real routable models are ``MiniMax-M2.7`` and the
+    like. The field name says "model"; the values are resource categories. An
+    owner told "video shares this quota" would look for a model they cannot
+    route to, so the distinction is recorded rather than assumed away.
+    """
+
+    MODEL = "MODEL"
+    PROVIDER_RESOURCE_SCOPE = "PROVIDER_RESOURCE_SCOPE"
+    UNKNOWN = "UNKNOWN"
+
+
 class MeasurementSource(StrEnum):
     """Where a figure came from, for the owner-facing confidence hierarchy."""
 
@@ -198,17 +213,22 @@ class ModelConsumptionObservation(RegistryModel):
 
 
 class ModelEquivalentView(RegistryModel):
-    """A provider's per-model *view* of one shared pool.
+    """A provider's per-scope *view* of one shared pool.
 
-    MiniMax reports a remaining percentage per model. Those figures differ
-    between models, which earlier looked like several independent balances and
-    caused the whole provider to be reported UNKNOWN. Under a documented shared
-    pool they are equivalents — "how far the shared remainder goes if you spend
-    it entirely on this model" — so they are modelled as a distinct type that
-    the UI is required to label as a view, never as that model's own quota.
+    MiniMax reports a remaining percentage per ``model_remains`` entry. Those
+    figures differ between entries, which earlier looked like several
+    independent balances and caused the whole provider to be reported UNKNOWN.
+    They are views of one plan, so they are modelled as a distinct type the UI
+    must label as a view, never as that scope's own quota.
+
+    ``scope_id`` is deliberately not called ``model_id``: on the observed
+    MiniMax account the entries are named ``general`` and ``video`` — resource
+    categories, not routable models — and naming the field after the provider's
+    own misleading key would propagate the error into our UI.
     """
 
-    model_id: str = Field(min_length=1)
+    scope_id: str = Field(min_length=1)
+    scope_kind: EquivalentScopeKind = EquivalentScopeKind.UNKNOWN
     window_id: str = Field(min_length=1)
     remaining_fraction: float | None = Field(default=None, ge=0.0, le=1.0)
     remaining_units: float | None = Field(default=None, ge=0.0)
@@ -387,9 +407,16 @@ class PlanQuotaProjection(RegistryModel):
         """
 
         seen = list(self.pool.covered_model_ids)
+        # Equivalent views only contribute a model when the provider's entry
+        # was actually identified as one. An unrecognized scope is not silently
+        # promoted into the list of models the owner can route to.
         for extra in (
             *(item.model_id for item in self.model_consumption),
-            *(item.model_id for item in self.model_equivalents),
+            *(
+                item.scope_id
+                for item in self.model_equivalents
+                if item.scope_kind is EquivalentScopeKind.MODEL
+            ),
         ):
             if extra not in seen:
                 seen.append(extra)
@@ -442,6 +469,7 @@ __all__ = [
     "BindingWindow",
     "BindingWindowReason",
     "ConsumptionUnitKind",
+    "EquivalentScopeKind",
     "MeasurementSource",
     "ModelConsumptionObservation",
     "ModelEquivalentView",

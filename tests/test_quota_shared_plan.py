@@ -29,6 +29,7 @@ from personal_ai_orchestrator.quota_collectors.zai import (
 from personal_ai_orchestrator.quota_plan import (
     BindingWindowReason,
     ConsumptionUnitKind,
+    EquivalentScopeKind,
     ModelConsumptionObservation,
     PlanQuota,
     PlanQuotaProjection,
@@ -279,7 +280,11 @@ def minimax_agreeing_payload() -> dict:
 
 
 def test_minimax_models_share_one_pool() -> None:
-    projection = normalize_minimax_quota(minimax_agreeing_payload(), observed_at=NOW)
+    projection = normalize_minimax_quota(
+        minimax_agreeing_payload(),
+        observed_at=NOW,
+        known_model_ids=frozenset({"MiniMax-M3", "MiniMax-M2.7"}),
+    )
 
     assert projection.plan.display_name == "MiniMax Token Plan"
     assert projection.plan.quota_semantics is PlanQuotaSemantics.SHARED_POOL
@@ -304,7 +309,7 @@ def test_minimax_differing_model_views_create_no_second_plan_balance() -> None:
     # The 5-hour figure is genuinely underivable from disagreeing views, so it
     # is UNKNOWN rather than averaged into a plausible-looking number.
     assert five_hour.remaining_fraction is None
-    # Every model view survives as an equivalent, labelled as such.
+    # Every provider view survives as an equivalent, labelled as such.
     assert len(projection.model_equivalents) == 4
     assert sorted(
         round(view.remaining_fraction, 4) for view in projection.model_equivalents
@@ -554,3 +559,69 @@ def test_unknown_confidence_cannot_smuggle_a_precise_value() -> None:
                 source_type=EvidenceSourceType.PROVIDER_API, observed_at=NOW
             ),
         )
+
+
+def test_minimax_resource_categories_are_not_reported_as_models() -> None:
+    """The finding that made this distinction necessary.
+
+    MiniMax calls the array ``model_remains``, but on the observed account its
+    entries are named ``general`` and ``video`` while the account's routable
+    models are ``MiniMax-M2.7`` and similar. Listing "video" among the models
+    sharing this quota would send the owner looking for a model that does not
+    exist.
+    """
+
+    payload = {
+        "model_remains": [
+            {
+                "model_name": "general",
+                "current_interval_remaining_percent": 96,
+                "current_weekly_remaining_percent": 59,
+            },
+            {
+                "model_name": "video",
+                "current_interval_remaining_percent": 100,
+                "current_weekly_remaining_percent": 100,
+            },
+        ]
+    }
+
+    projection = normalize_minimax_quota(
+        payload,
+        observed_at=NOW,
+        known_model_ids=frozenset({"MiniMax-M2.7", "MiniMax-M3"}),
+    )
+
+    assert projection.covered_model_ids() == ()
+    kinds = {view.scope_id: view.scope_kind for view in projection.model_equivalents}
+    assert kinds == {
+        "general": EquivalentScopeKind.PROVIDER_RESOURCE_SCOPE,
+        "video": EquivalentScopeKind.PROVIDER_RESOURCE_SCOPE,
+    }
+
+
+def test_an_entry_matching_the_catalog_is_reported_as_a_model() -> None:
+    payload = {
+        "model_remains": [
+            {"model": "MiniMax-M2.7", "current_interval_remaining_percent": 63}
+        ]
+    }
+
+    projection = normalize_minimax_quota(
+        payload, observed_at=NOW, known_model_ids=frozenset({"MiniMax-M2.7"})
+    )
+
+    assert projection.covered_model_ids() == ("MiniMax-M2.7",)
+    assert projection.model_equivalents[0].scope_kind is EquivalentScopeKind.MODEL
+
+
+def test_without_a_catalog_no_entry_is_promoted_to_a_model() -> None:
+    """Absent catalog evidence, an entry stays unclassified rather than assumed."""
+
+    projection = normalize_minimax_quota(
+        {"model_remains": [{"model": "MiniMax-M2.7", "current_interval_remaining_percent": 63}]},
+        observed_at=NOW,
+    )
+
+    assert projection.covered_model_ids() == ()
+    assert projection.model_equivalents[0].scope_kind is EquivalentScopeKind.UNKNOWN

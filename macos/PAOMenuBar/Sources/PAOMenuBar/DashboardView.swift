@@ -1863,7 +1863,7 @@ private struct SharedPlanQuotaView: View {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(plan.modelEquivalents) { item in
                     HStack {
-                        Text(item.modelId).font(.caption)
+                        Text(item.scopeId).font(.caption)
                         Text(item.windowId)
                             .font(.caption2)
                             .foregroundStyle(.tertiary)

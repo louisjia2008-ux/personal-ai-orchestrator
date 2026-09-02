@@ -177,7 +177,7 @@ final class SharedPlanQuotaTests: XCTestCase {
                 "pool_id": "minimax-token-plan-cn",
                 "resource_kind": "TOKEN_PLAN_INCLUDED_QUOTA",
                 "shared_across_models": true, "unit_kind": "PROVIDER_UNITS",
-                "covered_model_ids": ["MiniMax-M3", "MiniMax-M2.7"],
+                "covered_model_ids": [],
                 "state": "AVAILABLE", "confidence": "UNKNOWN",
                 "unknown_reason": "SHARED_POOL_VIEWED_PER_MODEL",
                 "windows": [
@@ -191,12 +191,12 @@ final class SharedPlanQuotaTests: XCTestCase {
                   "confidence": "ESTIMATED"},
                 "model_consumption": [],
                 "model_equivalents": [
-                  {"model_id": "MiniMax-M3", "window_id": "5h",
-                   "remaining_fraction": 0.95, "unit_kind": "UNKNOWN",
-                   "confidence": "EXACT"},
-                  {"model_id": "MiniMax-M2.7", "window_id": "5h",
-                   "remaining_fraction": 0.6, "unit_kind": "UNKNOWN",
-                   "confidence": "EXACT"}
+                  {"scope_id": "general", "scope_kind": "PROVIDER_RESOURCE_SCOPE",
+                   "window_id": "5h", "remaining_fraction": 0.96,
+                   "unit_kind": "UNKNOWN", "confidence": "EXACT"},
+                  {"scope_id": "video", "scope_kind": "PROVIDER_RESOURCE_SCOPE",
+                   "window_id": "5h", "remaining_fraction": 1.0,
+                   "unit_kind": "UNKNOWN", "confidence": "EXACT"}
                 ],
                 "equivalent_capacity": []
               }
@@ -213,10 +213,15 @@ final class SharedPlanQuotaTests: XCTestCase {
         XCTAssertTrue(weekly.isReadable)
         XCTAssertTrue(plan.hasReadableWindow)
 
-        // The per-model figures survive, in the section labelled as views.
+        // The per-scope figures survive, in the section labelled as views.
         XCTAssertEqual(plan.modelEquivalents.count, 2)
-        // ...and produce no per-model windows that could be drawn as balances.
+        // ...and produce no per-scope windows that could be drawn as balances.
         XCTAssertEqual(plan.windows.count, 2)
+        // MiniMax names these entries "general" and "video" - resource
+        // categories, not routable models - so none is offered as a model the
+        // owner can send work to.
+        XCTAssertTrue(plan.modelEquivalents.allSatisfy { !$0.isModel })
+        XCTAssertTrue(plan.coveredModelIds.isEmpty)
     }
 
     // MARK: - Compatibility
