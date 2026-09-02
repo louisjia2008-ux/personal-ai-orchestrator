@@ -228,6 +228,7 @@ class ExecutorHarness:
         self.worktree_root = tmp_path / "worktrees"
         self.worker_bin = worker_bin or write_worker_script(tmp_path / "bin")
         self.registry = make_registry()
+        self.project = None
         self.execution_evidence = ExecutionEvidenceJournal(self.runtime_root)
         self.executor = OwnerDispatchExecutor(
             state_db=self.state_db,
@@ -248,9 +249,20 @@ class ExecutorHarness:
     def reserve(self, task_id: str = "task-1", request_id: str = "dispatch-1") -> str:
         store = SafetyKernelStore(self.state_db)
         try:
+            base_sha = _git(self.main_repo, "rev-parse", "HEAD")
+            self.project = store.register_project(
+                project_id="project-main",
+                display_name="Main Repo",
+                canonical_repo_root=str(self.main_repo),
+                git_root=str(self.main_repo),
+                default_branch="main",
+                last_known_head=base_sha,
+            )
             store.submit_task(
                 task_id=task_id,
                 request_id=f"submit-{task_id}",
+                project_id=self.project.project_id,
+                base_sha=base_sha,
                 intent=f"Create hello.txt with exactly: {HELLO_CONTENT}",
             )
             store.reserve_owner_dispatch(
@@ -696,6 +708,45 @@ def test_internal_executor_error_after_running_emergency_repairs_state(
     assert harness.main_unchanged()
 
 
+def test_dispatch_blocks_task_without_registered_project(tmp_path: Path) -> None:
+    harness = ExecutorHarness(tmp_path)
+    store = SafetyKernelStore(harness.state_db)
+    try:
+        store.submit_task(
+            task_id="legacy-task",
+            request_id="submit-legacy-task",
+            intent=f"Create hello.txt with exactly: {HELLO_CONTENT}",
+        )
+        store.reserve_owner_dispatch(
+            dispatch_id="owner-dispatch-legacy",
+            request_id="dispatch-legacy",
+            task_id="legacy-task",
+            task_state_version=0,
+            execution_target_id="zai-coding-plan-glm-5.3",
+            authority="OWNER_INITIATED_EXECUTION",
+        )
+        store.transition_task(
+            "legacy-task",
+            TaskState.READY,
+            expected_version=0,
+            reason="legacy direct state",
+        )
+    finally:
+        store.close()
+
+    harness.run("dispatch-legacy")
+    snapshot = harness.snapshot("legacy-task")
+    try:
+        assert snapshot["task"].state is TaskState.BLOCKED
+        assert snapshot["run_status"] is None
+        assert snapshot["writer_token"] is None
+        assert snapshot["dispatch_status"] == "BLOCKED"
+        assert snapshot["dispatch_failure_code"] == "MISSING_PROJECT_ID"
+    finally:
+        _close(snapshot)
+    assert harness.main_unchanged()
+
+
 def test_full_product_path_over_http_with_cancellation(tmp_path: Path) -> None:
     import tempfile
 
@@ -725,9 +776,11 @@ def test_full_product_path_over_http_with_cancellation(tmp_path: Path) -> None:
     server.start_background()
     client = ControlPlaneClient(socket_path, timeout=30.0)
     try:
+        project = client.register_project(path=str(harness.main_repo), display_name="Harness")
         task = client.submit(
             task_id="task-1",
             request_id="submit-task-1",
+            project_id=project.project_id,
             intent=f"Create hello.txt with exactly: {HELLO_CONTENT}",
         )
         dispatch = client.dispatch(

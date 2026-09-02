@@ -18,9 +18,12 @@ import os
 import re
 import shutil
 import socket
+import subprocess
 import threading
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
+from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -34,12 +37,18 @@ from personal_ai_orchestrator.execution_controller import validate_execution_tar
 from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
+from personal_ai_orchestrator.scheduling_settings import (
+    SELECTABLE_GLOBAL_POLICIES,
+    SchedulingSettings,
+)
 from personal_ai_orchestrator.provider_registry_manager import (
     ProviderRegistryManager,
 )
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
 from personal_ai_orchestrator.safety_kernel import (
     OwnerDispatchRecord,
+    ProjectAvailability,
+    ProjectRecord,
     SafetyKernelStore,
     TaskState,
 )
@@ -54,6 +63,10 @@ DEFAULT_LIST_LIMIT = 50
 MAX_INTENT_LENGTH = 8192
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def datetime_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 class ControlPlaneError(Exception):
@@ -73,10 +86,18 @@ class _ViewModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+#: A task may additionally pick MANUAL, which a *global* default cannot: only a
+#: single task knows a concrete execution target that is valid for itself.
+SELECTABLE_TASK_POLICIES = (*SELECTABLE_GLOBAL_POLICIES, "MANUAL")
+
+
 class TaskSubmitRequest(_ViewModel):
     task_id: str = Field(min_length=1, max_length=128)
     request_id: str = Field(min_length=1, max_length=128)
+    project_id: str = Field(min_length=1, max_length=128)
     intent: str = Field(min_length=1, max_length=MAX_INTENT_LENGTH)
+    scheduling_policy: str | None = Field(default=None, min_length=1, max_length=64)
+    manual_execution_target_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class CancelRequest(_ViewModel):
@@ -93,10 +114,15 @@ class TaskView(_ViewModel):
     task_id: str
     request_id: str
     intent: str
+    project_id: str | None = None
+    base_sha: str | None = None
+    working_subpath: str | None = None
     state: str
     state_version: int
     created_at: str
     updated_at: str
+    scheduling_policy: str | None = None
+    manual_execution_target_id: str | None = None
 
 
 class CancelView(_ViewModel):
@@ -166,9 +192,59 @@ class DashboardCountsView(_ViewModel):
     running: int
     ready: int
     blocked: int
+    verifying: int
     verified: int
     completed: int
     total: int
+
+
+class TaskTrendBucketView(_ViewModel):
+    bucket_start: str
+    submitted: int
+    completed: int
+    blocked: int
+
+
+class TaskStateSliceView(_ViewModel):
+    state: str
+    count: int
+
+
+class DashboardBasicInfoView(_ViewModel):
+    daemon_connection: str
+    registered_projects: int
+    discovered_providers: int
+    available_execution_targets: int
+    running_tasks: int
+    tasks_today: int
+    routing_decisions_today: int
+    quota_warning_count: int
+    last_refresh_sync: str
+
+
+class RiskItemView(_ViewModel):
+    title: str
+    detail: str
+    severity: str
+    destination: str | None = None
+    raw_code: str | None = None
+
+
+class QuotaObservationView(_ViewModel):
+    provider_id: str
+    quota_pool_id: str
+    window_id: str
+    observed_at: str
+    remaining_fraction: float | None = None
+    confidence: str
+    measurement_source: str
+    reset_at: str | None = None
+    state: str
+
+
+class QuotaHistoryView(_ViewModel):
+    observations: tuple[QuotaObservationView, ...]
+    retention_limit: int
 
 
 class ActivityEventView(_ViewModel):
@@ -182,6 +258,12 @@ class DashboardSummaryView(_ViewModel):
     connection: HealthView
     counts: DashboardCountsView
     recent_tasks: tuple[TaskView, ...]
+    projects: ProjectListView
+    basic_info: DashboardBasicInfoView
+    task_trend: tuple[TaskTrendBucketView, ...]
+    task_state_distribution: tuple[TaskStateSliceView, ...]
+    risks: tuple[RiskItemView, ...]
+    quota_history: QuotaHistoryView
     providers: ProviderHealthListView
     active_status: ActiveStatusView
     important_blockers: tuple[str, ...]
@@ -190,10 +272,12 @@ class DashboardSummaryView(_ViewModel):
 
 class WorkspaceView(_ViewModel):
     task_id: str
+    project_id: str | None = None
     repo_path: str
     worktree_path: str
     branch: str
     base_sha: str
+    working_subpath: str | None = None
     writer_locked: bool
 
 
@@ -259,11 +343,101 @@ class ProviderHealthView(_ViewModel):
     evidence_source: str | None = None
     auth_status: str | None = None
     execution_status: str | None = None
+    connection_state: str | None = None
+    auth_state: str | None = None
+    runtime_state: str | None = None
+    plan_surface: str | None = None
+    region: str | None = None
     last_checked: str | None = None
 
 
 class ProviderHealthListView(_ViewModel):
     providers: tuple[ProviderHealthView, ...]
+
+
+class ProviderConnectionView(_ViewModel):
+    provider_id: str
+    display_name: str
+    connection_state: str
+    auth_state: str
+    execution_verified: bool
+    runtime_state: str
+    credential_reference_type: str
+    region: str | None = None
+    plan_surface: str | None = None
+    model_skus: tuple[str, ...] = ()
+    connected_at: str | None = None
+    last_validated_at: str | None = None
+    last_reason_code: str | None = None
+
+
+class AvailableProviderView(_ViewModel):
+    provider_id: str
+    display_name: str
+    connection_state: str
+    auth_state: str
+    execution_verified: bool
+    runtime_state: str
+    region: str | None = None
+    plan_surface: str | None = None
+    model_skus: tuple[str, ...] = ()
+    last_checked: str | None = None
+
+
+class ImportEvidenceItemView(_ViewModel):
+    kind: str
+    detail: str
+    observed_at: str | None = None
+
+
+class ProviderImportCandidateView(_ViewModel):
+    provider_id: str
+    display_name: str
+    region: str | None = None
+    plan_surface: str | None = None
+    model_skus: tuple[str, ...] = ()
+    execution_verified: bool = False
+    auth_state: str
+    credential_reference_type: str
+    evidence: tuple[ImportEvidenceItemView, ...] = ()
+
+
+class ProviderConnectionListView(_ViewModel):
+    connected: tuple[ProviderConnectionView, ...]
+    available_to_add: tuple[AvailableProviderView, ...]
+    import_candidates: tuple[ProviderImportCandidateView, ...] = ()
+
+
+class ConnectProviderRequest(_ViewModel):
+    provider_id: str = Field(min_length=1, max_length=128)
+
+
+class ImportConnectionsRequest(_ViewModel):
+    provider_ids: tuple[str, ...] = Field(min_length=1, max_length=32)
+
+
+class ImportConnectionsView(_ViewModel):
+    imported: tuple[ProviderConnectionView, ...]
+
+
+class SchedulingSettingsView(_ViewModel):
+    default_scheduling_policy: str
+    selectable_policies: tuple[str, ...]
+
+
+class SchedulingSettingsUpdateRequest(_ViewModel):
+    default_scheduling_policy: str = Field(min_length=1, max_length=64)
+
+
+class ProjectSchedulingPolicyRequest(_ViewModel):
+    """``scheduling_policy=None`` restores the global default for this project."""
+
+    scheduling_policy: str | None = Field(default=None, min_length=1, max_length=64)
+    manual_execution_target_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class DisconnectProviderRequest(_ViewModel):
+    confirm: bool
 
 
 class ProviderDiscoveryStatusView(_ViewModel):
@@ -304,15 +478,58 @@ class HealthView(_ViewModel):
     api_version: str
 
 
+class ProjectResolveRequest(_ViewModel):
+    path: str = Field(min_length=1, max_length=4096)
+
+
+class ProjectRegisterRequest(_ViewModel):
+    path: str = Field(min_length=1, max_length=4096)
+    display_name: str | None = Field(default=None, min_length=1, max_length=256)
+    security_bookmark_b64: str | None = Field(default=None, max_length=128 * 1024)
+
+
+class ProjectRemoveView(_ViewModel):
+    project: ProjectView
+    removed_from_orchestrator: bool
+
+
+class ProjectView(_ViewModel):
+    project_id: str
+    display_name: str
+    canonical_repo_root: str
+    git_root: str
+    default_branch: str
+    last_known_head: str
+    created_at: str
+    updated_at: str
+    working_subpath: str | None = None
+    remote_url: str | None = None
+    last_opened_at: str | None = None
+    storage_availability: str
+    recent_task_count: int = 0
+    current_branch: str | None = None
+    scheduling_policy: str | None = None
+    manual_execution_target_id: str | None = None
+
+
+class ProjectListView(_ViewModel):
+    projects: tuple[ProjectView, ...]
+
+
 def _task_view(record) -> TaskView:
     return TaskView(
         task_id=record.task_id,
         request_id=record.request_id,
         intent=record.intent,
+        project_id=record.project_id,
+        base_sha=record.base_sha,
+        working_subpath=record.working_subpath,
         state=record.state.value,
         state_version=record.state_version,
         created_at=record.created_at.isoformat(),
         updated_at=record.updated_at.isoformat(),
+        scheduling_policy=record.scheduling_policy,
+        manual_execution_target_id=record.manual_execution_target_id,
     )
 
 
@@ -328,6 +545,7 @@ class ControlPlaneService:
     quota_availability_journal: QuotaAvailabilityJournal | None = None
     provider_registry_manager: ProviderRegistryManager | None = None
     owner_execution: OwnerExecutionSettings = field(default_factory=OwnerExecutionSettings)
+    scheduling_settings: SchedulingSettings = field(default_factory=SchedulingSettings)
     execution_evidence_journal: ExecutionEvidenceJournal | None = None
     dispatch_executor: Any = None
 
@@ -349,6 +567,7 @@ class ControlPlaneService:
             quota_availability_journal=self.quota_availability_journal,
             provider_registry_manager=self.provider_registry_manager,
             owner_execution=self.owner_execution,
+            scheduling_settings=self.scheduling_settings,
             execution_evidence_journal=self.execution_evidence_journal,
             dispatch_executor=self.dispatch_executor,
         )
@@ -379,18 +598,334 @@ class ControlPlaneService:
             return False
         return shutil.which("opencode") is not None
 
+    @staticmethod
+    def _project_id_for(git_root: str, working_subpath: str | None) -> str:
+        payload = f"{git_root}\0{working_subpath or ''}".encode()
+        return f"project-{sha256(payload).hexdigest()[:16]}"
+
+    @staticmethod
+    def _git(repo: Path, *args: str) -> str:
+        completed = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return completed.stdout.strip()
+
+    def _project_probe(self, path: str) -> dict[str, str | None]:
+        try:
+            selected = Path(path).expanduser().resolve(strict=True)
+        except (OSError, RuntimeError):
+            raise ControlPlaneError(400, "project_path_missing") from None
+        if not selected.is_dir():
+            raise ControlPlaneError(400, "project_path_not_directory")
+        try:
+            git_root = Path(
+                self._git(selected, "rev-parse", "--show-toplevel")
+            ).resolve(strict=True)
+            is_work_tree = self._git(git_root, "rev-parse", "--is-inside-work-tree")
+            if is_work_tree != "true":
+                raise ValueError("not a work tree")
+            head = self._git(git_root, "rev-parse", "HEAD")
+        except Exception:
+            raise ControlPlaneError(400, "invalid_repository") from None
+        try:
+            rel = selected.relative_to(git_root)
+            working_subpath = None if str(rel) == "." else rel.as_posix()
+        except ValueError:
+            raise ControlPlaneError(400, "project_path_outside_git_root") from None
+        try:
+            default_branch = self._git(
+                git_root,
+                "symbolic-ref",
+                "--short",
+                "refs/remotes/origin/HEAD",
+            ).removeprefix("origin/")
+        except Exception:
+            try:
+                default_branch = self._git(git_root, "branch", "--show-current") or "HEAD"
+            except Exception:
+                default_branch = "HEAD"
+        try:
+            current_branch = self._git(git_root, "branch", "--show-current") or "HEAD"
+        except Exception:
+            current_branch = None
+        try:
+            remote_url = self._git(git_root, "config", "--get", "remote.origin.url") or None
+        except Exception:
+            remote_url = None
+        return {
+            "canonical_repo_root": str(selected),
+            "git_root": str(git_root),
+            "working_subpath": working_subpath,
+            "default_branch": default_branch,
+            "last_known_head": head,
+            "remote_url": remote_url,
+            "current_branch": current_branch,
+        }
+
+    def _availability_for_project(
+        self, project: ProjectRecord
+    ) -> tuple[ProjectAvailability, str | None, str | None, str | None]:
+        git_root = Path(project.git_root)
+        if not git_root.exists():
+            return ProjectAvailability.MISSING, None, None, None
+        if not git_root.is_dir():
+            return ProjectAvailability.INVALID_REPOSITORY, None, None, None
+        try:
+            top = Path(self._git(git_root, "rev-parse", "--show-toplevel")).resolve()
+            if top != git_root.resolve():
+                return ProjectAvailability.INVALID_REPOSITORY, None, None, None
+            head = self._git(git_root, "rev-parse", "HEAD")
+            branch = self._git(git_root, "branch", "--show-current") or "HEAD"
+        except Exception:
+            return ProjectAvailability.INVALID_REPOSITORY, None, None, None
+        return ProjectAvailability.ONLINE, head, project.default_branch, branch
+
+    def _refresh_project_view(self, project: ProjectRecord) -> ProjectView:
+        availability, head, default_branch, current_branch = self._availability_for_project(project)
+        if (
+            availability is not project.storage_availability
+            or (head is not None and head != project.last_known_head)
+        ):
+            project = self.store.update_project_availability(
+                project.project_id,
+                storage_availability=availability,
+                last_known_head=head,
+                default_branch=default_branch,
+            )
+        return self._project_view(project, current_branch=current_branch)
+
+    def _project_view(
+        self, project: ProjectRecord, *, current_branch: str | None = None
+    ) -> ProjectView:
+        return ProjectView(
+            project_id=project.project_id,
+            display_name=project.display_name,
+            canonical_repo_root=project.canonical_repo_root,
+            git_root=project.git_root,
+            default_branch=project.default_branch,
+            last_known_head=project.last_known_head,
+            created_at=project.created_at.isoformat(),
+            updated_at=project.updated_at.isoformat(),
+            working_subpath=project.working_subpath,
+            remote_url=project.remote_url,
+            last_opened_at=project.last_opened_at.isoformat() if project.last_opened_at else None,
+            storage_availability=project.storage_availability.value,
+            recent_task_count=self.store.task_count_for_project(project.project_id),
+            current_branch=current_branch,
+            scheduling_policy=project.scheduling_policy,
+            manual_execution_target_id=project.manual_execution_target_id,
+        )
+
+    def resolve_project(self, payload: dict[str, Any]) -> ProjectView:
+        request = ProjectResolveRequest.model_validate(payload)
+        probe = self._project_probe(request.path)
+        project_id = self._project_id_for(
+            str(probe["git_root"]), probe["working_subpath"]
+        )
+        now = datetime_now_iso()
+        return ProjectView(
+            project_id=project_id,
+            display_name=Path(str(probe["canonical_repo_root"])).name,
+            canonical_repo_root=str(probe["canonical_repo_root"]),
+            git_root=str(probe["git_root"]),
+            default_branch=str(probe["default_branch"]),
+            last_known_head=str(probe["last_known_head"]),
+            created_at=now,
+            updated_at=now,
+            working_subpath=probe["working_subpath"],
+            remote_url=probe["remote_url"],
+            storage_availability=ProjectAvailability.ONLINE.value,
+            current_branch=probe["current_branch"],
+        )
+
+    def register_project(self, payload: dict[str, Any]) -> ProjectView:
+        request = ProjectRegisterRequest.model_validate(payload)
+        probe = self._project_probe(request.path)
+        project_id = self._project_id_for(
+            str(probe["git_root"]), probe["working_subpath"]
+        )
+        display_name = request.display_name or Path(str(probe["canonical_repo_root"])).name
+        try:
+            project = self.store.register_project(
+                project_id=project_id,
+                display_name=display_name,
+                canonical_repo_root=str(probe["canonical_repo_root"]),
+                git_root=str(probe["git_root"]),
+                default_branch=str(probe["default_branch"]),
+                last_known_head=str(probe["last_known_head"]),
+                working_subpath=probe["working_subpath"],
+                remote_url=probe["remote_url"],
+                storage_availability=ProjectAvailability.ONLINE,
+                security_bookmark_b64=request.security_bookmark_b64,
+            )
+        except ValueError:
+            raise ControlPlaneError(409, "project_already_registered") from None
+        return self._project_view(project, current_branch=probe["current_branch"])
+
+    def list_projects(self) -> ProjectListView:
+        return ProjectListView(
+            projects=tuple(
+                self._refresh_project_view(project)
+                for project in self.store.list_projects()
+            )
+        )
+
+    def get_project(self, project_id: str) -> ProjectView:
+        self._validate_identifier("project_id", project_id)
+        try:
+            return self._refresh_project_view(self.store.get_project(project_id))
+        except KeyError:
+            raise ControlPlaneError(404, "project_not_found") from None
+
+    def remove_project(self, project_id: str) -> ProjectRemoveView:
+        self._validate_identifier("project_id", project_id)
+        try:
+            project = self.store.remove_project(project_id)
+        except KeyError:
+            raise ControlPlaneError(404, "project_not_found") from None
+        return ProjectRemoveView(
+            project=self._project_view(project),
+            removed_from_orchestrator=True,
+        )
+
+    def mark_project_opened(self, project_id: str) -> ProjectView:
+        self._validate_identifier("project_id", project_id)
+        try:
+            project = self.store.mark_project_opened(project_id)
+        except KeyError:
+            raise ControlPlaneError(404, "project_not_found") from None
+        return self._refresh_project_view(project)
+
+    def _validated_task_policy(
+        self,
+        scheduling_policy: str | None,
+        manual_execution_target_id: str | None,
+    ) -> tuple[str | None, str | None]:
+        """Validate an owner-supplied task scheduling override.
+
+        ``None`` means "no task override" and defers to project/global resolution.
+        MANUAL is the one policy that carries a payload: without an explicit target
+        there is nothing to honour, and silently falling back to another model is
+        exactly the behaviour MANUAL exists to prevent — so it is rejected here
+        rather than quietly downgraded.
+        """
+
+        if scheduling_policy is None:
+            if manual_execution_target_id is not None:
+                raise ControlPlaneError(400, "manual_target_requires_manual_policy")
+            return None, None
+        if scheduling_policy not in SELECTABLE_TASK_POLICIES:
+            raise ControlPlaneError(400, "unsupported_scheduling_policy")
+        if scheduling_policy == "MANUAL":
+            if not manual_execution_target_id:
+                raise ControlPlaneError(400, "manual_policy_requires_execution_target")
+            self._validate_identifier("execution_target_id", manual_execution_target_id)
+            return scheduling_policy, manual_execution_target_id
+        if manual_execution_target_id is not None:
+            raise ControlPlaneError(400, "manual_target_requires_manual_policy")
+        return scheduling_policy, None
+
+    def scheduling_settings_view(self) -> SchedulingSettingsView:
+        return SchedulingSettingsView(
+            default_scheduling_policy=self.scheduling_settings.default_policy,
+            selectable_policies=SELECTABLE_GLOBAL_POLICIES,
+        )
+
+    def update_scheduling_settings(self, payload: dict[str, Any]) -> SchedulingSettingsView:
+        request = SchedulingSettingsUpdateRequest.model_validate(payload)
+        try:
+            self.scheduling_settings.set_default_policy(request.default_scheduling_policy)
+        except ValueError:
+            raise ControlPlaneError(400, "unsupported_global_scheduling_policy") from None
+        return self.scheduling_settings_view()
+
+    def set_project_scheduling_policy(
+        self,
+        project_id: str,
+        payload: dict[str, Any],
+    ) -> ProjectView:
+        self._validate_identifier("project_id", project_id)
+        request = ProjectSchedulingPolicyRequest.model_validate(payload)
+        policy, manual_target = self._validated_task_policy(
+            request.scheduling_policy,
+            request.manual_execution_target_id,
+        )
+        try:
+            project = self.store.set_project_scheduling_policy(
+                project_id,
+                scheduling_policy=policy,
+                manual_execution_target_id=manual_target,
+            )
+        except KeyError:
+            raise ControlPlaneError(404, "project_not_found") from None
+        return self._project_view(project)
+
+    def import_provider_connections(self, payload: dict[str, Any]) -> ImportConnectionsView:
+        """Materialise owner-approved import candidates.
+
+        This is the owner action referenced by the Connected tab. It never runs
+        implicitly on discovery, startup, or refresh.
+        """
+
+        request = ImportConnectionsRequest.model_validate(payload)
+        for provider_id in request.provider_ids:
+            self._validate_identifier("provider_id", provider_id)
+        if self.provider_registry_manager is None:
+            raise ControlPlaneError(503, "provider_registry_manager_not_configured")
+        try:
+            connections = self.provider_registry_manager.import_connections(
+                request.provider_ids
+            )
+        except LookupError as error:
+            code = str(error) or "provider_not_import_candidate"
+            raise ControlPlaneError(404, code) from None
+        except ValueError as error:
+            raise ControlPlaneError(400, str(error) or "invalid_import_request") from None
+        return ImportConnectionsView(
+            imported=tuple(self._connection_view(item) for item in connections)
+        )
+
     def submit_task(self, payload: dict[str, Any]) -> TaskView:
         request = TaskSubmitRequest.model_validate(payload)
         for kind, value in (
             ("task_id", request.task_id),
             ("request_id", request.request_id),
+            ("project_id", request.project_id),
         ):
             self._validate_identifier(kind, value)
+        try:
+            project = self.store.get_project(request.project_id)
+        except KeyError:
+            raise ControlPlaneError(400, "project_not_registered") from None
+        project_view = self._refresh_project_view(project)
+        if project_view.storage_availability != ProjectAvailability.ONLINE.value:
+            raise ControlPlaneError(409, "project_not_available")
+        try:
+            base_sha = self._git(Path(project.git_root), "rev-parse", "HEAD")
+        except Exception:
+            self.store.update_project_availability(
+                project.project_id,
+                storage_availability=ProjectAvailability.INVALID_REPOSITORY,
+            )
+            raise ControlPlaneError(409, "project_not_available") from None
+        scheduling_policy, manual_target = self._validated_task_policy(
+            request.scheduling_policy,
+            request.manual_execution_target_id,
+        )
         try:
             record = self.store.submit_task(
                 task_id=request.task_id,
                 request_id=request.request_id,
                 intent=request.intent,
+                project_id=request.project_id,
+                base_sha=base_sha,
+                working_subpath=project.working_subpath,
+                scheduling_policy=scheduling_policy,
+                manual_execution_target_id=manual_target,
             )
         except ValueError:
             raise ControlPlaneError(400, "conflicting_request_id") from None
@@ -529,12 +1064,49 @@ class ControlPlaneService:
                 failure_reason=f"task state {task.state.value} is not dispatchable",
             )
             raise ControlPlaneError(409, "task_state_not_dispatchable")
+        if task.project_id is None:
+            self.store.mark_owner_dispatch_blocked(
+                request.request_id,
+                failure_code="MISSING_PROJECT_ID",
+                failure_reason="coding tasks require an explicit registered project",
+            )
+            raise ControlPlaneError(409, "missing_project_id")
+        if task.base_sha is None:
+            self.store.mark_owner_dispatch_blocked(
+                request.request_id,
+                failure_code="PROJECT_BASE_SHA_MISSING",
+                failure_reason="coding tasks require a durable base_sha",
+            )
+            raise ControlPlaneError(409, "project_base_sha_missing")
+        project_view = self.get_project(task.project_id)
+        if project_view.storage_availability != ProjectAvailability.ONLINE.value:
+            self.store.mark_owner_dispatch_blocked(
+                request.request_id,
+                failure_code=f"PROJECT_{project_view.storage_availability}",
+                failure_reason="registered project is not currently available",
+            )
+            raise ControlPlaneError(409, "project_not_available")
 
         effective_registry = (
             self.provider_registry_manager.registry()
             if self.provider_registry_manager is not None
             else self.registry
         )
+        if self.provider_registry_manager is not None:
+            target = effective_registry.execution_targets.get(request.execution_target_id)
+            model = (
+                effective_registry.models.get(target.model_sku_id)
+                if target is not None
+                else None
+            )
+            connected_provider_ids = self.provider_registry_manager.connected_provider_ids()
+            if model is None or model.provider_id not in connected_provider_ids:
+                self.store.mark_owner_dispatch_blocked(
+                    request.request_id,
+                    failure_code="PROVIDER_NOT_CONNECTED",
+                    failure_reason="execution target provider is not connected by owner",
+                )
+                raise ControlPlaneError(409, "provider_not_connected") from None
         try:
             validate_execution_target_launch(
                 effective_registry,
@@ -735,16 +1307,222 @@ class ControlPlaneService:
             )
         return tuple(events)
 
+    def _today_prefix(self) -> str:
+        return datetime.now(UTC).date().isoformat()
+
+    def _task_trend(self) -> tuple[TaskTrendBucketView, ...]:
+        rows = self.store.connection.execute(
+            """
+            SELECT substr(created_at, 1, 13) AS bucket,
+                   SUM(CASE WHEN event_type='TASK_SUBMITTED' THEN 1 ELSE 0 END) AS submitted,
+                   SUM(CASE
+                       WHEN event_type='TASK_STATE_CHANGED'
+                        AND payload_json LIKE '%"to":"COMPLETED"%'
+                       THEN 1 ELSE 0 END) AS completed,
+                   SUM(CASE
+                       WHEN event_type='TASK_STATE_CHANGED'
+                        AND payload_json LIKE '%"to":"BLOCKED"%'
+                       THEN 1 ELSE 0 END) AS blocked
+            FROM audit_events
+            WHERE event_type IN ('TASK_SUBMITTED', 'TASK_STATE_CHANGED')
+            GROUP BY bucket
+            ORDER BY bucket DESC
+            LIMIT 24
+            """
+        ).fetchall()
+        return tuple(
+            TaskTrendBucketView(
+                bucket_start=f"{row['bucket']}:00:00Z",
+                submitted=int(row["submitted"] or 0),
+                completed=int(row["completed"] or 0),
+                blocked=int(row["blocked"] or 0),
+            )
+            for row in reversed(rows)
+        )
+
+    def _task_state_distribution(
+        self, by_state: dict[str, int]
+    ) -> tuple[TaskStateSliceView, ...]:
+        return tuple(
+            TaskStateSliceView(state=state, count=int(count))
+            for state, count in sorted(by_state.items())
+            if int(count) > 0
+        )
+
+    def _quota_warning_count(self, providers: ProviderHealthListView) -> int:
+        warnings = 0
+        for provider in providers.providers:
+            for pool in provider.quota_pools:
+                if pool.confidence == "UNKNOWN":
+                    warnings += 1
+                if pool.state in {"EXHAUSTED", "EXHAUSTED_OBSERVED", "COOLDOWN"}:
+                    warnings += 1
+                for window in pool.windows:
+                    if window.confidence == "UNKNOWN":
+                        warnings += 1
+                    if (
+                        window.confidence in {"EXACT", "ESTIMATED"}
+                        and window.remaining_fraction is not None
+                        and window.remaining_fraction <= 0.15
+                    ):
+                        warnings += 1
+        return warnings
+
+    def _record_quota_history(self, providers: ProviderHealthListView) -> None:
+        for provider in providers.providers:
+            for pool in provider.quota_pools:
+                observed = pool.observed_at
+                for window in pool.windows:
+                    observed_at = observed or window.reset_at
+                    if observed_at is None:
+                        continue
+                    try:
+                        self.store.record_quota_observation(
+                            provider_id=provider.provider_id,
+                            quota_pool_id=pool.quota_pool_id,
+                            window_id=window.window_id,
+                            observed_at=observed_at,
+                            remaining_fraction=window.remaining_fraction,
+                            confidence=window.confidence,
+                            measurement_source=pool.measurement_source_type,
+                            reset_at=window.reset_at,
+                            state=window.state,
+                        )
+                    except Exception:
+                        pass
+
+    def quota_history(self) -> QuotaHistoryView:
+        rows = self.store.quota_observation_history(limit=200)
+        return QuotaHistoryView(
+            observations=tuple(
+                QuotaObservationView(
+                    provider_id=row["provider_id"],
+                    quota_pool_id=row["quota_pool_id"],
+                    window_id=row["window_id"],
+                    observed_at=row["observed_at"],
+                    remaining_fraction=row["remaining_fraction"],
+                    confidence=row["confidence"],
+                    measurement_source=row["measurement_source"],
+                    reset_at=row["reset_at"],
+                    state=row["state"],
+                )
+                for row in rows
+            ),
+            retention_limit=500,
+        )
+
+    def _risk_items(
+        self,
+        *,
+        blockers: list[str],
+        providers: ProviderHealthListView,
+        unavailable_projects: list[ProjectView],
+    ) -> tuple[RiskItemView, ...]:
+        risks: list[RiskItemView] = []
+        if unavailable_projects:
+            risks.append(
+                RiskItemView(
+                    title=f"{len(unavailable_projects)} project(s) unavailable",
+                    detail="Tasks for missing or invalid projects cannot be dispatched.",
+                    severity="BLOCKED",
+                    destination="projects",
+                    raw_code="PROJECT_UNAVAILABLE",
+                )
+            )
+        unverified_targets = [
+            target
+            for provider in providers.providers
+            for target in provider.execution_targets
+            if target.enabled and not target.execution_verified
+        ]
+        if unverified_targets:
+            risks.append(
+                RiskItemView(
+                    title=f"{len(unverified_targets)} execution target(s) are not verified",
+                    detail="Unverified targets cannot run real owner-dispatched tasks.",
+                    severity="WARNING",
+                    destination="models_providers",
+                    raw_code="EXECUTION_TARGET_UNVERIFIED",
+                )
+            )
+        exhausted = [
+            pool
+            for provider in providers.providers
+            for pool in provider.quota_pools
+            if pool.state in {"EXHAUSTED", "EXHAUSTED_OBSERVED", "COOLDOWN"}
+        ]
+        if exhausted:
+            risks.append(
+                RiskItemView(
+                    title=f"{len(exhausted)} quota pool(s) are blocked",
+                    detail="Some models may be unavailable until quota recovers.",
+                    severity="BLOCKED",
+                    destination="quota",
+                    raw_code="QUOTA_EXHAUSTED",
+                )
+            )
+        unknown = [
+            pool
+            for provider in providers.providers
+            for pool in provider.quota_pools
+            if pool.confidence == "UNKNOWN"
+        ]
+        if unknown:
+            risks.append(
+                RiskItemView(
+                    title=f"{len(unknown)} quota pool(s) have unknown limits",
+                    detail="Unknown quota is valid, but the UI cannot show reliable percentages.",
+                    severity="UNKNOWN",
+                    destination="quota",
+                    raw_code="QUOTA_UNKNOWN",
+                )
+            )
+        for raw in blockers:
+            if len(risks) >= 4:
+                break
+            if "owner approval" in raw:
+                risks.append(
+                    RiskItemView(
+                        title="Production automation is not authorized",
+                        detail="Owner approval is still required before ACTIVE mode.",
+                        severity="WARNING",
+                        destination="settings",
+                        raw_code=raw,
+                    )
+                )
+            elif "Shadow evidence" in raw:
+                risks.append(
+                    RiskItemView(
+                        title="Shadow evidence is still incomplete",
+                        detail=(
+                            "Production routing remains disabled until acceptance evidence "
+                            "is complete."
+                        ),
+                        severity="WARNING",
+                        destination="verification",
+                        raw_code=raw,
+                    )
+                )
+        return tuple(risks[:4])
+
     def dashboard_summary(self) -> DashboardSummaryView:
         task_rows = self.store.connection.execute(
             "SELECT state, COUNT(*) AS n FROM tasks GROUP BY state"
         ).fetchall()
         by_state = {row["state"]: row["n"] for row in task_rows}
         blockers = list(self.active_status().blocking_reasons)
+        providers = self.providers()
+        self._record_quota_history(providers)
+        unavailable_projects = [
+            project
+            for project in self.list_projects().projects
+            if project.storage_availability != ProjectAvailability.ONLINE.value
+        ]
+        for project in unavailable_projects:
+            blockers.append(f"{project.display_name} project {project.storage_availability}")
         blocked_count = int(by_state.get(TaskState.BLOCKED.value, 0))
         if blocked_count:
             blockers.insert(0, f"{blocked_count} task(s) blocked")
-        providers = self.providers()
         for provider in providers.providers:
             if not provider.quota_pools and not provider.execution_targets:
                 continue
@@ -762,11 +1540,47 @@ class ControlPlaneService:
                     + by_state.get(TaskState.SUBMITTED.value, 0)
                 ),
                 blocked=blocked_count,
+                verifying=int(by_state.get(TaskState.VERIFYING.value, 0)),
                 verified=int(by_state.get(TaskState.VERIFIED.value, 0)),
                 completed=int(by_state.get(TaskState.COMPLETED.value, 0)),
                 total=sum(int(value) for value in by_state.values()),
             ),
             recent_tasks=self.list_tasks(limit=10).tasks,
+            projects=self.list_projects(),
+            basic_info=DashboardBasicInfoView(
+                daemon_connection="CONNECTED",
+                registered_projects=len(self.list_projects().projects),
+                discovered_providers=len(providers.providers),
+                available_execution_targets=sum(
+                    1
+                    for provider in providers.providers
+                    for target in provider.execution_targets
+                    if target.enabled and target.runtime_available is True
+                ),
+                running_tasks=int(by_state.get(TaskState.RUNNING.value, 0)),
+                tasks_today=int(
+                    self.store.connection.execute(
+                        "SELECT COUNT(*) AS n FROM tasks WHERE created_at LIKE ?",
+                        (f"{self._today_prefix()}%",),
+                    ).fetchone()["n"]
+                ),
+                routing_decisions_today=int(
+                    self.store.connection.execute(
+                        "SELECT COUNT(*) AS n FROM routing_decisions WHERE created_at LIKE ?",
+                        (f"{self._today_prefix()}%",),
+                    ).fetchone()["n"]
+                ),
+                quota_warning_count=self._quota_warning_count(providers),
+                last_refresh_sync=datetime_now_iso(),
+            ),
+            task_trend=self._task_trend(),
+            task_state_distribution=self._task_state_distribution(by_state),
+            risks=self._risk_items(
+                blockers=blockers,
+                providers=providers,
+                unavailable_projects=unavailable_projects,
+            ),
+            quota_history=self.quota_history(),
             providers=providers,
             active_status=self.active_status(),
             important_blockers=tuple(blockers),
@@ -781,10 +1595,12 @@ class ControlPlaneService:
             return None
         return WorkspaceView(
             task_id=row["task_id"],
+            project_id=row["project_id"],
             repo_path=row["repo_path"],
             worktree_path=row["worktree_path"],
             branch=row["branch"],
             base_sha=row["base_sha"],
+            working_subpath=row["working_subpath"],
             writer_locked=row["writer_token"] is not None,
         )
 
@@ -903,6 +1719,11 @@ class ControlPlaneService:
                 if effective_registry.models[target.model_sku_id].provider_id == provider_id
             )
             evidence = evidence_by_provider.get(provider_id)
+            connection = (
+                self.provider_registry_manager.connection_registry().connections.get(provider_id)
+                if self.provider_registry_manager is not None
+                else None
+            )
             views.append(
                 ProviderHealthView(
                     provider_id=provider_id,
@@ -913,6 +1734,15 @@ class ControlPlaneService:
                     evidence_source=evidence.evidence_source if evidence else None,
                     auth_status=evidence.auth_status if evidence else None,
                     execution_status=evidence.execution_status if evidence else None,
+                    connection_state=(
+                        connection.connection_state.value if connection is not None else None
+                    ),
+                    auth_state=connection.auth_state.value if connection is not None else None,
+                    runtime_state=(
+                        connection.runtime_state.value if connection is not None else None
+                    ),
+                    plan_surface=connection.plan_surface if connection is not None else None,
+                    region=connection.region if connection is not None else None,
                     last_checked=(
                         evidence.observed_at.isoformat()
                         if evidence is not None and evidence.observed_at is not None
@@ -921,6 +1751,93 @@ class ControlPlaneService:
                 )
             )
         return ProviderHealthListView(providers=tuple(views))
+
+    @staticmethod
+    def _connection_view(connection) -> ProviderConnectionView:
+        return ProviderConnectionView(
+            provider_id=connection.provider_id,
+            display_name=connection.display_name,
+            connection_state=connection.connection_state.value,
+            auth_state=connection.auth_state.value,
+            execution_verified=connection.execution_verified,
+            runtime_state=connection.runtime_state.value,
+            credential_reference_type=connection.credential_reference_type.value,
+            region=connection.region,
+            plan_surface=connection.plan_surface,
+            model_skus=connection.model_skus,
+            connected_at=connection.connected_at.isoformat(),
+            last_validated_at=(
+                connection.last_validated_at.isoformat()
+                if connection.last_validated_at is not None
+                else None
+            ),
+            last_reason_code=connection.last_reason_code,
+        )
+
+    def provider_connections(self) -> ProviderConnectionListView:
+        if self.provider_registry_manager is None:
+            return ProviderConnectionListView(connected=(), available_to_add=())
+        projection = self.provider_registry_manager.connection_projection()
+        return ProviderConnectionListView(
+            connected=tuple(self._connection_view(item) for item in projection.connected),
+            available_to_add=tuple(
+                AvailableProviderView.model_validate(item)
+                for item in projection.available_to_add
+            ),
+            import_candidates=tuple(
+                self._import_candidate_view(item) for item in projection.import_candidates
+            ),
+        )
+
+    @staticmethod
+    def _import_candidate_view(candidate) -> ProviderImportCandidateView:
+        return ProviderImportCandidateView(
+            provider_id=candidate.provider_id,
+            display_name=candidate.display_name,
+            region=candidate.region,
+            plan_surface=candidate.plan_surface,
+            model_skus=candidate.model_skus,
+            execution_verified=candidate.execution_verified,
+            auth_state=candidate.auth_state.value,
+            credential_reference_type=candidate.credential_reference_type.value,
+            evidence=tuple(
+                ImportEvidenceItemView(
+                    kind=item.kind.value,
+                    detail=item.detail,
+                    observed_at=item.observed_at.isoformat() if item.observed_at else None,
+                )
+                for item in candidate.evidence
+            ),
+        )
+
+    def connect_provider(self, payload: dict[str, Any]) -> ProviderConnectionView:
+        request = ConnectProviderRequest.model_validate(payload)
+        self._validate_identifier("provider_id", request.provider_id)
+        if self.provider_registry_manager is None:
+            raise ControlPlaneError(503, "provider_registry_manager_not_configured")
+        try:
+            connection = self.provider_registry_manager.connect_provider(request.provider_id)
+        except LookupError as error:
+            code = str(error) or "provider_not_catalog_discovered"
+            raise ControlPlaneError(404, code) from None
+        return self._connection_view(connection)
+
+    def disconnect_provider(
+        self,
+        provider_id: str,
+        payload: dict[str, Any],
+    ) -> ProviderConnectionView:
+        self._validate_identifier("provider_id", provider_id)
+        request = DisconnectProviderRequest.model_validate(payload)
+        if not request.confirm:
+            raise ControlPlaneError(400, "disconnect_confirmation_required")
+        if self.provider_registry_manager is None:
+            raise ControlPlaneError(503, "provider_registry_manager_not_configured")
+        try:
+            connection = self.provider_registry_manager.disconnect_provider(provider_id)
+        except LookupError:
+            raise ControlPlaneError(404, "provider_not_connected") from None
+        return self._connection_view(connection)
 
     def _evidence_by_provider(self) -> dict[str, Any]:
         """Map ``provider_id`` to the latest sanitized discovery record.
@@ -1194,6 +2111,59 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                 self._json(405, {"error": "method_not_allowed"})
                 return
 
+            if rest == ("projects",):
+                if method == "GET":
+                    self._view(200, request_service.list_projects())
+                    return
+                if method == "POST":
+                    payload = self._read_json()
+                    if payload is None:
+                        return
+                    self._view(201, request_service.register_project(payload))
+                    return
+                self._json(405, {"error": "method_not_allowed"})
+                return
+
+            if rest == ("projects", "resolve"):
+                if method != "POST":
+                    self._json(405, {"error": "method_not_allowed"})
+                    return
+                payload = self._read_json()
+                if payload is None:
+                    return
+                self._view(200, request_service.resolve_project(payload))
+                return
+
+            if count >= 2 and rest[0] == "projects":
+                project_id = rest[1]
+                sub = rest[2] if count == 3 else None
+                if count == 2:
+                    if method != "GET":
+                        self._json(405, {"error": "method_not_allowed"})
+                        return
+                    self._view(200, request_service.get_project(project_id))
+                    return
+                if count == 3 and sub == "remove" and method == "POST":
+                    self._view(200, request_service.remove_project(project_id))
+                    return
+                if count == 3 and sub == "opened" and method == "POST":
+                    payload = self._read_json()
+                    if payload is None:
+                        return
+                    self._view(200, request_service.mark_project_opened(project_id))
+                    return
+                if count == 3 and sub == "scheduling" and method == "PUT":
+                    payload = self._read_json()
+                    if payload is None:
+                        return
+                    self._view(
+                        200,
+                        request_service.set_project_scheduling_policy(project_id, payload),
+                    )
+                    return
+                self._json(404, {"error": "not_found"})
+                return
+
             if count >= 2 and rest[0] == "tasks":
                 task_id = rest[1]
                 sub = rest[2] if count == 3 else None
@@ -1258,11 +2228,57 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                 self._json(405, {"error": "method_not_allowed"})
                 return
 
+            if rest == ("settings", "scheduling"):
+                if method == "GET":
+                    self._view(200, request_service.scheduling_settings_view())
+                    return
+                if method == "PUT":
+                    payload = self._read_json()
+                    if payload is None:
+                        return
+                    self._view(200, request_service.update_scheduling_settings(payload))
+                    return
+                self._json(405, {"error": "method_not_allowed"})
+                return
+
             if rest == ("providers",):
                 if method != "GET":
                     self._json(405, {"error": "method_not_allowed"})
                     return
                 self._view(200, request_service.providers())
+                return
+
+            if rest == ("provider-connections",):
+                if method == "GET":
+                    self._view(200, request_service.provider_connections())
+                    return
+                if method == "POST":
+                    payload = self._read_json()
+                    if payload is None:
+                        return
+                    self._view(201, request_service.connect_provider(payload))
+                    return
+                self._json(405, {"error": "method_not_allowed"})
+                return
+
+            if rest == ("provider-connections", "import"):
+                if method != "POST":
+                    self._json(405, {"error": "method_not_allowed"})
+                    return
+                payload = self._read_json()
+                if payload is None:
+                    return
+                self._view(200, request_service.import_provider_connections(payload))
+                return
+
+            if count == 3 and rest[0] == "provider-connections" and rest[2] == "disconnect":
+                if method != "POST":
+                    self._json(405, {"error": "method_not_allowed"})
+                    return
+                payload = self._read_json()
+                if payload is None:
+                    return
+                self._view(200, request_service.disconnect_provider(rest[1], payload))
                 return
 
             if rest == ("providers", "status"):

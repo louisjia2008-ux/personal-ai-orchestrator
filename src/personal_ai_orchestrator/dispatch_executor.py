@@ -285,7 +285,11 @@ class OwnerDispatchExecutor:
             return
         ready_version = task.state_version
 
-        main_before = self._fingerprint_or_blocked(store, request_id)
+        project_root = self._project_root_or_blocked(store, dispatch, request_id)
+        if project_root is None:
+            store.close()
+            return
+        main_before = self._fingerprint_or_blocked(store, request_id, project_root)
         if main_before is None:
             store.close()
             return
@@ -559,7 +563,7 @@ class OwnerDispatchExecutor:
 
         # -- main repo immutability --------------------------------------
         try:
-            main_after = main_repo_fingerprint(self.config.repo_path)
+            main_after = main_repo_fingerprint(project_root)
             main_unchanged = main_before == main_after
         except Exception:
             main_after = dict(main_before)
@@ -743,11 +747,102 @@ class OwnerDispatchExecutor:
     def _open_store(self) -> SafetyKernelStore:
         return self._store_factory()
 
+    def _project_root_or_blocked(
+        self,
+        store: SafetyKernelStore,
+        dispatch: OwnerDispatchRecord,
+        request_id: str,
+    ) -> Path | None:
+        try:
+            task = store.get_task(dispatch.task_id)
+        except Exception:
+            store.mark_owner_dispatch_blocked(
+                request_id,
+                failure_code="TASK_NOT_FOUND",
+                failure_reason="dispatch task could not be loaded",
+            )
+            return None
+        if task.project_id is None:
+            self._fail_pre_worker(
+                store,
+                request_id,
+                failure_code="MISSING_PROJECT_ID",
+                failure_reason="coding tasks require an explicit registered project",
+            )
+            return None
+        if task.base_sha is None:
+            self._fail_pre_worker(
+                store,
+                request_id,
+                failure_code="PROJECT_BASE_SHA_MISSING",
+                failure_reason="coding tasks require a durable base_sha",
+            )
+            return None
+        try:
+            project = store.get_project(task.project_id)
+        except KeyError:
+            self._fail_pre_worker(
+                store,
+                request_id,
+                failure_code="PROJECT_NOT_REGISTERED",
+                failure_reason="task project_id is not registered",
+            )
+            return None
+        if project.storage_availability.value != "ONLINE":
+            self._fail_pre_worker(
+                store,
+                request_id,
+                failure_code=f"PROJECT_{project.storage_availability.value}",
+                failure_reason="registered project is not currently available",
+            )
+            return None
+        root = Path(project.git_root)
+        if not root.exists():
+            try:
+                from personal_ai_orchestrator.safety_kernel import ProjectAvailability
+
+                store.update_project_availability(
+                    project.project_id,
+                    storage_availability=ProjectAvailability.MISSING,
+                )
+            except Exception:
+                pass
+            self._fail_pre_worker(
+                store,
+                request_id,
+                failure_code="PROJECT_MISSING",
+                failure_reason="registered project path is missing",
+            )
+            return None
+        try:
+            top = Path(_git(root, "rev-parse", "--show-toplevel")).resolve()
+            if top != root.resolve():
+                raise ValueError("registered path is no longer the git root")
+            _git(root, "cat-file", "-e", f"{task.base_sha}^{{commit}}")
+        except Exception:
+            try:
+                from personal_ai_orchestrator.safety_kernel import ProjectAvailability
+
+                store.update_project_availability(
+                    project.project_id,
+                    storage_availability=ProjectAvailability.INVALID_REPOSITORY,
+                )
+            except Exception:
+                pass
+            self._fail_pre_worker(
+                store,
+                request_id,
+                failure_code="PROJECT_INVALID_REPOSITORY",
+                failure_reason="registered project is not a usable git repository",
+            )
+            return None
+        return root
+
     def _fingerprint_or_blocked(
-        self, store: SafetyKernelStore, request_id: str
+        self, store: SafetyKernelStore, request_id: str, repo_path: Path
     ) -> dict[str, str] | None:
         try:
-            return main_repo_fingerprint(self.config.repo_path)
+            return main_repo_fingerprint(repo_path)
         except Exception:
             store.mark_owner_dispatch_blocked(
                 request_id,
@@ -760,7 +855,16 @@ class OwnerDispatchExecutor:
         self, store: SafetyKernelStore, dispatch: OwnerDispatchRecord
     ) -> tuple[ManagedWorktree | None, str | None]:
         try:
-            base_sha = _git(self.config.repo_path, "rev-parse", "HEAD")
+            task = store.get_task(dispatch.task_id)
+            if task.project_id is None:
+                return None, "MISSING_PROJECT_ID"
+            if task.base_sha is None:
+                return None, "PROJECT_BASE_SHA_MISSING"
+            project = store.get_project(task.project_id)
+            if project.storage_availability.value != "ONLINE":
+                return None, f"PROJECT_{project.storage_availability.value}"
+            repo_path = Path(project.git_root)
+            base_sha = task.base_sha
             manager = WorktreeManager(self.config.worktree_root)
             try:
                 existing = store.get_workspace(dispatch.task_id)
@@ -776,7 +880,7 @@ class OwnerDispatchExecutor:
             except KeyError:
                 pass
             managed = manager.create(
-                repo_path=self.config.repo_path,
+                repo_path=repo_path,
                 task_id=dispatch.task_id,
                 base_sha=base_sha,
             )
@@ -787,6 +891,8 @@ class OwnerDispatchExecutor:
                 worktree_path=str(managed.worktree_path),
                 branch=managed.branch,
                 base_sha=managed.base_sha,
+                project_id=task.project_id,
+                working_subpath=task.working_subpath,
             )
             return managed, None
         except FileExistsError:

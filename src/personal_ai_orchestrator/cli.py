@@ -169,6 +169,11 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--task-id", required=True)
     submit.add_argument("--request-id", required=True)
     submit.add_argument(
+        "--project-id",
+        required=True,
+        help="registered project id; terminal cwd is never used as task context",
+    )
+    submit.add_argument(
         "--intent",
         required=True,
         help="natural-language task intent (never executed)",
@@ -212,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
             view = client.submit(
                 task_id=args.task_id,
                 request_id=args.request_id,
+                project_id=args.project_id,
                 intent=args.intent,
             )
             _emit(view, as_json=args.json, render=_render_task)

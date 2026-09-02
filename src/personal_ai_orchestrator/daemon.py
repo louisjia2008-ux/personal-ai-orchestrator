@@ -18,6 +18,7 @@ from personal_ai_orchestrator.execution_controller import reconcile_workspace_tr
 from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
 from personal_ai_orchestrator.local_api import serve
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
+from personal_ai_orchestrator.scheduling_settings import SchedulingSettings
 from personal_ai_orchestrator.policy_snapshot import PolicySnapshotJournal
 from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryManager
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
@@ -58,11 +59,23 @@ def build_service(
         store=store,
         catalog_snapshot_id=config.catalog_snapshot_id,
         policy=config.policy,
+        project_policy_overrides=dict(config.project_policy_overrides),
+        task_policy_overrides=dict(config.task_policy_overrides),
         # Production ACTIVE is intentionally impossible from static config alone.
         activation_gate=ActiveRoutingGate(),
         policy_journal=PolicySnapshotJournal(runtime_state_root),
         runtime_availability=dict(config.runtime_availability),
         telemetry=dict(config.telemetry),
+        connected_provider_ids_provider=(
+            provider_registry_manager.connected_provider_ids
+            if provider_registry_manager is not None
+            else None
+        ),
+        # The owner's global default lives host-side and outranks the static config
+        # objective, so Settings and routing cannot disagree.
+        scheduling_settings=SchedulingSettings(
+            runtime_state_root / "scheduling-settings.json"
+        ),
     )
     for profile in config.task_profiles:
         service.set_task_profile(profile)
@@ -176,6 +189,15 @@ def build_control_service(
         else config.registry
     )
     execution_evidence_journal = ExecutionEvidenceJournal(runtime_state_root)
+    if provider_registry_manager is not None:
+        # Import candidates may cite a prior VERIFIED real worker execution. The
+        # lookup is scoped to one exact provider_id, so evidence never crosses a
+        # region, plan surface, or provider boundary.
+        provider_registry_manager.set_verified_execution_lookup(
+            lambda provider_id: (
+                lambda evidence: evidence.observed_at if evidence is not None else None
+            )(execution_evidence_journal.latest_verified_for_provider(provider_id))
+        )
     executor = None
     if execution_repo is not None:
         executor = OwnerDispatchExecutor(
@@ -208,6 +230,9 @@ def build_control_service(
         provider_registry_manager=provider_registry_manager,
         owner_execution=OwnerExecutionSettings(
             runtime_state_root / "owner-execution.json"
+        ),
+        scheduling_settings=SchedulingSettings(
+            runtime_state_root / "scheduling-settings.json"
         ),
         execution_evidence_journal=execution_evidence_journal,
         dispatch_executor=executor,

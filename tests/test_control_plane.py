@@ -1,6 +1,7 @@
 import json
 import shutil
 import stat
+import subprocess
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -128,6 +129,27 @@ def _registry() -> ModelRegistry:
     )
 
 
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    ).stdout.strip()
+
+
+def _make_repo(path: Path) -> Path:
+    path.mkdir(parents=True)
+    _git(path, "init", "-q", "-b", "main")
+    _git(path, "config", "user.email", "control@example.invalid")
+    _git(path, "config", "user.name", "Control")
+    (path / "README.md").write_text("# fixture\n", encoding="utf-8")
+    _git(path, "add", "README.md")
+    _git(path, "commit", "-q", "-m", "initial")
+    return path
+
+
 @pytest.fixture
 def harness(tmp_path):
     # macOS limits AF_UNIX sun_path to 104 bytes; pytest tmp_path dirs are deeper than that.
@@ -154,6 +176,8 @@ def harness(tmp_path):
     server = ControlPlaneServer(service, socket_path)
     server.start_background()
     client = ControlPlaneClient(socket_path)
+    repo = _make_repo(tmp_path / "project")
+    project = client.register_project(path=str(repo), display_name="Fixture")
     try:
         yield type(
             "Harness",
@@ -166,6 +190,8 @@ def harness(tmp_path):
                 "tmp_path": tmp_path,
                 "socket_path": socket_path,
                 "availability": availability,
+                "repo": repo,
+                "project": project,
             },
         )()
     finally:
@@ -184,8 +210,20 @@ def _raw_request(socket_path, method, path, *, headers=None, body=None):
         connection.close()
 
 
-def _submit(harness, *, task_id="task-1", request_id="req-1", intent="fix the bug"):
-    return harness.client.submit(task_id=task_id, request_id=request_id, intent=intent)
+def _submit(
+    harness,
+    *,
+    task_id="task-1",
+    request_id="req-1",
+    intent="fix the bug",
+    project_id=None,
+):
+    return harness.client.submit(
+        task_id=task_id,
+        request_id=request_id,
+        project_id=project_id or harness.project.project_id,
+        intent=intent,
+    )
 
 
 def test_health_roundtrip(harness):
@@ -208,14 +246,67 @@ def test_submit_get_list_roundtrip(harness):
     view = _submit(harness)
     assert view.state == TaskState.SUBMITTED.value
     assert view.state_version == 0
+    assert view.project_id == harness.project.project_id
+    assert view.base_sha == _git(harness.repo, "rev-parse", "HEAD")
 
     fetched = harness.client.get_task("task-1")
     assert fetched.task_id == "task-1"
     assert fetched.intent == "fix the bug"
+    assert fetched.working_subpath is None
 
     listed = harness.client.list_tasks()
     assert listed.total == 1
     assert listed.tasks[0].task_id == "task-1"
+
+
+def test_project_registry_resolves_registers_and_lists_git_roots(harness):
+    nested = harness.repo / "apps" / "desktop"
+    nested.mkdir(parents=True)
+    preview = harness.client.resolve_project(path=str(nested))
+    assert preview.git_root == str(harness.repo.resolve())
+    assert preview.canonical_repo_root == str(nested.resolve())
+    assert preview.working_subpath == "apps/desktop"
+    assert preview.storage_availability == "ONLINE"
+
+    project = harness.client.register_project(path=str(nested), display_name="Desktop")
+    assert project.display_name == "Desktop"
+    assert project.working_subpath == "apps/desktop"
+    listed = harness.client.list_projects()
+    assert {item.project_id for item in listed.projects} >= {
+        harness.project.project_id,
+        project.project_id,
+    }
+
+
+def test_project_registration_rejects_invalid_repositories(harness, tmp_path):
+    invalid = tmp_path / "not-a-repo"
+    invalid.mkdir()
+    with pytest.raises(ControlPlaneError) as error:
+        harness.client.resolve_project(path=str(invalid))
+    assert error.value.status == 400
+    assert error.value.code == "invalid_repository"
+
+
+def test_project_removal_only_forgets_registration(harness):
+    removed = harness.client.remove_project(harness.project.project_id)
+    assert removed.removed_from_orchestrator is True
+    assert harness.repo.exists()
+    assert (harness.repo / "README.md").exists()
+    assert harness.project.project_id not in {
+        project.project_id for project in harness.client.list_projects().projects
+    }
+
+
+def test_submit_requires_registered_project(harness):
+    with pytest.raises(ControlPlaneError) as error:
+        harness.client.submit(
+            task_id="task-missing-project",
+            request_id="req-missing-project",
+            project_id="project-not-registered",
+            intent="fix",
+        )
+    assert error.value.status == 400
+    assert error.value.code == "project_not_registered"
 
 
 def test_submit_is_idempotent_by_request_id(harness):
@@ -474,6 +565,7 @@ def test_submit_rejects_unsafe_task_id(harness):
         harness.client.submit(
             task_id="../escape",
             request_id="req-2",
+            project_id=harness.project.project_id,
             intent="text",
         )
     assert error.value.status == 400
@@ -707,15 +799,64 @@ def test_dashboard_summary_composes_sanitized_authoritative_state(harness):
     view = harness.client.dashboard()
     assert view.connection.status == "ok"
     assert view.counts.running == 1
+    assert view.counts.verifying == 0
     assert view.counts.total == 1
     assert view.recent_tasks[0].task_id == "task-dash"
+    assert view.basic_info.registered_projects == 1
+    assert view.basic_info.discovered_providers == 1
+    assert view.basic_info.running_tasks == 1
+    assert view.basic_info.tasks_today >= 0
+    assert view.task_trend
+    assert any(bucket.submitted >= 1 for bucket in view.task_trend)
+    assert any(
+        slice.state == TaskState.RUNNING.value and slice.count == 1
+        for slice in view.task_state_distribution
+    )
     assert view.active_status.production_active == "DISABLED_BY_DESIGN"
     assert "explicit owner approval missing" in view.important_blockers
+    assert any(risk.title == "Production automation is not authorized" for risk in view.risks)
+    assert all(
+        risk.raw_code is None or "credential" not in risk.raw_code.lower()
+        for risk in view.risks
+    )
+    assert view.quota_history.retention_limit == 500
+    assert view.quota_history.observations
     assert any(event.event_type == "TASK_STATE_CHANGED" for event in view.recent_events)
 
     raw = view.model_dump_json().lower()
     assert SECRET_MARKER not in raw
     assert "credential_ref" not in raw
+
+
+def test_quota_history_is_bounded_and_deduplicated(harness):
+    for index in range(505):
+        harness.store.record_quota_observation(
+            provider_id="minimax",
+            quota_pool_id="pool",
+            window_id="5h",
+            observed_at=f"2026-08-31T00:{index:03d}:00Z",
+            remaining_fraction=0.8,
+            confidence="ESTIMATED",
+            measurement_source="PROVIDER_API",
+            reset_at=None,
+            state="AVAILABLE",
+        )
+
+    harness.store.record_quota_observation(
+        provider_id="minimax",
+        quota_pool_id="pool",
+        window_id="5h",
+        observed_at="2026-08-31T00:504:00Z",
+        remaining_fraction=0.8,
+        confidence="ESTIMATED",
+        measurement_source="PROVIDER_API",
+        reset_at=None,
+        state="AVAILABLE",
+    )
+
+    rows = harness.store.quota_observation_history(limit=600)
+    assert len(rows) == 500
+    assert sum(1 for row in rows if row["observed_at"] == "2026-08-31T00:504:00Z") == 1
 
 
 def test_dashboard_summary_is_read_only(harness):
@@ -913,7 +1054,8 @@ def test_cli_submit_status_active_status(harness, capsys):
     socket_value = str(harness.socket_path)
 
     assert cli_main([socket_arg, socket_value, "submit", "--task-id", "cli-1",
-                     "--request-id", "cli-req-1", "--intent", "cli driven task"]) == 0
+                     "--request-id", "cli-req-1", "--project-id", harness.project.project_id,
+                     "--intent", "cli driven task"]) == 0
     out = capsys.readouterr().out
     assert "SUBMITTED" in out
 
@@ -965,7 +1107,14 @@ def test_daemon_control_service_wiring(tmp_path):
     server.start_background()
     client = ControlPlaneClient(socket_path)
     try:
-        view = client.submit(task_id="wire-1", request_id="wire-req-1", intent="wired")
+        repo = _make_repo(tmp_path / "wired-project")
+        project = client.register_project(path=str(repo), display_name="Wired")
+        view = client.submit(
+            task_id="wire-1",
+            request_id="wire-req-1",
+            project_id=project.project_id,
+            intent="wired",
+        )
         assert view.state == TaskState.SUBMITTED.value
         status = client.active_status()
         assert status.production_active == "DISABLED_BY_DESIGN"
