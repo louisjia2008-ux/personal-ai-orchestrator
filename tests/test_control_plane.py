@@ -991,8 +991,21 @@ def test_provider_health_is_sanitized(harness):
     assert target.observed_availability.confidence == EvidenceConfidence.UNKNOWN.value
 
 
-def test_quota_alias_matches_providers(harness):
-    assert harness.client.quota().providers == harness.client.providers().providers
+def test_quota_is_connection_based_not_pool_based(harness):
+    """Quota enumerates connected providers, never merely providers with pools.
+
+    This harness has a catalog provider carrying a real quota pool but no
+    connection registry, so the page must report NO_CONNECTED_PROVIDER rather
+    than borrowing the catalog list.
+    """
+
+    view = harness.client.quota()
+    assert view.state == "NO_CONNECTED_PROVIDER"
+    assert view.providers == ()
+    assert view.summary.connected_provider_count == 0
+    assert view.summary.quota_observable_provider_count == 0
+    # The catalog provider is still visible on the Providers page.
+    assert harness.client.providers().providers[0].quota_pools
 
 
 def test_active_status_fail_closed(harness):

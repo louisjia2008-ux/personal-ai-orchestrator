@@ -31,6 +31,8 @@ from personal_ai_orchestrator.control_api import (
     ProjectRemoveView,
     ProjectView,
     ProviderHealthListView,
+    QuotaOverviewView,
+    QuotaRefreshResultView,
     RoutingDecisionView,
     RunListView,
     RunView,
@@ -283,8 +285,20 @@ class ControlPlaneClient:
     def providers(self) -> ProviderHealthListView:
         return self._get("/v1/providers", ProviderHealthListView)  # type: ignore[return-value]
 
-    def quota(self) -> ProviderHealthListView:
-        return self._get("/v1/quota", ProviderHealthListView)  # type: ignore[return-value]
+    def quota(self) -> QuotaOverviewView:
+        """Connection-based quota projection (connected providers, not pools)."""
+
+        return self._get("/v1/quota", QuotaOverviewView)  # type: ignore[return-value]
+
+    def refresh_quota(self, provider_id: str | None = None) -> QuotaRefreshResultView:
+        """Explicit read-only quota collection, distinct from provider discovery."""
+
+        path = (
+            f"/v1/providers/{provider_id}/quota/refresh"
+            if provider_id is not None
+            else "/v1/quota/refresh"
+        )
+        return QuotaRefreshResultView.model_validate(self._request("POST", path, payload={}))
 
     def active_status(self) -> ActiveStatusView:
         return self._get("/v1/active-status", ActiveStatusView)  # type: ignore[return-value]
