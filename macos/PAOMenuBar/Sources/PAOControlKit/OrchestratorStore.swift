@@ -56,6 +56,7 @@ public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var schedulingSettings: SchedulingSettingsView?
     @Published public private(set) var lastDispatch: DispatchTaskView?
     @Published public private(set) var dispatchNotice: DispatchNotice?
+    @Published public private(set) var daemonBuild: BuildView?
     @Published public private(set) var lastError: PAOClientError?
     @Published public private(set) var lastSubmittedTaskId: String?
     @Published public private(set) var submitNotice: SubmitNotice?
@@ -68,6 +69,12 @@ public final class OrchestratorStore: ObservableObject {
     @Published public var selectedProjectId: String?
     @Published public var selectedSchedulingPolicy: String = "BALANCED"
     @Published public var selectedManualExecutionTargetId: String?
+
+    /// Whether the dashboard binary and the connected daemon came from the same
+    /// commit. Surfaced in Settings so stale-stack truth is never presented as live.
+    public var buildCompatibility: BuildCompatibility {
+        BuildCompatibility.compare(app: BuildIdentity.current, daemonCommitSHA: daemonBuild?.commitSHA)
+    }
 
     public let socketPath: String
     public let daemonLifecycle: DaemonLifecycleController
@@ -190,6 +197,9 @@ public final class OrchestratorStore: ObservableObject {
                 return
             }
             transition(.connected)
+            // A daemon predating this endpoint simply reports nothing; the UI
+            // then shows the comparison as indeterminate rather than matched.
+            self.daemonBuild = try? await client.build()
             let dashboard = try await client.dashboard()
             self.dashboard = dashboard
             self.tasks = TaskListView(tasks: dashboard.recentTasks, total: dashboard.counts.total)

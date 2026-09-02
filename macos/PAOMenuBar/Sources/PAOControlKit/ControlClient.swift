@@ -23,6 +23,10 @@ public struct PAOControlClient: Sendable {
         try await get("/v1/health")
     }
 
+    public func build() async throws -> BuildView {
+        try await get("/v1/build")
+    }
+
     public func listTasks(limit: Int? = nil) async throws -> TaskListView {
         let path = limit.map { "/v1/tasks?limit=\($0)" } ?? "/v1/tasks"
         return try await get(path)

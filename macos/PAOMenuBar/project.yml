@@ -8,6 +8,11 @@ packages:
     path: .
 settings:
   base:
+    # Build identity is supplied by scripts/build_app_bundle.sh from
+    # `git rev-parse HEAD`. Empty defaults mean an identity-less build reports
+    # UNKNOWN in the UI instead of inheriting a stale commit.
+    PAO_BUILD_COMMIT: ""
+    PAO_BUILD_TIMESTAMP: ""
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: "-"
     CODE_SIGN_INJECT_BASE_ENTITLEMENTS: "NO"
@@ -29,6 +34,9 @@ targets:
       properties:
         LSMinimumSystemVersion: "13.0"
         PAOWidgetAppGroup: group.com.personal-ai-orchestrator.dashboard
+        PAOBuildCommit: "$(PAO_BUILD_COMMIT)"
+        PAOBuildConfiguration: "$(CONFIGURATION)"
+        PAOBuildTimestamp: "$(PAO_BUILD_TIMESTAMP)"
     entitlements:
       path: Config/PersonalAIOrchestrator.entitlements
       properties:

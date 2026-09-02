@@ -282,3 +282,21 @@
 
 "notice.manualTargetRequired" = "手动指定策略需要先选择一个执行模型。";
 "providers.disconnect" = "断开连接";
+
+/* 构建标识 */
+"build.title" = "构建信息";
+"build.version" = "版本";
+"build.commit" = "提交";
+"build.short" = "构建";
+"build.configuration" = "配置";
+"build.timestamp" = "构建时间";
+"build.daemon" = "守护进程";
+"build.advanced" = "高级详情";
+"build.unknown" = "未知";
+"build.mismatchTitle" = "版本不一致";
+"build.mismatchApp" = "应用";
+"build.mismatchDaemon" = "守护进程";
+"build.mismatchFooter" = "控制台与守护进程来自不同的提交，显示的数据可能并非当前构建的真实状态。";
+"build.matched" = "应用与守护进程一致";
+"build.indeterminate" = "无法获取构建标识";
+"action.restartDaemon" = "重启守护进程";

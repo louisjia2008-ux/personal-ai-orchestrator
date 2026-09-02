@@ -282,3 +282,21 @@
 
 "notice.manualTargetRequired" = "Manual policy requires choosing an execution model first.";
 "providers.disconnect" = "Disconnect Provider";
+
+/* Build identity */
+"build.title" = "Build Information";
+"build.version" = "Version";
+"build.commit" = "Commit";
+"build.short" = "Build";
+"build.configuration" = "Configuration";
+"build.timestamp" = "Built";
+"build.daemon" = "Daemon";
+"build.advanced" = "Advanced Details";
+"build.unknown" = "UNKNOWN";
+"build.mismatchTitle" = "Version mismatch";
+"build.mismatchApp" = "App";
+"build.mismatchDaemon" = "Daemon";
+"build.mismatchFooter" = "The dashboard and the daemon were built from different commits. Displayed data may not reflect this build.";
+"build.matched" = "App and daemon match";
+"build.indeterminate" = "Build identity unavailable";
+"action.restartDaemon" = "Restart Daemon";

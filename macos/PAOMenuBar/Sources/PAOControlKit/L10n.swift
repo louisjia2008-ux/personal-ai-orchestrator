@@ -83,6 +83,11 @@ public enum L10n {
         "quota.source.locallyInferred", "quota.source.unknown",
         "quota.state.exhausted", "quota.state.recovered", "quota.state.unknown",
         "action.copyTaskId", "action.copyTaskId.help", "action.reload",
+        "build.title", "build.version", "build.commit", "build.short",
+        "build.configuration", "build.timestamp", "build.daemon", "build.advanced",
+        "build.unknown", "build.mismatchTitle", "build.mismatchApp",
+        "build.mismatchDaemon", "build.mismatchFooter", "build.matched",
+        "build.indeterminate", "action.restartDaemon",
         "action.reload.help", "empty.tasksHint", "empty.taskContextHint",
         "empty.taskDetailHint", "settings.activeAuthorized",
         "settings.activeNotAuthorized", "settings.activeGateLabel",
@@ -572,6 +577,25 @@ public enum L10n {
     public static var activeGateLabel: String { tr("settings.activeGateLabel") }
     public static var activeGateOpen: String { tr("settings.activeGate.open") }
     public static var activeGateClosed: String { tr("settings.activeGate.closed") }
+
+    // MARK: - Build identity
+
+    public static var buildTitle: String { tr("build.title") }
+    public static var buildVersion: String { tr("build.version") }
+    public static var buildCommit: String { tr("build.commit") }
+    public static var buildShort: String { tr("build.short") }
+    public static var buildConfiguration: String { tr("build.configuration") }
+    public static var buildTimestamp: String { tr("build.timestamp") }
+    public static var buildDaemon: String { tr("build.daemon") }
+    public static var buildAdvanced: String { tr("build.advanced") }
+    public static var buildUnknown: String { tr("build.unknown") }
+    public static var buildMismatchTitle: String { tr("build.mismatchTitle") }
+    public static var buildMismatchApp: String { tr("build.mismatchApp") }
+    public static var buildMismatchDaemon: String { tr("build.mismatchDaemon") }
+    public static var buildMismatchFooter: String { tr("build.mismatchFooter") }
+    public static var buildMatched: String { tr("build.matched") }
+    public static var buildIndeterminate: String { tr("build.indeterminate") }
+    public static var restartDaemonAction: String { tr("action.restartDaemon") }
 
     // MARK: - P4.2.4-A unified shell
 

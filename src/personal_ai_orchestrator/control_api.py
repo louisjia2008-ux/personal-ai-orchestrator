@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from personal_ai_orchestrator.activation import ActiveRoutingGate
 from personal_ai_orchestrator.approval import ApprovalAuthority
+from personal_ai_orchestrator.build_identity import resolve_build_identity
 from personal_ai_orchestrator.execution_controller import validate_execution_target_launch
 from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
 from personal_ai_orchestrator.model_registry import ModelRegistry
@@ -476,6 +477,21 @@ class ApprovalListView(_ViewModel):
 class HealthView(_ViewModel):
     status: str
     api_version: str
+
+
+class BuildView(_ViewModel):
+    """Sanitized daemon build identity.
+
+    Carries commit identity only, so the dashboard can prove the UI and the
+    daemon came from the same source revision. Never carries credentials,
+    paths, or repository content.
+    """
+
+    commit_sha: str
+    short_sha: str
+    api_version: str
+    configuration: str
+    built_at: str
 
 
 class ProjectResolveRequest(_ViewModel):
@@ -1965,6 +1981,17 @@ class ControlPlaneService:
     def health(self) -> HealthView:
         return HealthView(status="ok", api_version=CONTROL_API_VERSION)
 
+    def build(self) -> BuildView:
+        """Report which commit produced this daemon, or ``unknown`` if unresolvable."""
+        identity = resolve_build_identity()
+        return BuildView(
+            commit_sha=identity.commit_sha,
+            short_sha=identity.short_sha,
+            api_version=CONTROL_API_VERSION,
+            configuration=identity.configuration,
+            built_at=identity.built_at,
+        )
+
 
 def _host_allowed(value: str | None) -> bool:
     if value is None:
@@ -2089,6 +2116,13 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                     self._json(405, {"error": "method_not_allowed"})
                     return
                 self._view(200, request_service.health())
+                return
+
+            if rest == ("build",):
+                if method != "GET":
+                    self._json(405, {"error": "method_not_allowed"})
+                    return
+                self._view(200, request_service.build())
                 return
 
             if rest == ("tasks",):

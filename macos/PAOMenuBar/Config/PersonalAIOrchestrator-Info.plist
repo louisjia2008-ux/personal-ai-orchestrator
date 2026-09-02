@@ -20,6 +20,12 @@
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
+	<key>PAOBuildCommit</key>
+	<string>$(PAO_BUILD_COMMIT)</string>
+	<key>PAOBuildConfiguration</key>
+	<string>$(CONFIGURATION)</string>
+	<key>PAOBuildTimestamp</key>
+	<string>$(PAO_BUILD_TIMESTAMP)</string>
 	<key>PAOWidgetAppGroup</key>
 	<string>group.com.personal-ai-orchestrator.dashboard</string>
 </dict>

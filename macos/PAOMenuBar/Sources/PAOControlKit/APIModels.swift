@@ -21,6 +21,40 @@ public struct HealthView: Decodable, Equatable, Sendable {
     public var isCompatible: Bool { apiVersion == APIVersion.v1 }
 }
 
+/// Daemon build identity, so the dashboard can prove both halves of the stack
+/// came from the same source revision rather than assuming it.
+public struct BuildView: Decodable, Equatable, Sendable {
+    public let commitSHA: String
+    public let shortSHA: String
+    public let apiVersion: String
+    public let configuration: String
+    public let builtAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case commitSHA = "commit_sha"
+        case shortSHA = "short_sha"
+        case apiVersion = "api_version"
+        case configuration
+        case builtAt = "built_at"
+    }
+
+    public init(
+        commitSHA: String,
+        shortSHA: String,
+        apiVersion: String,
+        configuration: String,
+        builtAt: String
+    ) {
+        self.commitSHA = commitSHA
+        self.shortSHA = shortSHA
+        self.apiVersion = apiVersion
+        self.configuration = configuration
+        self.builtAt = builtAt
+    }
+
+    public var isCompatible: Bool { apiVersion == APIVersion.v1 }
+}
+
 public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
     public let taskId: String
     public let requestId: String
