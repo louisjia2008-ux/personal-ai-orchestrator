@@ -857,6 +857,62 @@ public enum L10n {
     public static var quotaHistoryEmpty: String { tr("quota.history.empty") }
     public static var quotaNoReliablePercentage: String { tr("quota.noReliablePercentage") }
 
+    // Shared subscription plan (P4.2.6.5)
+    public static var quotaPlanSharedQuota: String { tr("quota.plan.sharedQuota") }
+    public static var quotaPlanSharedModels: String { tr("quota.plan.sharedModels") }
+    public static var quotaPlanModelUsage: String { tr("quota.plan.modelUsage") }
+    public static var quotaPlanModelUsageFooter: String { tr("quota.plan.modelUsageFooter") }
+    public static var quotaPlanEquivalents: String { tr("quota.plan.equivalents") }
+    public static var quotaPlanEquivalentsFooter: String { tr("quota.plan.equivalentsFooter") }
+    public static var quotaPlanEstimatedCapacity: String { tr("quota.plan.estimatedCapacity") }
+    public static var quotaPlanEstimatedCapacityFooter: String {
+        tr("quota.plan.estimatedCapacityFooter")
+    }
+    public static var quotaPlanInsufficientHistory: String {
+        tr("quota.plan.insufficientHistory")
+    }
+    public static var quotaPlanLevel: String { tr("quota.plan.level") }
+    public static var quotaPlanPoolId: String { tr("quota.plan.poolId") }
+    public static var quotaPlanSharedSemantics: String { tr("quota.plan.sharedSemantics") }
+    public static var quotaPlanNoPlanFigure: String { tr("quota.plan.noPlanFigure") }
+    public static var quotaPlanCredentialSource: String { tr("quota.plan.credentialSource") }
+    public static var quotaPlanUnitLabel: String { tr("quota.plan.unitLabel") }
+    public static var quotaPlanConsumedLabel: String { tr("quota.plan.consumedLabel") }
+    public static var quotaPlanSamplesLabel: String { tr("quota.plan.samplesLabel") }
+    public static var quotaPlanSmallSample: String { tr("quota.plan.smallSample") }
+    public static var quotaBindingTitle: String { tr("quota.binding.title") }
+    public static var quotaBindingResetsIn: String { tr("quota.binding.resetsIn") }
+    public static var quotaBindingNone: String { tr("quota.binding.none") }
+
+    /// Localized label for the confidence hierarchy.
+    ///
+    /// The raw enum stays visible under Advanced Details; this is the sentence
+    /// the owner reads. EXACT and ESTIMATED must never render identically.
+    public static func quotaConfidenceLevel(_ value: String) -> String {
+        switch value {
+        case "EXACT": return tr("quota.confidence.exact")
+        case "ESTIMATED": return tr("quota.confidence.estimated")
+        default: return tr("quota.confidence.unknownData")
+        }
+    }
+
+    /// Where the quota credential came from. Never the credential itself.
+    public static func quotaCredentialSource(_ value: String) -> String {
+        switch value {
+        case "ENVIRONMENT": return tr("quota.credential.environment")
+        case "OPENCODE_AUTH_STORE": return tr("quota.credential.authStore")
+        default: return tr("quota.credential.none")
+        }
+    }
+
+    public static func quotaCapacityTasks(_ count: Int) -> String {
+        tr("quota.capacity.tasks", [count])
+    }
+
+    public static func quotaCapacityBasis(_ count: Int) -> String {
+        tr("quota.capacity.basis", [count])
+    }
+
     public static func quotaHistoryFooter(retentionLimit: Int) -> String {
         tr("quota.history.footer", [retentionLimit])
     }
@@ -876,6 +932,14 @@ public enum L10n {
         // A read that succeeded but yielded no single honest figure is a
         // different truth from a read that failed.
         case "QUOTA_VARIES_BY_MODEL": return tr("quota.reason.variesByModel")
+        // A shared pool the provider reports through each model. Not a failure:
+        // the per-model views are shown, only the single plan figure is absent.
+        case "SHARED_POOL_VIEWED_PER_MODEL": return tr("quota.reason.sharedPoolPerModel")
+        case "PROVIDER_LIMIT_TYPE_UNRECOGNIZED":
+            return tr("quota.reason.limitTypeUnrecognized")
+        case "PROVIDER_WINDOW_DIMENSION_UNRECOGNIZED":
+            return tr("quota.reason.windowUnrecognized")
+        case "PROVIDER_REPORTED_FAILURE": return tr("quota.reason.providerReportedFailure")
         case "PROVIDER_REPORTED_NO_QUOTA_ENTRIES": return tr("quota.reason.noEntries")
         case "PROVIDER_FIELDS_UNAVAILABLE": return tr("quota.reason.fieldsUnavailable")
         case "PROVIDER_QUOTA_NOT_INTERPRETABLE": return tr("quota.reason.notInterpretable")

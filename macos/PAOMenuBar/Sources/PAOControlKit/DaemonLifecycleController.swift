@@ -11,6 +11,9 @@ public enum DaemonLifecycleStatus: Equatable, Sendable {
     case failed(reason: String)
     case exited(status: Int32)
     case versionMismatch(version: String)
+    /// A running daemon speaks a compatible API but was built from a different
+    /// commit than this app. Adopting it renders stale truth as live truth.
+    case buildMismatch(app: String, daemon: String)
 
     public var displayValue: String {
         switch self {
@@ -23,6 +26,7 @@ public enum DaemonLifecycleStatus: Equatable, Sendable {
         case .failed: return "DAEMON_FAILED"
         case .exited: return "DAEMON_EXITED"
         case .versionMismatch: return "DAEMON_VERSION_MISMATCH"
+        case .buildMismatch: return "DAEMON_BUILD_MISMATCH"
         }
     }
 
@@ -31,6 +35,8 @@ public enum DaemonLifecycleStatus: Equatable, Sendable {
         case .failed(let reason): return "DAEMON_FAILED:\(reason)"
         case .exited(let status): return "DAEMON_EXITED:\(status)"
         case .versionMismatch(let version): return "DAEMON_VERSION_MISMATCH:\(version)"
+        case .buildMismatch(let app, let daemon):
+            return "DAEMON_BUILD_MISMATCH:app=\(app),daemon=\(daemon)"
         default: return displayValue
         }
     }
@@ -99,14 +105,42 @@ public final class DaemonLifecycleController: ObservableObject {
     private func healthIsCompatible() async -> Bool {
         do {
             let health = try await client.health()
-            if health.isCompatible {
-                return true
+            guard health.isCompatible else {
+                status = .versionMismatch(version: health.apiVersion)
+                return false
             }
-            status = .versionMismatch(version: health.apiVersion)
-            return false
+            return await buildIsCompatible()
         } catch {
             return false
         }
+    }
+
+    /// Whether a reachable daemon came from this app's own commit.
+    ///
+    /// API-version compatibility is not enough. A daemon left over from an
+    /// earlier checkout usually speaks the same API, so version alone lets a
+    /// freshly built app quietly adopt a stale daemon and present its answers
+    /// as current — the exact defect the deterministic launcher exists to close.
+    ///
+    /// Only a *known* mismatch is refused. When either side cannot state its
+    /// commit, nothing can be concluded, and refusing on that basis would make
+    /// an unstamped development build unable to start at all.
+    private func buildIsCompatible() async -> Bool {
+        let daemonCommit: String?
+        do {
+            daemonCommit = try await client.build().commitSHA
+        } catch {
+            // A daemon that cannot answer /v1/build predates the endpoint;
+            // that is indeterminate, not a mismatch.
+            return true
+        }
+        let compatibility = BuildCompatibility.compare(
+            app: BuildIdentity.current,
+            daemonCommitSHA: daemonCommit
+        )
+        guard case .mismatched(let app, let daemon) = compatibility else { return true }
+        status = .buildMismatch(app: app, daemon: daemon)
+        return false
     }
 
     private func launchBundledDaemon() async throws {

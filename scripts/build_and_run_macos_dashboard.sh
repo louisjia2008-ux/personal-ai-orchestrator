@@ -9,6 +9,13 @@
 # stops only the exact process it identified, launches the exact bundle it just
 # built, and then proves the process now running came from that bundle.
 #
+# The same ambiguity exists one level down, in the daemon. A daemon left over
+# from an earlier checkout usually speaks the same control-API version, so the
+# app's compatibility check would adopt it and present its stale answers as
+# current. This script therefore reconciles the daemon too: it identifies the
+# exact PAO daemon process, asks it which commit built it, and stops it only
+# when that commit differs from the source HEAD being launched.
+#
 # It never uses killall or pkill: only PIDs whose executable path was verified
 # to live inside a PAO bundle are ever signalled.
 #
@@ -81,6 +88,61 @@ embedded_commit() {
   /usr/libexec/PlistBuddy -c 'Print PAOBuildCommit' "$1/Contents/Info.plist" 2>/dev/null || true
 }
 
+# ------------------------------------- daemon identity and ownership ---------
+# The daemon is the bundled helper. A candidate is only ever signalled when its
+# executable path resolves inside a "<APP_NAME>.app/Contents/Helpers" directory,
+# so an unrelated process that merely happens to be called pao-daemon is never
+# touched.
+DAEMON_NAME="pao-daemon"
+CONTROL_SOCKET="${HOME}/Library/Caches/${APP_NAME}/control.sock"
+
+pao_daemon_pids() {
+  local pid comm
+  while IFS= read -r line; do
+    pid="${line%% *}"
+    comm="${line#* }"
+    [[ "${comm}" == *"/${APP_NAME}.app/Contents/Helpers/${DAEMON_NAME}" ]] \
+      && printf '%s\n' "${pid}"
+  done < <(ps -Ao pid=,comm= | sed 's/^ *//')
+}
+
+# Ask the running daemon which commit produced it. Returns empty when no daemon
+# is reachable, or when it predates the /v1/build endpoint — both are
+# "indeterminate", which is different from a mismatch and is treated as such.
+daemon_build_commit() {
+  [[ -S "${CONTROL_SOCKET}" ]] || return 0
+  curl --silent --show-error --max-time 5 \
+       --unix-socket "${CONTROL_SOCKET}" \
+       "http://localhost/v1/build" 2>/dev/null \
+    | /usr/bin/python3 -c \
+        'import json,sys
+try:
+    print(json.load(sys.stdin).get("commit_sha", ""))
+except Exception:
+    print("")' 2>/dev/null || true
+}
+
+# Stop one verified PID: SIGTERM, then SIGKILL scoped to that same PID only.
+stop_verified_pid() {
+  local pid="$1" label="$2" waited=0
+  log "terminating ${label} PID ${pid} (SIGTERM)"
+  kill -TERM "${pid}" 2>/dev/null || true
+  while kill -0 "${pid}" 2>/dev/null; do
+    if (( waited >= TERM_GRACE_SECONDS )); then
+      log "${label} PID ${pid} did not exit in ${TERM_GRACE_SECONDS}s; SIGKILL to that PID only"
+      kill -KILL "${pid}" 2>/dev/null || true
+      sleep 1
+      break
+    fi
+    sleep 1
+    waited=$(( waited + 1 ))
+  done
+  if kill -0 "${pid}" 2>/dev/null; then
+    fail "${label} PID ${pid} is still running"
+  fi
+  log "${label} PID ${pid} exited"
+}
+
 # ------------------------------------------- 4. record the currently running app
 OLD_PIDS=()
 while IFS= read -r pid; do [[ -n "${pid}" ]] && OLD_PIDS+=("${pid}"); done < <(pao_gui_pids)
@@ -124,29 +186,39 @@ fi
 # ------------------------------ 8/9. stop ONLY the exact processes we identified
 for pid in "${OLD_PIDS[@]:-}"; do
   [[ -n "${pid}" ]] || continue
-  log "terminating PID ${pid} (SIGTERM)"
-  kill -TERM "${pid}" 2>/dev/null || true
+  stop_verified_pid "${pid}" "app"
 done
 
-for pid in "${OLD_PIDS[@]:-}"; do
-  [[ -n "${pid}" ]] || continue
-  waited=0
-  while kill -0 "${pid}" 2>/dev/null; do
-    if (( waited >= TERM_GRACE_SECONDS )); then
-      # Escalation is scoped to this one verified PID, never a name pattern.
-      log "PID ${pid} did not exit in ${TERM_GRACE_SECONDS}s; sending SIGKILL to that PID only"
-      kill -KILL "${pid}" 2>/dev/null || true
-      sleep 1
-      break
-    fi
-    sleep 1
-    waited=$(( waited + 1 ))
-  done
-  if kill -0 "${pid}" 2>/dev/null; then
-    fail "PID ${pid} is still running; refusing to launch a second instance"
+# ------------------------------------- 9b. reconcile the running daemon ------
+# Must happen *before* the new app launches. The app adopts any reachable,
+# API-compatible daemon at startup, and a daemon from an earlier checkout
+# normally is API-compatible — so leaving it running is precisely how a current
+# UI ends up reporting a stale daemon's answers.
+STALE_DAEMON_REPAIRED="NO"
+DAEMON_COMMIT_BEFORE="$(daemon_build_commit)"
+
+DAEMON_PIDS=()
+while IFS= read -r pid; do [[ -n "${pid}" ]] && DAEMON_PIDS+=("${pid}"); done \
+  < <(pao_daemon_pids)
+
+if [[ ${#DAEMON_PIDS[@]} -eq 0 ]]; then
+  log "no ${DAEMON_NAME} process is running"
+else
+  log "daemon build ${DAEMON_COMMIT_BEFORE:-<unreported>}"
+  if [[ -z "${DAEMON_COMMIT_BEFORE}" ]]; then
+    # Indeterminate: a daemon that cannot state its commit could be anything,
+    # and the app is about to start its own. Stop it rather than gamble on it.
+    log "daemon did not report a commit; stopping it so the app starts a known one"
+    for pid in "${DAEMON_PIDS[@]}"; do stop_verified_pid "${pid}" "daemon"; done
+    STALE_DAEMON_REPAIRED="YES"
+  elif [[ "${DAEMON_COMMIT_BEFORE}" != "${SOURCE_HEAD}" ]]; then
+    log "daemon ${DAEMON_COMMIT_BEFORE:0:7} != source ${SOURCE_SHORT}; stopping stale daemon"
+    for pid in "${DAEMON_PIDS[@]}"; do stop_verified_pid "${pid}" "daemon"; done
+    STALE_DAEMON_REPAIRED="YES"
+  else
+    log "daemon already matches ${SOURCE_SHORT}; leaving it running"
   fi
-  log "PID ${pid} exited"
-done
+fi
 
 # --------------------------------------------- 10. launch the exact new bundle
 # `open -n <path>` targets this bundle by path and forces a new instance, so a
@@ -180,10 +252,27 @@ RUNNING_COMMIT="$(embedded_commit "$(bundle_for_executable "${NEW_EXEC}")")"
 [[ "${RUNNING_COMMIT}" == "${SOURCE_HEAD}" ]] \
   || fail "running app reports ${RUNNING_COMMIT}, source HEAD is ${SOURCE_HEAD}"
 
+# ------------------- 14. prove the daemon the app started matches that SHA too
+# The app starts the daemon asynchronously, so poll rather than assume.
+DAEMON_COMMIT_AFTER=""
+for _ in $(seq 1 30); do
+  DAEMON_COMMIT_AFTER="$(daemon_build_commit)"
+  [[ -n "${DAEMON_COMMIT_AFTER}" ]] && break
+  sleep 1
+done
+
+if [[ -z "${DAEMON_COMMIT_AFTER}" ]]; then
+  log "WARNING: no daemon reported a build identity within 30s"
+elif [[ "${DAEMON_COMMIT_AFTER}" != "${SOURCE_HEAD}" ]]; then
+  fail "daemon reports ${DAEMON_COMMIT_AFTER}, source HEAD is ${SOURCE_HEAD}"
+fi
+
 log "----------------------------------------"
-log "NEW_PID           ${NEW_PID}"
-log "NEW_EXECUTABLE    ${NEW_EXEC}"
-log "RUNNING_BUILD_SHA ${RUNNING_COMMIT}"
-log "SOURCE_HEAD       ${SOURCE_HEAD}"
-log "verified: the running app was built from this checkout"
+log "NEW_PID              ${NEW_PID}"
+log "NEW_EXECUTABLE       ${NEW_EXEC}"
+log "SOURCE_HEAD          ${SOURCE_HEAD}"
+log "APP_BUILD_SHA        ${RUNNING_COMMIT}"
+log "DAEMON_BUILD_SHA     ${DAEMON_COMMIT_AFTER:-<unreported>}"
+log "STALE_DAEMON_REPAIRED ${STALE_DAEMON_REPAIRED}"
+log "verified: app, daemon, and source agree"
 printf '%s\n' "${APP_PATH}"
