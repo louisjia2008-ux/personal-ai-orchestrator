@@ -19,20 +19,20 @@ final class OrchestratorStoreTests: XCTestCase {
             generated += 1
             return "id\(generated)"
         })
-        await store.quickSubmit(intent: "demo intent")
+        await store.quickSubmit(projectId: "project-fixture", intent: "demo intent")
         XCTAssertEqual(store.lastSubmittedTaskId, "menubar-abc")
         XCTAssertEqual(store.submitNotice, .submitted(taskId: "menubar-abc", state: "SUBMITTED"))
 
         // Duplicate guard: identical intent inside the window must not hit the daemon again.
         let postsBefore = daemon.receivedRequests.filter { $0.method == "POST" && $0.path == "/v1/tasks" }.count
-        await store.quickSubmit(intent: "demo intent")
+        await store.quickSubmit(projectId: "project-fixture", intent: "demo intent")
         let postsAfter = daemon.receivedRequests.filter { $0.method == "POST" && $0.path == "/v1/tasks" }.count
         XCTAssertEqual(postsBefore, postsAfter)
         XCTAssertEqual(postsAfter, 1)
         XCTAssertEqual(store.submitNotice, .duplicateBlocked(windowSeconds: 5))
 
         // A different intent submits again with a fresh idempotent request pair.
-        await store.quickSubmit(intent: "another intent")
+        await store.quickSubmit(projectId: "project-fixture", intent: "another intent")
         let postsFinal = daemon.receivedRequests.filter { $0.method == "POST" && $0.path == "/v1/tasks" }.count
         XCTAssertEqual(postsFinal, 2)
         let bodies = daemon.receivedRequests
@@ -89,6 +89,7 @@ final class OrchestratorStoreTests: XCTestCase {
         XCTAssertEqual(store.connection, .connected)
         XCTAssertEqual(store.tasks?.total, 2)
         XCTAssertEqual(store.dashboard?.counts.running, 1)
+        XCTAssertEqual(store.projects?.projects.first?.projectId, "project-fixture")
         XCTAssertEqual(store.activeStatus?.productionActive, "DISABLED_BY_DESIGN")
         XCTAssertNotNil(store.providers)
         XCTAssertEqual(store.statusSummary, .blocked)
@@ -133,7 +134,7 @@ final class OrchestratorStoreTests: XCTestCase {
         try daemon.start(socketPath: path)
 
         let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
-        await store.quickSubmit(intent: "acceptance intent")
+        await store.quickSubmit(projectId: "project-fixture", intent: "acceptance intent")
 
         // Banner is current and authoritative while connected.
         XCTAssertEqual(store.connection, .connected)

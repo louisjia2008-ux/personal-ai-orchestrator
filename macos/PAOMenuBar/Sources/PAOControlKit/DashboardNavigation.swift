@@ -5,6 +5,7 @@ import Foundation
 /// app executable.
 public enum DashboardSection: String, CaseIterable, Identifiable, Sendable {
     case overview
+    case projects
     case tasks
     case agents
     case providers
@@ -14,6 +15,15 @@ public enum DashboardSection: String, CaseIterable, Identifiable, Sendable {
     case history
     case settings
 
+    public static var allCases: [DashboardSection] {
+        [
+            .overview, .projects, .tasks,
+            .providers, .quota,
+            .routing, .verification,
+            .history, .settings,
+        ]
+    }
+
     public var id: String { rawValue }
 
     public var title: String { L10n.dashboardSection(rawValue) }
@@ -21,6 +31,7 @@ public enum DashboardSection: String, CaseIterable, Identifiable, Sendable {
     public var symbol: String {
         switch self {
         case .overview: return "gauge.with.dots.needle.67percent"
+        case .projects: return "folder.badge.gearshape"
         case .tasks: return "checklist"
         case .agents: return "cpu"
         case .providers: return "network"

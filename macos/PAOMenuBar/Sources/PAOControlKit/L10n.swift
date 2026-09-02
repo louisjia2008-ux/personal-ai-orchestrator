@@ -22,12 +22,13 @@ public enum L10n {
         "section.providersQuota", "section.noProviders", "section.productionActive",
         "action.submit", "action.cancel", "action.refresh", "action.quit",
         "submit.placeholder", "submit.authoritativeId", "notice.submitted",
-        "notice.duplicateBlocked", "notice.submitFailed", "notice.submitMalformed",
+        "notice.duplicateBlocked", "notice.projectRequired", "notice.manualTargetRequired",
+        "notice.submitFailed", "notice.submitMalformed",
         "notice.cancelled", "notice.alreadyCancelled", "notice.runningConflict",
         "notice.cancelFailed", "notice.cancelMalformed", "quota.unknown",
         "quota.unknownConfidence", "quota.confidence", "quota.source", "provider.target",
         "provider.accounts", "help.taskCounts", "help.cancel",
-        "app.dashboard", "action.openDashboard", "dashboard.overview", "dashboard.tasks",
+        "app.dashboard", "action.openDashboard", "dashboard.overview", "dashboard.projects", "dashboard.tasks",
         "dashboard.agents", "dashboard.providers", "dashboard.quota", "dashboard.routing",
         "dashboard.verification", "dashboard.history", "dashboard.settings",
         "label.connection", "label.systemHealth", "label.blockers", "label.events",
@@ -96,6 +97,29 @@ public enum L10n {
         "provider.lastChecked", "provider.evidenceSource",
         "evidence.discoveredFromCatalog", "evidence.authFromEnvPresence",
         "evidence.executionProbeNotRun", "evidence.executionProbeRun",
+        "kpi.running", "kpi.ready", "kpi.blocked", "kpi.verification", "kpi.completed",
+        "kpi.verificationDetail",
+        "policy.balanced", "policy.qualityFirst", "policy.quotaSaver",
+        "policy.speedFirst", "policy.manual",
+        "policy.balanced.detail", "policy.qualityFirst.detail",
+        "policy.quotaSaver.detail", "policy.speedFirst.detail", "policy.manual.detail",
+        "policy.title", "policy.change", "policy.useGlobalDefault",
+        "policy.globalDefault", "policy.resolutionSource",
+        "policy.source.task", "policy.source.project", "policy.source.global",
+        "providers.tab.connected", "providers.tab.available",
+        "providers.connectedEmpty.title", "providers.connectedEmpty.message",
+        "providers.addProvider", "providers.importExisting", "providers.disconnect",
+        "providers.importTitle", "providers.importFooter",
+        "providers.availableEmpty.message",
+        "providers.connectedNotAuthenticated", "providers.connectedNotVerified",
+        "providers.executionVerified", "providers.available", "providers.unavailable",
+        "routing.activePolicy", "routing.modes", "routing.whySelected",
+        "routing.whyNotSelected", "routing.candidates",
+        "routing.noTaskSelected", "routing.considers",
+        "routing.noConnectedProviders", "routing.noEligibleTargets",
+        "routing.selectedModel", "routing.decidedAt", "routing.resolvedPolicy",
+        "settings.defaultSchedulingPolicy", "settings.defaultSchedulingPolicy.footer",
+        "newTask.schedulingPolicy", "newTask.manualModel", "newTask.chooseModel",
     ]
 
     /// English is the guaranteed fallback (`defaultLocalization` in Package.swift).
@@ -268,6 +292,10 @@ public enum L10n {
             return tr("notice.submitted", [taskId, state])
         case .duplicateBlocked(let windowSeconds):
             return tr("notice.duplicateBlocked", [windowSeconds])
+        case .projectRequired:
+            return tr("notice.projectRequired")
+        case .manualTargetRequired:
+            return tr("notice.manualTargetRequired")
         case .failed(let detail):
             return tr("notice.submitFailed", [detail])
         case .malformedResponse:
@@ -294,7 +322,7 @@ public enum L10n {
 
     public static func quotaRemaining(fraction: Double?, confidence: String) -> String {
         guard let fraction else { return tr("quota.unknown") }
-        if confidence == "EXACT" {
+        if confidence == "EXACT" || confidence == "ESTIMATED" {
             return String(format: "%.1f%%", fraction * 100)
         }
         return tr("quota.unknownConfidence", [confidence])
@@ -315,6 +343,111 @@ public enum L10n {
     public static var newTaskTitle: String { tr("action.newTask.title") }
     public static var newTaskSubtitle: String { tr("action.newTask.subtitle") }
     public static var submitting: String { tr("action.submitting") }
+
+
+    // MARK: - Overview KPI
+
+    public static var kpiRunning: String { tr("kpi.running") }
+    public static var kpiReady: String { tr("kpi.ready") }
+    public static var kpiBlocked: String { tr("kpi.blocked") }
+    public static var kpiVerification: String { tr("kpi.verification") }
+    public static var kpiCompleted: String { tr("kpi.completed") }
+
+    /// Secondary line under the aggregated verification tile. The aggregate alone
+    /// would hide whether work is still in flight, so both counts stay visible.
+    public static func kpiVerificationDetail(verifying: Int, verified: Int) -> String {
+        tr("kpi.verificationDetail", [verifying, verified])
+    }
+
+    // MARK: - Scheduling policy
+
+    public static func schedulingPolicyName(_ policy: String) -> String {
+        switch policy {
+        case "BALANCED": return tr("policy.balanced")
+        case "QUALITY_FIRST": return tr("policy.qualityFirst")
+        case "QUOTA_SAVER": return tr("policy.quotaSaver")
+        case "SPEED_FIRST": return tr("policy.speedFirst")
+        case "MANUAL": return tr("policy.manual")
+        default: return policy
+        }
+    }
+
+    public static func schedulingPolicyDetail(_ policy: String) -> String {
+        switch policy {
+        case "BALANCED": return tr("policy.balanced.detail")
+        case "QUALITY_FIRST": return tr("policy.qualityFirst.detail")
+        case "QUOTA_SAVER": return tr("policy.quotaSaver.detail")
+        case "SPEED_FIRST": return tr("policy.speedFirst.detail")
+        case "MANUAL": return tr("policy.manual.detail")
+        default: return policy
+        }
+    }
+
+    /// Which level supplied the policy. Unknown values stay verbatim rather than
+    /// being rendered as a friendlier but wrong label.
+    public static func policyResolutionSource(_ source: String) -> String {
+        switch source {
+        case "TASK_OVERRIDE": return tr("policy.source.task")
+        case "PROJECT_OVERRIDE": return tr("policy.source.project")
+        case "GLOBAL_DEFAULT": return tr("policy.source.global")
+        default: return source
+        }
+    }
+
+    public static var policyTitle: String { tr("policy.title") }
+    public static var policyChange: String { tr("policy.change") }
+    public static var policyUseGlobalDefault: String { tr("policy.useGlobalDefault") }
+    public static var policyGlobalDefault: String { tr("policy.globalDefault") }
+    public static var policyResolutionSourceLabel: String { tr("policy.resolutionSource") }
+
+    // MARK: - Providers & connections
+
+    public static var providersTabConnected: String { tr("providers.tab.connected") }
+    public static var providersTabAvailable: String { tr("providers.tab.available") }
+    public static var providersConnectedEmptyTitle: String { tr("providers.connectedEmpty.title") }
+    public static var providersConnectedEmptyMessage: String {
+        tr("providers.connectedEmpty.message")
+    }
+    public static var providersAddProvider: String { tr("providers.addProvider") }
+    public static var providerDisconnect: String { tr("providers.disconnect") }
+    public static var providersImportExisting: String { tr("providers.importExisting") }
+    public static var providersImportTitle: String { tr("providers.importTitle") }
+    public static var providersImportFooter: String { tr("providers.importFooter") }
+    public static var providersAvailableEmptyMessage: String {
+        tr("providers.availableEmpty.message")
+    }
+    public static var providerNotAuthenticated: String { tr("providers.connectedNotAuthenticated") }
+    public static var providerNotExecutionVerified: String { tr("providers.connectedNotVerified") }
+    public static var providerExecutionVerified: String { tr("providers.executionVerified") }
+    public static var providerAvailable: String { tr("providers.available") }
+    public static var providerUnavailable: String { tr("providers.unavailable") }
+
+    // MARK: - Routing
+
+    public static var routingActivePolicy: String { tr("routing.activePolicy") }
+    public static var routingModes: String { tr("routing.modes") }
+    public static var routingWhySelected: String { tr("routing.whySelected") }
+    public static var routingWhyNotSelected: String { tr("routing.whyNotSelected") }
+    public static var routingCandidates: String { tr("routing.candidates") }
+    public static var routingNoTaskSelected: String { tr("routing.noTaskSelected") }
+    public static var routingConsiders: String { tr("routing.considers") }
+    public static var routingNoConnectedProviders: String { tr("routing.noConnectedProviders") }
+    public static var routingNoEligibleTargets: String { tr("routing.noEligibleTargets") }
+    public static var routingSelectedModel: String { tr("routing.selectedModel") }
+    public static var routingDecidedAt: String { tr("routing.decidedAt") }
+    public static var routingResolvedPolicy: String { tr("routing.resolvedPolicy") }
+
+    // MARK: - Settings & New Task
+
+    public static var settingsDefaultSchedulingPolicy: String {
+        tr("settings.defaultSchedulingPolicy")
+    }
+    public static var settingsDefaultSchedulingPolicyFooter: String {
+        tr("settings.defaultSchedulingPolicy.footer")
+    }
+    public static var newTaskSchedulingPolicy: String { tr("newTask.schedulingPolicy") }
+    public static var newTaskManualModel: String { tr("newTask.manualModel") }
+    public static var newTaskChooseModel: String { tr("newTask.chooseModel") }
 
     public static var metricTileHelp: String { tr("help.metricTile") }
     public static var noBlockers: String { tr("empty.noBlockers") }

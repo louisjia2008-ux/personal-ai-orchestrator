@@ -128,13 +128,17 @@ final class ModelAndStatusTests: XCTestCase {
         XCTAssertEqual(view.gate["owner_approved"], false)
     }
 
-    func testEstimatedNeverRendersAsPrecisePercentage() {
+    func testQuotaRenderingUsesObservedValuesExceptUnknown() {
         XCTAssertEqual(
             QuotaRendering.remainingText(fraction: 0.8, confidence: "ESTIMATED"),
-            "unknown (confidence: ESTIMATED)"
+            "80.0%"
         )
         XCTAssertEqual(QuotaRendering.remainingText(fraction: nil, confidence: "UNKNOWN"), "unknown")
         XCTAssertEqual(QuotaRendering.remainingText(fraction: 0.8123, confidence: "EXACT"), "81.2%")
+        XCTAssertEqual(
+            QuotaRendering.remainingText(fraction: 0.8, confidence: "UNKNOWN"),
+            "unknown (confidence: UNKNOWN)"
+        )
         XCTAssertEqual(QuotaRendering.confidenceBadge("WEIRD"), "UNKNOWN")
         XCTAssertEqual(QuotaRendering.confidenceBadge("ESTIMATED"), "ESTIMATED")
     }

@@ -32,6 +32,39 @@ public struct PAOControlClient: Sendable {
         try await get("/v1/dashboard")
     }
 
+    public func projects() async throws -> ProjectListView {
+        try await get("/v1/projects")
+    }
+
+    public func resolveProject(path: String) async throws -> ProjectView {
+        try await post("/v1/projects/resolve", body: ProjectPathRequest(path: path))
+    }
+
+    public func registerProject(
+        path: String,
+        displayName: String? = nil,
+        securityBookmarkB64: String? = nil
+    ) async throws -> ProjectView {
+        try await post(
+            "/v1/projects",
+            body: ProjectRegisterRequest(
+                path: path,
+                displayName: displayName,
+                securityBookmarkB64: securityBookmarkB64
+            )
+        )
+    }
+
+    public func markProjectOpened(_ projectId: String) async throws -> ProjectView {
+        struct EmptyBody: Encodable {}
+        return try await post("/v1/projects/\(projectId)/opened", body: EmptyBody())
+    }
+
+    public func removeProject(_ projectId: String) async throws -> ProjectRemoveView {
+        struct EmptyBody: Encodable {}
+        return try await post("/v1/projects/\(projectId)/remove", body: EmptyBody())
+    }
+
     public func getTask(_ taskId: String) async throws -> TaskView {
         try await get("/v1/tasks/\(taskId)")
     }
@@ -102,6 +135,111 @@ public struct PAOControlClient: Sendable {
 
     public func providers() async throws -> ProviderHealthListView {
         try await get("/v1/providers")
+    }
+
+    public func providerConnections() async throws -> ProviderConnectionListView {
+        try await get("/v1/provider-connections")
+    }
+
+    public func connectProvider(providerId: String) async throws -> ProviderConnectionView {
+        struct ConnectBody: Encodable {
+            let providerId: String
+
+            enum CodingKeys: String, CodingKey {
+                case providerId = "provider_id"
+            }
+        }
+        return try await post(
+            "/v1/provider-connections",
+            body: ConnectBody(providerId: providerId)
+        )
+    }
+
+    public func disconnectProvider(providerId: String) async throws -> ProviderConnectionView {
+        struct DisconnectBody: Encodable {
+            let confirm: Bool
+        }
+        return try await post(
+            "/v1/provider-connections/\(providerId)/disconnect",
+            body: DisconnectBody(confirm: true)
+        )
+    }
+
+    /// Materialise owner-approved import candidates as real connections.
+    ///
+    /// The daemon re-validates every id against current evidence, so a stale App
+    /// view cannot import a surface whose evidence has since disappeared.
+    public func importProviderConnections(
+        providerIds: [String]
+    ) async throws -> ImportConnectionsView {
+        struct ImportBody: Encodable {
+            let providerIds: [String]
+
+            enum CodingKeys: String, CodingKey {
+                case providerIds = "provider_ids"
+            }
+        }
+        return try await post(
+            "/v1/provider-connections/import",
+            body: ImportBody(providerIds: providerIds)
+        )
+    }
+
+    public func schedulingSettings() async throws -> SchedulingSettingsView {
+        try await get("/v1/settings/scheduling")
+    }
+
+    public func setDefaultSchedulingPolicy(
+        _ policy: String
+    ) async throws -> SchedulingSettingsView {
+        struct PolicyBody: Encodable {
+            let defaultSchedulingPolicy: String
+
+            enum CodingKeys: String, CodingKey {
+                case defaultSchedulingPolicy = "default_scheduling_policy"
+            }
+        }
+        let data = try await rawRequest(
+            method: "PUT",
+            path: "/v1/settings/scheduling",
+            body: JSONEncoder().encode(PolicyBody(defaultSchedulingPolicy: policy))
+        )
+        do {
+            return try JSONDecoder().decode(SchedulingSettingsView.self, from: data)
+        } catch {
+            throw PAOClientError.malformedResponse
+        }
+    }
+
+    /// `schedulingPolicy: nil` clears the project override, restoring the global default.
+    public func setProjectSchedulingPolicy(
+        projectId: String,
+        schedulingPolicy: String?,
+        manualExecutionTargetId: String? = nil
+    ) async throws -> ProjectView {
+        struct ProjectPolicyBody: Encodable {
+            let schedulingPolicy: String?
+            let manualExecutionTargetId: String?
+
+            enum CodingKeys: String, CodingKey {
+                case schedulingPolicy = "scheduling_policy"
+                case manualExecutionTargetId = "manual_execution_target_id"
+            }
+        }
+        let body = ProjectPolicyBody(
+            schedulingPolicy: schedulingPolicy,
+            manualExecutionTargetId: manualExecutionTargetId
+        )
+        let data = try await rawRequest(
+            method: "PUT",
+            path: "/v1/projects/\(projectId)/scheduling",
+            body: JSONEncoder().encode(body)
+        )
+        do {
+            return try JSONDecoder().decode(ProjectView.self, from: data)
+        } catch {
+            throw PAOClientError.malformedResponse
+        }
     }
 
     public func providerDiscoveryStatus() async throws -> ProviderDiscoveryStatusView {
