@@ -87,7 +87,8 @@ From a community research document, not provider documentation:
 ### Shape B — per-scope percentages (**OBSERVED**, this account, 2026-09-02)
 
 This is the shape this account actually returns, and the one that produced
-`QUOTA_VARIES_BY_MODEL`:
+`QUOTA_VARIES_BY_MODEL`. Each entry is a **workload scope**, and each carries
+both windows:
 
 ```json
 {"model_remains": [
@@ -102,24 +103,25 @@ Timestamps here are epoch **milliseconds**. (**OBSERVED**)
 ### Precedence
 
 Plan-level counts win when present: they describe the shared bar **directly**,
-rather than through one model's lens. Per-model percentages are a fallback.
+rather than through one scope's lens. Per-scope percentages are the fallback,
+read from the scopes belonging to the workload being projected.
 
-## The `QUOTA_VARIES_BY_MODEL` audit — what those differing values mean
+## The `model_remains` entries are workload scopes (**OBSERVED**)
 
-The prior collector saw per-model entries whose percentages disagreed, concluded
-no single plan figure could be derived, and discarded the whole observation.
+The prior collector saw entries whose percentages disagreed, concluded no single
+plan figure could be derived, and discarded the whole observation. Its
+replacement kept that rule and only renamed the outcome — so the defect
+survived in a different form.
 
-Candidate interpretations considered, per §9:
+Candidate interpretations considered:
 
 | Interpretation | Verdict |
 | --- | --- |
 | Independent per-model quota pools | **Rejected** — contradicts the documented shared usage bar and the documented "reference equivalents" framing of per-model figures. |
 | Different quota windows | **Rejected** — the response separates windows by field name (`current_interval_*` vs `current_weekly_*`), not by entry. |
-| Separate media / resource quota categories | **CONFIRMED for this account.** See below. |
+| Separate media / workload categories | **CONFIRMED for this account.** See below. |
 | Model-equivalent limits over one pool | **Not what this account returns** — the entries are not models at all. |
-| Collector misinterpretation | **Partly true** — the values were read correctly; the errors were concluding that disagreement meant *nothing* was knowable, and treating the entry names as models. |
-
-### The entries are resource categories, not models (**OBSERVED**)
+| Collector misinterpretation | **Partly true** — the values were read correctly; the errors were treating the entry names as models, and treating disagreement between *different resources* as evidence that nothing was knowable. |
 
 The live response named its `model_remains` entries **`general`** and
 **`video`**:
@@ -134,42 +136,85 @@ The same account's catalog lists its actual routable models as
 `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`. Neither `general` nor `video` is among
 them.
 
-So despite the field being called `model_remains`, its entries are **provider
-resource categories**, and the values differ because text and video usage differ
-— not because two models hold separate balances.
+So despite the field being called `model_remains`, its entries are **workload
+scopes**: text/coding usage and video usage, metered separately. They do not
+disagree about one quantity — they describe two.
 
-This has two consequences in the code:
+This has three consequences in the code:
 
 1. `ModelEquivalentView.scope_id` is deliberately **not** named `model_id`, and
    carries a `scope_kind` of `MODEL`, `PROVIDER_RESOURCE_SCOPE`, or `UNKNOWN`.
    Naming our field after the provider's misleading key would propagate the
-   error into the UI.
+   error into the UI. Nothing maps `general → MiniMax-M2.7`.
 2. `covered_model_ids` is populated **only** from entries the account's own
    catalog confirms as models. Telling the owner that "video" is a model sharing
    this quota would send them looking for something they cannot route to.
-   Without catalog evidence, no entry is promoted to a model at all.
+3. Each view additionally carries a `workload_scope`, which is what decides
+   whether this product reads it.
 
-Whether the documented "shared usage bar" spans these categories, or each
-category holds its own allocation, remains **UNKNOWN**. Either way the plan-level
-figure stays UNKNOWN and the per-category figures are shown as views, which is
-correct under both readings.
+## CONFIRMED PRODUCT PROJECTION — coding uses `general`
 
-### Resulting behaviour
+> For Personal AI Orchestrator coding workloads, MiniMax **`general`** is the
+> relevant workload scope. **`video` is not part of coding scheduling.**
+>
+> This does **not** claim MiniMax's video quota does not exist, and no video
+> evidence is discarded. It means the current product does not consume it.
 
-- Under a documented shared pool, disagreeing per-model percentages are
-  **equivalents**, not balances. They are preserved as `ModelEquivalentView` and
-  rendered in a section explicitly labelled as per-model views.
-- A window whose per-model views **disagree** yields **no** plan-level figure for
-  that window: it stays UNKNOWN. Averaging them would fabricate the number this
-  phase exists to remove.
-- A window whose views **agree** yields an EXACT plan figure — one shared bar
-  seen through several models that coincide *is* readable.
-- Windows are independent. In the observed case where models disagreed on the
-  5-hour view but agreed on weekly, the weekly window is reported EXACT while
-  only 5-hour stays UNKNOWN. **Partial knowledge beats hiding everything.**
-- The sanitized reason code is now `SHARED_POOL_VIEWED_PER_MODEL`, which says
-  what happened, rather than `QUOTA_VARIES_BY_MODEL`, which implied per-model
-  quotas exist.
+The orchestrator schedules coding, text, and agentic software-engineering work.
+It does not schedule MiniMax video generation, so a video balance is not
+evidence about coding capacity in either direction: it cannot supply a coding
+figure, and it cannot suppress one.
+
+### What the coding projection reads
+
+`general`'s own `current_interval_remaining_percent` and
+`current_weekly_remaining_percent` are provider-reported remaining fractions for
+that scope, and the two windows are separately identified by field name. Both
+are therefore projected as real windows at EXACT confidence — this is case **A**
+of the window-semantics audit, not an aggregate that has to be split.
+
+Note that `general` and `video` reporting *different* figures is itself evidence
+against a single bar spanning both scopes; under either reading, `general`'s own
+remaining percentage is the bound on coding work.
+
+| Input | Coding projection |
+| --- | --- |
+| `general` 95%, `video` 60% | **95%** — not the mean (77.5%), not the minimum (60%) |
+| `general` 20%, `video` 100% | 20% |
+| `general` 100%, `video` 0% | 100%, AVAILABLE |
+| `general` 0%, `video` 100% | 0%, EXHAUSTED |
+| `general` only | that figure |
+| `video` only | UNKNOWN, `GENERAL_QUOTA_NOT_AVAILABLE` — never 60% |
+| `general` present but unreadable | UNKNOWN, `GENERAL_QUOTA_READ_FAILED` — fail closed |
+| `general` 5h only, no weekly field | 5h shown; weekly UNKNOWN, `GENERAL_WINDOW_SEMANTICS_UNKNOWN`. Nothing invented. |
+
+### What video may never do
+
+`video` never enters `PlanQuotaProjection.windows`. Since `to_snapshot()` builds
+the scheduler's `QuotaSnapshot` from exactly those windows, video cannot reach
+the binding-window selection, Temporal Scarcity pace, QUOTA_SAVER scoring, or
+equivalent-capacity estimation. The exclusion is structural rather than a rule
+each caller must remember.
+
+Video evidence is still preserved, classified, and rendered under 高级详情 with
+an explicit statement that it does not participate in coding scheduling.
+
+### Retired reason codes
+
+`QUOTA_VARIES_BY_MODEL` and `SHARED_POOL_VIEWED_PER_MODEL` are no longer
+emitted. Both said that differing scope values meant no figure was derivable,
+which is the error itself. The codes that replaced them name what is actually
+missing from the coding scope: `GENERAL_QUOTA_NOT_AVAILABLE`,
+`GENERAL_QUOTA_READ_FAILED`, `GENERAL_WINDOW_SEMANTICS_UNKNOWN`,
+`CODING_SCOPE_VIEWS_DISAGREE`, plus the informational
+`VIDEO_SCOPE_IGNORED_FOR_CODING`.
+
+### Not yet claimed
+
+Membership of specific coding models in the `general` scope is **not** asserted
+from a marketing lineup. `covered_model_ids` still requires catalog evidence, so
+no model is presented as covered without it, and no model-level remaining
+balance exists at all (§16).
 
 ## Timestamps
 
@@ -183,8 +228,8 @@ kept. (Design decision, **not** provider-derived.)
 | Question | Status |
 | --- | --- |
 | Which response shape this account returns | **OBSERVED** — Shape B, per-scope percentages |
-| Whether `model_remains` entries are media-category rather than model scoped | **OBSERVED** — categories (`general`, `video`) on this account |
-| Whether the "shared usage bar" spans those categories or each holds its own allocation | **UNKNOWN** — the observed values differ, which is consistent with either |
+| Whether `model_remains` entries are workload-scoped rather than model scoped | **OBSERVED** — workload scopes (`general`, `video`) on this account |
+| Whether the "shared usage bar" spans those scopes or each holds its own allocation | **UNKNOWN** — the observed values differ. Either way `general` bounds coding work, so this no longer blocks the coding figure |
 | Whether `remains`/`total` are model-scoped or pool-scoped units | **UNKNOWN** — surfaced as an equivalent view, never as a pool balance |
 | The provider's unit for Token Plan quota | **UNKNOWN** — recorded as `PROVIDER_UNITS`, not forced into "tokens" |
 | Per-model consumption reporting | **UNKNOWN** — no documented MiniMax usage endpoint equivalent to GLM's `/model-usage`; none is invented |
@@ -195,6 +240,15 @@ Rotate the exposed key. Afterwards, a deliberate read-only acceptance against
 `/v1/token_plan/remains` should establish:
 
 - whether plan-level count fields (Shape A) are present on this account at all;
-- whether the `general` / `video` categories draw on one bar or on separate
-  allocations — the single question that decides whether a plan-level figure is
-  derivable here.
+- whether the `general` / `video` scopes draw on one bar or on separate
+  allocations. This is now a modelling refinement rather than a blocker: coding
+  quota reads `general` under either answer.
+
+The acceptance read must be **provider-scoped**:
+
+```
+python -m personal_ai_orchestrator.quota_acceptance --provider-id minimax-cn-coding-plan
+```
+
+`--provider-id` is required, and the helper refuses rather than widening into an
+all-provider refresh — the mistake recorded at the top of this document.

@@ -8,9 +8,9 @@ That shape cannot express the thing both of our providers actually sell — a
 provider separately reports how much each model consumed. Collapsing those two
 facts into one number produced the two defects this module removes:
 
-* MiniMax reported per-model figures that disagreed, and the collector answered
+* MiniMax reported per-scope figures that disagreed, and the collector answered
   ``QUOTA_VARIES_BY_MODEL`` and threw away every window, reset time, and
-  per-model figure it had just read.
+  per-scope figure it had just read.
 * GLM's plan-level windows were flattened into a single ``5h`` window, silently
   discarding the weekly window that is usually the binding one.
 
@@ -22,7 +22,14 @@ The hierarchy modelled here is:
         ├── ModelConsumptionObservation   what each model consumed
         └── ModelEquivalentView           a provider's per-model *view* of the shared pool
 
-Three invariants hold everywhere below:
+A projection is additionally scoped to *one workload*
+(:mod:`quota_workload_scope`). MiniMax's ``general`` and ``video`` scopes are not
+two views of one balance; they meter different resources, and only the scopes
+belonging to the workload this build schedules become ``windows``. Everything
+else is kept as a classified :class:`ModelEquivalentView` — preserved as
+evidence, read by nothing.
+
+Four invariants hold everywhere below:
 
 1. Shared plan remaining quota is **not** model remaining quota. A model never
    gets a ``remaining_fraction`` of its own unless the provider documents an
@@ -32,6 +39,9 @@ Three invariants hold everywhere below:
 3. Heterogeneous provider metrics keep their own unit. GLM meters its pool in
    plan credits while reporting model usage in tokens; forcing both into
    "tokens" would invent a conversion the provider never published.
+4. A scope outside the projected workload is never a limiter. It cannot supply,
+   cap, average with, or invalidate the projected figure, and because it never
+   reaches ``windows`` it never reaches the snapshot the scheduler reads.
 """
 
 from __future__ import annotations
@@ -50,6 +60,7 @@ from personal_ai_orchestrator.model_registry import (
     QuotaWindowSnapshot,
     RegistryModel,
 )
+from personal_ai_orchestrator.quota_workload_scope import QuotaWorkloadScope
 
 
 def _require_aware(value: datetime, field_name: str) -> None:
@@ -225,10 +236,18 @@ class ModelEquivalentView(RegistryModel):
     MiniMax account the entries are named ``general`` and ``video`` — resource
     categories, not routable models — and naming the field after the provider's
     own misleading key would propagate the error into our UI.
+
+    ``workload_scope`` records what kind of work the scope meters. It is what
+    lets the coding projection read ``general`` and leave ``video`` alone
+    without deleting the video observation.
     """
 
     scope_id: str = Field(min_length=1)
     scope_kind: EquivalentScopeKind = EquivalentScopeKind.UNKNOWN
+    #: Which workload this scope meters. ``video`` is a real MiniMax balance and
+    #: a real observation; it is simply not about coding, so it is classified
+    #: rather than discarded. See :mod:`quota_workload_scope`.
+    workload_scope: QuotaWorkloadScope = QuotaWorkloadScope.UNKNOWN
     window_id: str = Field(min_length=1)
     remaining_fraction: float | None = Field(default=None, ge=0.0, le=1.0)
     remaining_units: float | None = Field(default=None, ge=0.0)
@@ -358,6 +377,15 @@ class PlanQuotaProjection(RegistryModel):
     model_consumption: tuple[ModelConsumptionObservation, ...] = ()
     model_equivalents: tuple[ModelEquivalentView, ...] = ()
     binding_window: BindingWindow = BindingWindow()
+    #: The workload these ``windows`` describe. Every figure in this projection
+    #: — windows, binding window, state, and anything derived from them — is
+    #: scoped to it, so a scope belonging to another workload can never reach
+    #: the scheduler through this type.
+    active_workload_scope: QuotaWorkloadScope = QuotaWorkloadScope.UNKNOWN
+    #: Sanitized codes for scopes the provider reported that this workload does
+    #: not read, e.g. ``VIDEO_SCOPE_IGNORED_FOR_CODING``. Advanced Details only:
+    #: they explain an absence, they are not failures.
+    workload_scope_notes: tuple[str, ...] = ()
     state: QuotaState = QuotaState.UNKNOWN
     confidence: EvidenceConfidence = EvidenceConfidence.UNKNOWN
     source: EvidenceSource
@@ -398,6 +426,30 @@ class PlanQuotaProjection(RegistryModel):
                 return candidate
         return None
 
+    def equivalents_in_active_workload(self) -> tuple[ModelEquivalentView, ...]:
+        """Provider scope views that belong to the workload this plan projects.
+
+        Unclassified scopes are included: when a provider names its entries
+        after models rather than workloads, those entries *are* the coding view.
+        """
+
+        return tuple(
+            view
+            for view in self.model_equivalents
+            if view.workload_scope
+            in {self.active_workload_scope, QuotaWorkloadScope.UNKNOWN}
+        )
+
+    def equivalents_outside_active_workload(self) -> tuple[ModelEquivalentView, ...]:
+        """Real provider observations this workload deliberately does not read."""
+
+        return tuple(
+            view
+            for view in self.model_equivalents
+            if view.workload_scope
+            not in {self.active_workload_scope, QuotaWorkloadScope.UNKNOWN}
+        )
+
     def covered_model_ids(self) -> tuple[str, ...]:
         """Models with evidence of drawing on this pool.
 
@@ -426,9 +478,10 @@ class PlanQuotaProjection(RegistryModel):
         """Project onto the canonical snapshot the scheduler and cache consume.
 
         The scheduler's authoritative inputs stay exactly what they were —
-        provider-reported windows. Model consumption and equivalent capacity
-        travel beside the snapshot rather than inside it, so advisory numbers
-        can never become routing truth by accident.
+        provider-reported windows, now those of ``active_workload_scope`` only.
+        Model consumption, per-scope equivalents, and equivalent capacity travel
+        beside the snapshot rather than inside it, so neither advisory numbers
+        nor another workload's balance can become routing truth by accident.
         """
 
         return QuotaSnapshot(
@@ -477,6 +530,7 @@ __all__ = [
     "PlanQuotaProjection",
     "PlanQuotaSemantics",
     "QuotaResourceKind",
+    "QuotaWorkloadScope",
     "SharedQuotaPool",
     "aggregate_state",
     "determine_binding_window",

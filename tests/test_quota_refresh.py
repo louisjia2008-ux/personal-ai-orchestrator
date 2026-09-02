@@ -18,7 +18,10 @@ from pathlib import Path
 import pytest
 
 from personal_ai_orchestrator.activation import ActiveRoutingGate
-from personal_ai_orchestrator.control_api import ControlPlaneService
+from personal_ai_orchestrator.control_api import (
+    ControlPlaneService,
+    QuotaRefreshResultView,
+)
 from personal_ai_orchestrator.model_registry import (
     EvidenceConfidence,
     ModelRegistry,
@@ -34,6 +37,12 @@ from personal_ai_orchestrator.provider_discovery import (
 )
 from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryManager
 from personal_ai_orchestrator.provider_registry_store import save
+from personal_ai_orchestrator.quota_acceptance import (
+    ScopedRefreshTargetMissing,
+    ScopedRefreshWidened,
+    refresh_all_provider_quota,
+    scoped_quota_refresh,
+)
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
 from personal_ai_orchestrator.quota_collectors.base import (
     QuotaCollectionResult,
@@ -511,21 +520,20 @@ def test_refresh_of_unconnected_provider_is_a_no_op(tmp_path: Path, manager) -> 
     assert collector.calls == 0
 
 
-def test_disagreeing_model_views_keep_the_plan_evidence_they_do_support(
+def test_video_scope_never_suppresses_the_coding_quota_figure(
     tmp_path: Path, manager
 ) -> None:
-    """§24 — a shared pool viewed per model must not blank the whole provider.
+    """A video balance must not blank the provider's coding quota.
 
-    MiniMax reports a remaining percentage per model. When those views disagree
-    there is no single honest plan-level figure for that window, and the
-    previous implementation responded by discarding the entire observation:
-    both windows, every reset time, and every per-model figure.
+    ``general`` and ``video`` are workload scopes, not models and not two views
+    of one balance. This orchestrator schedules coding and text work, so
+    ``general`` is the scope its MiniMax targets draw on and ``video`` says
+    nothing about them in either direction.
 
-    Under the documented shared-pool semantics the disagreeing views are
-    equivalents, not balances. So the 5-hour plan figure stays UNKNOWN — it
-    genuinely cannot be derived — while the weekly window, on which every model
-    *does* agree, is reported, and the per-model views survive as equivalents.
-    Partial knowledge beats hiding everything.
+    Both earlier implementations read the disagreement as "no plan figure is
+    derivable" and reported the provider UNKNOWN. Here the coding projection
+    reads ``general`` — 95% over 5 hours, 60% weekly, exactly what the provider
+    said — while the video observation is preserved beside it, out of scope.
     """
 
     transport = _RecordingTransport(
@@ -554,11 +562,11 @@ def test_disagreeing_model_views_keep_the_plan_evidence_they_do_support(
     service.connect_provider({"provider_id": "minimax-cn-coding-plan"})
     card = service.refresh_quota().overview.providers[0]
 
-    # The plan as a whole is not EXACT: one of its windows is underivable.
-    assert card.quota_state == "UNKNOWN"
-    # ...but a truthful, sanitized explanation is given.
-    assert card.failure_reason == "SHARED_POOL_VIEWED_PER_MODEL"
-    assert card.last_refresh_status == "UNKNOWN"
+    # The coding scope is fully readable, so the provider is observable.
+    assert card.quota_state == "OBSERVED"
+    assert card.confidence == "EXACT"
+    assert card.failure_reason is None
+    assert card.last_refresh_status == "SUCCESS"
     assert card.last_refresh_at is not None
 
     projection = collector.collect().projection
@@ -566,26 +574,31 @@ def test_disagreeing_model_views_keep_the_plan_evidence_they_do_support(
     five_hour = projection.window(QuotaWindowKind.FIVE_HOUR)
     weekly = projection.window(QuotaWindowKind.WEEKLY)
     assert five_hour is not None and weekly is not None
-    # No fabricated 5-hour aggregate from views that disagree...
-    assert five_hour.remaining_fraction is None
-    assert five_hour.confidence is EvidenceConfidence.UNKNOWN
-    # ...and no discarding of the weekly window they agree on.
+    # The provider's own general figures, neither averaged with video nor
+    # limited by it.
+    assert five_hour.remaining_fraction == pytest.approx(0.95)
+    assert five_hour.confidence is EvidenceConfidence.EXACT
     assert weekly.remaining_fraction == pytest.approx(0.60)
     assert weekly.confidence is EvidenceConfidence.EXACT
-    # The per-scope views are preserved as equivalents, never as balances.
+    # Video is preserved as a real observation, out of the coding workload.
     assert {view.scope_id for view in projection.model_equivalents} == {
         "general",
         "video",
     }
+    assert projection.workload_scope_notes == ("VIDEO_SCOPE_IGNORED_FOR_CODING",)
     # ...and are not promoted into the list of models the owner can route to:
-    # "general" and "video" are MiniMax resource categories, not models.
+    # "general" and "video" are MiniMax workload scopes, not models.
     assert projection.covered_model_ids() == ()
 
 
-def test_all_models_agreeing_yields_one_exact_plan_figure(
+def test_agreeing_workload_scopes_still_yield_one_exact_plan_figure(
     tmp_path: Path, manager
 ) -> None:
-    """One shared bar seen through several models that agree *is* readable."""
+    """Scope agreement is not what makes the figure readable, but must still work.
+
+    Coding quota comes from ``general`` whether or not ``video`` happens to
+    match it, so this payload reads exactly like the disagreeing one above.
+    """
 
     transport = _RecordingTransport(
         {
@@ -615,7 +628,7 @@ def test_all_models_agreeing_yields_one_exact_plan_figure(
     assert five_hour is not None and weekly is not None
     assert five_hour.remaining_fraction == pytest.approx(0.63)
     assert weekly.remaining_fraction == pytest.approx(0.81)
-    # Both models draw on one pool; neither owns a balance of its own.
+    # Models draw on one pool; none owns a balance of its own.
     assert projection.pool.shared_across_models is True
     assert projection.binding_window.window_id == "5h"
 
@@ -654,8 +667,14 @@ def test_unknown_status_without_category_still_reports_a_reason(
     assert card.failure_reason == "PROVIDER_QUOTA_NOT_INTERPRETABLE"
 
 
-def test_agreeing_models_still_produce_an_exact_figure(tmp_path: Path, manager) -> None:
-    """Disagreement is what blocks an aggregate — agreement must still work."""
+def test_anonymous_provider_entries_still_produce_an_exact_figure(
+    tmp_path: Path, manager
+) -> None:
+    """An unnamed bar has no workload label, and must still be read.
+
+    Workload classification narrows what is read; it must not require a name
+    the provider never gave.
+    """
 
     entry = {
         "current_interval_remaining_percent": 80.0,
@@ -741,3 +760,193 @@ def test_quota_state_files_never_contain_credentials(tmp_path: Path, manager) ->
         assert "super-secret-token" not in raw
         payload = json.loads(raw)
         assert "authorization" not in json.dumps(payload).lower()
+
+
+# ---------------------------------------------------------------------------
+# P4.2.6.5.1 §17/§25 — observability count, and scoped acceptance
+# ---------------------------------------------------------------------------
+
+
+def test_minimax_general_quota_makes_two_providers_observable(
+    tmp_path: Path, manager
+) -> None:
+    """§17 — video ambiguity must not hold MiniMax in UNKNOWN.
+
+    Both providers report a real coding figure, so both are observable. Before
+    the workload-scope projection the MiniMax card sat at UNKNOWN because its
+    ``video`` scope disagreed with ``general``, and the owner saw
+    "observable: 1" while holding two readable balances.
+    """
+
+    minimax = MiniMaxQuotaCollector(
+        bearer_token="t",
+        region="cn",
+        transport=_RecordingTransport(
+            {
+                "model_remains": [
+                    {
+                        "model": "general",
+                        "current_interval_remaining_percent": 95,
+                        "current_weekly_remaining_percent": 59,
+                    },
+                    {
+                        "model": "video",
+                        "current_interval_remaining_percent": 60,
+                        "current_weekly_remaining_percent": 60,
+                    },
+                ]
+            }
+        ),
+    )
+    glm = ZAIQuotaCollector(
+        authorization_token="t",
+        transport=_RecordingTransport(
+            {
+                "data": {
+                    "limits": [
+                        {
+                            "type": "CREDIT_LIMIT",
+                            "unit": 3,
+                            "number": 5,
+                            "percentage": 30.0,
+                        }
+                    ]
+                }
+            }
+        ),
+    )
+    service = _service(
+        tmp_path,
+        manager,
+        collectors={"minimax-cn-coding-plan": minimax, "zai-coding-plan": glm},
+    )
+    service.connect_provider({"provider_id": "minimax-cn-coding-plan"})
+    service.connect_provider({"provider_id": "zai-coding-plan"})
+
+    view = service.refresh_quota().overview
+
+    assert view.summary.connected_provider_count == 2
+    assert view.summary.quota_observable_provider_count == 2
+    cards = {card.provider_id: card for card in view.providers}
+    minimax_plan = cards["minimax-cn-coding-plan"].plan
+    assert minimax_plan is not None
+    assert minimax_plan.active_workload_scope == "CODING_TEXT"
+    assert minimax_plan.workload_scope_notes == ("VIDEO_SCOPE_IGNORED_FOR_CODING",)
+    windows = {window.window_id: window for window in minimax_plan.windows}
+    assert windows["5h"].remaining_fraction == pytest.approx(0.95)
+    assert windows["weekly"].remaining_fraction == pytest.approx(0.59)
+    # ...and the video observation reaches the client, classified as such.
+    video = [
+        item
+        for item in minimax_plan.model_equivalents
+        if item.workload_scope == "VIDEO_GENERATION"
+    ]
+    assert {item.scope_id for item in video} == {"video"}
+
+
+def test_glm_semantics_are_untouched_by_the_minimax_projection(
+    tmp_path: Path, manager
+) -> None:
+    """§10 — GLM keeps its own provider-authoritative windows and product name."""
+
+    glm = ZAIQuotaCollector(
+        authorization_token="t",
+        transport=_RecordingTransport(
+            {
+                "data": {
+                    "limits": [
+                        {"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 30.0}
+                    ]
+                }
+            }
+        ),
+    )
+    service = _service(tmp_path, manager, collectors={"zai-coding-plan": glm})
+    service.connect_provider({"provider_id": "zai-coding-plan"})
+
+    plan = service.refresh_quota().overview.providers[0].plan
+    assert plan is not None
+    assert plan.display_name == "GLM Coding Plan"
+    # GLM reports no workload scopes; nothing about MiniMax's projection may
+    # invent one for it, and no GLM window may be dropped by it.
+    assert plan.active_workload_scope == "UNKNOWN"
+    assert plan.workload_scope_notes == ()
+    assert plan.model_equivalents == ()
+
+
+def test_scoped_acceptance_refresh_fails_closed_without_a_provider(
+    tmp_path: Path, manager
+) -> None:
+    """§25 — a scoped refresh with no target must stop, never widen.
+
+    The previous acceptance run omitted ``provider_id`` and refreshed every
+    connected provider, including one pending credential rotation. The scoped
+    helper cannot do that: it refuses instead.
+    """
+
+    minimax_transport = _RecordingTransport(
+        {"model_remains": [{"model": "general", "current_interval_remaining_percent": 95}]}
+    )
+    minimax = MiniMaxQuotaCollector(
+        bearer_token="t", region="cn", transport=minimax_transport
+    )
+    glm_transport = _RecordingTransport({"data": {"limits": []}})
+    glm = ZAIQuotaCollector(authorization_token="t", transport=glm_transport)
+    service = _service(
+        tmp_path,
+        manager,
+        collectors={"minimax-cn-coding-plan": minimax, "zai-coding-plan": glm},
+    )
+    service.connect_provider({"provider_id": "minimax-cn-coding-plan"})
+    service.connect_provider({"provider_id": "zai-coding-plan"})
+
+    for missing in (None, "", "   "):
+        with pytest.raises(ScopedRefreshTargetMissing):
+            scoped_quota_refresh(service, provider_id=missing)
+    # No provider was contacted: refusing is not a silent all-provider refresh.
+    assert glm_transport.calls == []
+    assert minimax_transport.calls == []
+
+    result = scoped_quota_refresh(service, provider_id="zai-coding-plan")
+    assert result.refreshed_provider_ids == ("zai-coding-plan",)
+    assert glm_transport.calls != []
+    # The provider that was not named stays untouched — this is the exact
+    # widening that reached a credential pending rotation.
+    assert minimax_transport.calls == []
+
+
+def test_scoped_refresh_rejects_a_result_that_touched_other_providers(
+    tmp_path: Path, manager
+) -> None:
+    """The widening this guard exists for is caught, not assumed impossible."""
+
+    class _WideningClient:
+        def refresh_quota(self, provider_id: str | None = None):
+            return QuotaRefreshResultView(
+                refreshed_provider_ids=("zai-coding-plan", "minimax-cn-coding-plan"),
+                overview=_service(tmp_path, manager).quota(),
+            )
+
+    with pytest.raises(ScopedRefreshWidened):
+        scoped_quota_refresh(_WideningClient(), provider_id="zai-coding-plan")
+
+
+def test_the_all_provider_refresh_must_be_named_to_be_invoked(
+    tmp_path: Path, manager
+) -> None:
+    """The product-wide operation still exists — as a deliberate call."""
+
+    glm_transport = _RecordingTransport({"data": {"limits": []}})
+    service = _service(
+        tmp_path,
+        manager,
+        collectors={
+            "zai-coding-plan": ZAIQuotaCollector(
+                authorization_token="t", transport=glm_transport
+            )
+        },
+    )
+    service.connect_provider({"provider_id": "zai-coding-plan"})
+
+    result = refresh_all_provider_quota(service)
+    assert result.refreshed_provider_ids == ("zai-coding-plan",)

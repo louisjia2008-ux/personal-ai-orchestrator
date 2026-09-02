@@ -158,17 +158,18 @@ final class SharedPlanQuotaTests: XCTestCase {
         XCTAssertNotEqual(capacity.confidence, "EXACT")
     }
 
-    // MARK: - MiniMax per-model views of one pool
+    // MARK: - MiniMax workload scopes
 
-    func testDisagreeingModelViewsRenderAsEquivalentsNotBalances() throws {
+    func testVideoScopeIsNeverRenderedAsACodingBalance() throws {
+        // The regression fixture: general 95% beside video 60%. The card must
+        // read 95%, and the video figure must not sit next to it as an equal.
         let json = """
             {
               "provider_id": "minimax-cn-coding-plan",
               "display_name": "MiniMax CN Coding Plan",
               "connection_state": "CONNECTED",
-              "quota_state": "UNKNOWN",
-              "confidence": "UNKNOWN",
-              "failure_reason": "SHARED_POOL_VIEWED_PER_MODEL",
+              "quota_state": "OBSERVED",
+              "confidence": "EXACT",
               "credential_source": "OPENCODE_AUTH_STORE",
               "plan": {
                 "provider_id": "minimax", "plan_id": "token-plan",
@@ -178,50 +179,77 @@ final class SharedPlanQuotaTests: XCTestCase {
                 "resource_kind": "TOKEN_PLAN_INCLUDED_QUOTA",
                 "shared_across_models": true, "unit_kind": "PROVIDER_UNITS",
                 "covered_model_ids": [],
-                "state": "AVAILABLE", "confidence": "UNKNOWN",
-                "unknown_reason": "SHARED_POOL_VIEWED_PER_MODEL",
+                "state": "AVAILABLE", "confidence": "EXACT",
+                "active_workload_scope": "CODING_TEXT",
+                "workload_scope_notes": ["VIDEO_SCOPE_IGNORED_FOR_CODING"],
                 "windows": [
-                  {"window_id": "5h", "window_kind": "FIVE_HOUR", "state": "UNKNOWN",
-                   "confidence": "UNKNOWN", "remaining_fraction": null},
+                  {"window_id": "5h", "window_kind": "FIVE_HOUR", "state": "AVAILABLE",
+                   "confidence": "EXACT", "remaining_fraction": 0.95},
                   {"window_id": "weekly", "window_kind": "WEEKLY", "state": "AVAILABLE",
-                   "confidence": "EXACT", "remaining_fraction": 0.6}
+                   "confidence": "EXACT", "remaining_fraction": 0.95}
                 ],
-                "binding_window": {"window_id": "weekly", "window_kind": "WEEKLY",
-                  "remaining_fraction": 0.6, "reason": "ONLY_KNOWN_WINDOW",
-                  "confidence": "ESTIMATED"},
+                "binding_window": {"window_id": "5h", "window_kind": "FIVE_HOUR",
+                  "remaining_fraction": 0.95, "reason": "SCARCEST_COMPARABLE_WINDOW",
+                  "confidence": "EXACT"},
                 "model_consumption": [],
                 "model_equivalents": [
                   {"scope_id": "general", "scope_kind": "PROVIDER_RESOURCE_SCOPE",
-                   "window_id": "5h", "remaining_fraction": 0.96,
+                   "workload_scope": "CODING_TEXT",
+                   "window_id": "5h", "remaining_fraction": 0.95,
                    "unit_kind": "UNKNOWN", "confidence": "EXACT"},
                   {"scope_id": "video", "scope_kind": "PROVIDER_RESOURCE_SCOPE",
-                   "window_id": "5h", "remaining_fraction": 1.0,
+                   "workload_scope": "VIDEO_GENERATION",
+                   "window_id": "5h", "remaining_fraction": 0.6,
                    "unit_kind": "UNKNOWN", "confidence": "EXACT"}
                 ],
                 "equivalent_capacity": []
               }
             }
             """
-        let plan = try XCTUnwrap(decodeCard(json).plan)
+        let card = try decodeCard(json)
+        let plan = try XCTUnwrap(card.plan)
 
-        // Partial knowledge is kept: the underivable window is UNKNOWN and
-        // draws no bar, while the window every model agrees on still renders.
-        let fiveHour = try XCTUnwrap(plan.windows.first { $0.windowId == "5h" })
-        let weekly = try XCTUnwrap(plan.windows.first { $0.windowId == "weekly" })
-        XCTAssertFalse(fiveHour.isReadable)
-        XCTAssertNil(fiveHour.remainingFraction)
-        XCTAssertTrue(weekly.isReadable)
-        XCTAssertTrue(plan.hasReadableWindow)
+        // Both coding windows carry the provider's own general figure.
+        XCTAssertEqual(card.quotaState, "OBSERVED")
+        for window in plan.windows {
+            XCTAssertTrue(window.isReadable)
+            XCTAssertEqual(window.remainingFraction ?? 0, 0.95, accuracy: 0.0001)
+        }
+        // Neither averaged with video (0.775) nor limited by it (0.6).
+        XCTAssertNotEqual(plan.bindingWindow?.remainingFraction, 0.6)
 
-        // The per-scope figures survive, in the section labelled as views.
+        // The two scopes are separated, so video cannot read as a coding bar.
+        XCTAssertEqual(plan.inScopeEquivalents.map(\.scopeId), ["general"])
+        XCTAssertEqual(plan.outOfScopeEquivalents.map(\.scopeId), ["video"])
+        // ...and video is still present, not deleted.
         XCTAssertEqual(plan.modelEquivalents.count, 2)
-        // ...and produce no per-scope windows that could be drawn as balances.
-        XCTAssertEqual(plan.windows.count, 2)
-        // MiniMax names these entries "general" and "video" - resource
-        // categories, not routable models - so none is offered as a model the
-        // owner can send work to.
-        XCTAssertTrue(plan.modelEquivalents.allSatisfy { !$0.isModel })
-        XCTAssertTrue(plan.coveredModelIds.isEmpty)
+        XCTAssertEqual(plan.workloadScopeNotes, ["VIDEO_SCOPE_IGNORED_FOR_CODING"])
+        XCTAssertEqual(plan.activeWorkloadScope, "CODING_TEXT")
+    }
+
+    func testWorkloadScopesReadDifferentlyToTheOwner() {
+        // A card that labels coding and video identically would defeat the
+        // separation above.
+        XCTAssertNotEqual(
+            L10n.quotaWorkloadScope("CODING_TEXT"),
+            L10n.quotaWorkloadScope("VIDEO_GENERATION")
+        )
+        XCTAssertFalse(L10n.quotaWorkloadScope("CODING_TEXT").isEmpty)
+    }
+
+    func testCodingUnknownReasonsNeverBlameAnotherWorkload() {
+        // Every retired code must fall through to the generic sentence rather
+        // than keep a dedicated one: the product no longer says "quota varies
+        // by model" when two workload scopes simply differ.
+        let generic = L10n.quotaFailureReason("SOMETHING_UNMAPPED")
+        XCTAssertEqual(L10n.quotaFailureReason("QUOTA_VARIES_BY_MODEL"), generic)
+        XCTAssertEqual(L10n.quotaFailureReason("SHARED_POOL_VIEWED_PER_MODEL"), generic)
+        // ...while the codes that replaced them say what is actually missing.
+        XCTAssertNotEqual(L10n.quotaFailureReason("GENERAL_QUOTA_NOT_AVAILABLE"), generic)
+        XCTAssertNotEqual(
+            L10n.quotaFailureReason("GENERAL_WINDOW_SEMANTICS_UNKNOWN"), generic
+        )
+        XCTAssertNotEqual(L10n.quotaFailureReason("CODING_SCOPE_VIEWS_DISAGREE"), generic)
     }
 
     // MARK: - Compatibility
@@ -241,6 +269,38 @@ final class SharedPlanQuotaTests: XCTestCase {
         XCTAssertEqual(card.credentialSource, "NONE")
         XCTAssertNil(card.plan)
         XCTAssertTrue(card.quotaPools.isEmpty)
+    }
+
+    func testAPlanFromADaemonPredatingWorkloadScopesStillDecodes() throws {
+        // The workload-scope keys are new. A card without them must decode to
+        // UNKNOWN rather than fail, or the Quota page blanks during a rollout.
+        let plan = try XCTUnwrap(
+            try decodeCard(
+                """
+                {"provider_id": "minimax-cn-coding-plan", "display_name": "MiniMax",
+                 "connection_state": "CONNECTED", "quota_state": "UNKNOWN",
+                 "confidence": "UNKNOWN",
+                 "plan": {"provider_id": "minimax", "plan_id": "token-plan",
+                  "display_name": "MiniMax Token Plan", "quota_semantics": "SHARED_POOL",
+                  "pool_id": "minimax-token-plan-cn", "resource_kind": "UNKNOWN",
+                  "shared_across_models": true, "unit_kind": "UNKNOWN",
+                  "covered_model_ids": [], "state": "UNKNOWN", "confidence": "UNKNOWN",
+                  "windows": [], "model_consumption": [], "equivalent_capacity": [],
+                  "model_equivalents": [
+                    {"scope_id": "general", "scope_kind": "PROVIDER_RESOURCE_SCOPE",
+                     "window_id": "5h", "remaining_fraction": 0.95,
+                     "unit_kind": "UNKNOWN", "confidence": "EXACT"}]}}
+                """
+            ).plan
+        )
+
+        XCTAssertEqual(plan.activeWorkloadScope, "UNKNOWN")
+        XCTAssertTrue(plan.workloadScopeNotes.isEmpty)
+        XCTAssertEqual(plan.modelEquivalents.first?.workloadScope, "UNKNOWN")
+        // An unclassified scope is in-scope: a provider naming its entries
+        // after models is still describing the coding pool.
+        XCTAssertEqual(plan.inScopeEquivalents.count, 1)
+        XCTAssertTrue(plan.outOfScopeEquivalents.isEmpty)
     }
 
     // MARK: - Localization
@@ -278,7 +338,11 @@ final class SharedPlanQuotaTests: XCTestCase {
             "quota.plan.insufficientHistory", "quota.plan.noPlanFigure",
             "quota.plan.credentialSource", "quota.binding.title",
             "quota.confidence.exact", "quota.confidence.estimated",
-            "quota.reason.sharedPoolPerModel",
+            "quota.plan.workloadScopeLabel", "quota.plan.workload.codingText",
+            "quota.plan.workload.video", "quota.plan.otherScopes",
+            "quota.plan.otherScopesFooter",
+            "quota.reason.codingScopeUnavailable",
+            "quota.reason.codingWindowSemanticsUnknown",
         ]
         for key in keys {
             XCTAssertNotNil(

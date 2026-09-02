@@ -473,12 +473,17 @@ class ModelEquivalentWindowView(_ViewModel):
 
     Rendered under an explicit "equivalent" heading; never as a balance.
     ``scope_id`` is not called ``model_id`` because MiniMax's ``model_remains``
-    entries are resource categories on the observed account, and ``scope_kind``
-    says which it is.
+    entries are workload scopes on the observed account; ``scope_kind`` says
+    whether the name is a model, and ``workload_scope`` says what it meters.
     """
 
     scope_id: str
     scope_kind: str
+    #: CODING_TEXT | VIDEO_GENERATION | IMAGE_GENERATION | AUDIO | UNKNOWN.
+    #: A scope outside the plan's active workload is real evidence the coding
+    #: dashboard does not read; the client must not render it as a balance
+    #: alongside the ones it does.
+    workload_scope: str = "UNKNOWN"
     window_id: str
     remaining_fraction: float | None = None
     remaining_units: float | None = None
@@ -530,6 +535,13 @@ class QuotaPlanView(_ViewModel):
     confidence: str
     observed_at: str | None = None
     unknown_reason: str | None = None
+    #: The workload every figure below is scoped to. Today the orchestrator
+    #: schedules CODING_TEXT, so a MiniMax plan projects its ``general`` scope
+    #: and leaves ``video`` out of ``windows`` entirely.
+    active_workload_scope: str = "UNKNOWN"
+    #: Sanitized Advanced-Details codes for observed scopes this workload does
+    #: not read, e.g. ``VIDEO_SCOPE_IGNORED_FOR_CODING``. Not failures.
+    workload_scope_notes: tuple[str, ...] = ()
     windows: tuple[QuotaPlanWindowView, ...] = ()
     binding_window: BindingWindowView | None = None
     model_consumption: tuple[ModelConsumptionView, ...] = ()
@@ -2258,6 +2270,8 @@ class ControlPlaneService:
             confidence=projection.confidence.value,
             observed_at=iso(projection.plan.observed_at),
             unknown_reason=projection.unknown_reason,
+            active_workload_scope=projection.active_workload_scope.value,
+            workload_scope_notes=projection.workload_scope_notes,
             windows=windows,
             binding_window=BindingWindowView(
                 window_id=binding.window_id,
@@ -2288,6 +2302,7 @@ class ControlPlaneService:
                 ModelEquivalentWindowView(
                     scope_id=item.scope_id,
                     scope_kind=item.scope_kind.value,
+                    workload_scope=item.workload_scope.value,
                     window_id=item.window_id,
                     remaining_fraction=item.remaining_fraction,
                     remaining_units=item.remaining_units,

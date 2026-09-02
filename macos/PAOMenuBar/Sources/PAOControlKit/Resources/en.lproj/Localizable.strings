@@ -466,7 +466,6 @@
 "command.reloadDetail" = "Reload detail";
 
 /* P4.2.6.4 quota reasons for a successful read with no usable figure */
-"quota.reason.variesByModel" = "The provider reports a different quota for each model, so no single plan-level figure exists. Per-model detail is under Advanced Details.";
 "quota.reason.noEntries" = "The provider returned no quota entries for this plan.";
 "quota.reason.fieldsUnavailable" = "The provider's quota response did not include a readable remaining figure.";
 "quota.reason.notInterpretable" = "The provider replied, but its quota data could not be interpreted reliably.";
@@ -498,10 +497,24 @@
 "quota.confidence.unknownData" = "No reliable data";
 "quota.reason.limitTypeUnrecognized" = "The provider returned a quota type this version does not recognize.";
 "quota.reason.windowUnrecognized" = "The provider returned a quota window this version does not recognize.";
-"quota.reason.sharedPoolPerModel" = "The provider reports this shared quota through each model, and the views disagree, so no single plan-level figure can be derived.";
 "quota.reason.providerReportedFailure" = "The provider accepted the request but reported a failure.";
 "quota.capacity.tasks" = "about %d similar tasks remaining";
 "quota.capacity.basis" = "based on %d recent similar tasks";
 "quota.credential.environment" = "Environment variable";
 "quota.credential.authStore" = "OpenCode sign-in";
 "quota.credential.none" = "Not available";
+
+/* P4.2.6.5.1 workload-scope projection: which provider scope the coding
+   dashboard reads, and why an observed scope is absent from it */
+"quota.plan.workloadScopeLabel" = "Used for";
+"quota.plan.workload.codingText" = "Coding / text";
+"quota.plan.workload.video" = "Video generation";
+"quota.plan.workload.image" = "Image generation";
+"quota.plan.workload.audio" = "Speech / audio";
+"quota.plan.workload.unknown" = "Unclassified";
+"quota.plan.otherScopes" = "Other provider quota scopes";
+"quota.plan.otherScopesFooter" = "Real provider balances for work this orchestrator does not schedule. They do not affect coding availability, scheduling, or reset windows.";
+"quota.reason.codingScopeUnavailable" = "The provider reported no remaining figure for the coding/text scope this orchestrator schedules.";
+"quota.reason.codingScopeUnreadable" = "The coding/text scope carried a remaining figure that could not be read, so nothing is shown for it.";
+"quota.reason.codingWindowSemanticsUnknown" = "One window of the coding/text scope is readable; the other window could not be identified in this response and is not guessed at.";
+"quota.reason.codingScopeDisagree" = "Several coding/text scopes report different values for the same window, so no single figure can be derived from them.";

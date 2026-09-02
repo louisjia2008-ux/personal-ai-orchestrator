@@ -547,13 +547,18 @@ public struct ModelConsumptionView: Codable, Equatable, Identifiable, Sendable {
 /// A provider's per-scope *view* of one shared pool.
 ///
 /// They are equivalents, not balances, and the view layer must label them so.
-/// `scopeId` is not `modelId`: MiniMax's `model_remains` entries are resource
-/// categories on the observed account, and `scopeKind` records which it is —
-/// an owner told "video shares this quota" would look for a model that does
-/// not exist.
+/// `scopeId` is not `modelId`: MiniMax's `model_remains` entries are workload
+/// scopes on the observed account, and `scopeKind` records which it is — an
+/// owner told "video shares this quota" would look for a model that does not
+/// exist. `workloadScope` says what the scope meters, which is what lets the
+/// coding dashboard show `general` and file `video` under Advanced Details
+/// instead of rendering the two as equals.
 public struct ModelEquivalentWindowView: Codable, Equatable, Identifiable, Sendable {
     public let scopeId: String
     public let scopeKind: String
+    /// Stored optional so a daemon predating this field still decodes; the
+    /// absence of a classification is UNKNOWN, which is a real value here.
+    private let workloadScopeRaw: String?
     public let windowId: String
     public let remainingFraction: Double?
     public let remainingUnits: Double?
@@ -566,9 +571,20 @@ public struct ModelEquivalentWindowView: Codable, Equatable, Identifiable, Senda
     /// True only when the account's catalog confirmed this entry names a model.
     public var isModel: Bool { scopeKind == "MODEL" }
 
+    /// CODING_TEXT | VIDEO_GENERATION | IMAGE_GENERATION | AUDIO | UNKNOWN
+    public var workloadScope: String { workloadScopeRaw ?? "UNKNOWN" }
+
+    /// Whether this scope belongs to the workload the plan is projecting.
+    /// An unclassified scope counts as in-scope: a provider that names its
+    /// entries after models is still describing the coding pool.
+    public func belongs(to workload: String) -> Bool {
+        workloadScope == workload || workloadScope == "UNKNOWN"
+    }
+
     enum CodingKeys: String, CodingKey {
         case scopeId = "scope_id"
         case scopeKind = "scope_kind"
+        case workloadScopeRaw = "workload_scope"
         case windowId = "window_id"
         case remainingFraction = "remaining_fraction"
         case remainingUnits = "remaining_units"
@@ -580,6 +596,7 @@ public struct ModelEquivalentWindowView: Codable, Equatable, Identifiable, Senda
     public init(
         scopeId: String,
         scopeKind: String = "UNKNOWN",
+        workloadScope: String = "UNKNOWN",
         windowId: String,
         remainingFraction: Double? = nil,
         remainingUnits: Double? = nil,
@@ -589,6 +606,7 @@ public struct ModelEquivalentWindowView: Codable, Equatable, Identifiable, Senda
     ) {
         self.scopeId = scopeId
         self.scopeKind = scopeKind
+        self.workloadScopeRaw = workloadScope
         self.windowId = windowId
         self.remainingFraction = remainingFraction
         self.remainingUnits = remainingUnits
@@ -672,6 +690,9 @@ public struct QuotaPlanView: Codable, Equatable, Identifiable, Sendable {
     public let confidence: String
     public let observedAt: String?
     public let unknownReason: String?
+    /// Stored optional so a daemon predating these fields still decodes.
+    private let activeWorkloadScopeRaw: String?
+    private let workloadScopeNotesRaw: [String]?
     public let windows: [QuotaPlanWindowView]
     public let bindingWindow: BindingWindowView?
     public let modelConsumption: [ModelConsumptionView]
@@ -683,6 +704,28 @@ public struct QuotaPlanView: Codable, Equatable, Identifiable, Sendable {
     /// True when at least one window carries a provider-reported figure.
     /// A plan can be partially readable: some windows known, others not.
     public var hasReadableWindow: Bool { windows.contains(where: \.isReadable) }
+
+    /// The workload every figure in this plan is scoped to. The orchestrator
+    /// schedules CODING_TEXT today, so a MiniMax plan carries its `general`
+    /// scope here and `video` never reaches `windows`.
+    public var activeWorkloadScope: String { activeWorkloadScopeRaw ?? "UNKNOWN" }
+
+    /// Sanitized codes for observed scopes this workload does not read, e.g.
+    /// `VIDEO_SCOPE_IGNORED_FOR_CODING`. Advanced Details only — they explain
+    /// an absence, they are not failures.
+    public var workloadScopeNotes: [String] { workloadScopeNotesRaw ?? [] }
+
+    /// Scope views belonging to the workload this plan projects.
+    public var inScopeEquivalents: [ModelEquivalentWindowView] {
+        modelEquivalents.filter { $0.belongs(to: activeWorkloadScope) }
+    }
+
+    /// Real provider observations for workloads this build does not schedule.
+    /// Kept visible under Advanced Details so the evidence is not lost, and
+    /// kept out of the primary card so it cannot read as a coding balance.
+    public var outOfScopeEquivalents: [ModelEquivalentWindowView] {
+        modelEquivalents.filter { !$0.belongs(to: activeWorkloadScope) }
+    }
 
     enum CodingKeys: String, CodingKey {
         case providerId = "provider_id"
@@ -699,6 +742,8 @@ public struct QuotaPlanView: Codable, Equatable, Identifiable, Sendable {
         case confidence
         case observedAt = "observed_at"
         case unknownReason = "unknown_reason"
+        case activeWorkloadScopeRaw = "active_workload_scope"
+        case workloadScopeNotesRaw = "workload_scope_notes"
         case windows
         case bindingWindow = "binding_window"
         case modelConsumption = "model_consumption"
@@ -721,6 +766,8 @@ public struct QuotaPlanView: Codable, Equatable, Identifiable, Sendable {
         confidence: String = "UNKNOWN",
         observedAt: String? = nil,
         unknownReason: String? = nil,
+        activeWorkloadScope: String = "UNKNOWN",
+        workloadScopeNotes: [String] = [],
         windows: [QuotaPlanWindowView] = [],
         bindingWindow: BindingWindowView? = nil,
         modelConsumption: [ModelConsumptionView] = [],
@@ -741,6 +788,8 @@ public struct QuotaPlanView: Codable, Equatable, Identifiable, Sendable {
         self.confidence = confidence
         self.observedAt = observedAt
         self.unknownReason = unknownReason
+        self.activeWorkloadScopeRaw = activeWorkloadScope
+        self.workloadScopeNotesRaw = workloadScopeNotes
         self.windows = windows
         self.bindingWindow = bindingWindow
         self.modelConsumption = modelConsumption

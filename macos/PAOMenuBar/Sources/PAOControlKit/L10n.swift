@@ -162,7 +162,13 @@ public enum L10n {
         "quota.limitingWindow.empty", "quota.provider", "quota.window", "quota.remainingLabel",
         "quota.resetLabel", "quota.estimatedBadge", "quota.history.title",
         "quota.history.empty", "quota.history.footer", "quota.noReliablePercentage",
-        "quota.reason.noReadonlySource", "quota.reason.variesByModel",
+        "quota.reason.noReadonlySource",
+        "quota.reason.codingScopeUnavailable", "quota.reason.codingScopeUnreadable",
+        "quota.reason.codingWindowSemanticsUnknown", "quota.reason.codingScopeDisagree",
+        "quota.plan.workloadScopeLabel", "quota.plan.workload.codingText",
+        "quota.plan.workload.video", "quota.plan.workload.image",
+        "quota.plan.workload.audio", "quota.plan.workload.unknown",
+        "quota.plan.otherScopes", "quota.plan.otherScopesFooter",
         "quota.reason.noEntries", "quota.reason.fieldsUnavailable",
         "quota.reason.notInterpretable", "quota.reason.credentialMissing",
         "quota.reason.authRequired", "quota.reason.rateLimited", "quota.reason.providerError",
@@ -875,6 +881,30 @@ public enum L10n {
     public static var quotaPlanPoolId: String { tr("quota.plan.poolId") }
     public static var quotaPlanSharedSemantics: String { tr("quota.plan.sharedSemantics") }
     public static var quotaPlanNoPlanFigure: String { tr("quota.plan.noPlanFigure") }
+
+    /// The workload a plan's quota is being read for, e.g. "编码 / 文本".
+    ///
+    /// Shown on the card so the owner can see *why* a scope they know exists
+    /// (MiniMax video) is not on it. Unknown workloads render nothing rather
+    /// than a placeholder, because a label with no meaning is noise.
+    public static func quotaWorkloadScope(_ value: String) -> String {
+        switch value {
+        case "CODING_TEXT": return tr("quota.plan.workload.codingText")
+        case "VIDEO_GENERATION": return tr("quota.plan.workload.video")
+        case "IMAGE_GENERATION": return tr("quota.plan.workload.image")
+        case "AUDIO": return tr("quota.plan.workload.audio")
+        default: return tr("quota.plan.workload.unknown")
+        }
+    }
+
+    public static var quotaPlanWorkloadScopeLabel: String {
+        tr("quota.plan.workloadScopeLabel")
+    }
+
+    public static var quotaPlanOtherScopes: String { tr("quota.plan.otherScopes") }
+    public static var quotaPlanOtherScopesFooter: String {
+        tr("quota.plan.otherScopesFooter")
+    }
     public static var quotaPlanCredentialSource: String { tr("quota.plan.credentialSource") }
     public static var quotaPlanUnitLabel: String { tr("quota.plan.unitLabel") }
     public static var quotaPlanConsumedLabel: String { tr("quota.plan.consumedLabel") }
@@ -929,12 +959,16 @@ public enum L10n {
         case "AUTHENTICATION_INTEGRATION_BLOCKED", "HTTP_401", "HTTP_403":
             return tr("quota.reason.authRequired")
         case "HTTP_429": return tr("quota.reason.rateLimited")
-        // A read that succeeded but yielded no single honest figure is a
-        // different truth from a read that failed.
-        case "QUOTA_VARIES_BY_MODEL": return tr("quota.reason.variesByModel")
-        // A shared pool the provider reports through each model. Not a failure:
-        // the per-model views are shown, only the single plan figure is absent.
-        case "SHARED_POOL_VIEWED_PER_MODEL": return tr("quota.reason.sharedPoolPerModel")
+        // A read that succeeded but yielded no figure for the workload we
+        // schedule is a different truth from a read that failed. None of these
+        // may be raised because a scope outside that workload disagreed —
+        // `QUOTA_VARIES_BY_MODEL` and `SHARED_POOL_VIEWED_PER_MODEL` said
+        // exactly that and are no longer produced.
+        case "GENERAL_QUOTA_NOT_AVAILABLE": return tr("quota.reason.codingScopeUnavailable")
+        case "GENERAL_QUOTA_READ_FAILED": return tr("quota.reason.codingScopeUnreadable")
+        case "GENERAL_WINDOW_SEMANTICS_UNKNOWN":
+            return tr("quota.reason.codingWindowSemanticsUnknown")
+        case "CODING_SCOPE_VIEWS_DISAGREE": return tr("quota.reason.codingScopeDisagree")
         case "PROVIDER_LIMIT_TYPE_UNRECOGNIZED":
             return tr("quota.reason.limitTypeUnrecognized")
         case "PROVIDER_WINDOW_DIMENSION_UNRECOGNIZED":
