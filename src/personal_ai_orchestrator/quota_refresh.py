@@ -424,10 +424,16 @@ class QuotaRefreshService:
             )
             return
 
+        # A refresh that produced no usable figure must never report a blank
+        # reason; the owner needs to know whether nothing could be read, or the
+        # provider simply has no single honest number to give.
+        reason = result.error_category
+        if reason is None and result.status is not QuotaCollectionStatus.SUCCESS:
+            reason = "PROVIDER_QUOTA_NOT_INTERPRETABLE"
         self._record_attempt(
             provider_id,
             status=result.status.value,
-            reason=result.error_category,
+            reason=reason,
         )
         if result.snapshot is not None and result.snapshot.quota_pool_id:
             with self._lock:

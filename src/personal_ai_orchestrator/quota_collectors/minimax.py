@@ -82,6 +82,41 @@ def _state_for_fraction(value: float | None) -> QuotaState:
     return QuotaState.AVAILABLE
 
 
+def minimax_unknown_reason(payload: dict[str, Any]) -> str:
+    """Explain why a *successful* read still yielded no usable figure.
+
+    UNKNOWN with no reason reads as breakage. MiniMax reports quota per model,
+    so a plan whose models disagree has no single honest pool-level percentage —
+    that is a real answer, not a failure, and the owner deserves to be told which
+    of these it is.
+    """
+
+    remains = payload.get("model_remains")
+    entries = (
+        [item for item in remains if isinstance(item, dict)]
+        if isinstance(remains, list)
+        else []
+    )
+    if not entries:
+        return "PROVIDER_REPORTED_NO_QUOTA_ENTRIES"
+
+    def values(name: str) -> list[float]:
+        return [
+            float(entry[name])
+            for entry in entries
+            if isinstance(entry.get(name), (int, float))
+        ]
+
+    interval = values("current_interval_remaining_percent")
+    weekly = values("current_weekly_remaining_percent")
+    if not interval and not weekly:
+        return "PROVIDER_FIELDS_UNAVAILABLE"
+    for series in (interval, weekly):
+        if len(series) > 1 and any(abs(v - series[0]) > 1e-6 for v in series[1:]):
+            return "QUOTA_VARIES_BY_MODEL"
+    return "PROVIDER_FIELDS_UNAVAILABLE"
+
+
 def normalize_minimax_quota(
     payload: dict[str, Any],
     *,
@@ -215,9 +250,13 @@ class MiniMaxQuotaCollector:
             quota_pool_id=self._quota_pool_id,
             source_uri=self._endpoint,
         )
-        status = (
-            QuotaCollectionStatus.SUCCESS
-            if snapshot.confidence is not EvidenceConfidence.UNKNOWN
-            else QuotaCollectionStatus.UNKNOWN
+        if snapshot.confidence is not EvidenceConfidence.UNKNOWN:
+            return QuotaCollectionResult(
+                status=QuotaCollectionStatus.SUCCESS,
+                snapshot=snapshot,
+            )
+        return QuotaCollectionResult(
+            status=QuotaCollectionStatus.UNKNOWN,
+            snapshot=snapshot,
+            error_category=minimax_unknown_reason(payload),
         )
-        return QuotaCollectionResult(status=status, snapshot=snapshot)

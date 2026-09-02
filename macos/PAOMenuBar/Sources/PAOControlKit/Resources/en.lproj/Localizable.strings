@@ -464,3 +464,9 @@
 "command.nextTask" = "Next task";
 "command.copyTaskId" = "Copy task ID";
 "command.reloadDetail" = "Reload detail";
+
+/* P4.2.6.4 quota reasons for a successful read with no usable figure */
+"quota.reason.variesByModel" = "The provider reports a different quota for each model, so no single plan-level figure exists. Per-model detail is under Advanced Details.";
+"quota.reason.noEntries" = "The provider returned no quota entries for this plan.";
+"quota.reason.fieldsUnavailable" = "The provider's quota response did not include a readable remaining figure.";
+"quota.reason.notInterpretable" = "The provider replied, but its quota data could not be interpreted reliably.";
