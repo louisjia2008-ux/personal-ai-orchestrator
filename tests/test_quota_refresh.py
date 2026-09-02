@@ -19,7 +19,11 @@ import pytest
 
 from personal_ai_orchestrator.activation import ActiveRoutingGate
 from personal_ai_orchestrator.control_api import ControlPlaneService
-from personal_ai_orchestrator.model_registry import ModelRegistry
+from personal_ai_orchestrator.model_registry import (
+    EvidenceConfidence,
+    ModelRegistry,
+    QuotaWindowKind,
+)
 from personal_ai_orchestrator.provider_discovery import (
     AuthStatus,
     DiscoveryCycleOutcome,
@@ -128,6 +132,7 @@ def _service(
         ),
         collectors=collectors,
         environ={},
+        auth_store_paths=(),
     )
     return ControlPlaneService(
         registry=ModelRegistry(),
@@ -407,7 +412,7 @@ def test_estimated_confidence_is_preserved_not_upgraded(
     """Z.AI derives remaining from a usage percentage: ESTIMATED, not EXACT."""
 
     transport = _RecordingTransport(
-        {"data": {"limits": [{"type": "TOKENS_LIMIT", "percentage": 30.0}]}}
+        {"data": {"limits": [{"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 30.0}]}}
     )
     collector = ZAIQuotaCollector(
         authorization_token="token-not-persisted", transport=transport
@@ -427,7 +432,7 @@ def test_failed_collector_keeps_provider_visible_with_sanitized_reason(
     collector = _StubCollector(
         QuotaCollectionResult(
             status=QuotaCollectionStatus.AUTH_REQUIRED,
-            error_category="AUTHENTICATION_INTEGRATION_BLOCKED",
+            error_category="CREDENTIAL_NOT_AVAILABLE",
         )
     )
     service = _service(tmp_path, manager, collectors={"zai-coding-plan": collector})
@@ -439,13 +444,19 @@ def test_failed_collector_keeps_provider_visible_with_sanitized_reason(
     assert card.quota_state == "UNKNOWN"
     assert card.last_refresh_status == "AUTH_REQUIRED"
     assert card.last_refresh_at is not None
-    assert card.failure_reason == "AUTHENTICATION_INTEGRATION_BLOCKED"
+    assert card.failure_reason == "CREDENTIAL_NOT_AVAILABLE"
 
 
 def test_refresh_failure_after_success_keeps_last_known_good(
     tmp_path: Path, manager
 ) -> None:
-    payload = {"data": {"limits": [{"type": "TOKENS_LIMIT", "percentage": 10.0}]}}
+    payload = {
+        "data": {
+            "limits": [
+                {"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 10.0}
+            ]
+        }
+    }
     transport = _RecordingTransport(payload)
     good = ZAIQuotaCollector(authorization_token="t", transport=transport)
     service = _service(tmp_path, manager, collectors={"zai-coding-plan": good})
@@ -500,14 +511,21 @@ def test_refresh_of_unconnected_provider_is_a_no_op(tmp_path: Path, manager) -> 
     assert collector.calls == 0
 
 
-def test_successful_read_with_no_usable_figure_reports_why(
+def test_disagreeing_model_views_keep_the_plan_evidence_they_do_support(
     tmp_path: Path, manager
 ) -> None:
-    """§19 — UNKNOWN must never come back with a blank reason.
+    """§24 — a shared pool viewed per model must not blank the whole provider.
 
-    Real MiniMax accounts report quota per model. When two models disagree the
-    collector correctly refuses to invent a single plan-level percentage, but
-    the owner must be told that is what happened.
+    MiniMax reports a remaining percentage per model. When those views disagree
+    there is no single honest plan-level figure for that window, and the
+    previous implementation responded by discarding the entire observation:
+    both windows, every reset time, and every per-model figure.
+
+    Under the documented shared-pool semantics the disagreeing views are
+    equivalents, not balances. So the 5-hour plan figure stays UNKNOWN — it
+    genuinely cannot be derived — while the weekly window, on which every model
+    *does* agree, is reported, and the per-model views survive as equivalents.
+    Partial knowledge beats hiding everything.
     """
 
     transport = _RecordingTransport(
@@ -521,7 +539,7 @@ def test_successful_read_with_no_usable_figure_reports_why(
                 {
                     "model_name": "video",
                     "current_interval_remaining_percent": 100,
-                    "current_weekly_remaining_percent": 100,
+                    "current_weekly_remaining_percent": 60,
                 },
             ],
             "base_resp": {"status_code": 0, "status_msg": "success"},
@@ -536,13 +554,68 @@ def test_successful_read_with_no_usable_figure_reports_why(
     service.connect_provider({"provider_id": "minimax-cn-coding-plan"})
     card = service.refresh_quota().overview.providers[0]
 
+    # The plan as a whole is not EXACT: one of its windows is underivable.
     assert card.quota_state == "UNKNOWN"
-    # No fabricated aggregate...
-    assert card.quota_pools == ()
-    # ...but a truthful, sanitized explanation.
-    assert card.failure_reason == "QUOTA_VARIES_BY_MODEL"
+    # ...but a truthful, sanitized explanation is given.
+    assert card.failure_reason == "SHARED_POOL_VIEWED_PER_MODEL"
     assert card.last_refresh_status == "UNKNOWN"
     assert card.last_refresh_at is not None
+
+    projection = collector.collect().projection
+    assert projection is not None
+    five_hour = projection.window(QuotaWindowKind.FIVE_HOUR)
+    weekly = projection.window(QuotaWindowKind.WEEKLY)
+    assert five_hour is not None and weekly is not None
+    # No fabricated 5-hour aggregate from views that disagree...
+    assert five_hour.remaining_fraction is None
+    assert five_hour.confidence is EvidenceConfidence.UNKNOWN
+    # ...and no discarding of the weekly window they agree on.
+    assert weekly.remaining_fraction == pytest.approx(0.60)
+    assert weekly.confidence is EvidenceConfidence.EXACT
+    # The per-model views are preserved as equivalents, never as balances.
+    assert {view.model_id for view in projection.model_equivalents} == {
+        "general",
+        "video",
+    }
+    assert projection.covered_model_ids() == ("general", "video")
+
+
+def test_all_models_agreeing_yields_one_exact_plan_figure(
+    tmp_path: Path, manager
+) -> None:
+    """One shared bar seen through several models that agree *is* readable."""
+
+    transport = _RecordingTransport(
+        {
+            "model_remains": [
+                {
+                    "model_name": "general",
+                    "current_interval_remaining_percent": 63,
+                    "current_weekly_remaining_percent": 81,
+                },
+                {
+                    "model_name": "video",
+                    "current_interval_remaining_percent": 63,
+                    "current_weekly_remaining_percent": 81,
+                },
+            ]
+        }
+    )
+    collector = MiniMaxQuotaCollector(
+        bearer_token="token-not-persisted", region="cn", transport=transport
+    )
+    projection = collector.collect().projection
+    assert projection is not None
+
+    assert projection.confidence is EvidenceConfidence.EXACT
+    five_hour = projection.window(QuotaWindowKind.FIVE_HOUR)
+    weekly = projection.window(QuotaWindowKind.WEEKLY)
+    assert five_hour is not None and weekly is not None
+    assert five_hour.remaining_fraction == pytest.approx(0.63)
+    assert weekly.remaining_fraction == pytest.approx(0.81)
+    # Both models draw on one pool; neither owns a balance of its own.
+    assert projection.pool.shared_across_models is True
+    assert projection.binding_window.window_id == "5h"
 
 
 def test_empty_provider_payload_reports_no_entries(tmp_path: Path, manager) -> None:
@@ -627,6 +700,7 @@ def test_collector_is_built_from_environment_credential_only(
         runtime_state_root=root,
         connected_provider_ids=manager.connected_provider_ids,
         environ={"ZAI_API_KEY": "value-never-persisted"},
+        auth_store_paths=(),
     )
     observation = service.observations()[0]
     assert observation.collector_available is True
@@ -635,13 +709,20 @@ def test_collector_is_built_from_environment_credential_only(
         runtime_state_root=root,
         connected_provider_ids=manager.connected_provider_ids,
         environ={},
+        auth_store_paths=(),
     )
     assert without.observations()[0].collector_available is False
 
 
 def test_quota_state_files_never_contain_credentials(tmp_path: Path, manager) -> None:
     transport = _RecordingTransport(
-        {"data": {"limits": [{"type": "TOKENS_LIMIT", "percentage": 55.0}]}}
+        {
+            "data": {
+                "limits": [
+                    {"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 55.0}
+                ]
+            }
+        }
     )
     collector = ZAIQuotaCollector(
         authorization_token="super-secret-token", transport=transport

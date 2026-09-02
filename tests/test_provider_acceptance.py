@@ -33,7 +33,7 @@ def test_supported_exact_provider_quota_classifies_live_exact() -> None:
             ]
         },
         observed_at=NOW,
-    )
+    ).to_snapshot()
     result = QuotaCollectionResult(status=QuotaCollectionStatus.SUCCESS, snapshot=snapshot)
 
     evidence = ProviderSurfaceEvidence(
@@ -58,9 +58,9 @@ def test_supported_exact_provider_quota_classifies_live_exact() -> None:
 
 def test_estimated_provider_quota_classifies_live_estimated() -> None:
     snapshot = normalize_zai_quota(
-        {"data": {"limits": [{"type": "TOKENS_LIMIT", "percentage": 10}]}},
+        {"data": {"limits": [{"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 10}]}},
         observed_at=NOW,
-    )
+    ).to_snapshot()
     result = QuotaCollectionResult(status=QuotaCollectionStatus.SUCCESS, snapshot=snapshot)
 
     evidence = ProviderSurfaceEvidence(
