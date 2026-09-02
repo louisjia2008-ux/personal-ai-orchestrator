@@ -1984,6 +1984,8 @@ struct ClientSettingsDashboard: View {
             title: L10n.dashboardSection(DashboardSection.settings.rawValue),
             symbol: DashboardSection.settings.symbol
         ) {
+            BuildInformationCard(daemonBuild: store.daemonBuild,
+                                 compatibility: store.buildCompatibility)
             DashboardCard(title: L10n.daemonLifecycle, symbol: "gearshape") {
                 Toggle(L10n.launchAtLogin, isOn: $launchAtLogin)
                 Text(L10n.launchAtLoginFooter)
@@ -3181,6 +3183,97 @@ enum Pasteboard {
         pasteboard.clearContents()
         pasteboard.setString(value, forType: .string)
         ClientLog.operation("clipboard", outcome: "copy")
+    }
+}
+
+/// Which commit produced the running app, and whether the daemon agrees.
+///
+/// This exists because a stale binary is otherwise indistinguishable from a
+/// current one: every copy of the app shares a bundle identifier and version
+/// string, so only the commit tells them apart.
+private struct BuildInformationCard: View {
+    let daemonBuild: BuildView?
+    let compatibility: BuildCompatibility
+
+    private var app: BuildIdentity { BuildIdentity.current }
+
+    var body: some View {
+        DashboardCard(title: L10n.buildTitle, symbol: "hammer") {
+            if compatibility.isMismatch {
+                mismatchBanner
+            }
+            LabeledContent(L10n.buildVersion, value: appVersion)
+            LabeledContent(L10n.buildShort, value: display(app.shortSHA))
+            LabeledContent(L10n.buildConfiguration, value: display(app.configuration))
+            LabeledContent(L10n.buildTimestamp, value: display(app.builtAt))
+            LabeledContent(L10n.buildDaemon, value: display(daemonBuild?.shortSHA))
+            statusLabel
+            DisclosureGroup(L10n.buildAdvanced) {
+                VStack(alignment: .leading, spacing: 6) {
+                    LabeledContent(L10n.buildCommit, value: display(app.commitSHA))
+                    LabeledContent(
+                        "\(L10n.buildDaemon) · \(L10n.buildCommit)",
+                        value: display(daemonBuild?.commitSHA)
+                    )
+                }
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 4)
+            }
+            .font(.caption)
+        }
+    }
+
+    private var mismatchBanner: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(L10n.buildMismatchTitle, systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.bold())
+                .foregroundStyle(.orange)
+            LabeledContent(L10n.buildMismatchApp, value: display(app.shortSHA))
+            LabeledContent(L10n.buildMismatchDaemon, value: display(daemonBuild?.shortSHA))
+            Text(L10n.buildMismatchFooter)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    @ViewBuilder
+    private var statusLabel: some View {
+        switch compatibility {
+        case .matched:
+            Label(L10n.buildMatched, systemImage: "checkmark.seal")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .indeterminate:
+            Label(L10n.buildIndeterminate, systemImage: "questionmark.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .mismatched:
+            EmptyView()
+        }
+    }
+
+    private var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(short) (\(build))"
+    }
+
+    /// An unresolved value is shown as UNKNOWN, never blank and never guessed.
+    private func display(_ value: String?) -> String {
+        guard let value,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              value != BuildIdentity.unknownValue
+        else {
+            return L10n.buildUnknown
+        }
+        return value
     }
 }
 

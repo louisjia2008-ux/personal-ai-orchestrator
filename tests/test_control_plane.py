@@ -630,6 +630,34 @@ def test_unknown_task_returns_sanitized_404(harness):
     assert error.value.code == "task_not_found"
 
 
+def test_build_endpoint_reports_daemon_identity(harness):
+    """The daemon must be able to state which commit produced it."""
+    status, body = _raw_request(harness.socket_path, "GET", "/v1/build")
+
+    assert status == 200
+    payload = json.loads(body)
+    assert set(payload) == {
+        "commit_sha",
+        "short_sha",
+        "api_version",
+        "configuration",
+        "built_at",
+    }
+    assert payload["api_version"] == "v1"
+    # Running from a checkout, identity resolves; either way it is never blank.
+    assert payload["commit_sha"]
+    if payload["commit_sha"] != "unknown":
+        assert len(payload["commit_sha"]) == 40
+        assert payload["short_sha"] == payload["commit_sha"][:7]
+
+
+def test_build_endpoint_rejects_writes(harness):
+    status, body = _raw_request(harness.socket_path, "POST", "/v1/build", body=b"{}")
+
+    assert status == 405
+    assert json.loads(body) == {"error": "method_not_allowed"}
+
+
 def test_unknown_path_returns_404(harness):
     status, body = _raw_request(
         harness.socket_path,
