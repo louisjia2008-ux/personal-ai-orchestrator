@@ -90,7 +90,9 @@ Any stage may transition to:
 
 ## Worktree model
 
-For an implementation task the host resolves a base SHA and creates the worktree before launching a worker.
+For an implementation task the host resolves a registered project, records that project's
+authoritative base SHA on the task, and creates the task worktree before launching a worker.
+The user's terminal working directory is never task context.
 
 Example conceptual layout:
 
@@ -106,7 +108,42 @@ Example conceptual layout:
   logs/
 ```
 
-The worker receives only the task worktree as its writable project workspace.
+The worker receives only the task worktree as its writable project workspace. The worker must not
+normally run with `cwd` equal to the original writable source checkout.
+
+## Project Registry
+
+The host owns a credential-free Project Registry. A coding task is dispatchable only when it
+durably references an explicit registered `project_id` and the host-recorded `base_sha`.
+
+Registered project records include:
+
+- `project_id`
+- `display_name`
+- `canonical_repo_root`
+- `git_root`
+- `default_branch`
+- `last_known_head`
+- `created_at`
+- `updated_at`
+- optional `working_subpath`
+- optional `remote_url`
+- optional `last_opened_at`
+- `storage_availability`
+
+The macOS app selects projects explicitly. `Projects -> Add Project` uses a native folder picker;
+the daemon canonicalizes the selected path, resolves symlinks, detects the git root with
+host-owned read-only git commands, and shows the detected repository before registration.
+Sandboxed macOS builds persist access intent through security-scoped bookmark data. No credentials
+are stored.
+
+Project availability is typed as `ONLINE`, `OFFLINE`, `MISSING`, or `INVALID_REPOSITORY`. If an
+external volume disappears, the daemon marks the registered project unavailable, blocks dispatch
+with a typed reason, preserves the task, and never substitutes another path. Availability returns
+only when the same registered path/bookmark identity is safely reachable again.
+
+Monorepos distinguish `git_root` from `working_subpath`. Worktrees are always created from
+`git_root`; `working_subpath` only narrows worker focus inside that worktree.
 
 ## Verification model
 

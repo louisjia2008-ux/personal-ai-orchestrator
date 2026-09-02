@@ -155,6 +155,9 @@ P4.2.4-A added the unified dashboard shell and the real GLM / MiniMax provider
 registry: `/v1/dashboard`, `/v1/providers`, `/v1/providers/status`, and
 `/v1/providers/refresh` so the shared store can refresh one aggregate dashboard view
 rather than polling each screen independently.
+P4.2.4-B added owner-initiated OpenCode dispatch, host verifier integration, and
+the Project Registry. Product task creation now requires an explicit registered
+project; terminal `cwd` is not task context.
 
 Runtime state for product launches should be bootstrapped outside source worktrees:
 
@@ -180,6 +183,4 @@ Current P4.2 limitations:
   or `SMAppService`;
 - the bundled helper is PyInstaller-based and built from project-local packaging dependencies;
 - WidgetKit source and a sanitized shared snapshot bridge exist, but producing an installable
-  `.appex` still requires an Xcode app-extension packaging/signing path;
-- owner-initiated execution / OpenCode dispatch / host verifier integration are deferred
-  to P4.2.4-B; the bundled daemon intentionally has no dispatch endpoint yet.
+  `.appex` still requires an Xcode app-extension packaging/signing path.
