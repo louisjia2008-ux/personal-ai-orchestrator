@@ -469,13 +469,16 @@ class ModelConsumptionView(_ViewModel):
 
 
 class ModelEquivalentWindowView(_ViewModel):
-    """A provider's per-model *view* of one shared pool.
+    """A provider's per-scope *view* of one shared pool.
 
-    Rendered under an explicit "equivalent" heading. MiniMax reports these per
-    model and they differ; they are not several balances.
+    Rendered under an explicit "equivalent" heading; never as a balance.
+    ``scope_id`` is not called ``model_id`` because MiniMax's ``model_remains``
+    entries are resource categories on the observed account, and ``scope_kind``
+    says which it is.
     """
 
-    model_id: str
+    scope_id: str
+    scope_kind: str
     window_id: str
     remaining_fraction: float | None = None
     remaining_units: float | None = None
@@ -2283,7 +2286,8 @@ class ControlPlaneService:
             ),
             model_equivalents=tuple(
                 ModelEquivalentWindowView(
-                    model_id=item.model_id,
+                    scope_id=item.scope_id,
+                    scope_kind=item.scope_kind.value,
                     window_id=item.window_id,
                     remaining_fraction=item.remaining_fraction,
                     remaining_units=item.remaining_units,

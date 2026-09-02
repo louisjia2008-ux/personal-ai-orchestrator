@@ -544,12 +544,16 @@ public struct ModelConsumptionView: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-/// A provider's per-model *view* of one shared pool.
+/// A provider's per-scope *view* of one shared pool.
 ///
-/// MiniMax reports these per model and they differ. They are equivalents, not
-/// balances, and the view layer must label them as such.
+/// They are equivalents, not balances, and the view layer must label them so.
+/// `scopeId` is not `modelId`: MiniMax's `model_remains` entries are resource
+/// categories on the observed account, and `scopeKind` records which it is —
+/// an owner told "video shares this quota" would look for a model that does
+/// not exist.
 public struct ModelEquivalentWindowView: Codable, Equatable, Identifiable, Sendable {
-    public let modelId: String
+    public let scopeId: String
+    public let scopeKind: String
     public let windowId: String
     public let remainingFraction: Double?
     public let remainingUnits: Double?
@@ -557,10 +561,14 @@ public struct ModelEquivalentWindowView: Codable, Equatable, Identifiable, Senda
     public let unitKind: String
     public let confidence: String
 
-    public var id: String { "\(modelId)/\(windowId)" }
+    public var id: String { "\(scopeId)/\(windowId)" }
+
+    /// True only when the account's catalog confirmed this entry names a model.
+    public var isModel: Bool { scopeKind == "MODEL" }
 
     enum CodingKeys: String, CodingKey {
-        case modelId = "model_id"
+        case scopeId = "scope_id"
+        case scopeKind = "scope_kind"
         case windowId = "window_id"
         case remainingFraction = "remaining_fraction"
         case remainingUnits = "remaining_units"
@@ -570,7 +578,8 @@ public struct ModelEquivalentWindowView: Codable, Equatable, Identifiable, Senda
     }
 
     public init(
-        modelId: String,
+        scopeId: String,
+        scopeKind: String = "UNKNOWN",
         windowId: String,
         remainingFraction: Double? = nil,
         remainingUnits: Double? = nil,
@@ -578,7 +587,8 @@ public struct ModelEquivalentWindowView: Codable, Equatable, Identifiable, Senda
         unitKind: String = "UNKNOWN",
         confidence: String = "UNKNOWN"
     ) {
-        self.modelId = modelId
+        self.scopeId = scopeId
+        self.scopeKind = scopeKind
         self.windowId = windowId
         self.remainingFraction = remainingFraction
         self.remainingUnits = remainingUnits

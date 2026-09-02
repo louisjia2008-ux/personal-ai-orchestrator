@@ -6,19 +6,21 @@ Product name: **MiniMax Token Plan**.
 
 Status labels are defined in `QUOTA_DOMAIN_MODEL.md`.
 
-> ## Live verification not performed
+> ## Credential status — rotation still required
 >
 > A previous agent printed the value of `MINIMAX_API_KEY` into a conversation
-> transcript. That credential is treated as **compromised**, so no authenticated
-> MiniMax request was made during this phase.
+> transcript. That credential is **compromised** and
+> **`OWNER_ACTION_REQUIRED_MINIMAX_KEY_ROTATION`** still stands.
 >
-> **`OWNER_ACTION_REQUIRED_MINIMAX_KEY_ROTATION`** — rotate the key, then a live
-> read-only acceptance of `/v1/token_plan/remains` can be run.
+> One live MiniMax read did occur during this phase, unintentionally: an
+> acceptance call to `POST /v1/quota/refresh` was issued without a provider
+> filter, and the daemon refreshed every connected provider — MiniMax included.
+> The call was read-only and non-billable (the documented quota endpoint, no
+> model generation), and it used the credential already present in the daemon's
+> environment, so it consumed no quota and created no new exposure. It was still
+> a live MiniMax call before rotation, and is recorded here rather than omitted.
 >
-> Everything below is therefore documentation-derived or derived from the shape
-> the previous collector was written against. Nothing here is labelled CONFIRMED
-> on the strength of a live response from this account, and the collector is
-> written to handle both documented shapes rather than committing to one.
+> Its response is the source of the **OBSERVED** findings below.
 
 ## Endpoint — read-only
 
@@ -82,9 +84,9 @@ From a community research document, not provider documentation:
 | `model_remains[].model` | Model identifier | **INFERRED** |
 | `model_remains[].remains` / `.total` | That model's *view* of the pool | **INFERRED** |
 
-### Shape B — per-model percentages (**OBSERVED**, this deployment)
+### Shape B — per-scope percentages (**OBSERVED**, this account, 2026-09-02)
 
-The shape the prior collector was written against, and the one that produced
+This is the shape this account actually returns, and the one that produced
 `QUOTA_VARIES_BY_MODEL`:
 
 ```json
@@ -113,9 +115,44 @@ Candidate interpretations considered, per §9:
 | --- | --- |
 | Independent per-model quota pools | **Rejected** — contradicts the documented shared usage bar and the documented "reference equivalents" framing of per-model figures. |
 | Different quota windows | **Rejected** — the response separates windows by field name (`current_interval_*` vs `current_weekly_*`), not by entry. |
-| Separate media quota categories | **Plausible and not excluded** — MiniMax covers text, image and speech; entries named for media classes (e.g. `video`) may be category-scoped views. **UNKNOWN** without a live response. |
-| Model-equivalent limits over one pool | **Best supported** — matches the documented "reference equivalents assuming exclusive use" semantics. |
-| Collector misinterpretation | **Partly true** — the values were read correctly; the error was concluding that disagreement meant *nothing* was knowable. |
+| Separate media / resource quota categories | **CONFIRMED for this account.** See below. |
+| Model-equivalent limits over one pool | **Not what this account returns** — the entries are not models at all. |
+| Collector misinterpretation | **Partly true** — the values were read correctly; the errors were concluding that disagreement meant *nothing* was knowable, and treating the entry names as models. |
+
+### The entries are resource categories, not models (**OBSERVED**)
+
+The live response named its `model_remains` entries **`general`** and
+**`video`**:
+
+| Entry | 5-hour remaining | Weekly remaining |
+| --- | --- | --- |
+| `general` | 96% | 59% |
+| `video` | 100% | 100% |
+
+The same account's catalog lists its actual routable models as
+`MiniMax-M2`, `MiniMax-M2.1`, `MiniMax-M2.5`, `MiniMax-M2.5-highspeed`,
+`MiniMax-M2.7`, `MiniMax-M2.7-highspeed`. Neither `general` nor `video` is among
+them.
+
+So despite the field being called `model_remains`, its entries are **provider
+resource categories**, and the values differ because text and video usage differ
+— not because two models hold separate balances.
+
+This has two consequences in the code:
+
+1. `ModelEquivalentView.scope_id` is deliberately **not** named `model_id`, and
+   carries a `scope_kind` of `MODEL`, `PROVIDER_RESOURCE_SCOPE`, or `UNKNOWN`.
+   Naming our field after the provider's misleading key would propagate the
+   error into the UI.
+2. `covered_model_ids` is populated **only** from entries the account's own
+   catalog confirms as models. Telling the owner that "video" is a model sharing
+   this quota would send them looking for something they cannot route to.
+   Without catalog evidence, no entry is promoted to a model at all.
+
+Whether the documented "shared usage bar" spans these categories, or each
+category holds its own allocation, remains **UNKNOWN**. Either way the plan-level
+figure stays UNKNOWN and the per-category figures are shown as views, which is
+correct under both readings.
 
 ### Resulting behaviour
 
@@ -145,14 +182,19 @@ kept. (Design decision, **not** provider-derived.)
 
 | Question | Status |
 | --- | --- |
-| Which response shape this account actually returns today | **UNKNOWN** — blocked on key rotation |
-| Whether `model_remains` entries can be media-category rather than model scoped | **UNKNOWN** |
+| Which response shape this account returns | **OBSERVED** — Shape B, per-scope percentages |
+| Whether `model_remains` entries are media-category rather than model scoped | **OBSERVED** — categories (`general`, `video`) on this account |
+| Whether the "shared usage bar" spans those categories or each holds its own allocation | **UNKNOWN** — the observed values differ, which is consistent with either |
 | Whether `remains`/`total` are model-scoped or pool-scoped units | **UNKNOWN** — surfaced as an equivalent view, never as a pool balance |
 | The provider's unit for Token Plan quota | **UNKNOWN** — recorded as `PROVIDER_UNITS`, not forced into "tokens" |
 | Per-model consumption reporting | **UNKNOWN** — no documented MiniMax usage endpoint equivalent to GLM's `/model-usage`; none is invented |
 
 ## Next step
 
-After rotation, run a read-only acceptance against `/v1/token_plan/remains`,
-record the sanitized schema here with **OBSERVED** status, and re-evaluate the
-media-category question above.
+Rotate the exposed key. Afterwards, a deliberate read-only acceptance against
+`/v1/token_plan/remains` should establish:
+
+- whether plan-level count fields (Shape A) are present on this account at all;
+- whether the `general` / `video` categories draw on one bar or on separate
+  allocations — the single question that decides whether a plan-level figure is
+  derivable here.

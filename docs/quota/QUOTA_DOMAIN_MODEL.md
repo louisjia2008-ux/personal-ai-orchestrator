@@ -48,6 +48,12 @@ The pool's own balance, per window. May be EXACT when the provider reports it.
 
 > 5-hour: 75% remaining · weekly: 16.12% remaining
 
+A per-scope view is **not** automatically a model. MiniMax's `model_remains`
+entries are named `general` and `video` on the observed account, while its
+routable models are `MiniMax-M2.7` and similar. `EquivalentScopeKind` records
+whether an entry was confirmed as a model by the account's catalog, and only
+confirmed models are listed as sharing the pool.
+
 ### B. Model consumption
 
 What one model contributed to the pool's consumption. **Not** entitlement.

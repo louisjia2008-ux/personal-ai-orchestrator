@@ -77,6 +77,7 @@ from personal_ai_orchestrator.quota_observability import (
 )
 from personal_ai_orchestrator.quota_plan import (
     ConsumptionUnitKind,
+    EquivalentScopeKind,
     MeasurementSource,
     ModelEquivalentView,
     PlanQuota,
@@ -233,20 +234,45 @@ def minimax_unknown_reason(payload: dict[str, Any]) -> str:
     return "PROVIDER_FIELDS_UNAVAILABLE"
 
 
+def _scope_kind(scope_id: str, known_model_ids: frozenset[str]) -> EquivalentScopeKind:
+    """Classify a ``model_remains`` entry name.
+
+    MiniMax calls the array ``model_remains``, but on the observed account its
+    entries are named ``general`` and ``video`` while the routable models are
+    ``MiniMax-M2.7`` and similar. The provider's field name is therefore not
+    evidence that an entry names a model.
+
+    An entry counts as a model only when the account's own catalog confirms it.
+    Anything else is a provider resource scope, and is labelled as one rather
+    than being offered to the owner as something they can route to.
+    """
+
+    if not known_model_ids:
+        return EquivalentScopeKind.UNKNOWN
+    lowered = {value.lower() for value in known_model_ids}
+    candidate = scope_id.lower()
+    if candidate in lowered or any(candidate == value.split("/")[-1] for value in lowered):
+        return EquivalentScopeKind.MODEL
+    return EquivalentScopeKind.PROVIDER_RESOURCE_SCOPE
+
+
 def _model_equivalent_views(
     entries: list[dict[str, Any]],
+    known_model_ids: frozenset[str] = frozenset(),
 ) -> tuple[ModelEquivalentView, ...]:
-    """Per-model views of the shared pool, for the advisory section of the card.
+    """Per-scope views of the shared pool, for the advisory section of the card.
 
-    Each view keeps the model's own name so the owner can see *why* the plan
-    figure is or is not derivable, instead of being told only that it is not.
+    Each view keeps the provider's own entry name so the owner can see *why* the
+    plan figure is or is not derivable, instead of being told only that it is
+    not — and carries whether that name is a model or a resource category.
     """
 
     views: list[ModelEquivalentView] = []
     for entry in entries:
-        model_id = entry.get("model") or entry.get("model_name")
-        if not isinstance(model_id, str) or not model_id:
+        scope_id = entry.get("model") or entry.get("model_name")
+        if not isinstance(scope_id, str) or not scope_id:
             continue
+        scope_kind = _scope_kind(scope_id, known_model_ids)
         for window_id, percent_key in (
             ("5h", "current_interval_remaining_percent"),
             ("weekly", "current_weekly_remaining_percent"),
@@ -256,7 +282,8 @@ def _model_equivalent_views(
                 continue
             views.append(
                 ModelEquivalentView(
-                    model_id=model_id,
+                    scope_id=scope_id,
+                    scope_kind=scope_kind,
                     window_id=window_id,
                     remaining_fraction=percent / 100.0,
                     confidence=EvidenceConfidence.EXACT,
@@ -268,7 +295,8 @@ def _model_equivalent_views(
         if remains is not None and total is not None and total > 0:
             views.append(
                 ModelEquivalentView(
-                    model_id=model_id,
+                    scope_id=scope_id,
+                    scope_kind=scope_kind,
                     window_id="5h-units",
                     remaining_fraction=max(0.0, min(1.0, remains / total)),
                     remaining_units=remains,
@@ -289,8 +317,14 @@ def normalize_minimax_quota(
     source_uri: str = MINIMAX_CN_QUOTA_ENDPOINT,
     provider_id: str = "minimax",
     plan_id: str = "token-plan",
+    known_model_ids: frozenset[str] = frozenset(),
 ) -> PlanQuotaProjection:
-    """Project the Token Plan response onto the shared-plan domain model."""
+    """Project the Token Plan response onto the shared-plan domain model.
+
+    ``known_model_ids`` is the account's own catalog. It is the only thing that
+    lets a ``model_remains`` entry be reported as a model; without it every
+    entry stays an unclassified provider scope.
+    """
 
     body = _body(payload)
     entries = _model_entries(payload)
@@ -408,12 +442,15 @@ def normalize_minimax_quota(
         else EvidenceConfidence.UNKNOWN
     )
 
+    equivalents = _model_equivalent_views(entries, known_model_ids)
+    # Only entries the account's catalog confirms as models are listed as
+    # sharing this pool. Listing "video" as a model the owner can route to
+    # would be a fabrication dressed up as provider evidence.
     covered = tuple(
         dict.fromkeys(
-            model_id
-            for entry in entries
-            if isinstance(model_id := entry.get("model") or entry.get("model_name"), str)
-            and model_id
+            view.scope_id
+            for view in equivalents
+            if view.scope_kind is EquivalentScopeKind.MODEL
         )
     )
 
@@ -438,7 +475,7 @@ def normalize_minimax_quota(
             provider_unit_label="token_plan_units",
         ),
         windows=windows,
-        model_equivalents=_model_equivalent_views(entries),
+        model_equivalents=equivalents,
         binding_window=determine_binding_window(windows, at=observed_at),
         state=aggregate_state(windows),
         confidence=confidence,
@@ -468,6 +505,7 @@ class MiniMaxQuotaCollector:
         quota_pool_id: str = "minimax-token-plan-cn",
         provider_id: str = "minimax",
         plan_id: str = "token-plan",
+        known_model_ids: frozenset[str] = frozenset(),
         now: object = None,
     ) -> None:
         self._token = (
@@ -481,6 +519,7 @@ class MiniMaxQuotaCollector:
         self._quota_pool_id = quota_pool_id
         self._provider_id = provider_id
         self._plan_id = plan_id
+        self._known_model_ids = known_model_ids
         self._now = now if callable(now) else (lambda: datetime.now(tz=UTC))
 
     def collect(self) -> QuotaCollectionResult:
@@ -508,6 +547,7 @@ class MiniMaxQuotaCollector:
             source_uri=self._endpoint,
             provider_id=self._provider_id,
             plan_id=self._plan_id,
+            known_model_ids=self._known_model_ids,
         )
         snapshot = projection.to_snapshot(quota_pool_id=self._quota_pool_id)
         if projection.confidence is not EvidenceConfidence.UNKNOWN:
