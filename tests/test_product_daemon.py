@@ -35,6 +35,27 @@ def _short_home(prefix: str) -> Path:
     return Path(tempfile.mkdtemp(prefix=prefix, dir="/tmp"))
 
 
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    ).stdout.strip()
+
+
+def _make_repo(path: Path) -> Path:
+    path.mkdir(parents=True)
+    _git(path, "init", "-q", "-b", "main")
+    _git(path, "config", "user.email", "product@example.invalid")
+    _git(path, "config", "user.name", "Product")
+    (path / "README.md").write_text("# product\n", encoding="utf-8")
+    _git(path, "add", "README.md")
+    _git(path, "commit", "-q", "-m", "initial")
+    return path
+
+
 def _result(*, providers: tuple[ProviderDiscovery, ...] | None = None) -> DiscoveryResult:
     records = providers
     if records is None:
@@ -277,9 +298,12 @@ def test_product_daemon_bootstraps_runtime_and_serves_control_plane() -> None:
         health = client.health()
         assert health.status == "ok"
         assert health.api_version == "v1"
+        repo = _make_repo(home / "project")
+        project = client.register_project(path=str(repo), display_name="Product Smoke")
         task = client.submit(
             task_id="product-smoke",
             request_id="product-smoke-req",
+            project_id=project.project_id,
             intent="product daemon smoke",
         )
         assert task.state == "SUBMITTED"

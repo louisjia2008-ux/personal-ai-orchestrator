@@ -147,6 +147,75 @@ def test_providers_uses_effective_registry_accounts_only(
     # Discovery evidence is wired through.
     assert provider_view.evidence_source == "DISCOVERED_FROM_CATALOG"
     assert provider_view.auth_status == "AUTH_FROM_ENV_PRESENCE"
+    assert provider_view.connection_state is None
+
+
+def test_provider_connections_separate_connected_from_available_to_add(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_state_root = tmp_path / "runtime-state"
+    runtime_state_root.mkdir()
+    state_db = tmp_path / "state.db"
+    manager = _dynamic_manager_with_provider(runtime_state_root, monkeypatch)
+    service = _build_service(
+        runtime_state_root=runtime_state_root,
+        state_db=state_db,
+        manager=manager,
+        static_registry=_empty_static_registry(),
+    )
+
+    projection = service.provider_connections()
+    assert projection.connected == ()
+    assert len(projection.available_to_add) == 1
+    assert projection.available_to_add[0].provider_id == "zai-coding-plan"
+    assert projection.available_to_add[0].connection_state == "DISCOVERED"
+
+    connected = service.connect_provider({"provider_id": "zai-coding-plan"})
+    assert connected.connection_state == "CONNECTED"
+    assert connected.auth_state == "AUTH_UNKNOWN"
+    assert connected.execution_verified is False
+    assert connected.credential_reference_type == "OPENCODE_AUTH"
+
+    projection = service.provider_connections()
+    assert len(projection.connected) == 1
+    assert projection.available_to_add == ()
+
+
+def test_provider_connection_survives_restart_and_disconnect_is_local_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_state_root = tmp_path / "runtime-state"
+    runtime_state_root.mkdir()
+    state_db = tmp_path / "state.db"
+    manager = _dynamic_manager_with_provider(runtime_state_root, monkeypatch)
+    service = _build_service(
+        runtime_state_root=runtime_state_root,
+        state_db=state_db,
+        manager=manager,
+        static_registry=_empty_static_registry(),
+    )
+    service.connect_provider({"provider_id": "zai-coding-plan"})
+
+    restarted = ProviderRegistryManager(runtime_state_root=runtime_state_root)
+    restarted_service = _build_service(
+        runtime_state_root=runtime_state_root,
+        state_db=state_db,
+        manager=restarted,
+        static_registry=_empty_static_registry(),
+    )
+    assert len(restarted_service.provider_connections().connected) == 1
+
+    disconnected = restarted_service.disconnect_provider(
+        "zai-coding-plan",
+        {"confirm": True},
+    )
+    assert disconnected.connection_state == "DISCONNECTED"
+    projection = restarted_service.provider_connections()
+    assert projection.connected == ()
+    assert len(projection.available_to_add) == 1
+    # Discovery evidence is still present; disconnect only disables the
+    # orchestrator connection and never deletes OpenCode/provider auth.
+    assert restarted.registry().providers["zai-coding-plan"].display_name == "GLM / Z.AI"
 
 
 def test_providers_does_not_fall_back_to_static_registry_when_dynamic_empty(
