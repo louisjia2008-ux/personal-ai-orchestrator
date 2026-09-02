@@ -30,7 +30,14 @@ CACHE_SCHEMA_VERSION = 2
 # plan semantics never invalidates the snapshot history that routing decisions
 # reference, and a projection written by an older build is ignored rather than
 # reinterpreted under new semantics it was not recorded with.
-PROJECTION_SCHEMA_VERSION = 1
+#
+# v2 (P4.2.6.5.1): a projection's windows are now scoped to one workload. A v1
+# record's windows were derived by requiring *every* provider scope to agree, so
+# the same field means something different in the two versions — a v1 MiniMax
+# record reads UNKNOWN precisely because a video balance disagreed, which is the
+# claim this version removes. Such a record is dropped rather than displayed as
+# if it were the new projection; the next read replaces it.
+PROJECTION_SCHEMA_VERSION = 2
 _SENSITIVE_KEYS = {
     "api_key",
     "apikey",

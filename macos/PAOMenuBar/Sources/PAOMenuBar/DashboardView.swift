@@ -1767,16 +1767,45 @@ private struct SharedPlanQuotaView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            workloadScopeSection
             sharedQuotaSection
             bindingWindowSection
             coveredModelsSection
-            if !plan.modelEquivalents.isEmpty {
+            if !plan.inScopeEquivalents.isEmpty {
                 modelEquivalentsSection
+            }
+            // Scopes for work this build does not schedule stay out of the
+            // primary card and out of the section above, so a video balance
+            // can never be read as a coding balance.
+            if !plan.outOfScopeEquivalents.isEmpty {
+                otherWorkloadScopesSection
             }
             if !plan.modelConsumption.isEmpty {
                 modelConsumptionSection
             }
             estimatedCapacitySection
+        }
+    }
+
+    // MARK: Which workload this quota is read for
+
+    /// Names the scope the figures above describe, e.g. "用途 · 编码 / 文本".
+    ///
+    /// Without it, an owner who knows MiniMax also meters video sees a card
+    /// that silently omits it and cannot tell whether it was lost or excluded.
+    @ViewBuilder
+    private var workloadScopeSection: some View {
+        if plan.activeWorkloadScope != "UNKNOWN" {
+            HStack(spacing: 6) {
+                Text(L10n.quotaPlanWorkloadScopeLabel)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                StatusBadge(
+                    text: L10n.quotaWorkloadScope(plan.activeWorkloadScope),
+                    kind: .neutral
+                )
+                Spacer()
+            }
         }
     }
 
@@ -1861,7 +1890,7 @@ private struct SharedPlanQuotaView: View {
     private var modelEquivalentsSection: some View {
         DisclosureGroup(L10n.quotaPlanEquivalents) {
             VStack(alignment: .leading, spacing: 6) {
-                ForEach(plan.modelEquivalents) { item in
+                ForEach(plan.inScopeEquivalents) { item in
                     HStack {
                         Text(item.scopeId).font(.caption)
                         Text(item.windowId)
@@ -1876,6 +1905,44 @@ private struct SharedPlanQuotaView: View {
                     }
                 }
                 Text(L10n.quotaPlanEquivalentsFooter)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.top, 4)
+        }
+        .font(.caption)
+    }
+
+    // MARK: Scopes outside the scheduled workload
+
+    /// Provider balances this build observes but does not schedule against.
+    ///
+    /// They are preserved rather than hidden — deleting a real observation
+    /// because today's product ignores it would destroy evidence a
+    /// video-scheduling build would need — but they are visually subordinate
+    /// and carry an explicit statement that they constrain nothing here.
+    private var otherWorkloadScopesSection: some View {
+        DisclosureGroup(L10n.quotaPlanOtherScopes) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(plan.outOfScopeEquivalents) { item in
+                    HStack {
+                        Text(item.scopeId).font(.caption)
+                        Text(L10n.quotaWorkloadScope(item.workloadScope))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        Text(item.windowId)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        Spacer()
+                        if let fraction = item.remainingFraction {
+                            Text(fraction.formatted(.percent.precision(.fractionLength(0))))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+                Text(L10n.quotaPlanOtherScopesFooter)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

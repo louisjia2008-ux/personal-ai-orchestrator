@@ -466,7 +466,6 @@
 "command.reloadDetail" = "重新加载详情";
 
 /* P4.2.6.4 quota reasons for a successful read with no usable figure */
-"quota.reason.variesByModel" = "该提供商按模型分别统计额度，因此没有统一的套餐级数值。逐模型信息见高级详情。";
 "quota.reason.noEntries" = "该提供商没有返回此套餐的额度条目。";
 "quota.reason.fieldsUnavailable" = "提供商返回的额度数据中没有可读的剩余量。";
 "quota.reason.notInterpretable" = "提供商已响应，但其额度数据无法被可靠解读。";
@@ -498,10 +497,24 @@
 "quota.confidence.unknownData" = "暂无可靠数据";
 "quota.reason.limitTypeUnrecognized" = "服务商返回了当前版本无法识别的额度类型。";
 "quota.reason.windowUnrecognized" = "服务商返回了当前版本无法识别的额度窗口。";
-"quota.reason.sharedPoolPerModel" = "服务商通过各个模型来呈现这份共享额度，而各模型的数值并不一致，因此无法推导出唯一的套餐级数值。";
 "quota.reason.providerReportedFailure" = "服务商接受了请求，但返回了失败结果。";
 "quota.capacity.tasks" = "预计还可完成约 %d 个类似任务";
 "quota.capacity.basis" = "依据最近 %d 次相似任务";
 "quota.credential.environment" = "环境变量";
 "quota.credential.authStore" = "OpenCode 登录凭据";
 "quota.credential.none" = "不可用";
+
+/* P4.2.6.5.1 workload-scope projection: which provider scope the coding
+   dashboard reads, and why an observed scope is absent from it */
+"quota.plan.workloadScopeLabel" = "用途";
+"quota.plan.workload.codingText" = "编码 / 文本";
+"quota.plan.workload.video" = "视频生成";
+"quota.plan.workload.image" = "图像生成";
+"quota.plan.workload.audio" = "语音 / 音频";
+"quota.plan.workload.unknown" = "未归类";
+"quota.plan.otherScopes" = "其他提供商额度范围";
+"quota.plan.otherScopesFooter" = "这些是服务商真实存在的额度，但对应的任务类型当前不参与本编排器的调度，因此不影响编码额度、调度决策或重置窗口。";
+"quota.reason.codingScopeUnavailable" = "服务商没有为本编排器所调度的编码 / 文本范围返回剩余额度。";
+"quota.reason.codingScopeUnreadable" = "编码 / 文本范围返回了无法解析的剩余额度，因此不予展示。";
+"quota.reason.codingWindowSemanticsUnknown" = "编码 / 文本范围中有一个窗口可读，另一个窗口在本次响应中无法识别，因此不作推测。";
+"quota.reason.codingScopeDisagree" = "多个编码 / 文本范围对同一窗口给出了不同数值，因此无法推导出唯一数值。";

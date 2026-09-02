@@ -18,9 +18,12 @@ that. Two defects followed directly from the gap.
 
 **MiniMax.** The collector required every entry in `model_remains` to report the
 same percentage. When they disagreed it concluded there was no single honest
-plan-level figure — correct — and then discarded the entire observation: both
-windows, every reset time, and every per-model figure. The Quota page went to
-`QUOTA_VARIES_BY_MODEL` while holding real data it had just read.
+plan-level figure and discarded the entire observation: both windows, every
+reset time, and every per-model figure. The Quota page went to
+`QUOTA_VARIES_BY_MODEL` while holding real data it had just read. Its
+replacement kept the disagreement rule and only renamed the outcome, so
+`general = 95%` beside `video = 60%` still collapsed **coding** quota to
+UNKNOWN — see "Provider scope truth vs product workload relevance" below.
 
 **GLM.** The two limit entries share one `type` and differ only in
 `unit`/`number`. The collector took the first match and labelled it `5h`,
@@ -52,7 +55,8 @@ A per-scope view is **not** automatically a model. MiniMax's `model_remains`
 entries are named `general` and `video` on the observed account, while its
 routable models are `MiniMax-M2.7` and similar. `EquivalentScopeKind` records
 whether an entry was confirmed as a model by the account's catalog, and only
-confirmed models are listed as sharing the pool.
+confirmed models are listed as sharing the pool. `QuotaWorkloadScope` separately
+records what each scope *meters*, which decides whether this product reads it.
 
 ### B. Model consumption
 
@@ -91,6 +95,68 @@ guess cannot be promoted into provider truth by any caller or later refactor.
    return types, because they render identically in a progress bar and mean
    opposite things.
 
+## Provider scope truth vs product workload relevance
+
+These are two different questions, and conflating them is what produced the
+second MiniMax defect.
+
+**Provider scope truth** is what the provider reported. On this account MiniMax
+reports a `general` scope and a `video` scope with different remaining figures.
+Both are true. Both are preserved verbatim as `ModelEquivalentView` rows, in the
+projection and in the sanitized journal.
+
+**Product workload relevance** is which of those scopes *this* product consumes.
+Personal AI Orchestrator schedules coding, text, and agentic software-engineering
+work. It does not schedule MiniMax video generation.
+
+`quota_workload_scope.py` holds the typed relevance layer:
+
+| Concept | Meaning |
+| --- | --- |
+| `QuotaWorkloadScope` | `CODING_TEXT`, `VIDEO_GENERATION`, `IMAGE_GENERATION`, `AUDIO`, `UNKNOWN` |
+| `PROVIDER_SCOPE_WORKLOADS` | Provider scope name → workload. Evidence only; an unrecognized name stays `UNKNOWN` rather than being guessed at. |
+| `ACTIVE_SCHEDULING_WORKLOADS` | What this build schedules. Today: `{CODING_TEXT}`. |
+| `select_for_workload` | Scopes of the requested workload win outright; only when none exists do `UNKNOWN` scopes stand in. A scope of *another* workload never stands in. |
+
+### CONFIRMED PRODUCT PROJECTION
+
+> For Personal AI Orchestrator coding workloads, MiniMax **`general`** is the
+> relevant workload scope. **`video` is not part of coding scheduling.**
+>
+> This does not claim MiniMax's video quota does not exist. It means the current
+> product does not consume it.
+
+Consequences, all enforced in `tests/test_quota_workload_scope.py`:
+
+- `general = 95%` beside `video = 60%` yields coding quota **95%**, not UNKNOWN,
+  not the mean (77.5%), and not the minimum (60%).
+- `video` alone yields UNKNOWN with `GENERAL_QUOTA_NOT_AVAILABLE`. It is never
+  read as a coding figure by default.
+- `video` never enters `PlanQuotaProjection.windows`, so it can never reach the
+  `QuotaSnapshot` the scheduler, Temporal Scarcity, and QUOTA_SAVER consume.
+  That exclusion is structural, not a rule a caller must remember.
+- The relevance layer is declarative. A future build that schedules video adds
+  `VIDEO_GENERATION` to `ACTIVE_SCHEDULING_WORKLOADS`; it does not delete an
+  `if scope == "video"` branch.
+
+### Reason codes
+
+A workload that cannot be read says why, in its own terms. None of these may be
+raised because a scope belonging to *another* workload disagreed:
+
+| Code | Meaning |
+| --- | --- |
+| `GENERAL_QUOTA_NOT_AVAILABLE` | No scope of the scheduled workload carries a remaining figure. |
+| `GENERAL_QUOTA_READ_FAILED` | The coding scope carried a figure that could not be read. Fail closed. |
+| `GENERAL_WINDOW_SEMANTICS_UNKNOWN` | One window readable; the other's window semantics are not identifiable in the response, and are not invented. |
+| `CODING_SCOPE_VIEWS_DISAGREE` | Several *coding* scopes disagree on one window. |
+| `VIDEO_SCOPE_IGNORED_FOR_CODING` | Advanced-Details note, not a failure: a real balance exists for a workload this build does not schedule. |
+
+`QUOTA_VARIES_BY_MODEL` and `SHARED_POOL_VIEWED_PER_MODEL` are **retired**. Both
+asserted that differing scope values meant no figure was derivable, which is the
+error itself. They are no longer emitted and no longer carry a localized
+sentence.
+
 ## Binding window
 
 `determine_binding_window` picks the scarcest **comparable** window. Two
@@ -110,7 +176,10 @@ ESTIMATED — the scarcest *readable* window may not be the scarcest window.
 
 Unchanged and deliberately so. `PlanQuotaProjection.to_snapshot()` produces the
 same `QuotaSnapshot` the Quota Governor and Temporal Scarcity logic already
-consume: provider-reported windows only. Model consumption and equivalent
+consume: provider-reported windows only — and, since P4.2.6.5.1, only the
+windows of the plan's `active_workload_scope`. A scope this product does not
+schedule is therefore not merely deprioritized by the scheduler; it is not
+present in the scheduler's input at all. Model consumption and equivalent
 capacity travel *beside* the snapshot, not inside it, so advisory numbers cannot
 become routing truth by accident.
 
@@ -124,7 +193,7 @@ Equivalent capacity is explanatory/advisory unless a later policy approves it.
 
 ## Persistence and migration
 
-`CACHE_SCHEMA_VERSION = 2` (snapshots) and `PROJECTION_SCHEMA_VERSION = 1`
+`CACHE_SCHEMA_VERSION = 2` (snapshots) and `PROJECTION_SCHEMA_VERSION = 2`
 (plan projections) are versioned **independently**, in separate files:
 
 - `runtime-state/quota/quota-<pool>.json` — last-known-good snapshot
@@ -137,6 +206,28 @@ written under a different schema version is **ignored**, never reinterpreted:
 re-reading an old record under new semantics is how a stale fact becomes a
 confident wrong answer. No model-level data is manufactured from old
 plan-level records.
+
+The projection version moved to 2 with the workload-scope projection: a v1
+record's `windows` were derived by requiring *every* provider scope to agree, so
+a v1 MiniMax record reads UNKNOWN precisely because a video balance disagreed —
+the claim this version removes. Such records are dropped, and the next read
+replaces them.
+
+## Provider-scoped quota acceptance
+
+`POST /v1/quota/refresh` with no provider filter means *refresh every connected
+provider*, and an acceptance run once invoked it while intending to read one.
+`quota_acceptance.py` separates the two operations by shape rather than by
+discipline:
+
+| Helper | Behaviour |
+| --- | --- |
+| `scoped_quota_refresh(client, provider_id=...)` | Keyword-only, no default. Blank or missing raises `ScopedRefreshTargetMissing`; a result naming any other provider raises `ScopedRefreshWidened`. |
+| `refresh_all_provider_quota(client)` | The deliberate product-wide operation. Must be named to be invoked. |
+| `python -m personal_ai_orchestrator.quota_acceptance --provider-id <id>` | CLI; `--provider-id` is required by the parser. |
+
+Both paths are read-only: one authenticated `GET` per collector against a
+documented quota endpoint, no model generation, no credential in output.
 
 ## Credential scope
 

@@ -14,16 +14,29 @@ metered over a 5-hour rolling window and a weekly window. Per-model "calls per
 assuming that model is used exclusively — they are not independent per-model
 quota buckets.
 
-The defect this rewrite fixes
------------------------------
-The previous implementation required every entry in ``model_remains`` to report
-the same percentage. When they disagreed it returned ``QUOTA_VARIES_BY_MODEL``
-and discarded the entire observation — windows, reset times, and every
-per-model figure included. But under a documented shared pool, disagreeing
-per-model percentages are not several balances; they are several *views* of one
-balance. They are therefore preserved as :class:`ModelEquivalentView` and the
-shared pool stays honestly UNKNOWN only when no plan-level figure can be
-derived. Partial knowledge beats hiding everything (§24).
+Workload scopes, not models
+---------------------------
+This account's ``model_remains`` entries are named ``general`` and ``video``.
+They are neither models nor competing views of one balance: they meter two
+different resources. Personal AI Orchestrator schedules coding, text, and
+agentic software-engineering work, so ``general`` is the scope its MiniMax
+targets draw on and ``video`` is out of the product's workload scope entirely.
+
+Two successive defects are fixed here:
+
+* The original collector required every ``model_remains`` entry to report the
+  same percentage, and answered ``QUOTA_VARIES_BY_MODEL`` when they disagreed,
+  discarding windows, reset times, and every figure it had just read.
+* Its replacement kept the disagreement rule and merely renamed the outcome. So
+  ``general = 95%`` beside ``video = 60%`` still collapsed **coding** quota to
+  UNKNOWN — a video balance suppressing a coding figure it says nothing about.
+
+The plan-level fraction is therefore derived from the scopes belonging to the
+workload being projected (:mod:`quota_workload_scope`). ``video`` is preserved
+verbatim as a :class:`ModelEquivalentView` carrying its workload classification,
+but it never supplies, caps, averages with, or invalidates the coding figure —
+and because it never enters ``windows``, it can never reach the snapshot the
+scheduler, temporal scarcity, or QUOTA_SAVER read.
 
 Response shapes
 ---------------
@@ -46,15 +59,16 @@ formally published:
                         "weekly_start_time": <ms>, "weekly_end_time": <ms>}]}
 
 Plan-level counts are authoritative when present: they describe the pool
-directly rather than through a model's lens. Percentages are used only as a
-fallback, and only produce a plan figure when every model agrees — because a
-single shared bar viewed through several models can only be read off directly
-when the views coincide.
+directly rather than through one scope's lens. Percentages are the fallback,
+read from the scopes relevant to the projected workload; when several such
+scopes report the same window they must still coincide, because one bar viewed
+through several lenses can only be read off directly when the views agree.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Any, Literal
 
 from personal_ai_orchestrator.model_registry import (
@@ -89,6 +103,13 @@ from personal_ai_orchestrator.quota_plan import (
     determine_binding_window,
     state_for_fraction,
 )
+from personal_ai_orchestrator.quota_workload_scope import (
+    ACTIVE_CODING_WORKLOAD,
+    QuotaWorkloadScope,
+    classify_provider_scope,
+    excluded_workloads,
+    select_for_workload,
+)
 
 MiniMaxRegion = Literal["global", "cn"]
 MINIMAX_GLOBAL_QUOTA_ENDPOINT = "https://www.minimax.io/v1/token_plan/remains"
@@ -98,6 +119,50 @@ MINIMAX_CN_QUOTA_DOC = "https://platform.minimaxi.com/subscribe/token-plan"
 MINIMAX_OFFICIAL_CLI = "https://github.com/MiniMax-AI/cli"
 
 MINIMAX_TOKEN_PLAN_DISPLAY_NAME = "MiniMax Token Plan"
+
+
+class MiniMaxQuotaReason(StrEnum):
+    """Sanitized machine codes for a read that yielded no coding figure.
+
+    They name what is actually missing. None of them may be raised because a
+    scope outside the projected workload disagreed: that is not a reason for
+    anything, and a code implying it (``QUOTA_VARIES_BY_MODEL``,
+    ``SHARED_POOL_VIEWED_PER_MODEL``) is no longer produced here.
+
+    These are Advanced-Details codes. The primary card renders a localized
+    sentence, never the raw value.
+    """
+
+    #: The response listed no quota entries at all.
+    NO_QUOTA_ENTRIES = "PROVIDER_REPORTED_NO_QUOTA_ENTRIES"
+    #: Entries exist, but none of them meters the projected workload — every
+    #: one belongs to a workload this product does not schedule, or the coding
+    #: scope carries no remaining figure.
+    GENERAL_QUOTA_NOT_AVAILABLE = "GENERAL_QUOTA_NOT_AVAILABLE"
+    #: The coding scope carried remaining fields we could not read. Fail closed:
+    #: a malformed figure is not a figure.
+    GENERAL_QUOTA_READ_FAILED = "GENERAL_QUOTA_READ_FAILED"
+    #: One window of the coding scope is readable and the other's window
+    #: semantics are not identifiable in this response. The readable one is
+    #: still shown; nothing is invented for the other.
+    GENERAL_WINDOW_SEMANTICS_UNKNOWN = "GENERAL_WINDOW_SEMANTICS_UNKNOWN"
+    #: Several scopes of the projected workload disagree about one window, so no
+    #: single figure for that window is derivable from them.
+    CODING_SCOPE_VIEWS_DISAGREE = "CODING_SCOPE_VIEWS_DISAGREE"
+
+
+#: Advanced-Details note, not a failure: a real provider balance exists for a
+#: workload this build does not schedule, and is therefore not on the card.
+MINIMAX_VIDEO_SCOPE_NOTE = "VIDEO_SCOPE_IGNORED_FOR_CODING"
+
+_WORKLOAD_SCOPE_NOTES: dict[QuotaWorkloadScope, str] = {
+    QuotaWorkloadScope.VIDEO_GENERATION: MINIMAX_VIDEO_SCOPE_NOTE,
+    QuotaWorkloadScope.IMAGE_GENERATION: "IMAGE_SCOPE_IGNORED_FOR_CODING",
+    QuotaWorkloadScope.AUDIO: "AUDIO_SCOPE_IGNORED_FOR_CODING",
+}
+
+_INTERVAL_PERCENT_KEY = "current_interval_remaining_percent"
+_WEEKLY_PERCENT_KEY = "current_weekly_remaining_percent"
 
 _FIVE_HOUR_SECONDS = 5 * 60 * 60.0
 _WEEKLY_SECONDS = 7 * 24 * 60 * 60.0
@@ -210,28 +275,108 @@ def _plan_level_window(
     return max(0.0, min(1.0, remaining / total)), remaining, total, reset_at
 
 
-def minimax_unknown_reason(payload: dict[str, Any]) -> str:
-    """Explain why a *successful* read still yielded no plan-level figure.
+def _entry_scope_id(entry: dict[str, Any]) -> str | None:
+    scope_id = entry.get("model") or entry.get("model_name")
+    return scope_id if isinstance(scope_id, str) and scope_id else None
 
-    UNKNOWN with no reason reads as breakage. These codes distinguish "nothing
-    was readable" from "the provider gave us per-model views that disagree" —
-    the latter is a real answer, and one whose per-model detail is still shown.
+
+def _classified_entries(
+    entries: list[dict[str, Any]],
+    provider_id: str,
+) -> tuple[tuple[dict[str, Any], str | None, QuotaWorkloadScope], ...]:
+    """Pair every entry with the workload its scope meters.
+
+    An entry the provider left unnamed is kept with a ``None`` scope id and an
+    UNKNOWN workload. Some account surfaces return a single anonymous bar, and
+    dropping it would turn a readable plan into UNKNOWN.
+    """
+
+    classified: list[tuple[dict[str, Any], str | None, QuotaWorkloadScope]] = []
+    for entry in entries:
+        scope_id = _entry_scope_id(entry)
+        workload = (
+            QuotaWorkloadScope.UNKNOWN
+            if scope_id is None
+            else classify_provider_scope(provider_id, scope_id)
+        )
+        classified.append((entry, scope_id, workload))
+    return tuple(classified)
+
+
+def _entries_for_workload(
+    classified: tuple[tuple[dict[str, Any], str | None, QuotaWorkloadScope], ...],
+    workload: QuotaWorkloadScope,
+) -> list[dict[str, Any]]:
+    """The entries a projection for ``workload`` is allowed to read.
+
+    Entries for another workload are not merely deprioritized — they are not
+    read at all. A ``video`` balance is real, and it is not evidence about
+    coding capacity in either direction.
+    """
+
+    return list(
+        select_for_workload([(entry, kind) for entry, _, kind in classified], workload)
+    )
+
+
+def _has_unreadable_percent(entries: list[dict[str, Any]]) -> bool:
+    """Whether a remaining-percent field is present but not a usable percentage.
+
+    Present-and-garbage is a different fact from absent, and it must fail closed
+    rather than fall through to some other scope's number.
+    """
+
+    for entry in entries:
+        for key in (_INTERVAL_PERCENT_KEY, _WEEKLY_PERCENT_KEY):
+            if key not in entry:
+                continue
+            value = _number(entry.get(key))
+            if value is None or not 0.0 <= value <= 100.0:
+                return True
+    return False
+
+
+def minimax_unknown_reason(
+    payload: dict[str, Any],
+    *,
+    provider_id: str = "minimax",
+    workload: QuotaWorkloadScope = ACTIVE_CODING_WORKLOAD,
+) -> str:
+    """Explain why a *successful* read still yielded no figure for ``workload``.
+
+    UNKNOWN with no reason reads as breakage. Each code names what is actually
+    missing from the projected workload's own scope. Crucially, none of them can
+    be raised because a scope outside that workload disagreed: a video balance
+    is not a reason for a coding figure to be unknown.
     """
 
     entries = _model_entries(payload)
     if not entries:
-        return "PROVIDER_REPORTED_NO_QUOTA_ENTRIES"
+        return MiniMaxQuotaReason.NO_QUOTA_ENTRIES.value
 
-    interval = _field_values(entries, "current_interval_remaining_percent")
-    weekly = _field_values(entries, "current_weekly_remaining_percent")
+    classified = _classified_entries(entries, provider_id)
+    relevant = _entries_for_workload(classified, workload)
+    if not relevant:
+        # Every entry belongs to a workload this product does not schedule.
+        return MiniMaxQuotaReason.GENERAL_QUOTA_NOT_AVAILABLE.value
+
+    interval = _field_values(relevant, _INTERVAL_PERCENT_KEY)
+    weekly = _field_values(relevant, _WEEKLY_PERCENT_KEY)
     if not interval and not weekly:
-        return "PROVIDER_FIELDS_UNAVAILABLE"
+        return (
+            MiniMaxQuotaReason.GENERAL_QUOTA_READ_FAILED.value
+            if _has_unreadable_percent(relevant)
+            else MiniMaxQuotaReason.GENERAL_QUOTA_NOT_AVAILABLE.value
+        )
     for series in (interval, weekly):
         if len(series) > 1 and any(abs(value - series[0]) > 1e-6 for value in series[1:]):
-            # Retained as a stable machine code, but it no longer suppresses the
-            # observation: the per-model views are surfaced as equivalents.
-            return "SHARED_POOL_VIEWED_PER_MODEL"
-    return "PROVIDER_FIELDS_UNAVAILABLE"
+            return MiniMaxQuotaReason.CODING_SCOPE_VIEWS_DISAGREE.value
+    if _has_unreadable_percent(relevant):
+        return MiniMaxQuotaReason.GENERAL_QUOTA_READ_FAILED.value
+    # One window is readable and the other's window semantics are not
+    # identifiable here. The readable one is still reported; the other is not
+    # invented.
+    return MiniMaxQuotaReason.GENERAL_WINDOW_SEMANTICS_UNKNOWN.value
 
 
 def _scope_kind(scope_id: str, known_model_ids: frozenset[str]) -> EquivalentScopeKind:
@@ -257,25 +402,28 @@ def _scope_kind(scope_id: str, known_model_ids: frozenset[str]) -> EquivalentSco
 
 
 def _model_equivalent_views(
-    entries: list[dict[str, Any]],
+    classified: tuple[tuple[dict[str, Any], str | None, QuotaWorkloadScope], ...],
     known_model_ids: frozenset[str] = frozenset(),
 ) -> tuple[ModelEquivalentView, ...]:
-    """Per-scope views of the shared pool, for the advisory section of the card.
+    """Per-scope views of the provider's quota, for Advanced Details.
 
-    Each view keeps the provider's own entry name so the owner can see *why* the
-    plan figure is or is not derivable, instead of being told only that it is
-    not — and carries whether that name is a model or a resource category.
+    Every scope the provider reported is preserved here, including the ones the
+    current workload does not read (§21). Deleting ``video`` because this build
+    ignores it would destroy a real observation that a future build — one that
+    schedules video — would need. Relevance is decided by ``workload_scope``,
+    not by what is kept.
     """
 
     views: list[ModelEquivalentView] = []
-    for entry in entries:
-        scope_id = entry.get("model") or entry.get("model_name")
-        if not isinstance(scope_id, str) or not scope_id:
+    for entry, scope_id, workload_scope in classified:
+        if scope_id is None:
+            # An anonymous bar has no scope to attribute a view to; it is read
+            # as the plan figure above and needs no per-scope row here.
             continue
         scope_kind = _scope_kind(scope_id, known_model_ids)
         for window_id, percent_key in (
-            ("5h", "current_interval_remaining_percent"),
-            ("weekly", "current_weekly_remaining_percent"),
+            ("5h", _INTERVAL_PERCENT_KEY),
+            ("weekly", _WEEKLY_PERCENT_KEY),
         ):
             percent = _number(entry.get(percent_key))
             if percent is None or not 0.0 <= percent <= 100.0:
@@ -284,6 +432,7 @@ def _model_equivalent_views(
                 ModelEquivalentView(
                     scope_id=scope_id,
                     scope_kind=scope_kind,
+                    workload_scope=workload_scope,
                     window_id=window_id,
                     remaining_fraction=percent / 100.0,
                     confidence=EvidenceConfidence.EXACT,
@@ -297,6 +446,7 @@ def _model_equivalent_views(
                 ModelEquivalentView(
                     scope_id=scope_id,
                     scope_kind=scope_kind,
+                    workload_scope=workload_scope,
                     window_id="5h-units",
                     remaining_fraction=max(0.0, min(1.0, remains / total)),
                     remaining_units=remains,
@@ -318,16 +468,26 @@ def normalize_minimax_quota(
     provider_id: str = "minimax",
     plan_id: str = "token-plan",
     known_model_ids: frozenset[str] = frozenset(),
+    workload_scope: QuotaWorkloadScope = ACTIVE_CODING_WORKLOAD,
 ) -> PlanQuotaProjection:
     """Project the Token Plan response onto the shared-plan domain model.
 
     ``known_model_ids`` is the account's own catalog. It is the only thing that
     lets a ``model_remains`` entry be reported as a model; without it every
     entry stays an unclassified provider scope.
+
+    ``workload_scope`` selects which provider scopes the returned ``windows``
+    describe. It defaults to the workload this build schedules — coding and
+    text — so ``video`` never reaches the windows, and therefore never reaches
+    the snapshot the scheduler, temporal scarcity, and QUOTA_SAVER consume.
     """
 
     body = _body(payload)
     entries = _model_entries(payload)
+    classified = _classified_entries(entries, provider_id)
+    # The only entries this projection is permitted to read. Everything else is
+    # still preserved below as an equivalent view.
+    relevant = _entries_for_workload(classified, workload_scope)
     source = QuotaEvidenceSource(
         source_type=EvidenceSourceType.PROVIDER_API,
         reference=source_uri,
@@ -351,21 +511,19 @@ def normalize_minimax_quota(
         reset_key="current_weekly_reset_time",
     )
 
-    interval_start = _millis_datetime(_agreed_number(_field_values(entries, "start_time")))
-    interval_end = _millis_datetime(_agreed_number(_field_values(entries, "end_time")))
+    # Window boundaries come from the same scopes as the figures they bound. A
+    # video window's reset time is not this plan's coding reset time.
+    interval_start = _millis_datetime(_agreed_number(_field_values(relevant, "start_time")))
+    interval_end = _millis_datetime(_agreed_number(_field_values(relevant, "end_time")))
     weekly_start = _millis_datetime(
-        _agreed_number(_field_values(entries, "weekly_start_time"))
+        _agreed_number(_field_values(relevant, "weekly_start_time"))
     )
-    weekly_end = _millis_datetime(_agreed_number(_field_values(entries, "weekly_end_time")))
+    weekly_end = _millis_datetime(_agreed_number(_field_values(relevant, "weekly_end_time")))
 
     if interval_fraction is None:
-        interval_fraction = _agreed_percent(
-            _field_values(entries, "current_interval_remaining_percent")
-        )
+        interval_fraction = _agreed_percent(_field_values(relevant, _INTERVAL_PERCENT_KEY))
     if weekly_fraction is None:
-        weekly_fraction = _agreed_percent(
-            _field_values(entries, "current_weekly_remaining_percent")
-        )
+        weekly_fraction = _agreed_percent(_field_values(relevant, _WEEKLY_PERCENT_KEY))
 
     interval_reset = interval_reset or interval_end
     weekly_reset = weekly_reset or weekly_end
@@ -438,11 +596,21 @@ def normalize_minimax_quota(
         # Every window must be readable before the plan as a whole is EXACT:
         # a known 5-hour window beside an unknown weekly one is partial truth,
         # and routing must not read partial truth as complete.
-        if entries and len(readable) == len(windows)
+        if len(readable) == len(windows)
         else EvidenceConfidence.UNKNOWN
     )
 
-    equivalents = _model_equivalent_views(entries, known_model_ids)
+    equivalents = _model_equivalent_views(classified, known_model_ids)
+    # Scopes the provider reported for workloads this build does not schedule.
+    # Recorded so the owner is told why a real balance is absent from the coding
+    # card, rather than the evidence simply vanishing.
+    notes = tuple(
+        _WORKLOAD_SCOPE_NOTES[kind]
+        for kind in excluded_workloads(
+            [(scope_id, kind) for _, scope_id, kind in classified], workload_scope
+        )
+        if kind in _WORKLOAD_SCOPE_NOTES
+    )
     # Only entries the account's catalog confirms as models are listed as
     # sharing this pool. Listing "video" as a model the owner can route to
     # would be a fabrication dressed up as provider evidence.
@@ -476,12 +644,18 @@ def normalize_minimax_quota(
         ),
         windows=windows,
         model_equivalents=equivalents,
+        # Only workload-relevant windows are candidates, so an excluded scope
+        # can never become the binding constraint on coding work.
         binding_window=determine_binding_window(windows, at=observed_at),
+        active_workload_scope=workload_scope,
+        workload_scope_notes=notes,
         state=aggregate_state(windows),
         confidence=confidence,
         source=source.model_copy(update={"confidence": confidence}),
         unknown_reason=(
-            minimax_unknown_reason(payload)
+            minimax_unknown_reason(
+                payload, provider_id=provider_id, workload=workload_scope
+            )
             if confidence is EvidenceConfidence.UNKNOWN
             else None
         ),
@@ -506,6 +680,9 @@ class MiniMaxQuotaCollector:
         provider_id: str = "minimax",
         plan_id: str = "token-plan",
         known_model_ids: frozenset[str] = frozenset(),
+        #: The workload the resulting snapshot describes. Defaults to the one
+        #: this build schedules; a video-scheduling build would pass its own.
+        workload_scope: QuotaWorkloadScope = ACTIVE_CODING_WORKLOAD,
         now: object = None,
     ) -> None:
         self._token = (
@@ -520,6 +697,7 @@ class MiniMaxQuotaCollector:
         self._provider_id = provider_id
         self._plan_id = plan_id
         self._known_model_ids = known_model_ids
+        self._workload_scope = workload_scope
         self._now = now if callable(now) else (lambda: datetime.now(tz=UTC))
 
     def collect(self) -> QuotaCollectionResult:
@@ -548,6 +726,7 @@ class MiniMaxQuotaCollector:
             provider_id=self._provider_id,
             plan_id=self._plan_id,
             known_model_ids=self._known_model_ids,
+            workload_scope=self._workload_scope,
         )
         snapshot = projection.to_snapshot(quota_pool_id=self._quota_pool_id)
         if projection.confidence is not EvidenceConfidence.UNKNOWN:
@@ -560,7 +739,14 @@ class MiniMaxQuotaCollector:
             status=QuotaCollectionStatus.UNKNOWN,
             snapshot=snapshot if snapshot.state is not QuotaState.UNKNOWN else None,
             projection=projection,
-            error_category=projection.unknown_reason or minimax_unknown_reason(payload),
+            error_category=(
+                projection.unknown_reason
+                or minimax_unknown_reason(
+                    payload,
+                    provider_id=self._provider_id,
+                    workload=self._workload_scope,
+                )
+            ),
         )
 
 
@@ -571,7 +757,9 @@ __all__ = [
     "MINIMAX_OFFICIAL_CLI",
     "MINIMAX_QUOTA_DOC",
     "MINIMAX_TOKEN_PLAN_DISPLAY_NAME",
+    "MINIMAX_VIDEO_SCOPE_NOTE",
     "MiniMaxQuotaCollector",
+    "MiniMaxQuotaReason",
     "MiniMaxRegion",
     "minimax_quota_endpoint",
     "minimax_unknown_reason",
