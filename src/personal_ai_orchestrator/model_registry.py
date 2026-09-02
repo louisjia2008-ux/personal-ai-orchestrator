@@ -148,6 +148,11 @@ class QuotaWindowSnapshot(RegistryModel):
     used_fraction: float | None = Field(default=None, ge=0.0, le=1.0)
     remaining_units: float | None = Field(default=None, ge=0.0)
     used_units: float | None = Field(default=None, ge=0.0)
+    #: Provider-reported capacity for this window. Kept rather than derived from
+    #: remaining + used: providers round those two independently (GLM reports
+    #: 1612 remaining and 8387 consumed against a capacity of 10000), so a
+    #: derived total silently contradicts the fraction computed from capacity.
+    total_units: float | None = Field(default=None, ge=0.0)
     unit: str | None = None
     window_started_at: datetime | None = None
     reset_at: datetime | None = None
@@ -173,6 +178,7 @@ class QuotaWindowSnapshot(RegistryModel):
             self.used_fraction,
             self.remaining_units,
             self.used_units,
+            self.total_units,
         )
         if self.confidence is EvidenceConfidence.UNKNOWN and any(
             value is not None for value in precise_values

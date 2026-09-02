@@ -36,12 +36,17 @@ from personal_ai_orchestrator.approval import ApprovalAuthority
 from personal_ai_orchestrator.build_identity import resolve_build_identity
 from personal_ai_orchestrator.execution_controller import validate_execution_target_launch
 from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
-from personal_ai_orchestrator.model_registry import ModelRegistry
+from personal_ai_orchestrator.model_registry import EvidenceConfidence, ModelRegistry
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
 from personal_ai_orchestrator.provider_registry_manager import (
     ProviderRegistryManager,
 )
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
+from personal_ai_orchestrator.quota_equivalent_capacity import (
+    EquivalentCapacityEstimate,
+    estimate_equivalent_capacity,
+)
+from personal_ai_orchestrator.quota_plan import PlanQuotaProjection
 from personal_ai_orchestrator.quota_refresh import (
     QuotaObservationState,
     QuotaPageState,
@@ -400,7 +405,133 @@ class QuotaProviderCardView(_ViewModel):
     last_refresh_status: str | None = None
     last_refresh_at: str | None = None
     failure_reason: str | None = None
+    #: Sanitized provenance of the credential used for this surface's quota
+    #: read. Never the credential itself.
+    credential_source: str = "NONE"
     quota_pools: tuple[QuotaPoolHealthView, ...] = ()
+    #: Plan-first projection. Present whenever any plan evidence exists — the
+    #: plan balance may be UNKNOWN while model consumption is known, and that
+    #: combination is exactly what this field exists to carry.
+    plan: QuotaPlanView | None = None
+
+
+class QuotaPlanWindowView(_ViewModel):
+    """One quota window of a shared plan pool.
+
+    ``remaining_fraction`` is populated only for EXACT/ESTIMATED windows, so a
+    client cannot draw a bar for a figure the provider never gave us.
+    """
+
+    window_id: str
+    window_kind: str
+    state: str
+    confidence: str
+    remaining_fraction: float | None = None
+    remaining_units: float | None = None
+    total_units: float | None = None
+    unit: str | None = None
+    reset_at: str | None = None
+
+
+class BindingWindowView(_ViewModel):
+    """Which window currently limits the plan, and how soon it resets.
+
+    Scarcity and reset horizon are separate fields on purpose: 20% remaining
+    that resets in 30 minutes is not the same situation as 20% remaining that
+    resets in six days.
+    """
+
+    window_id: str | None = None
+    window_kind: str | None = None
+    remaining_fraction: float | None = None
+    reset_at: str | None = None
+    seconds_until_reset: float | None = None
+    reason: str
+    confidence: str
+
+
+class ModelConsumptionView(_ViewModel):
+    """What one model consumed of the shared pool.
+
+    Contribution, never entitlement. There is deliberately no remaining field:
+    the shape itself makes a per-model balance unrepresentable.
+    """
+
+    model_id: str
+    consumed_units: float
+    unit_kind: str
+    provider_unit_label: str | None = None
+    call_count: int | None = None
+    period_start: str | None = None
+    period_end: str | None = None
+    confidence: str
+    measurement_source: str
+
+
+class ModelEquivalentWindowView(_ViewModel):
+    """A provider's per-model *view* of one shared pool.
+
+    Rendered under an explicit "equivalent" heading. MiniMax reports these per
+    model and they differ; they are not several balances.
+    """
+
+    model_id: str
+    window_id: str
+    remaining_fraction: float | None = None
+    remaining_units: float | None = None
+    total_units: float | None = None
+    unit_kind: str
+    confidence: str
+
+
+class EquivalentCapacityView(_ViewModel):
+    """Derived "roughly how many more tasks fit". Always ESTIMATED.
+
+    ``estimated_remaining_tasks`` is ``None`` whenever we lack the history to
+    support a figure; ``unavailable_reason`` then says why. Absent is not zero.
+    """
+
+    model_id: str
+    window_id: str
+    task_class: str
+    estimated_remaining_tasks: float | None = None
+    sample_count: int = 0
+    small_sample: bool = False
+    #: Always "ESTIMATED" when a figure is present; never EXACT.
+    confidence: str = "ESTIMATED"
+    unavailable_reason: str | None = None
+
+
+class QuotaPlanView(_ViewModel):
+    """Plan-first projection of one connected subscription.
+
+    The three concepts stay separate all the way to the client: ``windows``
+    is the shared plan balance, ``model_consumption`` is what each model spent,
+    and ``equivalent_capacity`` is a derived estimate. A client that merged
+    them would be merging facts of different kinds.
+    """
+
+    provider_id: str
+    plan_id: str
+    #: The provider's own product name — "GLM Coding Plan", not a renamed
+    #: symmetric label.
+    display_name: str
+    plan_level: str | None = None
+    quota_semantics: str
+    pool_id: str
+    resource_kind: str
+    shared_across_models: bool
+    unit_kind: str
+    covered_model_ids: tuple[str, ...] = ()
+    state: str
+    confidence: str
+    observed_at: str | None = None
+    unknown_reason: str | None = None
+    windows: tuple[QuotaPlanWindowView, ...] = ()
+    binding_window: BindingWindowView | None = None
+    model_consumption: tuple[ModelConsumptionView, ...] = ()
+    model_equivalents: tuple[ModelEquivalentWindowView, ...] = ()
+    equivalent_capacity: tuple[EquivalentCapacityView, ...] = ()
 
 
 class QuotaSummaryView(_ViewModel):
@@ -2070,6 +2201,162 @@ class ControlPlaneService:
             ),
         )
 
+    @staticmethod
+    def _plan_view(observation: QuotaProviderObservation) -> QuotaPlanView | None:
+        """Render the shared-plan projection the Quota page leads with.
+
+        Returns ``None`` only when there is no plan evidence at all. A plan
+        whose *balance* is UNKNOWN still renders, because the per-model
+        consumption and equivalents beside it are real, and dropping the whole
+        card to hide the one unknown reports less than we know.
+        """
+
+        projection = observation.projection
+        if projection is None:
+            return None
+
+        def iso(value) -> str | None:
+            return value.isoformat() if value is not None else None
+
+        windows = tuple(
+            QuotaPlanWindowView(
+                window_id=window.window_id,
+                window_kind=window.window_kind.value,
+                state=window.state.value,
+                confidence=window.confidence.value,
+                # A window we could not read draws no bar.
+                remaining_fraction=(
+                    window.remaining_fraction
+                    if window.confidence is not EvidenceConfidence.UNKNOWN
+                    else None
+                ),
+                remaining_units=window.remaining_units,
+                total_units=window.total_units,
+                unit=window.unit,
+                reset_at=iso(window.reset_at),
+            )
+            for window in projection.windows
+        )
+        binding = projection.binding_window
+        return QuotaPlanView(
+            provider_id=projection.plan.provider_id,
+            plan_id=projection.plan.plan_id,
+            display_name=(
+                observation.plan_display_name or projection.plan.display_name
+            ),
+            plan_level=projection.plan.plan_level,
+            quota_semantics=projection.plan.quota_semantics.value,
+            pool_id=projection.pool.pool_id,
+            resource_kind=projection.pool.resource_kind.value,
+            shared_across_models=projection.pool.shared_across_models,
+            unit_kind=projection.pool.unit_kind.value,
+            covered_model_ids=projection.covered_model_ids(),
+            state=projection.state.value,
+            confidence=projection.confidence.value,
+            observed_at=iso(projection.plan.observed_at),
+            unknown_reason=projection.unknown_reason,
+            windows=windows,
+            binding_window=BindingWindowView(
+                window_id=binding.window_id,
+                window_kind=(
+                    binding.window_kind.value if binding.window_kind is not None else None
+                ),
+                remaining_fraction=binding.remaining_fraction,
+                reset_at=iso(binding.reset_at),
+                seconds_until_reset=binding.seconds_until_reset,
+                reason=binding.reason.value,
+                confidence=binding.confidence.value,
+            ),
+            model_consumption=tuple(
+                ModelConsumptionView(
+                    model_id=item.model_id,
+                    consumed_units=item.consumed_units,
+                    unit_kind=item.unit_kind.value,
+                    provider_unit_label=item.provider_unit_label,
+                    call_count=item.call_count,
+                    period_start=iso(item.period_start),
+                    period_end=iso(item.period_end),
+                    confidence=item.confidence.value,
+                    measurement_source=item.measurement_source.value,
+                )
+                for item in projection.model_consumption
+            ),
+            model_equivalents=tuple(
+                ModelEquivalentWindowView(
+                    model_id=item.model_id,
+                    window_id=item.window_id,
+                    remaining_fraction=item.remaining_fraction,
+                    remaining_units=item.remaining_units,
+                    total_units=item.total_units,
+                    unit_kind=item.unit_kind.value,
+                    confidence=item.confidence.value,
+                )
+                for item in projection.model_equivalents
+            ),
+            equivalent_capacity=ControlPlaneService._equivalent_capacity_views(
+                projection
+            ),
+        )
+
+    @staticmethod
+    def _equivalent_capacity_views(
+        projection: PlanQuotaProjection,
+    ) -> tuple[EquivalentCapacityView, ...]:
+        """Advisory capacity estimates for models covered by this pool.
+
+        The orchestrator does not yet record per-task provider consumption in
+        the pool's own unit, so today every model truthfully reports
+        ``INSUFFICIENT_SAMPLE`` rather than a number. That is the designed
+        outcome, not a stub: the estimator refuses to divide a credit-metered
+        remainder by token-metered history, and the UI renders the absence as
+        "历史数据不足，暂不估算" rather than as zero.
+        """
+
+        binding = projection.binding_window
+        if binding.window_id is None:
+            return ()
+        window = next(
+            (item for item in projection.windows if item.window_id == binding.window_id),
+            None,
+        )
+        remaining_units = window.remaining_units if window is not None else None
+        views: list[EquivalentCapacityView] = []
+        for model_id in projection.covered_model_ids():
+            result = estimate_equivalent_capacity(
+                provider_id=projection.plan.provider_id,
+                plan_id=projection.plan.plan_id,
+                pool_id=projection.pool.pool_id,
+                window_id=binding.window_id,
+                model_id=model_id,
+                remaining_units=remaining_units,
+                remaining_unit_kind=projection.pool.unit_kind,
+                samples=[],
+                observed_at=projection.plan.observed_at,
+            )
+            if isinstance(result, EquivalentCapacityEstimate):
+                views.append(
+                    EquivalentCapacityView(
+                        model_id=model_id,
+                        window_id=result.window_id,
+                        task_class=result.task_class,
+                        estimated_remaining_tasks=result.estimated_remaining_tasks,
+                        sample_count=result.sample_count,
+                        small_sample=result.small_sample,
+                        confidence=result.confidence.value,
+                    )
+                )
+            else:
+                views.append(
+                    EquivalentCapacityView(
+                        model_id=model_id,
+                        window_id=result.window_id,
+                        task_class=result.task_class,
+                        sample_count=result.sample_count,
+                        unavailable_reason=result.reason.value,
+                    )
+                )
+        return tuple(views)
+
     def _connected_connections(self) -> dict[str, Any]:
         """Provider connection records the owner has explicitly registered."""
 
@@ -2124,7 +2411,11 @@ class ControlPlaneService:
             failure_reason=(
                 observation.failure_reason if observation is not None else None
             ),
+            credential_source=(
+                observation.credential_source if observation is not None else "NONE"
+            ),
             quota_pools=pools,
+            plan=(self._plan_view(observation) if observation is not None else None),
         )
 
     def quota(self) -> QuotaOverviewView:
