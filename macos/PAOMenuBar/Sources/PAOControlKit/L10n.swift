@@ -125,6 +125,52 @@ public enum L10n {
         "routing.selectedModel", "routing.decidedAt", "routing.resolvedPolicy",
         "settings.defaultSchedulingPolicy", "settings.defaultSchedulingPolicy.footer",
         "newTask.schedulingPolicy", "newTask.manualModel", "newTask.chooseModel",
+        // P4.2.6.4 owner-facing localization sweep
+        "sidebar.group.work", "sidebar.group.aiResources", "sidebar.group.execution",
+        "sidebar.group.system", "common.advancedDetails", "common.never", "common.reason",
+        "common.plan", "common.region", "common.retry", "overview.basicInfo",
+        "overview.connection", "overview.projects", "overview.providers",
+        "overview.runnableTargets", "overview.runningTasks", "overview.tasksToday",
+        "overview.routingToday", "overview.quotaWarnings", "overview.lastRefresh",
+        "overview.taskTrend", "overview.taskTrend.empty", "overview.taskTrend.help",
+        "overview.taskStates", "overview.taskStates.empty", "overview.risks",
+        "overview.recentActivity", "risk.projectUnavailable.title",
+        "risk.projectUnavailable.detail", "risk.executionTargetUnverified.title",
+        "risk.executionTargetUnverified.detail", "risk.quotaExhausted.title",
+        "risk.quotaExhausted.detail", "risk.quotaUnknown.title", "risk.quotaUnknown.detail",
+        "risk.ownerApproval.title", "risk.ownerApproval.detail", "risk.shadowEvidence.title",
+        "risk.shadowEvidence.detail", "projects.add", "projects.detectedRepository",
+        "projects.register", "projects.empty", "projects.revealInFinder", "projects.open",
+        "projects.remove", "projects.gitRoot", "projects.workingSubpath", "projects.branch",
+        "projects.recentTasks", "projects.lastUsed", "newTask.project",
+        "newTask.selectProject", "newTask.execution", "newTask.executionAuto",
+        "providers.pickerTitle", "providers.notConnected", "providers.surface",
+        "providers.providerId", "providers.credentialReference", "providers.runtime",
+        "providers.connectionLabel", "providers.accountsLabel",
+        "providers.executionTargetsLabel", "providers.quotaPoolsLabel", "providers.modelCount",
+        "providers.quotaPoolCount", "providers.catalogModelCount", "models.title",
+        "models.empty", "models.ready", "models.needsVerification",
+        "models.noExecutionTargets", "auth.authenticated", "auth.required", "auth.unknown",
+        "connectionState.connected", "connectionState.disconnected",
+        "connectionState.discovered", "runtimeState.available", "runtimeState.unavailable",
+        "runtimeState.unknown", "quota.refresh", "quota.refresh.help", "quota.empty.title",
+        "quota.empty.message", "quota.status", "quota.statusTitle", "quota.noReliableData",
+        "quota.unreadable", "quota.lastChecked", "quota.neverChecked", "quota.lastAttempt",
+        "quota.connectionStatus", "quota.summary.connected", "quota.summary.observable",
+        "quota.summary.warnings", "quota.summary.exhausted", "quota.windows",
+        "quota.windowDetails", "quota.poolId", "quota.limitingWindow",
+        "quota.limitingWindow.empty", "quota.provider", "quota.window", "quota.remainingLabel",
+        "quota.resetLabel", "quota.estimatedBadge", "quota.history.title",
+        "quota.history.empty", "quota.history.footer", "quota.noReliablePercentage",
+        "quota.reason.noReadonlySource", "quota.reason.credentialMissing",
+        "quota.reason.authRequired", "quota.reason.rateLimited", "quota.reason.providerError",
+        "quota.reason.notConnected", "detail.currentPhase", "detail.elapsed", "detail.stop",
+        "detail.stop.help", "detail.filesChanged", "detail.noWorktree",
+        "detail.verifierProfile", "detail.noWorkerRun", "detail.rawWorkerOutput",
+        "detail.taskId", "detail.requestId", "detail.routingDecision", "detail.routingRequest",
+        "detail.baseSha", "detail.runId", "detail.runStatus", "detail.quotaEvidence",
+        "command.focusSearch", "command.previousTask", "command.nextTask",
+        "command.copyTaskId", "command.reloadDetail"
     ]
 
     /// English is the guaranteed fallback (`defaultLocalization` in Package.swift).
@@ -629,4 +675,229 @@ public enum L10n {
     public static func discoveryError(_ code: String) -> String {
         tr("label.discoveryError", [code])
     }
+
+    // MARK: - P4.2.6.4 owner-facing localization sweep
+
+    // Sidebar groups
+    public static var sidebarWork: String { tr("sidebar.group.work") }
+    public static var sidebarAIResources: String { tr("sidebar.group.aiResources") }
+    public static var sidebarExecution: String { tr("sidebar.group.execution") }
+    public static var sidebarSystem: String { tr("sidebar.group.system") }
+
+    // Shared labels
+    public static var advancedDetails: String { tr("common.advancedDetails") }
+    public static var never: String { tr("common.never") }
+    public static var reasonLabel: String { tr("common.reason") }
+    public static var planLabel: String { tr("common.plan") }
+    public static var regionLabel: String { tr("common.region") }
+    public static var retry: String { tr("common.retry") }
+
+    // Overview
+    public static var overviewBasicInfo: String { tr("overview.basicInfo") }
+    public static var overviewConnection: String { tr("overview.connection") }
+    public static var overviewProjects: String { tr("overview.projects") }
+    public static var overviewProviders: String { tr("overview.providers") }
+    public static var overviewRunnableTargets: String { tr("overview.runnableTargets") }
+    public static var overviewRunningTasks: String { tr("overview.runningTasks") }
+    public static var overviewTasksToday: String { tr("overview.tasksToday") }
+    public static var overviewRoutingToday: String { tr("overview.routingToday") }
+    public static var overviewQuotaWarnings: String { tr("overview.quotaWarnings") }
+    public static var overviewTaskTrend: String { tr("overview.taskTrend") }
+    public static var overviewTaskTrendEmpty: String { tr("overview.taskTrend.empty") }
+    public static var overviewTaskStates: String { tr("overview.taskStates") }
+    public static var overviewTaskStatesEmpty: String { tr("overview.taskStates.empty") }
+    public static var overviewRisks: String { tr("overview.risks") }
+    public static var overviewRecentActivity: String { tr("overview.recentActivity") }
+
+    public static func overviewLastRefresh(_ timestamp: String) -> String {
+        tr("overview.lastRefresh", [timestamp])
+    }
+
+    public static func taskTrendHelp(submitted: Int, completed: Int, blocked: Int) -> String {
+        tr("overview.taskTrend.help", [submitted, completed, blocked])
+    }
+
+    /// Localized risk title for a daemon ``raw_code``.
+    ///
+    /// Unknown codes fall back to the daemon's own English sentence rather than
+    /// inventing a label, so a newer daemon still renders something truthful.
+    public static func riskTitle(rawCode: String?, count: Int?, fallback: String) -> String {
+        guard let key = riskKeyPrefix(rawCode) else { return fallback }
+        let template = tr("\(key).title")
+        guard let count else { return template }
+        return String(format: template, locale: Locale.current, count)
+    }
+
+    public static func riskDetail(rawCode: String?, fallback: String) -> String {
+        guard let key = riskKeyPrefix(rawCode) else { return fallback }
+        return tr("\(key).detail")
+    }
+
+    private static func riskKeyPrefix(_ rawCode: String?) -> String? {
+        guard let rawCode else { return nil }
+        switch rawCode {
+        case "PROJECT_UNAVAILABLE": return "risk.projectUnavailable"
+        case "EXECUTION_TARGET_UNVERIFIED": return "risk.executionTargetUnverified"
+        case "QUOTA_EXHAUSTED": return "risk.quotaExhausted"
+        case "QUOTA_UNKNOWN": return "risk.quotaUnknown"
+        default: break
+        }
+        // Free-form activation blockers are matched on their stable substrings.
+        if rawCode.contains("owner approval") { return "risk.ownerApproval" }
+        if rawCode.contains("Shadow evidence") { return "risk.shadowEvidence" }
+        return nil
+    }
+
+    // Projects
+    public static var projectsAdd: String { tr("projects.add") }
+    public static var projectsDetectedRepository: String { tr("projects.detectedRepository") }
+    public static var projectsRegister: String { tr("projects.register") }
+    public static var projectsEmpty: String { tr("projects.empty") }
+    public static var projectsRevealInFinder: String { tr("projects.revealInFinder") }
+    public static var projectsOpen: String { tr("projects.open") }
+    public static var projectsRemove: String { tr("projects.remove") }
+    public static var projectsGitRoot: String { tr("projects.gitRoot") }
+    public static var projectsWorkingSubpath: String { tr("projects.workingSubpath") }
+    public static var projectsBranch: String { tr("projects.branch") }
+    public static var projectsRecentTasks: String { tr("projects.recentTasks") }
+    public static var projectsLastUsed: String { tr("projects.lastUsed") }
+
+    // New task sheet
+    public static var newTaskProject: String { tr("newTask.project") }
+    public static var newTaskSelectProject: String { tr("newTask.selectProject") }
+    public static var newTaskExecution: String { tr("newTask.execution") }
+    public static var newTaskExecutionAuto: String { tr("newTask.executionAuto") }
+
+    // Providers & models
+    public static var providersPickerTitle: String { tr("providers.pickerTitle") }
+    public static var providersNotConnected: String { tr("providers.notConnected") }
+    public static var providersSurface: String { tr("providers.surface") }
+    public static var providersProviderId: String { tr("providers.providerId") }
+    public static var providersCredentialReference: String { tr("providers.credentialReference") }
+    public static var providersRuntime: String { tr("providers.runtime") }
+    public static var providersConnectionLabel: String { tr("providers.connectionLabel") }
+    public static var providersAccountsLabel: String { tr("providers.accountsLabel") }
+    public static var providersExecutionTargetsLabel: String {
+        tr("providers.executionTargetsLabel")
+    }
+    public static var providersQuotaPoolsLabel: String { tr("providers.quotaPoolsLabel") }
+    public static var modelsTitle: String { tr("models.title") }
+    public static var modelsEmpty: String { tr("models.empty") }
+    public static var modelsReady: String { tr("models.ready") }
+    public static var modelsNeedsVerification: String { tr("models.needsVerification") }
+    public static var modelsNoExecutionTargets: String { tr("models.noExecutionTargets") }
+
+    public static func modelCount(_ count: Int) -> String { tr("providers.modelCount", [count]) }
+    public static func quotaPoolCount(_ count: Int) -> String {
+        tr("providers.quotaPoolCount", [count])
+    }
+    public static func catalogModelCount(_ count: Int) -> String {
+        tr("providers.catalogModelCount", [count])
+    }
+
+    /// Raw connection/auth/runtime enums stay verbatim on the wire; only their
+    /// presentation label is localized, and unknown values pass through.
+    public static func authStateLabel(_ value: String) -> String {
+        switch value {
+        case "AUTHENTICATED": return tr("auth.authenticated")
+        case "AUTH_REQUIRED": return tr("auth.required")
+        case "AUTH_UNKNOWN": return tr("auth.unknown")
+        default: return value
+        }
+    }
+
+    public static func connectionStateLabel(_ value: String) -> String {
+        switch value {
+        case "CONNECTED": return tr("connectionState.connected")
+        case "DISCONNECTED": return tr("connectionState.disconnected")
+        case "DISCOVERED": return tr("connectionState.discovered")
+        default: return value
+        }
+    }
+
+    public static func runtimeStateLabel(_ value: String) -> String {
+        switch value {
+        case "AVAILABLE": return tr("runtimeState.available")
+        case "UNAVAILABLE": return tr("runtimeState.unavailable")
+        case "UNKNOWN": return tr("runtimeState.unknown")
+        default: return value
+        }
+    }
+
+    // Quota page
+    public static var quotaRefresh: String { tr("quota.refresh") }
+    public static var quotaRefreshHelp: String { tr("quota.refresh.help") }
+    public static var quotaEmptyTitle: String { tr("quota.empty.title") }
+    public static var quotaEmptyMessage: String { tr("quota.empty.message") }
+    public static var quotaStatus: String { tr("quota.status") }
+    public static var quotaStatusTitle: String { tr("quota.statusTitle") }
+    public static var quotaNoReliableData: String { tr("quota.noReliableData") }
+    public static var quotaUnreadable: String { tr("quota.unreadable") }
+    public static var quotaLastChecked: String { tr("quota.lastChecked") }
+    public static var quotaNeverChecked: String { tr("quota.neverChecked") }
+    public static var quotaLastAttempt: String { tr("quota.lastAttempt") }
+    public static var quotaConnectionStatus: String { tr("quota.connectionStatus") }
+    public static var quotaSummaryConnected: String { tr("quota.summary.connected") }
+    public static var quotaSummaryObservable: String { tr("quota.summary.observable") }
+    public static var quotaSummaryWarnings: String { tr("quota.summary.warnings") }
+    public static var quotaSummaryExhausted: String { tr("quota.summary.exhausted") }
+    public static var quotaWindows: String { tr("quota.windows") }
+    public static var quotaWindowDetails: String { tr("quota.windowDetails") }
+    public static var quotaPoolId: String { tr("quota.poolId") }
+    public static var quotaLimitingWindow: String { tr("quota.limitingWindow") }
+    public static var quotaLimitingWindowEmpty: String { tr("quota.limitingWindow.empty") }
+    public static var quotaProviderLabel: String { tr("quota.provider") }
+    public static var quotaWindowLabel: String { tr("quota.window") }
+    public static var quotaRemainingLabel: String { tr("quota.remainingLabel") }
+    public static var quotaResetLabel: String { tr("quota.resetLabel") }
+    public static var quotaEstimatedBadge: String { tr("quota.estimatedBadge") }
+    public static var quotaHistoryTitle: String { tr("quota.history.title") }
+    public static var quotaHistoryEmpty: String { tr("quota.history.empty") }
+    public static var quotaNoReliablePercentage: String { tr("quota.noReliablePercentage") }
+
+    public static func quotaHistoryFooter(retentionLimit: Int) -> String {
+        tr("quota.history.footer", [retentionLimit])
+    }
+
+    /// Localized sentence for a sanitized quota failure code.
+    ///
+    /// Unknown codes fall back to the generic provider-error sentence; the raw
+    /// code itself stays visible under Advanced Details.
+    public static func quotaFailureReason(_ code: String?) -> String {
+        switch code {
+        case "NO_READONLY_QUOTA_SOURCE": return tr("quota.reason.noReadonlySource")
+        case "CREDENTIAL_NOT_AVAILABLE": return tr("quota.reason.credentialMissing")
+        case "PROVIDER_NOT_CONNECTED": return tr("quota.reason.notConnected")
+        case "AUTHENTICATION_INTEGRATION_BLOCKED", "HTTP_401", "HTTP_403":
+            return tr("quota.reason.authRequired")
+        case "HTTP_429": return tr("quota.reason.rateLimited")
+        default: return tr("quota.reason.providerError")
+        }
+    }
+
+    // Task detail
+    public static var detailCurrentPhase: String { tr("detail.currentPhase") }
+    public static var detailElapsed: String { tr("detail.elapsed") }
+    public static var detailStop: String { tr("detail.stop") }
+    public static var detailStopHelp: String { tr("detail.stop.help") }
+    public static var detailFilesChanged: String { tr("detail.filesChanged") }
+    public static var detailNoWorktree: String { tr("detail.noWorktree") }
+    public static var detailVerifierProfile: String { tr("detail.verifierProfile") }
+    public static var detailNoWorkerRun: String { tr("detail.noWorkerRun") }
+    public static var detailRawWorkerOutput: String { tr("detail.rawWorkerOutput") }
+    public static var detailTaskId: String { tr("detail.taskId") }
+    public static var detailRequestId: String { tr("detail.requestId") }
+    public static var detailRoutingDecision: String { tr("detail.routingDecision") }
+    public static var detailRoutingRequest: String { tr("detail.routingRequest") }
+    public static var detailBaseSha: String { tr("detail.baseSha") }
+    public static var detailRunId: String { tr("detail.runId") }
+    public static var detailRunStatus: String { tr("detail.runStatus") }
+    public static var detailQuotaEvidence: String { tr("detail.quotaEvidence") }
+
+    // Keyboard commands (hidden buttons; still owner-visible to VoiceOver)
+    public static var commandFocusSearch: String { tr("command.focusSearch") }
+    public static var commandPreviousTask: String { tr("command.previousTask") }
+    public static var commandNextTask: String { tr("command.nextTask") }
+    public static var commandCopyTaskId: String { tr("command.copyTaskId") }
+    public static var commandReloadDetail: String { tr("command.reloadDetail") }
 }

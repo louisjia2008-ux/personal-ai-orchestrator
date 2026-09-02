@@ -213,6 +213,35 @@ let taskDetailBody = """
 {"task":{"task_id":"t-1","request_id":"r-1","intent":"fix bug","project_id":"project-fixture","base_sha":"abc123","working_subpath":null,"state":"RUNNING","state_version":2,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:01:00Z"},"runs":[{"run_id":"run-1","task_id":"t-1","worker_id":"m3-sub","pid":123,"status":"RUNNING","started_at":"2026-08-31T00:00:30Z","finished_at":null}],"routing":{"task_id":"t-1","decision_id":"route-1","request_id":"r-1","created_at":"2026-08-31T00:00:15Z","decision":{"mode":"SHADOW","selected_execution_target_id":null,"fallback_reason":"quota confidence remained UNKNOWN"}},"verification":{"task_id":"t-1","task_state":"RUNNING","status":"NOT_VERIFIED","evidence_id":null,"failure_reason":null},"approvals":{"approvals":[]},"workspace":{"task_id":"t-1","project_id":"project-fixture","repo_path":"/repo","worktree_path":"/repo-wt","branch":"codex/t-1","base_sha":"abc123","working_subpath":null,"writer_locked":false},"events":[{"event_type":"TASK_SUBMITTED","task_id":"t-1","created_at":"2026-08-31T00:00:00Z","summary":"task submitted"}]}
 """
 
+/// Connection-based quota body: one connected provider that has no quota
+/// evidence yet. This is the required regression shape — CONNECTED with zero
+/// pools must still render a card.
+let quotaUnknownBody = """
+{
+  "state": "CONNECTED_BUT_QUOTA_UNKNOWN",
+  "summary": {"connected_provider_count": 1, "quota_observable_provider_count": 0, "quota_unknown_provider_count": 1, "quota_warning_count": 0, "quota_exhausted_count": 0},
+  "providers": [
+    {"provider_id": "zai-coding-plan", "display_name": "GLM / Z.AI", "connection_state": "CONNECTED", "auth_state": "AUTH_UNKNOWN", "plan_surface": "Coding Plan", "region": null, "quota_state": "UNKNOWN", "confidence": "UNKNOWN", "measurement_source": null, "observed_at": null, "readonly_source_available": true, "collector_available": false, "last_refresh_status": null, "last_refresh_at": null, "failure_reason": "CREDENTIAL_NOT_AVAILABLE", "quota_pools": []}
+  ],
+  "history": {"observations": [], "retention_limit": 500}
+}
+"""
+
+let quotaObservedBody = """
+{
+  "state": "CONNECTED_WITH_QUOTA_OBSERVATIONS",
+  "summary": {"connected_provider_count": 1, "quota_observable_provider_count": 1, "quota_unknown_provider_count": 0, "quota_warning_count": 0, "quota_exhausted_count": 0},
+  "providers": [
+    {"provider_id": "minimax-cn-coding-plan", "display_name": "MiniMax CN Coding Plan", "connection_state": "CONNECTED", "auth_state": "AUTHENTICATED", "plan_surface": "Coding Plan", "region": "cn", "quota_state": "OBSERVED", "confidence": "EXACT", "measurement_source": "PROVIDER_API", "observed_at": "2026-08-31T00:00:00Z", "readonly_source_available": true, "collector_available": true, "last_refresh_status": "SUCCESS", "last_refresh_at": "2026-08-31T00:00:00Z", "failure_reason": null, "quota_pools": [{"quota_pool_id": "minimax-coding-plan-cn", "name": "minimax-coding-plan-cn", "plan_id": "coding-plan", "state": "AVAILABLE", "confidence": "EXACT", "measurement_source_type": "PROVIDER_API", "observed_at": "2026-08-31T00:00:00Z", "windows": [{"window_id": "5h", "window_kind": "FIVE_HOUR", "state": "AVAILABLE", "confidence": "EXACT", "remaining_fraction": 0.42, "reset_at": "2026-08-31T05:00:00Z"}]}]}
+  ],
+  "history": {"observations": [], "retention_limit": 500}
+}
+"""
+
+let quotaRefreshBody = """
+{"refreshed_provider_ids": ["zai-coding-plan"], "overview": \(quotaUnknownBody)}
+"""
+
 func registerStandardRoutes(_ daemon: TestDaemon) {
     daemon.route("GET", "/v1/health", body: healthBody)
     daemon.route("GET", "/v1/dashboard", body: dashboardBody)
@@ -223,6 +252,7 @@ func registerStandardRoutes(_ daemon: TestDaemon) {
     daemon.route("GET", "/v1/providers", body: providersBody)
     daemon.route("GET", "/v1/providers/status", body: providerDiscoveryStatusBody)
     daemon.route("POST", "/v1/providers/refresh", body: providerDiscoveryStatusBody)
-    daemon.route("GET", "/v1/quota", body: providersBody)
+    daemon.route("GET", "/v1/quota", body: quotaUnknownBody)
+    daemon.route("POST", "/v1/quota/refresh", body: quotaRefreshBody)
     daemon.route("GET", "/v1/active-status", body: activeStatusBody)
 }
