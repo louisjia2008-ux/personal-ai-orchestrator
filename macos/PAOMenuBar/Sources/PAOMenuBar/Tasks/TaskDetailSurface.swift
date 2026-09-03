@@ -172,6 +172,10 @@ struct TaskDetailSurface: View {
 // MARK: - Header
 
 /// What this task is, where it stands, and what can be done to it.
+///
+/// Typography, status and timing all come from the B1 foundations. `PageHeader`
+/// itself is not reused here: it titles a destination with a fixed label, and a
+/// task's title is owner-written prose that has to wrap rather than truncate.
 struct TaskDetailHeader: View {
     let detail: TaskDetailView
     let projectName: String?
