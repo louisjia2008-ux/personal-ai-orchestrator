@@ -51,30 +51,44 @@ struct TasksWorkspace: View {
     }
 
     var body: some View {
-        HSplitView {
-            TaskCollectionView(
-                state: collection,
-                allTasks: allTasks,
-                projectNames: projectNames,
-                totalCount: store.tasks?.total ?? allTasks.count,
-                isTruncated: store.taskCollectionIsTruncated,
-                filter: $filter,
-                selectedTaskId: $selectedTaskId,
-                onNewTask: onNewTask
-            )
-            .frame(minWidth: 260, idealWidth: 320, maxWidth: 460)
+        DashboardPageScaffold {
+            // A fixed collection beside a flexible detail, not a negotiated
+            // split. `HSplitView` resolved its children from their content:
+            // Tasks, whose rows carry long intents, pushed the whole split
+            // wider than the window and the sidebar was clipped to absorb it,
+            // while Resources — whose rows truncate — was left alone. Same
+            // page grammar, two different geometries.
+            HStack(spacing: 0) {
+                TaskCollectionView(
+                    state: collection,
+                    allTasks: allTasks,
+                    projectNames: projectNames,
+                    totalCount: store.tasks?.total ?? allTasks.count,
+                    isTruncated: store.taskCollectionIsTruncated,
+                    filter: $filter,
+                    selectedTaskId: $selectedTaskId,
+                    onNewTask: onNewTask
+                )
+                .frame(width: DashboardLayoutMetrics.collectionPreferredWidth)
 
-            TaskDetailSurface(
-                detail: store.selectedTaskDetail,
-                selectedTaskId: selectedTaskId,
-                projectName: selectedProjectName,
-                inspectorAvailable: inspectorAvailable,
-                onNewTask: onNewTask,
-                onOpenProviders: onOpenProviders
-            )
-            .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+                Divider()
+
+                TaskDetailSurface(
+                    detail: store.selectedTaskDetail,
+                    selectedTaskId: selectedTaskId,
+                    projectName: selectedProjectName,
+                    inspectorAvailable: inspectorAvailable,
+                    onNewTask: onNewTask,
+                    onOpenProviders: onOpenProviders
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Window-level chrome — the search field and the toolbar live in the
+        // title bar — is attached outside the content region, not inside it.
+        // Attached inside, the region reported itself as spanning the whole
+        // window rather than the pane it occupies.
         .searchable(text: $filter.query, prompt: L10n.tasksSearchPrompt)
         .modifier(SearchFocusBinding(focus: $searchFocused))
         .toolbar { toolbarContent }

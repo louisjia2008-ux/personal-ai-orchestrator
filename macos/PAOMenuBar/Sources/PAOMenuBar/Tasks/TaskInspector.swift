@@ -43,6 +43,7 @@ struct TaskInspectorContent: View {
                     symbol: "sidebar.right",
                     message: L10n.inspectorEmpty
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }

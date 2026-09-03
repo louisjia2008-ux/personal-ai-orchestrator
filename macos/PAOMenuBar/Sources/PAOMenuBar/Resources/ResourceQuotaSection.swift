@@ -37,11 +37,34 @@ struct ResourceQuotaSection: View {
                     }
                 }
             } else {
-                VStack(alignment: .leading, spacing: Spacing.element) {
-                    ForEach(bindings) { binding in
-                        QuotaBindingRow(binding: binding, now: now)
-                    }
+                // Bindings read side by side when the detail pane is wide
+                // enough — `[FIVE_HOUR] [WEEKLY]` — and reflow into a column
+                // when it is not. A grid rather than a fit-or-stack pair: with
+                // four bindings the all-or-nothing form fell back to one
+                // column and left the pane half empty. Each binding is still
+                // rendered on its own, in full: a card per binding, never an
+                // aggregate.
+                LazyVGrid(
+                    columns: [
+                        GridItem(
+                            .adaptive(minimum: DashboardLayoutMetrics.cardMinimumWidth),
+                            spacing: DashboardLayoutMetrics.cardSpacing
+                        )
+                    ],
+                    alignment: .leading,
+                    spacing: DashboardLayoutMetrics.cardSpacing
+                ) {
+                    bindingCards
                 }
+            }
+        }
+    }
+
+    /// One card per binding, sharing the dashboard's card geometry.
+    private var bindingCards: some View {
+        ForEach(bindings) { binding in
+            DashboardCard {
+                QuotaBindingRow(binding: binding, now: now)
             }
         }
     }
@@ -58,9 +81,23 @@ struct QuotaBindingRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.tight) {
+            // Two rows, because three chips and a window name do not fit one
+            // row in a card narrow enough to sit two-across: on one row the
+            // window name wrapped mid-word and the state chip truncated to
+            // "AVAIL…". The window and its state lead; the qualifiers follow.
             HStack(spacing: Spacing.inner) {
                 Label(binding.windowKind, systemImage: "timer")
                     .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                Spacer(minLength: Spacing.tight)
+                ResourceChip(
+                    text: binding.state,
+                    tone: binding.status.tone,
+                    symbol: binding.status.symbol
+                )
+            }
+            HStack(spacing: Spacing.tight) {
                 if binding.isLimiting {
                     // The daemon's own answer to "which window limits this
                     // plan". The client never elects one itself.
@@ -70,13 +107,8 @@ struct QuotaBindingRow: View {
                         symbol: "exclamationmark.triangle"
                     )
                 }
-                Spacer(minLength: 0)
-                ResourceChip(
-                    text: binding.state,
-                    tone: binding.status.tone,
-                    symbol: binding.status.symbol
-                )
                 ResourceChip(text: binding.confidence, tone: confidence.tone)
+                Spacer(minLength: 0)
             }
 
             if binding.isReadable, let fraction = binding.remainingFraction {

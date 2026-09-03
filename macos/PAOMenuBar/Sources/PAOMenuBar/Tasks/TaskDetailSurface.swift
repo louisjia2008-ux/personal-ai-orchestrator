@@ -34,6 +34,22 @@ struct TaskDetailSurface: View {
     }
 
     var body: some View {
+        Group {
+            if currentDetail == nil && selectedTaskId == nil {
+                // No selection is a state of the whole pane, not a document in
+                // it: one centered composition, with no scrolling document
+                // chrome and no panel left hanging beneath it.
+                noSelection
+            } else {
+                document
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+            .accessibilityIdentifier("workspace.detail")
+    }
+
+    private var document: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.section) {
                 if let detail = currentDetail {
@@ -60,19 +76,17 @@ struct TaskDetailSurface: View {
                     if !inspectorAvailable {
                         additionalDetails(detail)
                     }
-                } else if selectedTaskId != nil {
+                } else {
                     // A task is selected but its detail has not arrived. Loading
                     // is not "no task selected", and it is not an error either.
                     loading
-                } else {
-                    noSelection
                 }
             }
             .frame(maxWidth: ContentWidth.reading, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(Spacing.page)
+            .padding(.horizontal, DashboardLayoutMetrics.pageHorizontalPadding)
+            .padding(.vertical, DashboardLayoutMetrics.pageVerticalPadding)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     // MARK: - States
@@ -87,24 +101,30 @@ struct TaskDetailSurface: View {
         .frame(maxWidth: .infinity, minHeight: 240)
     }
 
-    /// No selection is its own state, with its own guidance. The routing
-    /// readiness card stays here because "no eligible provider is connected" is
-    /// the one thing that makes every future task fail, and it is worth knowing
-    /// before a task is picked.
+    /// No selection is its own state, centered in the detail pane as one
+    /// composition. The routing readiness card is part of that composition —
+    /// "no eligible provider is connected" is the one thing that makes every
+    /// future task fail, and it is worth knowing before a task is picked —
+    /// rather than a detached panel floating below the empty state.
     private var noSelection: some View {
-        VStack(spacing: Spacing.section) {
+        VStack(spacing: DashboardLayoutMetrics.sectionSpacing) {
             EmptyStateView(
                 title: L10n.emptyTasksNoSelectionTitle,
                 symbol: "sidebar.left",
                 message: L10n.emptyTasksNoSelectionMessage,
                 hint: L10n.taskBrowserHint
             )
-            .frame(minHeight: 220)
+            // Only when it has something to say. With a provider connected and
+            // tasks in the list it had nothing left but a restatement of the
+            // empty state, drawn as a full-width panel below it.
             TaskRoutingReadinessNotice(
                 onNewTask: onNewTask,
                 onOpenProviders: onOpenProviders
             )
+            .frame(maxWidth: 420)
         }
+        .padding(DashboardLayoutMetrics.pageHorizontalPadding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
     /// The result of a Stop the owner just pressed. The daemon's semantics are

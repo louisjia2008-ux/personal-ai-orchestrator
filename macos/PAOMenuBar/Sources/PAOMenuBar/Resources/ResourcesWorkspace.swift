@@ -71,36 +71,50 @@ struct ResourcesWorkspace: View {
     }
 
     var body: some View {
-        HSplitView {
-            VStack(spacing: 0) {
-                ResourceCollectionView(
-                    state: collection,
-                    totalCount: allResources.count,
-                    query: $query,
-                    kindFilter: $kindFilter,
-                    selectedResourceId: $selectedResourceId,
+        DashboardPageScaffold {
+            // A fixed collection beside a flexible detail, not a negotiated
+            // split. `HSplitView` resolved its children from their content:
+            // Tasks, whose rows carry long intents, pushed the whole split
+            // wider than the window and the sidebar was clipped to absorb it,
+            // while Resources — whose rows truncate — was left alone. Same
+            // page grammar, two different geometries.
+            HStack(spacing: 0) {
+                VStack(spacing: 0) {
+                    ResourceCollectionView(
+                        state: collection,
+                        totalCount: allResources.count,
+                        query: $query,
+                        kindFilter: $kindFilter,
+                        selectedResourceId: $selectedResourceId,
+                        now: now
+                    )
+                    ResourceCollectionFooter()
+                }
+                .frame(width: DashboardLayoutMetrics.collectionPreferredWidth)
+
+                Divider()
+
+                ResourceDetailSurface(
+                    resource: selectedResource,
+                    history: store.quota?.history,
+                    displayNames: displayNames,
+                    isRefreshingQuota: store.isRefreshingQuota,
+                    onRefreshQuota: { providerId in
+                        Task { await store.refreshQuota(providerId: providerId) }
+                    },
+                    onConnect: { providerId in
+                        Task { await store.connectProvider(providerId: providerId) }
+                    },
                     now: now
                 )
-                ResourceCollectionFooter()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(minWidth: 260, idealWidth: 320, maxWidth: 460)
-
-            ResourceDetailSurface(
-                resource: selectedResource,
-                history: store.quota?.history,
-                displayNames: displayNames,
-                isRefreshingQuota: store.isRefreshingQuota,
-                onRefreshQuota: { providerId in
-                    Task { await store.refreshQuota(providerId: providerId) }
-                },
-                onConnect: { providerId in
-                    Task { await store.connectProvider(providerId: providerId) }
-                },
-                now: now
-            )
-            .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Window-level chrome — the search field and the toolbar live in the
+        // title bar — is attached outside the content region, not inside it.
+        // Attached inside, the region reported itself as spanning the whole
+        // window rather than the pane it occupies.
         .searchable(text: $query, prompt: L10n.resourcesSearchPrompt)
         .toolbar { toolbarContent }
         .onAppear(perform: selectFirstIfNeeded)
