@@ -245,5 +245,8 @@ JSON response through the ordinary paths that produce them. `reveal()` is the
 only accessor, and its only caller builds a request header.
 
 See `docs/quota/MINIMAX_TOKEN_PLAN_SEMANTICS.md`,
-`docs/quota/GLM_CODING_PLAN_SEMANTICS.md`, and
-`docs/quota/EQUIVALENT_CAPACITY.md`.
+`docs/quota/GLM_CODING_PLAN_SEMANTICS.md`,
+`docs/quota/EQUIVALENT_CAPACITY.md`, and
+`docs/quota/CLIENT_QUOTA_PROJECTION.md` — the Dashboard's client-side history
+series, burn rate and forecast, which are explanation only and never a
+scheduling input.
