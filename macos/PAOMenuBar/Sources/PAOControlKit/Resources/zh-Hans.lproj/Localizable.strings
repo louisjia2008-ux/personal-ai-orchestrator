@@ -676,3 +676,89 @@
 "label.currentWorker" = "当前执行方";
 "label.noWorkerYet" = "尚未分配执行方";
 "routing.planRevisionLabel" = "版本";
+
+/* ---------------------------------------------------------------- B4 资源 */
+
+"resources.searchPrompt" = "搜索资源";
+"resources.visibleCount" = "%1$d / %2$d";
+"resources.kind.connected" = "已连接";
+"resources.kind.available" = "可添加";
+"resources.kind.discovered" = "已发现";
+"resources.filter.all" = "全部资源";
+"resources.filter.kind" = "类型";
+
+"empty.resources.none.title" = "尚无资源";
+"empty.resources.none.message" = "尚未发现或连接任何资源。可刷新发现流程，或添加你已在使用的提供商。";
+"empty.resources.loading" = "正在加载资源……";
+"empty.resources.search.title" = "没有匹配的资源";
+"empty.resources.search.message" = "没有与“%@”匹配的资源。";
+"empty.resources.noSelection.title" = "选择一项资源";
+"empty.resources.noSelection.message" = "选择一个提供商，查看其可用性、额度、用量与执行目标。";
+"resources.disconnectedHint" = "守护进程不可达时，资源状态属于未知而非为空——只是尚未读取。";
+
+"resource.section.availability" = "可用性";
+"resource.section.quota" = "额度";
+"resource.section.usage" = "用量";
+"resource.section.projection" = "预测";
+"resource.section.executionTargets" = "执行目标";
+"resource.section.observability" = "可观测性";
+"resource.section.models" = "模型";
+
+"resource.noQuotaTelemetry" = "该提供商未上报额度。它依然是可用资源，只是剩余额度未知。";
+"resource.noExecutionTargets" = "发现流程未找到该提供商的执行目标。";
+"resource.notConnected" = "尚未连接。连接后才能读取额度并向其调度任务。";
+"resource.connectAction" = "连接";
+"resource.severalBindings" = "%d 个额度绑定";
+"resource.bindingLimiting" = "当前受限窗口";
+"resource.quotaObservable" = "额度已观测";
+"resource.quotaNotObservable" = "额度不可观测";
+"resource.freshnessUnknown" = "从未读取";
+"resource.observedAge" = "%@前读取";
+"resource.staleWarning" = "该读数比它所描述的窗口更旧，应视为过期数据，而非当前数据。";
+"resource.targetsSummary" = "已验证 %1$d / %2$d";
+"resource.modelsSummary" = "%d 个模型";
+"resource.refreshQuota" = "刷新额度";
+"resource.refreshProviders" = "刷新发现";
+"resource.refreshQuotaHelp" = "读取每个已连接提供商的官方只读额度接口，不会发起任何模型生成。";
+"resource.refreshProvidersHelp" = "重新执行目录与凭据发现，不读取额度。";
+"resource.refreshFailed" = "上次刷新失败：%@";
+
+"quota.rate.perHour" = "%@ / 小时";
+"quota.rate.belowThreshold" = "低于 %@ / 小时";
+"quota.horizon.daysHours" = "%1$d 天 %2$d 小时";
+"quota.horizon.hoursMinutes" = "%1$d 小时 %2$d 分";
+"quota.horizon.minutes" = "%d 分";
+
+"quota.burnRate.title" = "消耗速率";
+"quota.burnRate.basis" = "基于 %2$@ 内的 %1$d 次读数";
+"quota.burnRate.flat" = "本窗口内未测得消耗。";
+
+"quota.projection.title" = "按此速率推算";
+"quota.projection.remainingAtReset" = "重置时预计剩余";
+"quota.projection.exhaustionAt" = "预计耗尽于";
+"quota.projection.likelyUnused" = "预计到重置时未用完";
+"quota.projection.noExhaustion" = "预计在重置前不会耗尽。";
+"quota.projection.footer" = "这是预测，不是读数。它把测得的消耗速率直线外推到重置时刻，并假设其余条件不变。";
+
+"quota.projection.unavailable.NO_HISTORY" = "该窗口尚无可用的额度观测记录。";
+"quota.projection.unavailable.INSUFFICIENT_OBSERVATIONS" = "本重置窗口内仅有一次读数，测算速率至少需要两次。";
+"quota.projection.unavailable.NO_ELAPSED_TIME" = "本窗口内各次读数的时间戳相同，无法测算速率。";
+"quota.projection.unavailable.REMAINING_INCREASED" = "本窗口内剩余额度出现回升，对回升的余额不作外推。";
+"quota.projection.unavailable.RESET_UNKNOWN" = "未上报重置时间，缺少可推算的时间终点。";
+"quota.projection.unavailable.RESET_ALREADY_PASSED" = "上报的重置时刻已过，这些读数描述的是一个已经结束的窗口。";
+
+"quota.scarcity.unavailable" = "守护进程未通过控制 API 公开其稀缺度分级，因此此处不作显示。上方的读数、重置时限与消耗速率，正是该分级本应依据的证据。";
+
+"quota.history.axisTime" = "观测时间";
+"quota.history.axisRemaining" = "剩余";
+"quota.history.seriesLegend" = "序列";
+"quota.history.resetBoundary" = "重置";
+"quota.history.gapNote" = "每个标记都是一次真实观测，按其发生时刻定位。空缺表示未观测，而非未使用；连线也不会跨越重置。";
+"quota.history.singleObservation" = "仅有一次观测。要看出趋势，同一重置窗口内至少需要两次。";
+"quota.history.observationCount" = "%d 次观测";
+"quota.history.accessibleSummary" = "%1$@：%2$d 次观测，最近一次剩余 %3$@，跨度 %4$@。";
+
+"quota.resetsIn" = "%@后重置";
+"quota.resetPassed" = "重置时刻已过";
+"quota.observedAge" = "%@前观测";
+"quota.equivalentCapacity.explanation" = "等效容量估算的是受限窗口的剩余单位还能容纳多少个同类任务。它是任务数量，不是百分比，不能与上方的余额合并计算。";
