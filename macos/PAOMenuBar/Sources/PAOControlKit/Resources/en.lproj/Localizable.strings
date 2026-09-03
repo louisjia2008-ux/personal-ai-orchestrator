@@ -525,3 +525,32 @@
 "evidence.forecast" = "Projected";
 "evidence.unavailable" = "Not enough data";
 "timestamp.justNow" = "just now";
+
+/* B1: Task Detail was the one screen left unlocalized */
+"detail.panel.summary" = "Summary";
+"detail.panel.progress" = "Progress";
+"detail.panel.liveActivity" = "Live Activity";
+"detail.panel.changes" = "Changes";
+"detail.panel.verification" = "Tests / Verification";
+"phase.preparing" = "Preparing";
+"phase.routing" = "Routing";
+"phase.workspace" = "Workspace";
+"phase.quota" = "Quota";
+"phase.startingWorker" = "Starting worker";
+"phase.editing" = "Editing";
+"phase.testing" = "Testing";
+"phase.verifying" = "Verifying";
+"phase.finished" = "Finished";
+"candidate.selected" = "Selected";
+"candidate.eligible" = "Eligible";
+"candidate.ineligible" = "Ineligible";
+"candidate.unknownModel" = "Unknown model";
+"value.none" = "none";
+"value.unknown" = "unknown";
+"value.automatic" = "Automatic";
+"value.notVerifiedYet" = "not verified yet";
+"value.stagePassed" = "passed";
+"value.stageFailed" = "failed";
+"value.notShadowMode" = "not shadow mode";
+"label.task" = "Task";
+"label.updatedRelative" = "Updated %@";

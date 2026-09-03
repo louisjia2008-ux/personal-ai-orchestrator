@@ -177,6 +177,15 @@ public enum L10n {
         "detail.verifierProfile", "detail.noWorkerRun", "detail.rawWorkerOutput",
         "detail.taskId", "detail.requestId", "detail.routingDecision", "detail.routingRequest",
         "detail.baseSha", "detail.runId", "detail.runStatus", "detail.quotaEvidence",
+        "detail.panel.summary", "detail.panel.progress", "detail.panel.liveActivity",
+        "detail.panel.changes", "detail.panel.verification", "phase.preparing",
+        "phase.routing", "phase.workspace", "phase.quota",
+        "phase.startingWorker", "phase.editing", "phase.testing",
+        "phase.verifying", "phase.finished", "candidate.selected",
+        "candidate.eligible", "candidate.ineligible", "candidate.unknownModel",
+        "value.none", "value.unknown", "value.automatic",
+        "value.notVerifiedYet", "value.stagePassed", "value.stageFailed",
+        "value.notShadowMode", "label.task", "label.updatedRelative",
         "evidence.observed", "evidence.derived", "evidence.forecast",
         "evidence.unavailable", "timestamp.justNow",
         "command.focusSearch", "command.previousTask", "command.nextTask",
@@ -271,6 +280,27 @@ public enum L10n {
         guard let bundle = languageBundle(for: language) else { return nil }
         let value = bundle.localizedString(forKey: key, value: nil, table: nil)
         return value == key ? nil : value
+    }
+
+    /// Every key defined in one catalog (tests).
+    ///
+    /// Reads the `.strings` file directly rather than through `Bundle`, because a
+    /// bundle lookup can only answer "does this key resolve" — it cannot enumerate
+    /// what a catalog defines, which is what a drift check needs.
+    public static func catalogKeys(language: String) -> Set<String> {
+        guard let entry = lprojDirectories[language.lowercased()] else { return [] }
+        let url = URL(fileURLWithPath: entry.path)
+            .appendingPathComponent("Localizable.strings")
+        guard let contents = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        var keys: Set<String> = []
+        for line in contents.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("\"") else { continue }
+            let afterOpening = trimmed.dropFirst()
+            guard let closing = afterOpening.firstIndex(of: "\"") else { continue }
+            keys.insert(String(afterOpening[..<closing]))
+        }
+        return keys
     }
 
     // MARK: - Status summary
@@ -1001,6 +1031,40 @@ public enum L10n {
     public static var detailRunId: String { tr("detail.runId") }
     public static var detailRunStatus: String { tr("detail.runStatus") }
     public static var detailQuotaEvidence: String { tr("detail.quotaEvidence") }
+
+    // Task detail panels, lifecycle phases, and inline values (B1 l10n)
+    public static var detailPanelSummary: String { tr("detail.panel.summary") }
+    public static var detailPanelProgress: String { tr("detail.panel.progress") }
+    public static var detailPanelLiveActivity: String { tr("detail.panel.liveActivity") }
+    public static var detailPanelChanges: String { tr("detail.panel.changes") }
+    public static var detailPanelVerification: String { tr("detail.panel.verification") }
+    public static var phasePreparing: String { tr("phase.preparing") }
+    public static var phaseRouting: String { tr("phase.routing") }
+    public static var phaseWorkspace: String { tr("phase.workspace") }
+    public static var phaseQuota: String { tr("phase.quota") }
+    public static var phaseStartingWorker: String { tr("phase.startingWorker") }
+    public static var phaseEditing: String { tr("phase.editing") }
+    public static var phaseTesting: String { tr("phase.testing") }
+    public static var phaseVerifying: String { tr("phase.verifying") }
+    public static var phaseFinished: String { tr("phase.finished") }
+    public static var candidateSelected: String { tr("candidate.selected") }
+    public static var candidateEligible: String { tr("candidate.eligible") }
+    public static var candidateIneligible: String { tr("candidate.ineligible") }
+    public static var candidateUnknownModel: String { tr("candidate.unknownModel") }
+    public static var valueNone: String { tr("value.none") }
+    public static var valueUnknown: String { tr("value.unknown") }
+    public static var valueAutomatic: String { tr("value.automatic") }
+    public static var valueNotVerifiedYet: String { tr("value.notVerifiedYet") }
+    public static var valueStagePassed: String { tr("value.stagePassed") }
+    public static var valueStageFailed: String { tr("value.stageFailed") }
+    public static var valueNotShadowMode: String { tr("value.notShadowMode") }
+    public static var labelTask: String { tr("label.task") }
+
+    /// Relative "updated" line for a task row. The instant is formatted by
+    /// `Timestamps`, which follows the locale; this only supplies the frame.
+    public static func updatedRelative(_ relative: String) -> String {
+        String(format: tr("label.updatedRelative"), relative)
+    }
 
     // Evidence levels (OBSERVED / DERIVED / FORECAST) and timestamps
     public static var evidenceObserved: String { tr("evidence.observed") }
