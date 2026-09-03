@@ -75,6 +75,11 @@ public enum StatusStyle {
         switch state {
         case "RUNNING", "VERIFYING":
             return StatusPresentation(tone: .neutral, symbol: "gearshape.2")
+        // The worker stopped and verification has not started. It was falling
+        // through to `unknown` even though the Safety Kernel defines it, so a
+        // perfectly ordinary state rendered with a question mark.
+        case "WORKER_FINISHED":
+            return StatusPresentation(tone: .neutral, symbol: "hourglass")
         case "SUBMITTED", "READY", "PREPARING":
             return StatusPresentation(tone: .caution, symbol: "tray")
         case "VERIFIED", "COMPLETED", "ACCEPTED", "INTEGRATED":
@@ -200,11 +205,73 @@ public enum StatusStyle {
         switch status {
         case "VERIFIED", "PASSED":
             return StatusPresentation(tone: .positive, symbol: "checkmark.seal")
-        case "FAILED":
+        case "FAILED", "FAILED_VERIFICATION":
             return StatusPresentation(tone: .critical, symbol: "xmark.seal")
+        // Verified work whose proof cannot be produced. Not a pass — the
+        // evidence is the point — and not a rejection of the work either, so it
+        // gets the tone reserved for "truth not established".
+        case "VERIFIED_EVIDENCE_MISSING", "VERIFIED_EVIDENCE_UNAVAILABLE":
+            return StatusPresentation(tone: .unknown, symbol: "seal.badge.questionmark")
+        case "IN_PROGRESS":
+            return StatusPresentation(tone: .neutral, symbol: "gearshape.2")
         case "NOT_VERIFIED":
             return StatusPresentation(tone: .neutral, symbol: "seal")
         default:
+            return StatusPresentation(tone: .unknown, symbol: "questionmark.circle")
+        }
+    }
+
+    /// The normalized verification status, resolved through the same table as
+    /// the raw machine value so the two can never disagree.
+    public static func verification(
+        _ status: TaskVerificationStatus
+    ) -> StatusPresentation {
+        verification(status.rawValue)
+    }
+
+    // MARK: - Attention
+
+    /// Why a task needs the owner. Nothing here is `positive`: every case is a
+    /// reason the task is not simply progressing.
+    public static func attention(_ kind: TaskAttention.Kind) -> StatusPresentation {
+        switch kind {
+        case .verificationFailed:
+            return StatusPresentation(tone: .critical, symbol: "xmark.seal")
+        case .failed:
+            return StatusPresentation(tone: .critical, symbol: "xmark.octagon")
+        case .blocked:
+            return StatusPresentation(tone: .critical, symbol: "exclamationmark.octagon")
+        case .unknownState:
+            return StatusPresentation(tone: .unknown, symbol: "questionmark.circle")
+        case .verificationEvidenceUnavailable:
+            return StatusPresentation(tone: .unknown, symbol: "seal.badge.questionmark")
+        case .unexpectedChanges:
+            return StatusPresentation(tone: .caution, symbol: "exclamationmark.triangle")
+        case .awaitingApproval:
+            return StatusPresentation(tone: .caution, symbol: "person.badge.clock")
+        }
+    }
+
+    // MARK: - Lifecycle
+
+    /// One step of the task lifecycle.
+    ///
+    /// `notReached` is deliberately `unknown` rather than `neutral`: a stage that
+    /// has not happened yet is not a stage that reported nothing, and a hollow
+    /// mark keeps it from reading as quietly fine.
+    public static func lifecycle(_ status: TaskLifecycleStatus) -> StatusPresentation {
+        switch status {
+        case .reached:
+            return StatusPresentation(tone: .positive, symbol: "checkmark.circle.fill")
+        case .inProgress:
+            return StatusPresentation(tone: .neutral, symbol: "circle.dotted")
+        case .notReached:
+            return StatusPresentation(tone: .unknown, symbol: "circle")
+        case .failed:
+            return StatusPresentation(tone: .critical, symbol: "xmark.circle.fill")
+        case .stopped:
+            return StatusPresentation(tone: .neutral, symbol: "slash.circle")
+        case .unknown:
             return StatusPresentation(tone: .unknown, symbol: "questionmark.circle")
         }
     }
