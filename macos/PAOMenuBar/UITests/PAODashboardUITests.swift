@@ -60,19 +60,47 @@ final class PAODashboardUITests: XCTestCase {
         }
     }
 
-    /// Providers, execution targets and quota collapsed into Resources. All three
-    /// must still be reachable — as surfaces inside it, not as destinations.
-    func testResourcesReachesProvidersExecutionTargetsAndQuota() {
+    /// Providers, execution targets and quota are one workspace.
+    ///
+    /// B2 collapsed the three destinations into a segmented control; B4 replaced
+    /// the segments with a selection/detail workspace, because a tab strip made
+    /// the owner visit three surfaces and join them by memory to read one
+    /// provider. What B2 actually protected was that all three capabilities
+    /// survive inside Resources, so that is what this asserts — not the widget
+    /// that happened to carry them.
+    func testResourcesOwnsProvidersExecutionTargetsAndQuota() {
         let app = XCUIApplication()
         app.launch()
 
         let resources = app.staticTexts["资源"].firstMatch
         XCTAssertTrue(resources.waitForExistence(timeout: 10))
         resources.click()
-        for surface in ["模型与服务", "执行目标", "额度"] {
-            let tab = app.radioButtons[surface].firstMatch
-            XCTAssertTrue(tab.waitForExistence(timeout: 5), "Resources is missing \(surface)")
-            tab.click()
+
+        // The resource collection, searchable as one list rather than split
+        // across tabs.
+        XCTAssertTrue(
+            app.searchFields.firstMatch.waitForExistence(timeout: 5),
+            "the resource collection lost its search field"
+        )
+
+        // Both daemon operations, still named for what they do. Discovery reads
+        // no quota and the quota read runs no discovery; one merged "Refresh"
+        // would hide which of the two ran.
+        for operation in ["刷新发现", "刷新额度"] {
+            XCTAssertTrue(
+                app.buttons.matching(
+                    NSPredicate(format: "label CONTAINS %@", operation)
+                ).firstMatch.waitForExistence(timeout: 5),
+                "Resources no longer offers \(operation) as its own operation"
+            )
+        }
+
+        // The segmented host is gone: its three tabs must not be back.
+        for surface in ["模型与服务", "执行目标"] {
+            XCTAssertFalse(
+                app.radioButtons[surface].firstMatch.exists,
+                "\(surface) is a tab again; Resources is one workspace"
+            )
         }
     }
 
