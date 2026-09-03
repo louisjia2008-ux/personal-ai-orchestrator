@@ -1,0 +1,55 @@
+{
+  "task": {
+    "task_id": "PT-0042", "request_id": "rq-0042", "intent": "Fix coordinate drift",
+    "project_id": "proj-pintrace", "base_sha": "4f9a21c", "working_subpath": null,
+    "state": "RUNNING", "state_version": 3,
+    "created_at": "2026-09-03T11:40:00Z", "updated_at": "2026-09-03T11:59:00Z"
+  },
+  "runs": [
+    { "run_id": "run-01", "task_id": "PT-0042", "worker_id": "minimax-cn-coding-plan/MiniMax-M2.7",
+      "pid": 4711, "status": "RUNNING", "started_at": "2026-09-03T11:41:08Z", "finished_at": null,
+      "result": null }
+  ],
+  "routing": {
+    "task_id": "PT-0042", "decision_id": "rd-8841", "request_id": "rq-0042",
+    "created_at": "2026-09-03T11:41:02Z",
+    "decision": {
+      "mode": "ACTIVE",
+      "selected_execution_target_id": "minimax-cn-coding-plan/MiniMax-M2.7",
+      "explanation": {
+        "policy_id": "BALANCED",
+        "why_selected": "Quality tier satisfied; binding window above reserve.",
+        "policy_resolution": {
+          "resolved_policy": "BALANCED", "resolution_source": "PROJECT_OVERRIDE"
+        },
+        "candidates": [
+          { "execution_target_id": "minimax-cn-coding-plan/MiniMax-M2.7",
+            "provider_id": "minimax-cn-coding-plan", "model_display_name": "MiniMax-M2.7",
+            "model_sku_id": "MiniMax-M2.7", "score": 0.87,
+            "eligible": true, "admitted": true, "selected": true,
+            "quota_snapshot_id": "qs-2210" },
+          { "execution_target_id": "zai-coding-plan/glm-5.3",
+            "provider_id": "zai-coding-plan", "model_display_name": "glm-5.3",
+            "model_sku_id": "glm-5.3", "score": 0.81,
+            "eligible": true, "admitted": true, "selected": false,
+            "why_not_selected": "Lower score than selected candidate." }
+        ]
+      }
+    }
+  },
+  "verification": {
+    "task_id": "PT-0042", "task_state": "RUNNING", "status": "NOT_VERIFIED",
+    "evidence_id": null, "failure_reason": null, "result": null
+  },
+  "approvals": { "approvals": [] },
+  "workspace": {
+    "task_id": "PT-0042", "project_id": "proj-pintrace",
+    "repo_path": "/repo/pintrace", "worktree_path": "/repo/.worktrees/PT-0042",
+    "branch": "task/PT-0042", "base_sha": "4f9a21c",
+    "working_subpath": null, "writer_locked": true
+  },
+  "events": [
+    { "event_type": "ROUTING_DECISION_RECORDED", "task_id": "PT-0042",
+      "created_at": "2026-09-03T11:41:02Z", "summary": "Routed to MiniMax-M2.7" }
+  ]
+}

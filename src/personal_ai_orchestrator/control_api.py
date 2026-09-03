@@ -201,6 +201,78 @@ class RoutingDecisionView(_ViewModel):
     decision: dict[str, Any]
 
 
+# Routing plan / role / decision contract (Gate-R).
+#
+# See docs/ROUTING_ROLE_CONTRACT.md. These models freeze the wire shape so the
+# client can be built against it before the execution layer plans roles. The
+# daemon does not populate `TaskDetailView.routing_plan` yet: role assignments
+# are authoritative execution state and are never fabricated here.
+
+
+class RoutingPlanCandidateView(_ViewModel):
+    execution_target_id: str | None = None
+    provider_id: str | None = None
+    model_display_name: str | None = None
+    model_sku_id: str | None = None
+    score: float | None = None
+    eligible: bool | None = None
+    admitted: bool | None = None
+    selected: bool | None = None
+    why_not_selected: str | None = None
+    quota_snapshot_id: str | None = None
+
+
+class RoutingDecisionRecordView(_ViewModel):
+    """One selection for one role at one moment, independent of every other."""
+
+    decision_id: str
+    role: str
+    created_at: str
+    mode: str | None = None
+    selected_execution_target_id: str | None = None
+    provider_id: str | None = None
+    model_display_name: str | None = None
+    why_selected: str | None = None
+    supersedes_decision_id: str | None = None
+    reroute_reason: str | None = None
+    quota_snapshot_id: str | None = None
+    candidates: tuple[RoutingPlanCandidateView, ...] = ()
+
+
+class RoutingRoleStateView(_ViewModel):
+    """Where one declared role stands, plus every selection made for it.
+
+    `status` is lifecycle and `outcome` is result; collapsing them would make a
+    review that rejected the work indistinguishable from one that crashed.
+    """
+
+    role: str
+    status: str
+    outcome: str = "NONE"
+    active_decision_id: str | None = None
+    decisions: tuple[RoutingDecisionRecordView, ...] = ()
+
+
+class RoutingPlanView(_ViewModel):
+    """One immutable execution plan revision for a task.
+
+    `declared_roles` is authoritative orchestrator policy state: it is frozen
+    when the plan is created, and a later policy change produces a new revision
+    rather than mutating this one.
+    """
+
+    plan_id: str
+    revision: int = 1
+    task_id: str
+    created_at: str
+    policy_id: str | None = None
+    resolved_policy: str | None = None
+    policy_resolution_source: str | None = None
+    superseded_by_plan_id: str | None = None
+    declared_roles: tuple[str, ...] = ()
+    roles: tuple[RoutingRoleStateView, ...] = ()
+
+
 class DashboardCountsView(_ViewModel):
     running: int
     ready: int
@@ -311,6 +383,9 @@ class TaskDetailView(_ViewModel):
     approvals: ApprovalListView
     workspace: WorkspaceView | None = None
     events: tuple[ActivityEventView, ...]
+    #: Authoritative multi-role routing plan. ``None`` until the execution layer
+    #: plans roles; clients then fall back to ``routing`` for the primary.
+    routing_plan: RoutingPlanView | None = None
 
 
 class SanitizedEvidenceSourceView(_ViewModel):
