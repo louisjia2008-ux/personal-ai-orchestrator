@@ -246,6 +246,11 @@ func registerStandardRoutes(_ daemon: TestDaemon) {
     daemon.route("GET", "/v1/health", body: healthBody)
     daemon.route("GET", "/v1/dashboard", body: dashboardBody)
     daemon.route("GET", "/v1/tasks?limit=20", body: tasksBody)
+    // The dashboard fetches the authoritative collection at the daemon's list
+    // limit; without this route the store would silently exercise its fallback.
+    daemon.route(
+        "GET", "/v1/tasks?limit=\(OrchestratorStore.taskListLimit)", body: tasksBody
+    )
     daemon.route("GET", "/v1/tasks", body: tasksBody)
     daemon.route("GET", "/v1/projects", body: projectsBody)
     daemon.route("GET", "/v1/tasks/t-1/detail", body: taskDetailBody)

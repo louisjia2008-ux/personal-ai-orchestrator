@@ -2539,7 +2539,7 @@ private struct TaskSummaryPanel: View {
             }
             LabeledContent(L10n.providerModel, value: providerModel)
             LabeledContent(L10n.detailCurrentPhase, value: currentPhase)
-            LabeledContent(L10n.detailElapsed, value: elapsedText(start: detail.task.createdAt, end: detail.task.updatedAt))
+            LabeledContent(L10n.detailElapsed, value: elapsedText(task: detail.task))
             HStack(spacing: 8) {
                 if detail.task.state == "RUNNING" || detail.task.state == "VERIFYING" {
                     Button(role: .destructive) {
@@ -3210,12 +3210,11 @@ private struct EventList: View {
     }
 }
 
-private func elapsedText(start: String, end: String) -> String {
-    guard let startDate = parseAPIDate(start),
-          let endDate = parseAPIDate(end) else {
-        return "unknown"
-    }
-    let seconds = max(0, Int(endDate.timeIntervalSince(startDate)))
+/// Elapsed time for a task. Running work measures to now; finished work measures
+/// to the moment it stopped. See `TaskTiming`.
+private func elapsedText(task: TaskView) -> String {
+    guard let interval = TaskTiming.elapsed(task: task) else { return "unknown" }
+    let seconds = Int(interval)
     if seconds < 60 { return "\(seconds)s" }
     let minutes = seconds / 60
     if minutes < 60 { return "\(minutes)m \(seconds % 60)s" }
@@ -3223,13 +3222,7 @@ private func elapsedText(start: String, end: String) -> String {
 }
 
 private func parseAPIDate(_ value: String) -> Date? {
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = formatter.date(from: value) {
-        return date
-    }
-    formatter.formatOptions = [.withInternetDateTime]
-    return formatter.date(from: value)
+    TaskTiming.parseTimestamp(value)
 }
 
 private enum BadgeKind {
