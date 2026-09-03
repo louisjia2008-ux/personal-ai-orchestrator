@@ -525,3 +525,32 @@
 "evidence.forecast" = "预计";
 "evidence.unavailable" = "数据不足";
 "timestamp.justNow" = "刚刚";
+
+/* B1: Task Detail was the one screen left unlocalized */
+"detail.panel.summary" = "摘要";
+"detail.panel.progress" = "进度";
+"detail.panel.liveActivity" = "实时活动";
+"detail.panel.changes" = "变更";
+"detail.panel.verification" = "测试与验证";
+"phase.preparing" = "准备中";
+"phase.routing" = "路由";
+"phase.workspace" = "工作区";
+"phase.quota" = "额度";
+"phase.startingWorker" = "启动工作器";
+"phase.editing" = "编辑中";
+"phase.testing" = "测试中";
+"phase.verifying" = "验证中";
+"phase.finished" = "已完成";
+"candidate.selected" = "已选";
+"candidate.eligible" = "合格";
+"candidate.ineligible" = "不合格";
+"candidate.unknownModel" = "未知模型";
+"value.none" = "无";
+"value.unknown" = "未知";
+"value.automatic" = "自动";
+"value.notVerifiedYet" = "尚未验证";
+"value.stagePassed" = "通过";
+"value.stageFailed" = "未通过";
+"value.notShadowMode" = "非影子模式";
+"label.task" = "任务";
+"label.updatedRelative" = "更新于 %@";

@@ -783,15 +783,10 @@ private struct TaskRow: View {
         }
     }
 
+    /// The hand-rolled English relative time is gone: `Timestamps` follows the
+    /// locale, so this row reads in the product language like every other.
     private func relativeTime(_ value: String) -> String {
-        guard let date = parseAPIDate(value) else { return value }
-        let seconds = max(0, Int(Date().timeIntervalSince(date)))
-        if seconds < 60 { return "Updated just now" }
-        let minutes = seconds / 60
-        if minutes < 60 { return "Updated \(minutes)m ago" }
-        let hours = minutes / 60
-        if hours < 24 { return "Updated \(hours)h ago" }
-        return "Updated \(hours / 24)d ago"
+        L10n.updatedRelative(Timestamps.friendly(value))
     }
 }
 
@@ -2519,17 +2514,17 @@ private struct TaskSummaryPanel: View {
     let onStop: () -> Void
 
     private var currentPhase: String {
-        ExecutionPhase.derive(from: detail).first(where: { $0.isCurrent })?.title ?? "Preparing"
+        ExecutionPhase.derive(from: detail).first(where: { $0.isCurrent })?.title ?? L10n.phasePreparing
     }
 
     private var providerModel: String {
         detail.runs.last?.workerId
             ?? detail.routing?.selectedExecutionTargetId
-            ?? "Auto"
+            ?? L10n.valueAutomatic
     }
 
     var body: some View {
-        DashboardCard(title: "Summary", symbol: "doc.text.magnifyingglass") {
+        DashboardCard(title: L10n.detailPanelSummary, symbol: "doc.text.magnifyingglass") {
             HStack(alignment: .firstTextBaseline) {
                 Text(detail.task.intent)
                     .font(.headline)
@@ -2597,15 +2592,15 @@ private struct ExecutionPhase: Identifiable {
             || detail.verification.status != "NOT_VERIFIED"
         let finished = ["VERIFIED", "BLOCKED", "FAILED", "CANCELLED", "COMPLETED"].contains(detail.task.state)
         let states: [(String, Bool)] = [
-            ("Preparing", true),
-            ("Routing", hasRouting),
-            ("Workspace", hasWorkspace),
-            ("Quota", hasQuota),
-            ("Starting worker", hasRun),
-            ("Editing", editingDone),
-            ("Testing", editingDone),
-            ("Verifying", verifying),
-            ("Finished", finished),
+            (L10n.phasePreparing, true),
+            (L10n.phaseRouting, hasRouting),
+            (L10n.phaseWorkspace, hasWorkspace),
+            (L10n.phaseQuota, hasQuota),
+            (L10n.phaseStartingWorker, hasRun),
+            (L10n.phaseEditing, editingDone),
+            (L10n.phaseTesting, editingDone),
+            (L10n.phaseVerifying, verifying),
+            (L10n.phaseFinished, finished),
         ]
         let currentIndex = states.firstIndex { !$0.1 } ?? states.count - 1
         return states.enumerated().map { index, item in
@@ -2618,7 +2613,7 @@ private struct ProgressPanel: View {
     let detail: TaskDetailView
 
     var body: some View {
-        DashboardCard(title: "Progress", symbol: "checklist") {
+        DashboardCard(title: L10n.detailPanelProgress, symbol: "checklist") {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 8)], spacing: 8) {
                 ForEach(ExecutionPhase.derive(from: detail)) { phase in
                     HStack(spacing: 6) {
@@ -2645,7 +2640,7 @@ private struct LiveActivityPanel: View {
     let detail: TaskDetailView
 
     var body: some View {
-        DashboardCard(title: "Live Activity", symbol: "waveform.path.ecg") {
+        DashboardCard(title: L10n.detailPanelLiveActivity, symbol: "waveform.path.ecg") {
             EventList(events: detail.events)
         }
     }
@@ -2655,7 +2650,7 @@ private struct ChangesPanel: View {
     let detail: TaskDetailView
 
     var body: some View {
-        DashboardCard(title: "Changes", symbol: "doc.on.clipboard") {
+        DashboardCard(title: L10n.detailPanelChanges, symbol: "doc.on.clipboard") {
             if let workspace = detail.workspace {
                 LabeledContent(L10n.worktree, value: workspace.worktreePath)
                     .font(.system(.caption, design: .monospaced))
@@ -2669,7 +2664,7 @@ private struct ChangesPanel: View {
     }
 
     private var changedFileText: String {
-        guard let result = detail.verification.result else { return "not verified yet" }
+        guard let result = detail.verification.result else { return L10n.valueNotVerifiedYet }
         let count = result.changedPaths.count
         return "\(count)"
     }
@@ -2679,13 +2674,13 @@ private struct TestsVerificationPanel: View {
     let detail: TaskDetailView
 
     var body: some View {
-        DashboardCard(title: "Tests / Verification", symbol: "checkmark.seal") {
+        DashboardCard(title: L10n.detailPanelVerification, symbol: "checkmark.seal") {
             StatusBadge(text: detail.verification.status, kind: detail.verification.status == "VERIFIED" ? .good : .neutral)
-            LabeledContent(L10n.evidenceLabel, value: detail.verification.evidenceId ?? "none")
+            LabeledContent(L10n.evidenceLabel, value: detail.verification.evidenceId ?? L10n.valueNone)
             if let result = detail.verification.result {
                 LabeledContent(L10n.detailVerifierProfile, value: result.profile)
                 ForEach(result.stages) { stage in
-                    LabeledContent(stage.name, value: stage.passed ? "passed" : "failed")
+                    LabeledContent(stage.name, value: stage.passed ? L10n.valueStagePassed : L10n.valueStageFailed)
                 }
             }
             if let failure = detail.verification.failureReason {
@@ -2863,8 +2858,8 @@ private struct RoutingPanel: View {
                         value: L10n.policyResolutionSource(source)
                     )
                 }
-                LabeledContent(L10n.actualExecutionTarget, value: routing.selectedExecutionTargetId ?? "none")
-                LabeledContent(L10n.wouldSelect, value: routing.mode == "SHADOW" ? (routing.selectedExecutionTargetId ?? "none") : "not shadow")
+                LabeledContent(L10n.actualExecutionTarget, value: routing.selectedExecutionTargetId ?? L10n.valueNone)
+                LabeledContent(L10n.wouldSelect, value: routing.mode == "SHADOW" ? (routing.selectedExecutionTargetId ?? L10n.valueNone) : L10n.valueNotShadowMode)
                 if let why = routing.whySelected {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(L10n.routingWhySelected)
@@ -2906,7 +2901,7 @@ private struct RoutingCandidateRow: View {
             HStack(spacing: 8) {
                 Text(candidate["model_display_name"]?.value
                     ?? candidate["model_sku_id"]?.value
-                    ?? "Unknown model")
+                    ?? L10n.candidateUnknownModel)
                     .font(.caption.weight(.semibold))
                 Spacer()
                 StatusBadge(text: statusText, kind: statusKind)
@@ -2949,11 +2944,11 @@ private struct RoutingCandidateRow: View {
     }
 
     private var statusText: String {
-        if candidate["selected"]?.boolValue == true { return "Selected" }
+        if candidate["selected"]?.boolValue == true { return L10n.candidateSelected }
         if candidate["eligible"]?.boolValue == true && candidate["admitted"]?.boolValue == true {
-            return "Eligible"
+            return L10n.candidateEligible
         }
-        return "Ineligible"
+        return L10n.candidateIneligible
     }
 
     private var statusKind: BadgeKind {
@@ -2971,8 +2966,8 @@ private struct VerificationPanel: View {
     var body: some View {
         DashboardCard(title: L10n.verification, symbol: "checkmark.seal") {
             StatusBadge(text: detail.verification.status, kind: detail.verification.status == "VERIFIED" ? .good : .neutral)
-            LabeledContent("task", value: detail.verification.taskId)
-            LabeledContent(L10n.evidenceLabel, value: detail.verification.evidenceId ?? "none")
+            LabeledContent(L10n.labelTask, value: detail.verification.taskId)
+            LabeledContent(L10n.evidenceLabel, value: detail.verification.evidenceId ?? L10n.valueNone)
             if let failure = detail.verification.failureReason {
                 Text(failure).foregroundStyle(.red)
             }
@@ -3222,17 +3217,10 @@ private struct EventList: View {
 /// Elapsed time for a task. Running work measures to now; finished work measures
 /// to the moment it stopped. See `TaskTiming`.
 private func elapsedText(task: TaskView) -> String {
-    guard let interval = TaskTiming.elapsed(task: task) else { return "unknown" }
-    let seconds = Int(interval)
-    if seconds < 60 { return "\(seconds)s" }
-    let minutes = seconds / 60
-    if minutes < 60 { return "\(minutes)m \(seconds % 60)s" }
-    return "\(minutes / 60)h \(minutes % 60)m"
+    guard let interval = TaskTiming.elapsed(task: task) else { return L10n.valueUnknown }
+    return Timestamps.duration(interval)
 }
 
-private func parseAPIDate(_ value: String) -> Date? {
-    TaskTiming.parseTimestamp(value)
-}
 
 /// Badge semantics, resolved through the shared `StatusTone` vocabulary so a
 /// badge cannot drift away from the same status rendered elsewhere.
