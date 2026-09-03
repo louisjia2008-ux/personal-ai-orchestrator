@@ -676,3 +676,89 @@
 "label.currentWorker" = "Current worker";
 "label.noWorkerYet" = "No worker assigned yet";
 "routing.planRevisionLabel" = "Revision";
+
+/* ---------------------------------------------------------------- B4 Resources */
+
+"resources.searchPrompt" = "Search resources";
+"resources.visibleCount" = "%1$d of %2$d";
+"resources.kind.connected" = "Connected";
+"resources.kind.available" = "Available to add";
+"resources.kind.discovered" = "Discovered";
+"resources.filter.all" = "All resources";
+"resources.filter.kind" = "Kind";
+
+"empty.resources.none.title" = "No resources yet";
+"empty.resources.none.message" = "Nothing has been discovered or connected. Refresh providers to run discovery, or add a provider you already use.";
+"empty.resources.loading" = "Loading resources…";
+"empty.resources.search.title" = "No resource matches";
+"empty.resources.search.message" = "Nothing matches “%@”.";
+"empty.resources.noSelection.title" = "Select a resource";
+"empty.resources.noSelection.message" = "Choose a provider to see its availability, quota, usage and execution targets.";
+"resources.disconnectedHint" = "Resources are unknown while the daemon is unreachable. Nothing here is empty — it is simply unread.";
+
+"resource.section.availability" = "Availability";
+"resource.section.quota" = "Quota";
+"resource.section.usage" = "Usage";
+"resource.section.projection" = "Projection";
+"resource.section.executionTargets" = "Execution targets";
+"resource.section.observability" = "Observability";
+"resource.section.models" = "Models";
+
+"resource.noQuotaTelemetry" = "This provider reports no quota. It is still a usable resource — only its remaining balance is unknown.";
+"resource.noExecutionTargets" = "Discovery found no execution target for this provider.";
+"resource.notConnected" = "Not connected. Connect it to read quota and schedule work on it.";
+"resource.connectAction" = "Connect";
+"resource.severalBindings" = "%d quota bindings";
+"resource.bindingLimiting" = "Limiting window";
+"resource.quotaObservable" = "Quota observed";
+"resource.quotaNotObservable" = "Quota not observable";
+"resource.freshnessUnknown" = "Never read";
+"resource.observedAge" = "read %@ ago";
+"resource.staleWarning" = "This reading is older than the window it describes; treat it as stale, not current.";
+"resource.targetsSummary" = "%1$d of %2$d verified";
+"resource.modelsSummary" = "%d models";
+"resource.refreshQuota" = "Refresh quota";
+"resource.refreshProviders" = "Refresh discovery";
+"resource.refreshQuotaHelp" = "Reads each connected provider's documented read-only quota endpoint. No model generation is issued.";
+"resource.refreshProvidersHelp" = "Re-runs catalog and credential discovery. It reads no quota.";
+"resource.refreshFailed" = "Last refresh failed: %@";
+
+"quota.rate.perHour" = "%@ / hour";
+"quota.rate.belowThreshold" = "under %@ / hour";
+"quota.horizon.daysHours" = "%1$dd %2$dh";
+"quota.horizon.hoursMinutes" = "%1$dh %2$dm";
+"quota.horizon.minutes" = "%dm";
+
+"quota.burnRate.title" = "Burn rate";
+"quota.burnRate.basis" = "from %1$d readings over %2$@";
+"quota.burnRate.flat" = "No consumption measured in this window.";
+
+"quota.projection.title" = "At this rate";
+"quota.projection.remainingAtReset" = "Remaining at reset";
+"quota.projection.exhaustionAt" = "Expected to run out";
+"quota.projection.likelyUnused" = "Likely unused at reset";
+"quota.projection.noExhaustion" = "Not expected to run out before reset.";
+"quota.projection.footer" = "A projection, not a reading. It extends the measured burn rate straight to the reset and assumes nothing else changes.";
+
+"quota.projection.unavailable.NO_HISTORY" = "No usable quota observation has been recorded for this window.";
+"quota.projection.unavailable.INSUFFICIENT_OBSERVATIONS" = "Only one reading in this reset window. A rate needs two.";
+"quota.projection.unavailable.NO_ELAPSED_TIME" = "Every reading in this window carries the same timestamp, so no rate can be measured.";
+"quota.projection.unavailable.REMAINING_INCREASED" = "The remaining balance rose during this window. A rising balance is not extrapolated.";
+"quota.projection.unavailable.RESET_UNKNOWN" = "No reset time reported, so there is no horizon to project to.";
+"quota.projection.unavailable.RESET_ALREADY_PASSED" = "The reported reset has already passed. These readings describe a window that has ended.";
+
+"quota.scarcity.unavailable" = "The daemon does not publish its scarcity classification over the control API, so none is shown. The readings, reset horizon and burn rate above are the evidence it would be derived from.";
+
+"quota.history.axisTime" = "Observed at";
+"quota.history.axisRemaining" = "Remaining";
+"quota.history.seriesLegend" = "Series";
+"quota.history.resetBoundary" = "Reset";
+"quota.history.gapNote" = "Each mark is one observation, placed at the time it was taken. A gap means nothing was observed, not that nothing was used. Lines never cross a reset.";
+"quota.history.singleObservation" = "One observation. A trend needs at least two in the same reset window.";
+"quota.history.observationCount" = "%d observations";
+"quota.history.accessibleSummary" = "%1$@: %2$d observations, latest %3$@ remaining, over %4$@.";
+
+"quota.resetsIn" = "resets in %@";
+"quota.resetPassed" = "reset time has passed";
+"quota.observedAge" = "observed %@ ago";
+"quota.equivalentCapacity.explanation" = "Equivalent capacity estimates how many more tasks of one class fit in the limiting window's remaining units. It is a task count, not a percentage, and cannot be combined with the balances above.";

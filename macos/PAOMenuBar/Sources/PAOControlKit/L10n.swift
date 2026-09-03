@@ -230,7 +230,47 @@ public enum L10n {
         "inspector.workspaceSection", "inspector.runsSection", "inspector.routingProvenance",
         "inspector.empty", "label.createdAt", "label.updatedAt",
         "label.stateVersion", "label.repositoryPath", "label.projectId",
-        "label.currentWorker", "label.noWorkerYet", "routing.planRevisionLabel"
+        "label.currentWorker", "label.noWorkerYet", "routing.planRevisionLabel",
+        // B4 resources + quota workspace
+        "resources.searchPrompt", "resources.visibleCount",
+        "resources.kind.connected", "resources.kind.available", "resources.kind.discovered",
+        "resources.filter.all", "resources.filter.kind",
+        "empty.resources.none.title", "empty.resources.none.message",
+        "empty.resources.loading", "empty.resources.search.title",
+        "empty.resources.search.message", "empty.resources.noSelection.title",
+        "empty.resources.noSelection.message", "resources.disconnectedHint",
+        "resource.section.availability", "resource.section.quota",
+        "resource.section.usage", "resource.section.projection",
+        "resource.section.executionTargets", "resource.section.observability",
+        "resource.section.models",
+        "resource.noQuotaTelemetry", "resource.noExecutionTargets",
+        "resource.notConnected", "resource.connectAction",
+        "resource.severalBindings", "resource.bindingLimiting",
+        "resource.quotaObservable", "resource.quotaNotObservable",
+        "resource.freshnessUnknown", "resource.observedAge", "resource.staleWarning",
+        "resource.targetsSummary", "resource.modelsSummary",
+        "resource.refreshQuota", "resource.refreshProviders",
+        "resource.refreshQuotaHelp", "resource.refreshProvidersHelp",
+        "resource.refreshFailed",
+        "quota.rate.perHour", "quota.rate.belowThreshold",
+        "quota.horizon.daysHours", "quota.horizon.hoursMinutes", "quota.horizon.minutes",
+        "quota.burnRate.title", "quota.burnRate.basis", "quota.burnRate.flat",
+        "quota.projection.title", "quota.projection.remainingAtReset",
+        "quota.projection.exhaustionAt", "quota.projection.likelyUnused",
+        "quota.projection.noExhaustion", "quota.projection.footer",
+        "quota.projection.unavailable.NO_HISTORY",
+        "quota.projection.unavailable.INSUFFICIENT_OBSERVATIONS",
+        "quota.projection.unavailable.NO_ELAPSED_TIME",
+        "quota.projection.unavailable.REMAINING_INCREASED",
+        "quota.projection.unavailable.RESET_UNKNOWN",
+        "quota.projection.unavailable.RESET_ALREADY_PASSED",
+        "quota.scarcity.unavailable",
+        "quota.history.axisTime", "quota.history.axisRemaining",
+        "quota.history.seriesLegend", "quota.history.resetBoundary",
+        "quota.history.gapNote", "quota.history.accessibleSummary",
+        "quota.history.singleObservation", "quota.history.observationCount",
+        "quota.resetsIn", "quota.resetPassed", "quota.observedAge",
+        "quota.equivalentCapacity.explanation"
     ]
 
     /// English is the guaranteed fallback (`defaultLocalization` in Package.swift).
@@ -1319,4 +1359,179 @@ public enum L10n {
     public static var labelProjectId: String { tr("label.projectId") }
     public static var labelCurrentWorker: String { tr("label.currentWorker") }
     public static var labelNoWorkerYet: String { tr("label.noWorkerYet") }
+
+    // MARK: - B4 Resources workspace
+
+    public static var resourcesSearchPrompt: String { tr("resources.searchPrompt") }
+
+    public static func resourcesVisibleCount(shown: Int, total: Int) -> String {
+        tr("resources.visibleCount", [shown, total])
+    }
+
+    public static func resourceKind(_ rawValue: String) -> String {
+        tr("resources.kind.\(rawValue)")
+    }
+
+    public static var resourcesFilterAll: String { tr("resources.filter.all") }
+    public static var resourcesFilterKind: String { tr("resources.filter.kind") }
+
+    public static var emptyResourcesNoneTitle: String { tr("empty.resources.none.title") }
+    public static var emptyResourcesNoneMessage: String { tr("empty.resources.none.message") }
+    public static var emptyResourcesLoading: String { tr("empty.resources.loading") }
+    public static var emptyResourcesSearchTitle: String { tr("empty.resources.search.title") }
+
+    public static func emptyResourcesSearchMessage(_ query: String) -> String {
+        tr("empty.resources.search.message", [query])
+    }
+
+    public static var emptyResourcesNoSelectionTitle: String {
+        tr("empty.resources.noSelection.title")
+    }
+    public static var emptyResourcesNoSelectionMessage: String {
+        tr("empty.resources.noSelection.message")
+    }
+    public static var resourcesDisconnectedHint: String { tr("resources.disconnectedHint") }
+
+    // Resource detail sections
+    public static var resourceSectionAvailability: String { tr("resource.section.availability") }
+    public static var resourceSectionQuota: String { tr("resource.section.quota") }
+    public static var resourceSectionUsage: String { tr("resource.section.usage") }
+    public static var resourceSectionProjection: String { tr("resource.section.projection") }
+    public static var resourceSectionExecutionTargets: String {
+        tr("resource.section.executionTargets")
+    }
+    public static var resourceSectionObservability: String {
+        tr("resource.section.observability")
+    }
+    public static var resourceSectionModels: String { tr("resource.section.models") }
+
+    public static var resourceNoQuotaTelemetry: String { tr("resource.noQuotaTelemetry") }
+    public static var resourceNoExecutionTargets: String { tr("resource.noExecutionTargets") }
+    public static var resourceNotConnected: String { tr("resource.notConnected") }
+    public static var resourceConnectAction: String { tr("resource.connectAction") }
+    public static var resourceBindingLimiting: String { tr("resource.bindingLimiting") }
+    public static var resourceQuotaObservable: String { tr("resource.quotaObservable") }
+    public static var resourceQuotaNotObservable: String { tr("resource.quotaNotObservable") }
+    public static var resourceFreshnessUnknown: String { tr("resource.freshnessUnknown") }
+    public static var resourceStaleWarning: String { tr("resource.staleWarning") }
+
+    /// "Several quota bindings" — the row state that replaces a fabricated
+    /// average when a resource owns more than one readable window.
+    public static func resourceSeveralBindings(_ count: Int) -> String {
+        tr("resource.severalBindings", [count])
+    }
+
+    public static func resourceObservedAge(_ age: String) -> String {
+        tr("resource.observedAge", [age])
+    }
+
+    public static func resourceTargetsSummary(verified: Int, total: Int) -> String {
+        tr("resource.targetsSummary", [verified, total])
+    }
+
+    public static func resourceModelsSummary(_ count: Int) -> String {
+        tr("resource.modelsSummary", [count])
+    }
+
+    public static var resourceRefreshQuota: String { tr("resource.refreshQuota") }
+    public static var resourceRefreshProviders: String { tr("resource.refreshProviders") }
+    public static var resourceRefreshQuotaHelp: String { tr("resource.refreshQuotaHelp") }
+    public static var resourceRefreshProvidersHelp: String {
+        tr("resource.refreshProvidersHelp")
+    }
+
+    public static func resourceRefreshFailed(_ reason: String) -> String {
+        tr("resource.refreshFailed", [reason])
+    }
+
+    // MARK: - B4 Quota formatting
+
+    public static func quotaRatePerHour(_ percent: String) -> String {
+        tr("quota.rate.perHour", [percent])
+    }
+
+    public static func quotaRateBelowThreshold(_ percent: String) -> String {
+        tr("quota.rate.belowThreshold", [percent])
+    }
+
+    public static func quotaHorizonDaysHours(_ days: Int, _ hours: Int) -> String {
+        tr("quota.horizon.daysHours", [days, hours])
+    }
+
+    public static func quotaHorizonHoursMinutes(_ hours: Int, _ minutes: Int) -> String {
+        tr("quota.horizon.hoursMinutes", [hours, minutes])
+    }
+
+    public static func quotaHorizonMinutes(_ minutes: Int) -> String {
+        tr("quota.horizon.minutes", [minutes])
+    }
+
+    // MARK: - B4 Burn rate and projection
+
+    public static var quotaBurnRateTitle: String { tr("quota.burnRate.title") }
+    public static var quotaBurnRateFlat: String { tr("quota.burnRate.flat") }
+
+    public static func quotaBurnRateBasis(samples: Int, span: String) -> String {
+        tr("quota.burnRate.basis", [samples, span])
+    }
+
+    public static var quotaProjectionTitle: String { tr("quota.projection.title") }
+    public static var quotaProjectionRemainingAtReset: String {
+        tr("quota.projection.remainingAtReset")
+    }
+    public static var quotaProjectionExhaustionAt: String { tr("quota.projection.exhaustionAt") }
+    public static var quotaProjectionLikelyUnused: String { tr("quota.projection.likelyUnused") }
+    public static var quotaProjectionNoExhaustion: String {
+        tr("quota.projection.noExhaustion")
+    }
+    public static var quotaProjectionFooter: String { tr("quota.projection.footer") }
+
+    /// Why no forecast exists. Every reason is its own sentence: "never
+    /// observed" and "the window already reset" are fixed by different actions.
+    public static func quotaProjectionUnavailable(_ rawValue: String) -> String {
+        tr("quota.projection.unavailable.\(rawValue)")
+    }
+
+    /// Stated where a scarcity verdict would otherwise go.
+    ///
+    /// The daemon computes `scarcity_class` from a pace the control API does not
+    /// expose, and the client must not invent a second one. The facts are shown
+    /// instead, and this says so rather than leaving a silent gap.
+    public static var quotaScarcityUnavailable: String { tr("quota.scarcity.unavailable") }
+
+    // MARK: - B4 Quota history chart
+
+    public static var quotaHistoryAxisTime: String { tr("quota.history.axisTime") }
+    public static var quotaHistoryAxisRemaining: String { tr("quota.history.axisRemaining") }
+    public static var quotaHistorySeriesLegend: String { tr("quota.history.seriesLegend") }
+    public static var quotaHistoryResetBoundary: String { tr("quota.history.resetBoundary") }
+    public static var quotaHistoryGapNote: String { tr("quota.history.gapNote") }
+    public static var quotaHistorySingleObservation: String {
+        tr("quota.history.singleObservation")
+    }
+
+    public static func quotaHistoryObservationCount(_ count: Int) -> String {
+        tr("quota.history.observationCount", [count])
+    }
+
+    /// Spoken equivalent of one series' line, for a reader who cannot see it.
+    public static func quotaHistoryAccessibleSummary(
+        series: String, count: Int, latest: String, span: String
+    ) -> String {
+        tr("quota.history.accessibleSummary", [series, count, latest, span])
+    }
+
+    public static func quotaResetsIn(_ horizon: String) -> String {
+        tr("quota.resetsIn", [horizon])
+    }
+
+    public static var quotaResetPassed: String { tr("quota.resetPassed") }
+
+    public static func quotaObservedAge(_ age: String) -> String {
+        tr("quota.observedAge", [age])
+    }
+
+    public static var quotaEquivalentCapacityExplanation: String {
+        tr("quota.equivalentCapacity.explanation")
+    }
 }
