@@ -7,8 +7,10 @@ struct DashboardView: View {
     @EnvironmentObject private var store: OrchestratorStore
     @SceneStorage("dashboard.selection") private var storedSelection = DashboardSection.overview.rawValue
     @State private var section: DashboardSection?
-    @State private var query = ""
-    @State private var stateFilter = ""
+    /// Search, state grouping and project narrowing for the task workspace.
+    /// Owned here so a trip through another destination does not discard it.
+    @State private var taskFilter = TaskFilter()
+    @State private var showsTaskInspector = false
     @State private var showsNewTaskSheet = false
     @State private var resourcesTab: ResourcesTab = .providers
     @State private var settingsTab: SettingsTab = .general
@@ -20,6 +22,16 @@ struct DashboardView: View {
     /// Single entry point for navigation that does not come from the sidebar:
     /// overview risks today, deep links later. Applying the sub-surface context
     /// before the destination means the destination renders already positioned.
+    /// Open Tasks narrowed to an Overview counter.
+    ///
+    /// The tiles count composite states, and `TaskStateSelection` maps each one
+    /// to the selection that contains exactly those states, so the list the tile
+    /// opens holds exactly what the tile counted.
+    private func openTasks(metricsFilter: String) {
+        taskFilter = TaskFilter(state: .fromMetricsFilter(metricsFilter))
+        section = .tasks
+    }
+
     private func navigate(to intent: NavigationIntent) {
         switch intent.context {
         case .projects: settingsTab = .projects
@@ -29,6 +41,9 @@ struct DashboardView: View {
         case .verification, .none: break
         }
         if let taskId = intent.taskId {
+            // Navigating to a specific task clears the narrowing, so the task the
+            // link names is actually visible in the collection beside it.
+            taskFilter = TaskFilter()
             store.selectedTaskId = taskId
             Task { await store.loadTaskDetail(taskId: taskId) }
         }
@@ -48,8 +63,9 @@ struct DashboardView: View {
         .sheet(isPresented: $showsNewTaskSheet) {
             NewTaskSheet { submittedTaskId in
                 showsNewTaskSheet = false
-                stateFilter = ""
-                query = ""
+                // A new task is never hidden behind the filter that was in force
+                // when it was created.
+                taskFilter = TaskFilter()
                 store.selectedTaskId = submittedTaskId
                 section = .tasks
                 Task { await store.loadTaskDetail(taskId: submittedTaskId) }
@@ -127,14 +143,14 @@ struct DashboardView: View {
         case .overview:
             OverviewDashboard(
                 section: $section,
-                stateFilter: $stateFilter,
+                onOpenTasks: { openTasks(metricsFilter: $0) },
                 onNavigate: { navigate(to: $0) }
             )
         case .tasks:
-            TasksDashboard(
-                query: $query,
-                stateFilter: $stateFilter,
+            TasksWorkspace(
+                filter: $taskFilter,
                 selectedTaskId: taskSelection,
+                showsInspector: $showsTaskInspector,
                 onNewTask: { showsNewTaskSheet = true },
                 onOpenProviders: {
                     navigate(to: NavigationIntent(section: .resources, context: .providers))
@@ -462,7 +478,9 @@ private struct ProjectFacts: View {
 private struct OverviewDashboard: View {
     @EnvironmentObject private var store: OrchestratorStore
     @Binding var section: DashboardSection?
-    @Binding var stateFilter: String
+    /// Hands the tasks workspace the composite counter the owner clicked, so the
+    /// list it opens contains exactly the tasks the tile counted.
+    let onOpenTasks: (String) -> Void
     let onNavigate: (NavigationIntent) -> Void
 
     var body: some View {
@@ -560,11 +578,10 @@ private struct OverviewDashboard: View {
         }
     }
 
-    /// Navigation only: opens the tasks list filtered to a state. Never mutates
-    /// authoritative task state.
+    /// Navigation only: opens the tasks list narrowed to what the counter
+    /// counted. Never mutates authoritative task state.
     private func navigateToTasks(filter: String) {
-        stateFilter = filter
-        section = .tasks
+        onOpenTasks(filter)
     }
 
     private var disconnectedText: String {
@@ -572,227 +589,6 @@ private struct OverviewDashboard: View {
             return L10n.disconnectionReason(reason)
         }
         return ""
-    }
-}
-
-// MARK: - Tasks
-
-private struct TasksDashboard: View {
-    @EnvironmentObject private var store: OrchestratorStore
-    @Binding var query: String
-    @Binding var stateFilter: String
-    @Binding var selectedTaskId: String?
-    let onNewTask: () -> Void
-    /// The no-selection routing guidance can send the owner to providers, which is
-    /// now a surface inside Resources rather than a first-level destination.
-    let onOpenProviders: () -> Void
-    @FocusState private var searchFocused: Bool
-
-    private var allTasks: [TaskView] {
-        store.tasks?.tasks ?? []
-    }
-
-    private var tasks: [TaskView] {
-        allTasks.filter { task in
-            let matchesQuery = query.isEmpty
-                || task.taskId.localizedCaseInsensitiveContains(query)
-                || task.intent.localizedCaseInsensitiveContains(query)
-            let matchesState = MetricsFilter.matches(state: task.state, filter: stateFilter)
-            return matchesQuery && matchesState
-        }
-    }
-
-    private var states: [String] {
-        Array(Set(allTasks.map(\.state))).sorted()
-    }
-
-    var body: some View {
-        DashboardPageContainer(
-            title: L10n.taskBrowserTitle,
-            symbol: DashboardSection.tasks.symbol,
-            trailing: {
-                AnyView(
-                    Button {
-                        onNewTask()
-                    } label: {
-                        Label(L10n.newTask, systemImage: "plus")
-                    }
-                    .buttonStyle(.borderless)
-                    .keyboardShortcut("n", modifiers: .command)
-                    .help(L10n.newTaskHelp)
-                )
-            }
-        ) {
-            GeometryReader { proxy in
-                let compact = proxy.size.width < 760
-                HStack(alignment: .top, spacing: 12) {
-                    DashboardBrowserPanel(title: L10n.taskBrowserTitle) {
-                        browserContent
-                    }
-                    .frame(
-                        minWidth: compact ? 280 : 300,
-                        idealWidth: compact ? 320 : 340,
-                        maxWidth: 420
-                    )
-                    Divider()
-                    DashboardDetailPanel {
-                        detailContent
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .padding(.horizontal, 4)
-            }
-            .frame(minHeight: 360)
-        }
-        .background(hiddenCommands)
-    }
-
-    @ViewBuilder
-    private var browserContent: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                TextField(L10n.search, text: $query)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($searchFocused)
-                Picker(L10n.stateFilter, selection: $stateFilter) {
-                    Text(L10n.allStates).tag("")
-                    ForEach(states, id: \.self) { Text($0).tag($0) }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-            }
-            .padding(10)
-
-            Divider()
-
-            if tasks.isEmpty {
-                Text(L10n.tasksNoMatch)
-                    .foregroundStyle(.secondary)
-                    .padding(12)
-                Spacer()
-            } else {
-                List(selection: $selectedTaskId) {
-                    ForEach(tasks) { task in
-                        TaskRow(task: task, isSelected: task.taskId == selectedTaskId)
-                            .tag(task.taskId)
-                            .padding(.vertical, 2)
-                    }
-                }
-                .listStyle(.inset)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var detailContent: some View {
-        if allTasks.isEmpty {
-            if store.connection.isConnected {
-                EmptyStateView(
-                    title: L10n.taskDetail,
-                    symbol: "doc.text",
-                    message: L10n.noTasksHint,
-                    hint: L10n.tasksEmptyHint,
-                    action: onNewTask
-                )
-            } else {
-                EmptyStateView(
-                    title: L10n.disconnectedLabel,
-                    symbol: "bolt.slash",
-                    message: L10n.tasksDisconnectedHint
-                )
-            }
-        } else if let selectedTaskId {
-            TaskDetailPanel(
-                detail: store.selectedTaskDetail,
-                selectedTaskId: selectedTaskId,
-                onCopyTaskId: { Pasteboard.copy(selectedTaskId) },
-                onReload: {
-                    Task { await store.loadTaskDetail(taskId: selectedTaskId) }
-                },
-                onStop: {
-                    Task { await store.cancel(taskId: selectedTaskId) }
-                }
-            )
-        } else {
-            EmptyStateView(
-                title: L10n.taskDetailCanvasTitle,
-                symbol: "doc.text",
-                message: L10n.selectTaskForDetails,
-                hint: L10n.taskBrowserHint
-            )
-            RoutingNoSelectionCard(
-                hasTasks: !allTasks.isEmpty,
-                onNewTask: onNewTask,
-                onOpenProviders: onOpenProviders
-            )
-        }
-    }
-
-    /// Hidden commands for keyboard-first navigation. SwiftUI on macOS only
-    /// honors `.keyboardShortcut` on real views; an empty `Group` works for
-    /// invisible but routable shortcuts.
-    private var hiddenCommands: some View {
-        Group {
-            Button(L10n.commandFocusSearch) { searchFocused = true }
-                .keyboardShortcut("f", modifiers: .command)
-                .hidden()
-            Button(L10n.commandPreviousTask) {
-                _ = store.navigateToNeighbour(current: selectedTaskId, in: tasks, offset: -1)
-            }
-            .keyboardShortcut("[", modifiers: .command)
-            .disabled(tasks.isEmpty)
-            .hidden()
-            Button(L10n.commandNextTask) {
-                _ = store.navigateToNeighbour(current: selectedTaskId, in: tasks, offset: 1)
-            }
-            .keyboardShortcut("]", modifiers: .command)
-            .disabled(tasks.isEmpty)
-            .hidden()
-            Button(L10n.commandCopyTaskId) { selectedTaskId.map(Pasteboard.copy) }
-                .keyboardShortcut("c", modifiers: [.command, .option])
-                .disabled(selectedTaskId == nil)
-                .hidden()
-            Button(L10n.commandReloadDetail) {
-                if let selectedTaskId {
-                    Task { await store.loadTaskDetail(taskId: selectedTaskId) }
-                }
-            }
-            .keyboardShortcut("r", modifiers: [.command, .option])
-            .disabled(selectedTaskId == nil)
-            .hidden()
-        }
-    }
-}
-
-private struct TaskRow: View {
-    let task: TaskView
-    let isSelected: Bool
-
-    var body: some View {
-        HStack(spacing: 0) {
-            Rectangle()
-                .fill(isSelected ? Color.accentColor : .clear)
-                .frame(width: 3)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(task.intent)
-                        .font(.body.weight(.medium))
-                        .lineLimit(2)
-                    Spacer()
-                    StatusBadge(text: task.state, kind: task.state == "BLOCKED" ? .bad : .neutral)
-                }
-                Text(relativeTime(task.updatedAt))
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.leading, 6)
-        }
-    }
-
-    /// The hand-rolled English relative time is gone: `Timestamps` follows the
-    /// locale, so this row reads in the product language like every other.
-    private func relativeTime(_ value: String) -> String {
-        L10n.updatedRelative(Timestamps.friendly(value))
     }
 }
 
@@ -1470,6 +1266,7 @@ private struct QuotaSection: View {
                     symbol: "chart.pie",
                     message: L10n.quotaEmptyMessage,
                     hint: L10n.providersAddProvider,
+                    actionTitle: L10n.providersAddProvider,
                     action: onAddProvider
                 )
             } else {
@@ -2413,233 +2210,6 @@ private struct DaemonLifecycleLabel: View {
     }
 }
 
-private struct TaskDetailPanel: View {
-    let detail: TaskDetailView?
-    let selectedTaskId: String?
-    let onCopyTaskId: () -> Void
-    let onReload: () -> Void
-    let onStop: () -> Void
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if let detail {
-                    TaskSummaryPanel(
-                        detail: detail,
-                        onCopyTaskId: onCopyTaskId,
-                        onReload: onReload,
-                        onStop: onStop
-                    )
-                    // Routing was a first-level destination; its explanation is
-                    // task-scoped, so it belongs with the task it explains. B3
-                    // decides where in the new Task Detail structure it sits.
-                    RoutingPanel(detail: detail)
-                    ProgressPanel(detail: detail)
-                    LiveActivityPanel(detail: detail)
-                    ChangesPanel(detail: detail)
-                    TestsVerificationPanel(detail: detail)
-                    AdvancedDetailsPanel(detail: detail)
-                    RawWorkerConsolePanel(detail: detail)
-                } else {
-                    EmptyStateView(
-                        title: L10n.taskDetail,
-                        symbol: "doc.text",
-                        message: L10n.selectTaskEmptyState,
-                        hint: L10n.taskDetailEmptyHint
-                    )
-                }
-            }
-            .padding(20)
-        }
-    }
-}
-
-private struct TaskSummaryPanel: View {
-    let detail: TaskDetailView
-    let onCopyTaskId: () -> Void
-    let onReload: () -> Void
-    let onStop: () -> Void
-
-    private var currentPhase: String {
-        ExecutionPhase.derive(from: detail).first(where: { $0.isCurrent })?.title ?? L10n.phasePreparing
-    }
-
-    private var providerModel: String {
-        detail.runs.last?.workerId
-            ?? detail.routing?.selectedExecutionTargetId
-            ?? L10n.valueAutomatic
-    }
-
-    var body: some View {
-        DashboardCard(title: L10n.detailPanelSummary, symbol: "doc.text.magnifyingglass") {
-            HStack(alignment: .firstTextBaseline) {
-                Text(detail.task.intent)
-                    .font(.headline)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer()
-                StatusBadge(
-                    text: detail.task.state,
-                    kind: detail.task.state == "BLOCKED" ? .bad : (detail.task.state == "VERIFIED" ? .good : .neutral)
-                )
-            }
-            LabeledContent(L10n.providerModel, value: providerModel)
-            LabeledContent(L10n.detailCurrentPhase, value: currentPhase)
-            LabeledContent(L10n.detailElapsed, value: elapsedText(task: detail.task))
-            HStack(spacing: 8) {
-                if detail.task.state == "RUNNING" || detail.task.state == "VERIFYING" {
-                    Button(role: .destructive) {
-                        onStop()
-                    } label: {
-                        Label(L10n.detailStop, systemImage: "stop.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .help(L10n.detailStopHelp)
-                }
-                Button {
-                    onReload()
-                } label: {
-                    Label(L10n.reload, systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .keyboardShortcut("r", modifiers: [.command, .option])
-                .help(L10n.reloadHint)
-
-                Button {
-                    onCopyTaskId()
-                } label: {
-                    Label(L10n.copyTaskId, systemImage: "doc.on.doc")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .keyboardShortcut("c", modifiers: [.command, .option])
-                .help(L10n.copyTaskIdHint)
-            }
-        }
-    }
-}
-
-private struct ExecutionPhase: Identifiable {
-    let title: String
-    let isComplete: Bool
-    let isCurrent: Bool
-
-    var id: String { title }
-
-    static func derive(from detail: TaskDetailView) -> [ExecutionPhase] {
-        let events = Set(detail.events.map(\.eventType))
-        let hasWorkspace = detail.workspace != nil || events.contains("WORKSPACE_REGISTERED")
-        let hasRouting = detail.routing != nil || events.contains("ROUTING_DECISION_RECORDED")
-        let hasQuota = events.contains("QUOTA_ADMITTED")
-        let hasRun = !detail.runs.isEmpty || events.contains("RUN_STARTED")
-        let editingDone = detail.runs.contains { $0.status != "RUNNING" } || events.contains("RUN_FINISHED")
-        let verifying = detail.task.state == "VERIFYING"
-            || detail.task.state == "VERIFIED"
-            || detail.verification.status != "NOT_VERIFIED"
-        let finished = ["VERIFIED", "BLOCKED", "FAILED", "CANCELLED", "COMPLETED"].contains(detail.task.state)
-        let states: [(String, Bool)] = [
-            (L10n.phasePreparing, true),
-            (L10n.phaseRouting, hasRouting),
-            (L10n.phaseWorkspace, hasWorkspace),
-            (L10n.phaseQuota, hasQuota),
-            (L10n.phaseStartingWorker, hasRun),
-            (L10n.phaseEditing, editingDone),
-            (L10n.phaseTesting, editingDone),
-            (L10n.phaseVerifying, verifying),
-            (L10n.phaseFinished, finished),
-        ]
-        let currentIndex = states.firstIndex { !$0.1 } ?? states.count - 1
-        return states.enumerated().map { index, item in
-            ExecutionPhase(title: item.0, isComplete: item.1, isCurrent: index == currentIndex)
-        }
-    }
-}
-
-private struct ProgressPanel: View {
-    let detail: TaskDetailView
-
-    var body: some View {
-        DashboardCard(title: L10n.detailPanelProgress, symbol: "checklist") {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 8)], spacing: 8) {
-                ForEach(ExecutionPhase.derive(from: detail)) { phase in
-                    HStack(spacing: 6) {
-                        let style = StatusStyle.lifecyclePhase(
-                            isComplete: phase.isComplete, isCurrent: phase.isCurrent
-                        )
-                        Image(systemName: style.symbol)
-                            .foregroundStyle(phase.isCurrent ? Color.accentColor : style.color)
-                        Text(phase.title)
-                            .lineLimit(1)
-                    }
-                    .font(.caption)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-                }
-            }
-        }
-    }
-}
-
-private struct LiveActivityPanel: View {
-    let detail: TaskDetailView
-
-    var body: some View {
-        DashboardCard(title: L10n.detailPanelLiveActivity, symbol: "waveform.path.ecg") {
-            EventList(events: detail.events)
-        }
-    }
-}
-
-private struct ChangesPanel: View {
-    let detail: TaskDetailView
-
-    var body: some View {
-        DashboardCard(title: L10n.detailPanelChanges, symbol: "doc.on.clipboard") {
-            if let workspace = detail.workspace {
-                LabeledContent(L10n.worktree, value: workspace.worktreePath)
-                    .font(.system(.caption, design: .monospaced))
-                LabeledContent(L10n.branch, value: workspace.branch)
-                LabeledContent(L10n.detailFilesChanged, value: changedFileText)
-            } else {
-                Label(L10n.detailNoWorktree, systemImage: "tray")
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var changedFileText: String {
-        guard let result = detail.verification.result else { return L10n.valueNotVerifiedYet }
-        let count = result.changedPaths.count
-        return "\(count)"
-    }
-}
-
-private struct TestsVerificationPanel: View {
-    let detail: TaskDetailView
-
-    var body: some View {
-        DashboardCard(title: L10n.detailPanelVerification, symbol: "checkmark.seal") {
-            StatusBadge(text: detail.verification.status, kind: detail.verification.status == "VERIFIED" ? .good : .neutral)
-            LabeledContent(L10n.evidenceLabel, value: detail.verification.evidenceId ?? L10n.valueNone)
-            if let result = detail.verification.result {
-                LabeledContent(L10n.detailVerifierProfile, value: result.profile)
-                ForEach(result.stages) { stage in
-                    LabeledContent(stage.name, value: stage.passed ? L10n.valueStagePassed : L10n.valueStageFailed)
-                }
-            }
-            if let failure = detail.verification.failureReason {
-                Text(failure).foregroundStyle(.red)
-            }
-            ForEach(detail.approvals.approvals) { approval in
-                Text("\(approval.kind): \(approval.status)")
-            }
-        }
-    }
-}
-
 /// All five owner-facing scheduling modes, plus which one is currently in force.
 ///
 /// Shown on the Routing page even with no task selected, so the owner can always see
@@ -2731,426 +2301,6 @@ private struct SchedulingModeRow: View {
 
 /// Routing page state when no task is selected: explain what the scheduler weighs,
 /// and surface the provider problem when there is nothing eligible to weigh.
-private struct RoutingNoSelectionCard: View {
-    @EnvironmentObject private var store: OrchestratorStore
-    let hasTasks: Bool
-    let onNewTask: () -> Void
-    let onOpenProviders: () -> Void
-
-    private var connectedCount: Int {
-        store.providerConnections?.connected.count ?? 0
-    }
-
-    private var importCandidateCount: Int {
-        store.providerConnections?.importCandidates.count ?? 0
-    }
-
-    var body: some View {
-        DashboardCard(title: L10n.routingTitle, symbol: "point.topleft.down.curvedto.point.bottomright.up") {
-            if connectedCount == 0 {
-                Label(L10n.routingNoConnectedProviders, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 10) {
-                    Button(action: onOpenProviders) {
-                        Label(L10n.providersAddProvider, systemImage: "plus")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    if importCandidateCount > 0 {
-                        Button(action: onOpenProviders) {
-                            Label(L10n.providersImportExisting, systemImage: "square.and.arrow.down")
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
-            } else {
-                Text(hasTasks ? L10n.routingNoTaskSelected : L10n.routingNeedsTask)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(L10n.routingConsiders)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if !hasTasks {
-                    Button(action: onNewTask) {
-                        Label(L10n.newTask, systemImage: "plus")
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-            }
-        }
-    }
-}
-
-private struct RoutingPanel: View {
-    let detail: TaskDetailView
-
-    var body: some View {
-        DashboardCard(title: L10n.routingExplanation, symbol: "point.topleft.down.curvedto.point.bottomright.up") {
-            if let routing = detail.routing {
-                StatusBadge(text: routing.mode ?? "UNKNOWN", kind: .neutral)
-                // The resolved policy and where it came from are read from the frozen
-                // decision record, not from current Settings.
-                if let resolved = routing.resolvedPolicy {
-                    LabeledContent(
-                        L10n.routingResolvedPolicy,
-                        value: L10n.schedulingPolicyName(resolved)
-                    )
-                } else if let policy = routing.policyId {
-                    LabeledContent(L10n.routingResolvedPolicy, value: L10n.schedulingPolicyName(policy))
-                }
-                if let source = routing.policyResolutionSource {
-                    LabeledContent(
-                        L10n.policyResolutionSourceLabel,
-                        value: L10n.policyResolutionSource(source)
-                    )
-                }
-                LabeledContent(L10n.actualExecutionTarget, value: routing.selectedExecutionTargetId ?? L10n.valueNone)
-                LabeledContent(L10n.wouldSelect, value: routing.mode == "SHADOW" ? (routing.selectedExecutionTargetId ?? L10n.valueNone) : L10n.valueNotShadowMode)
-                if let why = routing.whySelected {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(L10n.routingWhySelected)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Text(why)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                if !routing.candidates.isEmpty {
-                    Divider()
-                    Text(L10n.routingCandidates)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    ForEach(Array(routing.candidates.enumerated()), id: \.offset) { _, candidate in
-                        RoutingCandidateRow(candidate: candidate)
-                    }
-                }
-                if let reason = routing.fallbackReason {
-                    Text(reason).foregroundStyle(.secondary)
-                }
-                DisclosureGroup(L10n.advancedDetails) {
-                    LabeledContent(L10n.detailRoutingDecision, value: routing.decisionId)
-                    LabeledContent(L10n.detailRoutingRequest, value: routing.requestId)
-                }
-            } else {
-                Label(L10n.routingNotYetDecided, systemImage: "clock")
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-}
-
-private struct RoutingCandidateRow: View {
-    let candidate: [String: RoutingDecisionView.StringValue]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Text(candidate["model_display_name"]?.value
-                    ?? candidate["model_sku_id"]?.value
-                    ?? L10n.candidateUnknownModel)
-                    .font(.caption.weight(.semibold))
-                Spacer()
-                StatusBadge(text: statusText, kind: statusKind)
-                if let score = candidate["score"]?.value {
-                    Text(score)
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            }
-            if let provider = candidate["provider_display_name"]?.value {
-                Text(provider)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            if let whyNot = candidate["why_not_selected"]?.value {
-                // Structured scheduler evidence, verbatim — never model-generated prose.
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(L10n.routingWhyNotSelected)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                    Text(whyNot)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            DisclosureGroup(L10n.advancedDetails) {
-                if let target = candidate["execution_target_id"]?.value {
-                    LabeledContent(L10n.executionTarget, value: target)
-                }
-                if let providerId = candidate["provider_id"]?.value {
-                    LabeledContent(L10n.providersProviderId, value: providerId)
-                }
-                if let quota = candidate["quota_snapshot_id"]?.value {
-                    LabeledContent(L10n.detailQuotaEvidence, value: quota)
-                }
-            }
-        }
-        .padding(.vertical, 6)
-    }
-
-    private var statusText: String {
-        if candidate["selected"]?.boolValue == true { return L10n.candidateSelected }
-        if candidate["eligible"]?.boolValue == true && candidate["admitted"]?.boolValue == true {
-            return L10n.candidateEligible
-        }
-        return L10n.candidateIneligible
-    }
-
-    private var statusKind: BadgeKind {
-        if candidate["selected"]?.boolValue == true { return .good }
-        if candidate["eligible"]?.boolValue == true && candidate["admitted"]?.boolValue == true {
-            return .neutral
-        }
-        return .warn
-    }
-}
-
-/// Owner-initiated execution panel. Dispatch is only enabled when the
-/// safety gates hold: the owner setting is ON, the task is dispatchable,
-/// and a verified execution target is selected. Nothing here implies
-/// autonomous Production ACTIVE.
-private struct OwnerDispatchPanel: View {
-    @EnvironmentObject private var store: OrchestratorStore
-    let detail: TaskDetailView
-    @State private var selectedTargetId: String = ""
-
-    private var verifiedTargets: [ExecutionTargetHealthView] {
-        (store.providers?.providers ?? [])
-            .flatMap(\.executionTargets)
-            .filter { $0.enabled && $0.isExecutionVerified }
-    }
-
-    /// MANUAL may only name a target on a connected provider — scheduling never
-    /// reaches catalog-only or merely importable surfaces.
-    private var connectedTargets: [ExecutionTargetHealthView] {
-        let connectedIds = Set(
-            (store.providerConnections?.connected ?? []).map(\.providerId)
-        )
-        return (store.providers?.providers ?? [])
-            .filter { connectedIds.contains($0.providerId) }
-            .flatMap(\.executionTargets)
-    }
-
-    private static let selectablePolicies = [
-        "BALANCED", "QUALITY_FIRST", "QUOTA_SAVER", "SPEED_FIRST", "MANUAL",
-    ]
-
-    private var ownerSettingEnabled: Bool {
-        store.ownerExecutionSettings?.ownerInitiatedExecutionEnabled ?? false
-    }
-
-    private var taskDispatchable: Bool {
-        detail.task.state == "SUBMITTED" || detail.task.state == "READY"
-    }
-
-    private var canDispatch: Bool {
-        ownerSettingEnabled && taskDispatchable && !verifiedTargets.isEmpty && !selectedTargetId.isEmpty
-    }
-
-    var body: some View {
-        DashboardCard(title: L10n.ownerDispatch, symbol: "person.badge.key") {
-            if !ownerSettingEnabled {
-                Label(L10n.ownerExecutionDisabled, systemImage: "lock")
-                    .foregroundStyle(.secondary)
-            }
-            if !taskDispatchable {
-                Label(
-                    L10n.taskNotDispatchable(detail.task.state),
-                    systemImage: "exclamationmark.circle"
-                )
-                .foregroundStyle(.secondary)
-            }
-            if verifiedTargets.isEmpty {
-                Label(L10n.noVerifiedTargets, systemImage: "xmark.shield")
-                    .foregroundStyle(.secondary)
-            } else {
-                Picker(L10n.executionTarget, selection: $selectedTargetId) {
-                    ForEach(verifiedTargets) { target in
-                        Text(target.executionTargetId).tag(target.executionTargetId)
-                    }
-                }
-                if let target = verifiedTargets.first(where: { $0.executionTargetId == selectedTargetId }) {
-                    LabeledContent(L10n.providerModel, value: target.modelSkuId)
-                }
-            }
-            Button {
-                Task {
-                    await store.dispatch(
-                        taskId: detail.task.taskId,
-                        executionTargetId: selectedTargetId
-                    )
-                }
-            } label: {
-                Label(L10n.dispatch, systemImage: "play")
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(!canDispatch)
-            .help(canDispatch ? L10n.dispatchHelp : L10n.dispatchBlockedHint)
-
-            if let dispatch = store.lastDispatch, dispatch.task.taskId == detail.task.taskId {
-                LabeledContent(L10n.dispatchStatus, value: dispatch.status)
-                if let code = dispatch.failureCode {
-                    LabeledContent(L10n.failureCode, value: code).foregroundStyle(.red)
-                }
-                if let reason = dispatch.reason {
-                    Text(reason)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            if let workspace = detail.workspace {
-                LabeledContent(L10n.worktree, value: workspace.worktreePath)
-                    .font(.system(.caption, design: .monospaced))
-                LabeledContent(L10n.branch, value: workspace.branch)
-                LabeledContent(L10n.writerLock, value: workspace.writerLocked ? "HELD" : "RELEASED")
-            }
-            ForEach(detail.runs) { run in
-                VStack(alignment: .leading, spacing: 2) {
-                    LabeledContent(L10n.workerRun, value: run.status)
-                    LabeledContent("PID", value: run.pid.map(String.init) ?? "-")
-                }
-            }
-            Text(L10n.ownerDispatchFooter)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .onAppear {
-            if selectedTargetId.isEmpty {
-                selectedTargetId = verifiedTargets.first?.executionTargetId ?? ""
-            }
-        }
-    }
-}
-
-private struct AdvancedDetailsPanel: View {
-    let detail: TaskDetailView
-
-    var body: some View {
-        DisclosureGroup {
-            VStack(alignment: .leading, spacing: 8) {
-                LabeledContent(L10n.detailTaskId, value: detail.task.taskId)
-                LabeledContent(L10n.detailRequestId, value: detail.task.requestId)
-                if let routing = detail.routing {
-                    LabeledContent(L10n.detailRoutingDecision, value: routing.decisionId)
-                    LabeledContent(L10n.detailRoutingRequest, value: routing.requestId)
-                }
-                if let workspace = detail.workspace {
-                    LabeledContent(L10n.worktree, value: workspace.worktreePath)
-                        .font(.system(.caption, design: .monospaced))
-                    LabeledContent(L10n.detailBaseSha, value: workspace.baseSha)
-                    LabeledContent(L10n.writerLock, value: workspace.writerLocked ? "HELD" : "RELEASED")
-                }
-                ForEach(detail.runs) { run in
-                    VStack(alignment: .leading, spacing: 4) {
-                        LabeledContent(L10n.detailRunId, value: run.runId)
-                        LabeledContent(L10n.executionTarget, value: run.workerId)
-                        LabeledContent("PID", value: run.pid.map(String.init) ?? "-")
-                        LabeledContent(L10n.detailRunStatus, value: run.status)
-                    }
-                    .padding(.vertical, 4)
-                    Divider()
-                }
-            }
-        } label: {
-            Label(L10n.advancedDetails, systemImage: "gearshape.2")
-                .font(.headline)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-private struct RawWorkerConsolePanel: View {
-    let detail: TaskDetailView
-
-    var body: some View {
-        DisclosureGroup {
-            VStack(alignment: .leading, spacing: 10) {
-                if detail.runs.isEmpty {
-                    Label(L10n.detailNoWorkerRun, systemImage: "tray")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(detail.runs) { run in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("worker=\(run.workerId) status=\(run.status)")
-                        if let exitCode = run.exitCode {
-                            Text("exit_code=\(exitCode)")
-                        }
-                        Text("stdout_bytes=\(run.stdoutBytes ?? 0) stderr_bytes=\(run.stderrBytes ?? 0)")
-                        if let stdout = run.stdoutSHA256 {
-                            Text("stdout_sha256=\(stdout)")
-                        }
-                        if let stderr = run.stderrSHA256 {
-                            Text("stderr_sha256=\(stderr)")
-                        }
-                        if run.outputTruncated == true {
-                            Text("output_truncated=true")
-                        }
-                        if run.timedOut == true {
-                            Text("timed_out=true")
-                        }
-                    }
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(
-                        Color(nsColor: .textBackgroundColor),
-                        in: RoundedRectangle(cornerRadius: Radius.inline)
-                    )
-                }
-                ForEach(detail.events) { event in
-                    Text("[\(event.createdAt)] \(event.eventType): \(event.summary)")
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-        } label: {
-            Label(L10n.detailRawWorkerOutput, systemImage: "terminal")
-                .font(.headline)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-private struct EventList: View {
-    let events: [ActivityEventView]
-
-    var body: some View {
-        if events.isEmpty {
-            Label(L10n.noEvents, systemImage: "tray")
-                .foregroundStyle(.secondary)
-        } else {
-            ForEach(events) { event in
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack {
-                        Text(event.eventType).font(.system(.caption, design: .monospaced))
-                        Spacer()
-                        Text(event.createdAt).font(.caption).foregroundStyle(.tertiary)
-                    }
-                    Text(event.summary).foregroundStyle(.secondary)
-                }
-                Divider()
-            }
-        }
-    }
-}
-
-/// Elapsed time for a task. Running work measures to now; finished work measures
-/// to the moment it stopped. See `TaskTiming`.
-private func elapsedText(task: TaskView) -> String {
-    guard let interval = TaskTiming.elapsed(task: task) else { return L10n.valueUnknown }
-    return Timestamps.duration(interval)
-}
-
-
 /// Badge semantics, resolved through the shared `StatusTone` vocabulary so a
 /// badge cannot drift away from the same status rendered elsewhere.
 private enum BadgeKind {
@@ -3411,49 +2561,6 @@ private struct RiskRow: View {
     private var presentation: StatusPresentation { StatusStyle.severity(risk.severity) }
     private var color: Color { presentation.color }
     private var symbol: String { presentation.symbol }
-}
-
-private struct EmptyStateView: View {
-    let title: String
-    let symbol: String
-    let message: String
-    var hint: String? = nil
-    var action: (() -> Void)? = nil
-
-    init(title: String, symbol: String, message: String, hint: String? = nil, action: (() -> Void)? = nil) {
-        self.title = title
-        self.symbol = symbol
-        self.message = message
-        self.hint = hint
-        self.action = action
-    }
-
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: symbol)
-                .font(.system(size: 48, weight: .light))
-                .foregroundStyle(.secondary)
-            Text(title).font(.title3.weight(.semibold))
-            Text(message)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-            if let hint {
-                Text(hint)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let action {
-                Button(L10n.newTask, action: action)
-                    .controlSize(.regular)
-                    .padding(.top, 4)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(30)
-    }
 }
 
 /// Sanitized clipboard helper. Plain NSPasteboard writes do not require TCC

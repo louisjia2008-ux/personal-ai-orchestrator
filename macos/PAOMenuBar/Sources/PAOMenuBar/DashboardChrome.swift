@@ -72,54 +72,87 @@ struct PageHeader: View {
     }
 }
 
-/// Internal browser / list panel used inside a page container when a
-/// section needs a master/detail layout. Visually subordinate to the
-/// primary navigation sidebar: rounded content material, subtle
-/// separator, no navigation chrome.
-struct DashboardBrowserPanel<Content: View>: View {
+/// Placeholder for a surface with nothing to show.
+///
+/// The action is a title plus a closure rather than a bare closure: every empty
+/// state used to render the same "New Task" button regardless of what it was
+/// empty of, so the quota page offered to create a task when what it needed was
+/// a provider. A caller that supplies an action now has to say what it does.
+struct EmptyStateView: View {
     let title: String
-    @ViewBuilder var content: Content
+    let symbol: String
+    let message: String
+    var hint: String? = nil
+    var actionTitle: String? = nil
+    var action: (() -> Void)? = nil
 
-    init(title: String, @ViewBuilder content: () -> Content) {
+    init(
+        title: String,
+        symbol: String,
+        message: String,
+        hint: String? = nil,
+        actionTitle: String? = nil,
+        action: (() -> Void)? = nil
+    ) {
         self.title = title
-        self.content = content()
+        self.symbol = symbol
+        self.message = message
+        self.hint = hint
+        self.actionTitle = actionTitle
+        self.action = action
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(title)
-                .font(.headline)
+        VStack(spacing: Spacing.element) {
+            Image(systemName: symbol)
+                .font(.system(size: 48, weight: .light))
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.top, 10)
-                .padding(.bottom, 6)
-            Divider()
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            Text(title).font(.title3.weight(.semibold))
+            Text(message)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            if let hint {
+                Text(hint)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let action, let actionTitle {
+                Button(actionTitle, action: action)
+                    .controlSize(.regular)
+                    .padding(.top, Spacing.tight)
+            }
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.6), lineWidth: 1)
-        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(30)
     }
 }
 
-/// Detail slot inside a DashboardPageContainer. Flexible width; pairs
-/// with `DashboardBrowserPanel` to form a master/detail layout that
-/// never visually competes with the primary navigation sidebar.
-struct DashboardDetailPanel<Content: View>: View {
-    @ViewBuilder var content: Content
-
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
+/// Chronological daemon events. Summaries are the daemon's own sentences and
+/// are rendered verbatim.
+struct EventList: View {
+    let events: [ActivityEventView]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            content
+        if events.isEmpty {
+            Label(L10n.noEvents, systemImage: "tray")
+                .foregroundStyle(.secondary)
+        } else {
+            ForEach(events) { event in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text(event.eventType).font(.system(.caption, design: .monospaced))
+                        Spacer()
+                        Text(Timestamps.friendly(event.createdAt))
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    Text(event.summary).foregroundStyle(.secondary)
+                }
+                Divider()
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(.horizontal, 4)
     }
 }
