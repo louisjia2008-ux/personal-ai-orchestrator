@@ -191,7 +191,46 @@ public enum L10n {
         "evidence.observed", "evidence.derived", "evidence.forecast",
         "evidence.unavailable", "timestamp.justNow",
         "command.focusSearch", "command.previousTask", "command.nextTask",
-        "command.copyTaskId", "command.reloadDetail"
+        "command.copyTaskId", "command.reloadDetail",
+        // B3 task workspace
+        "taskGroup.queued", "taskGroup.active", "taskGroup.needsAttention",
+        "taskGroup.completed", "taskGroup.cancelled", "tasks.filterMenu",
+        "tasks.filter.allTasks", "tasks.filter.groups", "tasks.filter.states",
+        "tasks.filter.project", "tasks.filter.allProjects", "tasks.filter.clear",
+        "tasks.searchPrompt", "tasks.visibleCount", "tasks.truncated",
+        "tasks.truncatedHelp", "tasks.noProject", "empty.tasks.none.title",
+        "empty.tasks.none.message", "empty.tasks.search.title", "empty.tasks.search.message",
+        "empty.tasks.search.hint", "empty.tasks.filter.title", "empty.tasks.filter.message",
+        "empty.tasks.loading", "empty.tasks.noSelection.title", "empty.tasks.noSelection.message",
+        "taskDetail.section.overview", "taskDetail.section.lifecycle", "taskDetail.section.execution",
+        "taskDetail.section.attention", "taskDetail.openTaskFailed", "taskLifecycle.submitted",
+        "taskLifecycle.routing", "taskLifecycle.workspace", "taskLifecycle.execution",
+        "taskLifecycle.verification", "taskLifecycle.completion", "taskLifecycle.status.reached",
+        "taskLifecycle.status.inProgress", "taskLifecycle.status.notReached", "taskLifecycle.status.failed",
+        "taskLifecycle.status.stopped", "taskLifecycle.status.unknown", "taskLifecycle.footer",
+        "taskAttention.verificationFailed", "taskAttention.failed", "taskAttention.blocked",
+        "taskAttention.unknownState", "taskAttention.verificationEvidenceUnavailable", "taskAttention.unexpectedChanges",
+        "taskAttention.awaitingApproval", "taskAttention.noDetail", "routing.role.primary",
+        "routing.role.reviewer", "routing.role.finalAuditor", "routing.roleStatus.unassigned",
+        "routing.roleStatus.assigned", "routing.roleStatus.running", "routing.roleStatus.completed",
+        "routing.roleStatus.cancelled", "routing.outcome.pass", "routing.outcome.fail",
+        "routing.outcome.error", "routing.outcome.none", "routing.plan",
+        "routing.planRevision", "routing.superseded", "routing.legacySynthesized",
+        "routing.declaredRoles", "routing.rerouteCount", "routing.rerouteReason",
+        "routing.previousDecisions", "routing.decidedAtLabel", "routing.noDetails",
+        "changes.title", "changes.count", "changes.none",
+        "changes.notMeasured.verificationNotRun", "changes.notMeasured.noWorkspace", "changes.unexpected",
+        "changes.unexpectedCount", "changes.footer", "changes.revealWorktree",
+        "verification.status.verified", "verification.status.evidenceMissing", "verification.status.evidenceUnavailable",
+        "verification.status.failed", "verification.status.inProgress", "verification.status.notVerified",
+        "verification.checks", "verification.checkExit", "verification.noResult",
+        "verification.notRunYet", "verification.overall", "verification.approvals",
+        "verification.evidenceProblemFooter", "verification.stageFooter", "inspector.title",
+        "inspector.toggle", "inspector.identity", "inspector.timestamps",
+        "inspector.workspaceSection", "inspector.runsSection", "inspector.routingProvenance",
+        "inspector.empty", "label.createdAt", "label.updatedAt",
+        "label.stateVersion", "label.repositoryPath", "label.projectId",
+        "label.currentWorker", "label.noWorkerYet", "routing.planRevisionLabel"
     ]
 
     /// English is the guaranteed fallback (`defaultLocalization` in Package.swift).
@@ -1098,4 +1137,186 @@ public enum L10n {
     public static var commandNextTask: String { tr("command.nextTask") }
     public static var commandCopyTaskId: String { tr("command.copyTaskId") }
     public static var commandReloadDetail: String { tr("command.reloadDetail") }
+
+    // MARK: - B3 task workspace
+
+    /// Product groupings over authoritative task states.
+    public static func taskStateGroup(_ rawValue: String) -> String {
+        tr("taskGroup.\(rawValue)")
+    }
+
+    public static var tasksFilterMenu: String { tr("tasks.filterMenu") }
+    public static var tasksFilterAllTasks: String { tr("tasks.filter.allTasks") }
+    public static var tasksFilterGroups: String { tr("tasks.filter.groups") }
+    public static var tasksFilterStates: String { tr("tasks.filter.states") }
+    public static var tasksFilterProject: String { tr("tasks.filter.project") }
+    public static var tasksFilterAllProjects: String { tr("tasks.filter.allProjects") }
+    public static var tasksFilterClear: String { tr("tasks.filter.clear") }
+    public static var tasksSearchPrompt: String { tr("tasks.searchPrompt") }
+    public static var tasksNoProject: String { tr("tasks.noProject") }
+
+    public static func tasksVisibleCount(shown: Int, total: Int) -> String {
+        tr("tasks.visibleCount", [shown, total])
+    }
+
+    /// The honest scope line for a collection the daemon could not serve whole.
+    /// Both numbers are authoritative: what arrived, and what the store holds.
+    public static func tasksTruncated(shown: Int, total: Int) -> String {
+        tr("tasks.truncated", [shown, total])
+    }
+
+    public static func tasksTruncatedHelp(limit: Int) -> String {
+        tr("tasks.truncatedHelp", [limit])
+    }
+
+    // Task collection empty states. Each names its own cause, because "no tasks
+    // exist" and "your search matched nothing" need different next actions.
+    public static var emptyTasksNoneTitle: String { tr("empty.tasks.none.title") }
+    public static var emptyTasksNoneMessage: String { tr("empty.tasks.none.message") }
+    public static var emptyTasksSearchTitle: String { tr("empty.tasks.search.title") }
+    public static func emptyTasksSearchMessage(_ query: String) -> String {
+        tr("empty.tasks.search.message", [query])
+    }
+    public static var emptyTasksSearchHint: String { tr("empty.tasks.search.hint") }
+    public static var emptyTasksFilterTitle: String { tr("empty.tasks.filter.title") }
+    public static var emptyTasksFilterMessage: String { tr("empty.tasks.filter.message") }
+    public static var emptyTasksLoading: String { tr("empty.tasks.loading") }
+    public static var emptyTasksNoSelectionTitle: String { tr("empty.tasks.noSelection.title") }
+    public static var emptyTasksNoSelectionMessage: String {
+        tr("empty.tasks.noSelection.message")
+    }
+
+    // Task Detail sections
+    public static var taskDetailSectionOverview: String { tr("taskDetail.section.overview") }
+    public static var taskDetailSectionLifecycle: String { tr("taskDetail.section.lifecycle") }
+    public static var taskDetailSectionExecution: String { tr("taskDetail.section.execution") }
+    public static var taskDetailSectionAttention: String { tr("taskDetail.section.attention") }
+    public static var taskDetailOpenFailed: String { tr("taskDetail.openTaskFailed") }
+
+    public static func taskLifecycleStage(_ rawValue: String) -> String {
+        tr("taskLifecycle.\(rawValue)")
+    }
+
+    public static func taskLifecycleStatus(_ status: TaskLifecycleStatus) -> String {
+        tr("taskLifecycle.status.\(status.rawValue)")
+    }
+
+    public static var taskLifecycleFooter: String { tr("taskLifecycle.footer") }
+
+    public static func taskAttentionTitle(_ rawValue: String) -> String {
+        tr("taskAttention.\(rawValue)")
+    }
+
+    public static var taskAttentionNoDetail: String { tr("taskAttention.noDetail") }
+
+    /// Localized role name. An unrecognized role keeps its machine value: a
+    /// label this build invented would claim knowledge it does not have.
+    public static func routingRoleName(_ role: RoutingRole) -> String {
+        switch role {
+        case .primary: return tr("routing.role.primary")
+        case .reviewer: return tr("routing.role.reviewer")
+        case .finalAuditor: return tr("routing.role.finalAuditor")
+        case .other(let raw): return raw
+        }
+    }
+
+    public static func routingRoleStatusName(_ status: RoutingRoleStatus) -> String {
+        switch status {
+        case .unassigned: return tr("routing.roleStatus.unassigned")
+        case .assigned: return tr("routing.roleStatus.assigned")
+        case .running: return tr("routing.roleStatus.running")
+        case .completed: return tr("routing.roleStatus.completed")
+        case .cancelled: return tr("routing.roleStatus.cancelled")
+        case .unknown(let raw): return raw
+        }
+    }
+
+    public static func routingOutcomeName(_ outcome: RoutingOutcome) -> String {
+        switch outcome {
+        case .pass: return tr("routing.outcome.pass")
+        case .fail: return tr("routing.outcome.fail")
+        case .error: return tr("routing.outcome.error")
+        case .none: return tr("routing.outcome.none")
+        case .unknown(let raw): return raw
+        }
+    }
+
+    public static var routingPlanLabel: String { tr("routing.plan") }
+    public static func routingPlanRevision(_ revision: Int) -> String {
+        tr("routing.planRevision", [revision])
+    }
+    public static var routingPlanRevisionLabel: String { tr("routing.planRevisionLabel") }
+    public static var routingSuperseded: String { tr("routing.superseded") }
+    public static var routingLegacySynthesized: String { tr("routing.legacySynthesized") }
+    public static var routingDeclaredRoles: String { tr("routing.declaredRoles") }
+    public static func routingRerouteCount(_ count: Int) -> String {
+        tr("routing.rerouteCount", [count])
+    }
+    public static var routingRerouteReason: String { tr("routing.rerouteReason") }
+    public static var routingPreviousDecisions: String { tr("routing.previousDecisions") }
+    public static var routingDecidedAtLabel: String { tr("routing.decidedAtLabel") }
+    public static var routingNoDetails: String { tr("routing.noDetails") }
+
+    // Changes
+    public static var changesTitle: String { tr("changes.title") }
+    public static func changesCount(_ count: Int) -> String { tr("changes.count", [count]) }
+    public static var changesNone: String { tr("changes.none") }
+    public static var changesUnexpected: String { tr("changes.unexpected") }
+    public static func changesUnexpectedCount(_ count: Int) -> String {
+        tr("changes.unexpectedCount", [count])
+    }
+    public static var changesFooter: String { tr("changes.footer") }
+    public static var changesRevealWorktree: String { tr("changes.revealWorktree") }
+
+    public static func changesUnavailable(_ reason: TaskChangesUnavailableReason) -> String {
+        switch reason {
+        case .verificationNotRun: return tr("changes.notMeasured.verificationNotRun")
+        case .noWorkspace: return tr("changes.notMeasured.noWorkspace")
+        }
+    }
+
+    /// Localized verification status. An unrecognized status shows its machine
+    /// value rather than being mapped onto a status this build understands.
+    public static func verificationStatusName(_ status: TaskVerificationStatus) -> String {
+        switch status {
+        case .verified: return tr("verification.status.verified")
+        case .verifiedEvidenceMissing: return tr("verification.status.evidenceMissing")
+        case .verifiedEvidenceUnavailable: return tr("verification.status.evidenceUnavailable")
+        case .failedVerification: return tr("verification.status.failed")
+        case .inProgress: return tr("verification.status.inProgress")
+        case .notVerified: return tr("verification.status.notVerified")
+        case .unrecognized(let raw): return raw
+        }
+    }
+
+    public static var verificationChecks: String { tr("verification.checks") }
+    public static func verificationCheckExit(_ code: Int) -> String {
+        tr("verification.checkExit", [code])
+    }
+    public static var verificationNoResult: String { tr("verification.noResult") }
+    public static var verificationNotRunYet: String { tr("verification.notRunYet") }
+    public static var verificationOverall: String { tr("verification.overall") }
+    public static var verificationApprovals: String { tr("verification.approvals") }
+    public static var verificationEvidenceProblemFooter: String {
+        tr("verification.evidenceProblemFooter")
+    }
+    public static var verificationStageFooter: String { tr("verification.stageFooter") }
+
+    // Inspector
+    public static var inspectorTitle: String { tr("inspector.title") }
+    public static var inspectorToggle: String { tr("inspector.toggle") }
+    public static var inspectorIdentity: String { tr("inspector.identity") }
+    public static var inspectorTimestamps: String { tr("inspector.timestamps") }
+    public static var inspectorWorkspaceSection: String { tr("inspector.workspaceSection") }
+    public static var inspectorRunsSection: String { tr("inspector.runsSection") }
+    public static var inspectorRoutingProvenance: String { tr("inspector.routingProvenance") }
+    public static var inspectorEmpty: String { tr("inspector.empty") }
+
+    public static var labelCreatedAt: String { tr("label.createdAt") }
+    public static var labelUpdatedAt: String { tr("label.updatedAt") }
+    public static var labelStateVersion: String { tr("label.stateVersion") }
+    public static var labelRepositoryPath: String { tr("label.repositoryPath") }
+    public static var labelProjectId: String { tr("label.projectId") }
+    public static var labelCurrentWorker: String { tr("label.currentWorker") }
+    public static var labelNoWorkerYet: String { tr("label.noWorkerYet") }
 }
