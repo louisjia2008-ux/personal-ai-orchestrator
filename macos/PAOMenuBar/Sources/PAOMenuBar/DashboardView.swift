@@ -2227,7 +2227,10 @@ private struct QuotaHistoryChart: View {
             ForEach(observations) { observation in
                 let value = observation.remainingFraction ?? 0
                 RoundedRectangle(cornerRadius: 3)
-                    .fill(value <= 0.15 ? Color.red.opacity(0.8) : Color.blue.opacity(0.7))
+                    .fill(
+                        StatusStyle.quotaState(value <= 0.15 ? "EXHAUSTED" : "AVAILABLE")
+                            .tone.fillColor
+                    )
                     .frame(width: 10, height: max(3, CGFloat(value) * 120))
                     .help("\(observation.providerId) \(observation.windowId): \(L10n.quotaRemaining(fraction: observation.remainingFraction, confidence: observation.confidence))")
             }
@@ -2619,8 +2622,11 @@ private struct ProgressPanel: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 8)], spacing: 8) {
                 ForEach(ExecutionPhase.derive(from: detail)) { phase in
                     HStack(spacing: 6) {
-                        Image(systemName: phase.isComplete ? "checkmark.circle.fill" : (phase.isCurrent ? "circle.dotted" : "circle"))
-                            .foregroundStyle(phase.isComplete ? .green : (phase.isCurrent ? .accentColor : .secondary))
+                        let style = StatusStyle.lifecyclePhase(
+                            isComplete: phase.isComplete, isCurrent: phase.isCurrent
+                        )
+                        Image(systemName: style.symbol)
+                            .foregroundStyle(phase.isCurrent ? Color.accentColor : style.color)
                         Text(phase.title)
                             .lineLimit(1)
                     }
@@ -3168,7 +3174,10 @@ private struct RawWorkerConsolePanel: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
-                    .background(Color.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                    .background(
+                        Color(nsColor: .textBackgroundColor),
+                        in: RoundedRectangle(cornerRadius: Radius.inline)
+                    )
                 }
                 ForEach(detail.events) { event in
                     Text("[\(event.createdAt)] \(event.eventType): \(event.summary)")
@@ -3225,20 +3234,24 @@ private func parseAPIDate(_ value: String) -> Date? {
     TaskTiming.parseTimestamp(value)
 }
 
+/// Badge semantics, resolved through the shared `StatusTone` vocabulary so a
+/// badge cannot drift away from the same status rendered elsewhere.
 private enum BadgeKind {
     case good
     case warn
     case bad
     case neutral
 
-    var color: Color {
+    var tone: StatusTone {
         switch self {
-        case .good: return .green
-        case .warn: return .orange
-        case .bad: return .red
-        case .neutral: return .secondary
+        case .good: return .positive
+        case .warn: return .caution
+        case .bad: return .critical
+        case .neutral: return .neutral
         }
     }
+
+    var color: Color { tone.color }
 }
 
 private struct StatusBadge: View {
@@ -3370,10 +3383,15 @@ private struct TaskTrendChart: View {
         let submitted = CGFloat(bucket.submitted) / CGFloat(maxValue)
         let completed = CGFloat(bucket.completed) / CGFloat(maxValue)
         let blocked = CGFloat(bucket.blocked) / CGFloat(maxValue)
+        // Series colours come from the states they represent, so the trend reads
+        // with the same vocabulary as the rest of the dashboard.
         return VStack(spacing: 0) {
-            Rectangle().fill(Color.red).frame(height: max(0, blocked * 120))
-            Rectangle().fill(Color.green).frame(height: max(0, completed * 120))
-            Rectangle().fill(Color.blue).frame(height: max(2, submitted * 120))
+            Rectangle().fill(StatusStyle.task(state: "BLOCKED").tone.fillColor)
+                .frame(height: max(0, blocked * 120))
+            Rectangle().fill(StatusStyle.task(state: "COMPLETED").tone.fillColor)
+                .frame(height: max(0, completed * 120))
+            Rectangle().fill(StatusStyle.task(state: "SUBMITTED").tone.fillColor)
+                .frame(height: max(2, submitted * 120))
         }
         .frame(width: 12, height: 120, alignment: .bottom)
         .clipShape(RoundedRectangle(cornerRadius: 3))
@@ -3416,14 +3434,10 @@ private struct StateDistributionChart: View {
         .frame(minHeight: 150, alignment: .center)
     }
 
+    /// Chart marks share the task-state vocabulary: the same state must not be
+    /// one colour in a chart and another in a badge.
     private func color(for state: String) -> Color {
-        switch state {
-        case "RUNNING", "VERIFYING": return .blue
-        case "VERIFIED", "COMPLETED": return .green
-        case "BLOCKED", "FAILED": return .red
-        case "READY", "SUBMITTED": return .orange
-        default: return .secondary
-        }
+        StatusStyle.task(state: state).tone.fillColor
     }
 }
 
@@ -3472,23 +3486,9 @@ private struct RiskRow: View {
         .padding(.vertical, 4)
     }
 
-    private var color: Color {
-        switch risk.severity {
-        case "BLOCKED": return .red
-        case "WARNING": return .orange
-        case "UNKNOWN": return .secondary
-        default: return .blue
-        }
-    }
-
-    private var symbol: String {
-        switch risk.severity {
-        case "BLOCKED": return "xmark.octagon.fill"
-        case "WARNING": return "exclamationmark.triangle.fill"
-        case "UNKNOWN": return "questionmark.circle.fill"
-        default: return "info.circle.fill"
-        }
-    }
+    private var presentation: StatusPresentation { StatusStyle.severity(risk.severity) }
+    private var color: Color { presentation.color }
+    private var symbol: String { presentation.symbol }
 
     private func sectionForDestination(_ destination: String) -> DashboardSection? {
         switch destination {

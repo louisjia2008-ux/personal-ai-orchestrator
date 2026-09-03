@@ -518,3 +518,10 @@
 "quota.reason.codingScopeUnreadable" = "The coding/text scope carried a remaining figure that could not be read, so nothing is shown for it.";
 "quota.reason.codingWindowSemanticsUnknown" = "One window of the coding/text scope is readable; the other window could not be identified in this response and is not guessed at.";
 "quota.reason.codingScopeDisagree" = "Several coding/text scopes report different values for the same window, so no single figure can be derived from them.";
+
+/* B1 evidence levels: OBSERVED / DERIVED / FORECAST must never read alike */
+"evidence.observed" = "Observed";
+"evidence.derived" = "Derived";
+"evidence.forecast" = "Projected";
+"evidence.unavailable" = "Not enough data";
+"timestamp.justNow" = "just now";

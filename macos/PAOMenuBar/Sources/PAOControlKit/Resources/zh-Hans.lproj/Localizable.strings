@@ -518,3 +518,10 @@
 "quota.reason.codingScopeUnreadable" = "编码 / 文本范围返回了无法解析的剩余额度，因此不予展示。";
 "quota.reason.codingWindowSemanticsUnknown" = "编码 / 文本范围中有一个窗口可读，另一个窗口在本次响应中无法识别，因此不作推测。";
 "quota.reason.codingScopeDisagree" = "多个编码 / 文本范围对同一窗口给出了不同数值，因此无法推导出唯一数值。";
+
+/* B1 evidence levels: OBSERVED / DERIVED / FORECAST must never read alike */
+"evidence.observed" = "实测";
+"evidence.derived" = "推算";
+"evidence.forecast" = "预计";
+"evidence.unavailable" = "数据不足";
+"timestamp.justNow" = "刚刚";
