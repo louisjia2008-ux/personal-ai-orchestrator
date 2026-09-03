@@ -516,6 +516,15 @@ public final class OrchestratorStore: ObservableObject {
         }
     }
 
+    /// Drop the ephemeral cancellation result.
+    ///
+    /// The notice describes one interaction. Its `failed` and `malformedResponse`
+    /// cases carry no task identity, so a notice left standing would attach a
+    /// failure the owner caused on one task to whichever task they look at next.
+    public func clearCancellationNotice() {
+        cancellationNotice = nil
+    }
+
     public func loadTaskDetail(taskId: String) async {
         do {
             selectedTaskDetail = try await client.taskDetail(taskId)
