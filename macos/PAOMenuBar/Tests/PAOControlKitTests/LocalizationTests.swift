@@ -150,6 +150,64 @@ final class LocalizationTests: XCTestCase {
         )
     }
 
+    // MARK: - Task workspace parity (B3)
+
+    /// Every string B3 introduces exists in both catalogs. `requiredKeys`
+    /// already asserts presence; this pins that the Chinese catalog carries a
+    /// translation rather than an echo of the English one.
+    func testTaskWorkspaceChineseIsActuallyTranslated() {
+        let pairs: [(String, String, String)] = [
+            ("taskGroup.queued", "Queued", "排队中"),
+            ("taskGroup.needsAttention", "Needs attention", "需要处理"),
+            ("taskGroup.cancelled", "Cancelled", "已取消"),
+            ("taskLifecycle.verification", "Verification", "验证"),
+            ("taskLifecycle.status.notReached", "Not yet", "尚未开始"),
+            ("taskAttention.blocked", "This task is blocked", "任务被阻塞"),
+            ("routing.role.reviewer", "Reviewer", "评审"),
+            ("routing.roleStatus.unassigned", "Not yet assigned", "尚未分配"),
+            ("routing.outcome.fail", "Rejected the work", "判定不通过"),
+            ("routing.outcome.error", "Could not run", "无法执行"),
+            ("verification.status.failed", "Verification failed", "验证未通过"),
+            ("changes.unexpected", "Outside allowed paths", "超出允许路径"),
+            ("inspector.title", "Details", "详细信息"),
+            ("empty.tasks.noSelection.title", "No task selected", "未选择任务"),
+        ]
+        for (key, english, chinese) in pairs {
+            XCTAssertEqual(L10n.catalogString(key: key, language: "en"), english, key)
+            XCTAssertEqual(L10n.catalogString(key: key, language: "zh-Hans"), chinese, key)
+        }
+    }
+
+    /// The four empty states the task collection distinguishes each have their
+    /// own words. Sharing one string would collapse four different situations
+    /// into one instruction that fits none of them.
+    func testTaskCollectionEmptyStatesAreDistinct() {
+        let keys = [
+            "empty.tasks.none.message", "empty.tasks.search.message",
+            "empty.tasks.filter.message", "empty.tasks.noSelection.message",
+        ]
+        for language in ["en", "zh-Hans"] {
+            let values = keys.compactMap { L10n.catalogString(key: $0, language: language) }
+            XCTAssertEqual(values.count, keys.count, "missing \(language) empty-state copy")
+            XCTAssertEqual(Set(values).count, keys.count, "\(language) empty states share copy")
+        }
+    }
+
+    /// Task states, routing roles, verification statuses and every other machine
+    /// value stay verbatim. Translating them would change what the owner is
+    /// looking at, and D3 keeps them untranslated on purpose.
+    func testTaskWorkspaceMachineValuesAreNotTranslated() {
+        let machineValues = [
+            "WORKER_FINISHED", "FAILED_VERIFICATION", "VERIFIED_EVIDENCE_MISSING",
+            "PRIMARY", "REVIEWER", "FINAL_AUDITOR", "UNASSIGNED", "PASS", "FAIL",
+        ]
+        for language in ["en", "zh-Hans"] {
+            for value in machineValues {
+                XCTAssertNil(L10n.catalogString(key: value, language: language), value)
+            }
+        }
+    }
+
     /// Provider, protocol and identifier names are not translated. Translating
     /// them would change what the owner is looking at.
     func testProperNamesAreNotTranslated() {
