@@ -10,10 +10,29 @@ struct DashboardView: View {
     @State private var query = ""
     @State private var stateFilter = ""
     @State private var showsNewTaskSheet = false
+    @State private var resourcesTab: ResourcesTab = .providers
+    @State private var settingsTab: SettingsTab = .general
 
     private var activeSection: DashboardSection {
-        let resolved = section ?? DashboardSection(rawValue: storedSelection) ?? .overview
-        return resolved == .agents ? .providers : resolved
+        section ?? DashboardSectionMigration.section(forStoredValue: storedSelection)
+    }
+
+    /// Single entry point for navigation that does not come from the sidebar:
+    /// overview risks today, deep links later. Applying the sub-surface context
+    /// before the destination means the destination renders already positioned.
+    private func navigate(to intent: NavigationIntent) {
+        switch intent.context {
+        case .projects: settingsTab = .projects
+        case .clientSettings: settingsTab = .general
+        case .providers: resourcesTab = .providers
+        case .quota: resourcesTab = .quota
+        case .verification, .none: break
+        }
+        if let taskId = intent.taskId {
+            store.selectedTaskId = taskId
+            Task { await store.loadTaskDetail(taskId: taskId) }
+        }
+        section = intent.section
     }
 
     var body: some View {
@@ -41,7 +60,7 @@ struct DashboardView: View {
         .onAppear {
             store.dashboardVisible = true
             if section == nil {
-                section = DashboardSection(rawValue: storedSelection) ?? .overview
+                section = DashboardSectionMigration.section(forStoredValue: storedSelection)
             }
             Task { await store.refreshNow() }
         }
@@ -56,22 +75,10 @@ struct DashboardView: View {
             get: { activeSection },
             set: { section = $0 ?? .overview }
         )) {
-            Section(L10n.sidebarWork) {
-                sidebarItem(.overview)
-                sidebarItem(.projects)
-                sidebarItem(.tasks)
-            }
-            Section(L10n.sidebarAIResources) {
-                sidebarItem(.providers)
-                sidebarItem(.quota)
-            }
-            Section(L10n.sidebarExecution) {
-                sidebarItem(.routing)
-                sidebarItem(.verification)
-            }
-            Section(L10n.sidebarSystem) {
-                sidebarItem(.history)
-                sidebarItem(.settings)
+            // Five product destinations, flat. Grouping headers existed to make nine
+            // backend-shaped rows legible; five product surfaces do not need them.
+            ForEach(DashboardSection.allCases) { candidate in
+                sidebarItem(candidate)
             }
         }
         .listStyle(.sidebar)
@@ -120,44 +127,28 @@ struct DashboardView: View {
         case .overview:
             OverviewDashboard(
                 section: $section,
-                stateFilter: $stateFilter
+                stateFilter: $stateFilter,
+                onNavigate: { navigate(to: $0) }
             )
-        case .projects:
-            ProjectsDashboard { projectId in
-                store.selectedProjectId = projectId
-                showsNewTaskSheet = true
-            }
         case .tasks:
             TasksDashboard(
                 query: $query,
                 stateFilter: $stateFilter,
                 selectedTaskId: taskSelection,
-                onNewTask: { showsNewTaskSheet = true }
+                onNewTask: { showsNewTaskSheet = true },
+                onOpenProviders: {
+                    navigate(to: NavigationIntent(section: .resources, context: .providers))
+                }
             )
-        case .agents:
-            ProvidersDashboard()
-        case .providers:
-            ProvidersDashboard()
-        case .quota:
-            QuotaDashboard(section: $section)
-        case .routing:
-            SelectedTaskDetailDashboard(
-                selectedTaskId: taskSelection,
-                section: $section,
-                mode: .routing,
-                onNewTask: { showsNewTaskSheet = true }
-            )
-        case .verification:
-            SelectedTaskDetailDashboard(
-                selectedTaskId: taskSelection,
-                section: $section,
-                mode: .verification,
-                onNewTask: { showsNewTaskSheet = true }
-            )
-        case .history:
-            HistoryDashboard()
+        case .resources:
+            ResourcesDashboard(tab: $resourcesTab)
+        case .activity:
+            ActivityDashboard()
         case .settings:
-            ClientSettingsDashboard()
+            SettingsDashboard(tab: $settingsTab) { projectId in
+                store.selectedProjectId = projectId
+                showsNewTaskSheet = true
+            }
         }
     }
 }
@@ -297,7 +288,13 @@ private struct NewTaskSheet: View {
 
 // MARK: - Projects
 
-private struct ProjectsDashboard: View {
+/// Projects, unchanged, rendered inside Settings.
+///
+/// Only the navigation location moves in B2. Folder picking still produces a
+/// security-scoped bookmark, and registration still goes through the
+/// resolveProject preview/confirmation step — the capability migration and its
+/// acceptance belong to B7.
+private struct ProjectsSection: View {
     @EnvironmentObject private var store: OrchestratorStore
     @State private var selectedURL: URL?
     @State private var bookmarkData: Data?
@@ -308,20 +305,19 @@ private struct ProjectsDashboard: View {
     }
 
     var body: some View {
-        DashboardPageContainer(
-            title: L10n.dashboardSection(DashboardSection.projects.rawValue),
-            symbol: DashboardSection.projects.symbol,
-            trailing: {
-                AnyView(
-                    Button {
-                        pickProjectFolder()
-                    } label: {
-                        Label(L10n.projectsAdd, systemImage: "folder.badge.plus")
-                    }
-                    .buttonStyle(.borderless)
-                )
+        VStack(alignment: .leading, spacing: Spacing.section) {
+            HStack {
+                Text(L10n.sectionProjects)
+                    .font(.headline)
+                Spacer()
+                Button {
+                    pickProjectFolder()
+                } label: {
+                    Label(L10n.projectsAdd, systemImage: "folder.badge.plus")
+                }
+                .buttonStyle(.borderless)
             }
-        ) {
+
             if let preview = store.pendingProjectPreview {
                 DashboardCard(title: L10n.projectsDetectedRepository, symbol: "checkmark.seal") {
                     ProjectFacts(project: preview)
@@ -351,8 +347,8 @@ private struct ProjectsDashboard: View {
 
             if projects.isEmpty {
                 EmptyStateView(
-                    title: L10n.dashboardSection(DashboardSection.projects.rawValue),
-                    symbol: DashboardSection.projects.symbol,
+                    title: L10n.sectionProjects,
+                    symbol: "folder.badge.gearshape",
                     message: L10n.projectsEmpty
                 )
             } else {
@@ -361,6 +357,7 @@ private struct ProjectsDashboard: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func pickProjectFolder() {
@@ -466,10 +463,11 @@ private struct OverviewDashboard: View {
     @EnvironmentObject private var store: OrchestratorStore
     @Binding var section: DashboardSection?
     @Binding var stateFilter: String
+    let onNavigate: (NavigationIntent) -> Void
 
     var body: some View {
         DashboardPageContainer(
-            title: L10n.dashboardSection(DashboardSection.overview.rawValue),
+            title: DashboardSection.overview.title,
             symbol: DashboardSection.overview.symbol
         ) {
             let counts = store.dashboard?.counts
@@ -541,7 +539,7 @@ private struct OverviewDashboard: View {
             DashboardCard(title: L10n.overviewRisks, symbol: "exclamationmark.triangle") {
                 if let risks = store.dashboard?.risks, !risks.isEmpty {
                     ForEach(risks) { risk in
-                        RiskRow(risk: risk, section: $section)
+                        RiskRow(risk: risk, onNavigate: onNavigate)
                     }
                     DisclosureGroup(L10n.advancedDetails) {
                         ForEach(store.dashboard?.importantBlockers ?? [], id: \.self) { raw in
@@ -585,6 +583,9 @@ private struct TasksDashboard: View {
     @Binding var stateFilter: String
     @Binding var selectedTaskId: String?
     let onNewTask: () -> Void
+    /// The no-selection routing guidance can send the owner to providers, which is
+    /// now a surface inside Resources rather than a first-level destination.
+    let onOpenProviders: () -> Void
     @FocusState private var searchFocused: Bool
 
     private var allTasks: [TaskView] {
@@ -719,6 +720,11 @@ private struct TasksDashboard: View {
                 message: L10n.selectTaskForDetails,
                 hint: L10n.taskBrowserHint
             )
+            RoutingNoSelectionCard(
+                hasTasks: !allTasks.isEmpty,
+                onNewTask: onNewTask,
+                onOpenProviders: onOpenProviders
+            )
         }
     }
 
@@ -790,193 +796,109 @@ private struct TaskRow: View {
     }
 }
 
-// MARK: - Routing / verification sections
+// MARK: - Resources
 
-private enum DetailMode {
-    case routing
-    case verification
+/// Which resource surface the Resources destination is showing.
+///
+/// Providers, execution targets and quota were three first-level destinations (one
+/// of them — execution targets — reachable only through a legacy enum case that was
+/// excluded from the sidebar). They are one product concept: what this machine can
+/// run work on, and how much of it is left.
+enum ResourcesTab: String, CaseIterable, Identifiable {
+    case providers
+    case executionTargets
+    case quota
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .providers: return L10n.sectionProviders
+        case .executionTargets: return L10n.sectionExecutionTargets
+        case .quota: return L10n.sectionQuota
+        }
+    }
 }
 
-private struct SelectedTaskDetailDashboard: View {
+private struct ResourcesDashboard: View {
     @EnvironmentObject private var store: OrchestratorStore
-    @Binding var selectedTaskId: String?
-    @Binding var section: DashboardSection?
-    let mode: DetailMode
-    let onNewTask: () -> Void
-
-    private var tasks: [TaskView] {
-        store.tasks?.tasks ?? []
-    }
+    @Binding var tab: ResourcesTab
 
     var body: some View {
-        DashboardPageContainer(
-            title: mode == .routing
-                ? L10n.dashboardSection(DashboardSection.routing.rawValue)
-                : L10n.dashboardSection(DashboardSection.verification.rawValue),
-            symbol: mode == .routing
-                ? DashboardSection.routing.symbol
-                : DashboardSection.verification.symbol
-        ) {
-            // Scheduling must never be a black box: the active policy and the full set
-            // of modes are visible whether or not a task is selected.
-            if mode == .routing {
-                ActiveSchedulingPolicyCard()
+        ScrollView {
+            VStack(alignment: .leading, spacing: Spacing.section) {
+                PageHeader(
+                    title: DashboardSection.resources.title,
+                    symbol: DashboardSection.resources.symbol,
+                    trailing: { AnyView(refreshAction) }
+                )
+                Picker(L10n.resourcesPickerTitle, selection: $tab) {
+                    ForEach(ResourcesTab.allCases) { candidate in
+                        Text(candidate.title).tag(candidate)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                switch tab {
+                case .providers:
+                    ProvidersSection()
+                case .executionTargets:
+                    ExecutionTargetsSurface()
+                case .quota:
+                    QuotaSection(onAddProvider: { tab = .providers })
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.vertical, Spacing.page)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
 
-            taskPicker
-
-            if let detail = store.selectedTaskDetail {
-                taskHeader(detail: detail)
-                if mode == .routing {
-                    RoutingPanel(detail: detail)
+    /// Refreshing providers and refreshing quota are different daemon operations;
+    /// the header offers whichever one the visible surface is actually about.
+    @ViewBuilder
+    private var refreshAction: some View {
+        switch tab {
+        case .providers, .executionTargets:
+            Button {
+                Task { await store.refreshProviders() }
+            } label: {
+                if store.isRefreshingProviders {
+                    ProgressView().controlSize(.small)
                 } else {
-                    VerificationPanel(detail: detail)
-                }
-            } else if mode == .routing {
-                RoutingNoSelectionCard(
-                    hasTasks: !tasks.isEmpty,
-                    onNewTask: onNewTask,
-                    onOpenProviders: { section = .providers }
-                )
-            } else {
-                noSelectionState
-            }
-        }
-        .background(hiddenCommands)
-        .onAppear {
-            Task { await store.loadSchedulingSettings() }
-            if let selectedTaskId {
-                Task { await store.loadTaskDetail(taskId: selectedTaskId) }
-            }
-        }
-        .onChange(of: selectedTaskId) { taskId in
-            guard let taskId else { return }
-            Task { await store.loadTaskDetail(taskId: taskId) }
-        }
-    }
-
-    private var taskPicker: some View {
-        DashboardCard(title: L10n.taskContext, symbol: "sidebar.left") {
-            Picker(L10n.taskContext, selection: $selectedTaskId) {
-                Text(L10n.pickerNoSelection).tag(String?.none)
-                ForEach(tasks) { task in
-                    Text("\(task.taskId) · \(task.state)")
-                        .tag(String?.some(task.taskId))
+                    Label(L10n.refreshProviders, systemImage: "arrow.clockwise")
                 }
             }
-            .pickerStyle(.menu)
-            if selectedTaskId != nil {
-                Text(L10n.pickerChangeHint)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func taskHeader(detail: TaskDetailView) -> some View {
-        DashboardCard(title: L10n.taskDetail, symbol: "doc.text.magnifyingglass") {
-            HStack(alignment: .firstTextBaseline) {
-                Text(detail.task.taskId)
-                    .font(.system(.headline, design: .monospaced))
-                    .textSelection(.enabled)
-                Spacer()
-                StatusBadge(text: detail.task.state, kind: detail.task.state == "BLOCKED" ? .bad : .neutral)
-            }
-            Text(detail.task.intent)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("\(detail.task.createdAt) -> \(detail.task.updatedAt)")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-            HStack(spacing: 8) {
-                Button {
-                    Pasteboard.copy(selectedTaskId ?? "")
-                } label: {
-                    Label(L10n.copyTaskId, systemImage: "doc.on.doc")
+            .buttonStyle(.borderless)
+            .disabled(store.isRefreshingProviders)
+            .help(L10n.refreshProviders)
+        case .quota:
+            Button {
+                Task { await store.refreshQuota() }
+            } label: {
+                if store.isRefreshingQuota {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Label(L10n.quotaRefresh, systemImage: "arrow.clockwise")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .keyboardShortcut("c", modifiers: [.command, .option])
-                .help(L10n.copyTaskIdHint)
-
-                Button {
-                    if let selectedTaskId {
-                        Task { await store.loadTaskDetail(taskId: selectedTaskId) }
-                    }
-                } label: {
-                    Label(L10n.reload, systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .keyboardShortcut("r", modifiers: [.command, .option])
-                .help(L10n.reloadHint)
             }
-        }
-    }
-
-    @ViewBuilder
-    private var noSelectionState: some View {
-        if tasks.isEmpty {
-            EmptyStateView(
-                title: mode == .routing ? L10n.routingTitle : L10n.verificationTitle,
-                symbol: mode == .routing ? "point.topleft.down.curvedto.point.bottomright.up" : "checkmark.seal",
-                message: mode == .routing ? L10n.routingNeedsTask : L10n.verificationNeedsTask,
-                hint: L10n.taskContextEmptyHint,
-                action: onNewTask
-            )
-        } else {
-            EmptyStateView(
-                title: mode == .routing ? L10n.routingTitle : L10n.verificationTitle,
-                symbol: "sidebar.left",
-                message: mode == .routing ? L10n.routingNoSelection : L10n.verificationNoSelection
-            )
-        }
-    }
-
-    private var hiddenCommands: some View {
-        Group {
-            Button(L10n.commandPreviousTask) {
-                _ = store.navigateToNeighbour(current: selectedTaskId, in: tasks, offset: -1)
-            }
-            .keyboardShortcut("[", modifiers: .command)
-            .disabled(tasks.isEmpty)
-            .hidden()
-            Button(L10n.commandNextTask) {
-                _ = store.navigateToNeighbour(current: selectedTaskId, in: tasks, offset: 1)
-            }
-            .keyboardShortcut("]", modifiers: .command)
-            .disabled(tasks.isEmpty)
-            .hidden()
+            .buttonStyle(.borderless)
+            .disabled(store.isRefreshingQuota || (store.quota?.providers ?? []).isEmpty)
+            .help(L10n.quotaRefreshHelp)
         }
     }
 }
 
-// MARK: - Agents / execution targets
+// MARK: - Execution targets
 
-private struct ExecutionTargetsDashboard: View {
+/// The former Agents destination, preserved verbatim as a Resources surface.
+private struct ExecutionTargetsSurface: View {
     @EnvironmentObject private var store: OrchestratorStore
 
     var body: some View {
-        DashboardPageContainer(
-            title: L10n.dashboardSection(DashboardSection.agents.rawValue),
-            symbol: DashboardSection.agents.symbol,
-            trailing: {
-                AnyView(
-                    Button {
-                        Task { await store.refreshProviders() }
-                    } label: {
-                        if store.isRefreshingProviders {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Label(L10n.refreshProviders, systemImage: "arrow.clockwise")
-                        }
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(store.isRefreshingProviders)
-                    .help(L10n.refreshProviders)
-                )
-            }
-        ) {
+        VStack(alignment: .leading, spacing: Spacing.section) {
             ProviderDiscoveryStatusCard()
             let providers = store.providers?.providers ?? []
             if providers.isEmpty {
@@ -986,20 +908,10 @@ private struct ExecutionTargetsDashboard: View {
                     message: L10n.noProvidersHint
                 )
             } else {
-                ForEach(providers) { provider in
-                    DashboardCard(title: provider.displayName, symbol: "cpu") {
-                        if provider.executionTargets.isEmpty {
-                            Text(L10n.noProvidersHint)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(provider.executionTargets) { target in
-                                ExecutionTargetDisclosure(target: target)
-                            }
-                        }
-                    }
-                }
+                ExecutionTargetsSection(providers: providers)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1053,31 +965,12 @@ private struct ExecutionTargetDisclosure: View {
 
 // MARK: - Providers
 
-private struct ProvidersDashboard: View {
+private struct ProvidersSection: View {
     @EnvironmentObject private var store: OrchestratorStore
     @State private var tab: ModelsProvidersTab = .connected
 
     var body: some View {
-        DashboardPageContainer(
-            title: L10n.dashboardSection(DashboardSection.providers.rawValue),
-            symbol: DashboardSection.providers.symbol,
-            trailing: {
-                AnyView(
-                    Button {
-                        Task { await store.refreshProviders() }
-                    } label: {
-                        if store.isRefreshingProviders {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Label(L10n.refreshProviders, systemImage: "arrow.clockwise")
-                        }
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(store.isRefreshingProviders)
-                    .help(L10n.refreshProviders)
-                )
-            }
-        ) {
+        VStack(alignment: .leading, spacing: Spacing.section) {
             ProviderDiscoveryStatusCard()
             Picker(L10n.providersPickerTitle, selection: $tab) {
                 ForEach(ModelsProvidersTab.allCases) { tab in
@@ -1140,6 +1033,7 @@ private struct ProvidersDashboard: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1559,45 +1453,25 @@ private struct QuotaPoolDisclosure: View {
 /// - `noConnectedProvider`: nothing to show yet; route the owner to Add Provider.
 /// - `connectedButQuotaUnknown`: cards render with UNKNOWN and an explanation.
 /// - `connectedWithQuotaObservations`: real windows, progress, and history.
-private struct QuotaDashboard: View {
+private struct QuotaSection: View {
     @EnvironmentObject private var store: OrchestratorStore
-    @Binding var section: DashboardSection?
+    /// Quota's empty state sends the owner to providers — now a sibling surface
+    /// inside Resources rather than another first-level destination.
+    let onAddProvider: () -> Void
 
     private var overview: QuotaOverviewView? { store.quota }
     private var cards: [QuotaProviderCardView] { overview?.providers ?? [] }
 
     var body: some View {
-        DashboardPageContainer(
-            title: L10n.dashboardSection(DashboardSection.quota.rawValue),
-            symbol: DashboardSection.quota.symbol,
-            trailing: {
-                AnyView(
-                    // "Refresh Quota" is a different operation from
-                    // "Refresh Providers": it reads quota, discovery does not.
-                    Button {
-                        Task { await store.refreshQuota() }
-                    } label: {
-                        if store.isRefreshingQuota {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Label(L10n.quotaRefresh, systemImage: "arrow.clockwise")
-                        }
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(store.isRefreshingQuota || cards.isEmpty)
-                    .help(L10n.quotaRefreshHelp)
-                )
-            }
-        ) {
+        VStack(alignment: .leading, spacing: Spacing.section) {
             if cards.isEmpty {
                 EmptyStateView(
                     title: L10n.quotaEmptyTitle,
                     symbol: "chart.pie",
                     message: L10n.quotaEmptyMessage,
-                    hint: L10n.providersAddProvider
-                ) {
-                    section = .providers
-                }
+                    hint: L10n.providersAddProvider,
+                    action: onAddProvider
+                )
             } else {
                 if let summary = overview?.summary {
                     QuotaSummaryCard(summary: summary)
@@ -1608,6 +1482,7 @@ private struct QuotaDashboard: View {
                 QuotaHistoryCard(history: overview?.history)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -2332,17 +2207,19 @@ private struct ProviderDiscoveryStatusCard: View {
     }
 }
 
-// MARK: - History
+// MARK: - Activity
 
-private struct HistoryDashboard: View {
+/// Activity absorbs History, and is where verification risks land when the risk
+/// carries no authoritative task identity to select a task with.
+private struct ActivityDashboard: View {
     @EnvironmentObject private var store: OrchestratorStore
 
     var body: some View {
         DashboardPageContainer(
-            title: L10n.dashboardSection(DashboardSection.history.rawValue),
-            symbol: DashboardSection.history.symbol
+            title: DashboardSection.activity.title,
+            symbol: DashboardSection.activity.symbol
         ) {
-            DashboardCard(title: L10n.history, symbol: "clock.arrow.circlepath") {
+            DashboardCard(title: L10n.sectionHistory, symbol: "clock.arrow.circlepath") {
                 EventList(events: store.dashboard?.recentEvents ?? [])
             }
         }
@@ -2351,17 +2228,79 @@ private struct HistoryDashboard: View {
 
 // MARK: - Settings
 
+/// Which settings surface the Settings destination is showing.
+///
+/// Projects stopped being a first-level destination in B2 and lives here. B7 does
+/// the real Projects-into-Settings migration; this is the navigation entry only.
+enum SettingsTab: String, CaseIterable, Identifiable {
+    case general
+    case projects
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general: return L10n.settingsTabGeneral
+        case .projects: return L10n.sectionProjects
+        }
+    }
+}
+
+private struct SettingsDashboard: View {
+    @Binding var tab: SettingsTab
+    let onNewTask: (String) -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Spacing.section) {
+                PageHeader(
+                    title: DashboardSection.settings.title,
+                    symbol: DashboardSection.settings.symbol
+                )
+                Picker(L10n.settingsPickerTitle, selection: $tab) {
+                    ForEach(SettingsTab.allCases) { candidate in
+                        Text(candidate.title).tag(candidate)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                switch tab {
+                case .general:
+                    ClientSettingsSection()
+                case .projects:
+                    ProjectsSection(onNewTask: onNewTask)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.vertical, Spacing.page)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+/// The client-settings page, still reachable as its own window from the menu bar
+/// (`PAOMenuBarApp`'s Settings scene) as well as inside the Settings destination.
 struct ClientSettingsDashboard: View {
+    var body: some View {
+        DashboardPageContainer(
+            title: DashboardSection.settings.title,
+            symbol: DashboardSection.settings.symbol
+        ) {
+            ClientSettingsSection()
+        }
+    }
+}
+
+private struct ClientSettingsSection: View {
     @AppStorage("pao.launchAtLogin") private var launchAtLogin = false
     @AppStorage("pao.autoStartDaemon") private var autoStartDaemon = true
     @EnvironmentObject private var store: OrchestratorStore
     private let layout = AppSupportLayout.resolve()
 
     var body: some View {
-        DashboardPageContainer(
-            title: L10n.dashboardSection(DashboardSection.settings.rawValue),
-            symbol: DashboardSection.settings.symbol
-        ) {
+        VStack(alignment: .leading, spacing: Spacing.section) {
             BuildInformationCard(daemonBuild: store.daemonBuild,
                                  compatibility: store.buildCompatibility)
             DashboardCard(title: L10n.daemonLifecycle, symbol: "gearshape") {
@@ -2453,7 +2392,11 @@ struct ClientSettingsDashboard: View {
                 Text(L10n.activeReadOnlyNote)
                     .foregroundStyle(.secondary)
             }
+            // Moved here from the Routing destination, which no longer exists: the
+            // full mode list is global scheduling configuration, not task detail.
+            ActiveSchedulingPolicyCard()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
             Task { await store.loadSchedulingSettings() }
         }
@@ -2487,6 +2430,10 @@ private struct TaskDetailPanel: View {
                         onReload: onReload,
                         onStop: onStop
                     )
+                    // Routing was a first-level destination; its explanation is
+                    // task-scoped, so it belongs with the task it explains. B3
+                    // decides where in the new Task Detail structure it sits.
+                    RoutingPanel(detail: detail)
                     ProgressPanel(detail: detail)
                     LiveActivityPanel(detail: detail)
                     ChangesPanel(detail: detail)
@@ -2960,24 +2907,6 @@ private struct RoutingCandidateRow: View {
     }
 }
 
-private struct VerificationPanel: View {
-    let detail: TaskDetailView
-
-    var body: some View {
-        DashboardCard(title: L10n.verification, symbol: "checkmark.seal") {
-            StatusBadge(text: detail.verification.status, kind: detail.verification.status == "VERIFIED" ? .good : .neutral)
-            LabeledContent(L10n.labelTask, value: detail.verification.taskId)
-            LabeledContent(L10n.evidenceLabel, value: detail.verification.evidenceId ?? L10n.valueNone)
-            if let failure = detail.verification.failureReason {
-                Text(failure).foregroundStyle(.red)
-            }
-            ForEach(detail.approvals.approvals) { approval in
-                Text("\(approval.kind): \(approval.status)")
-            }
-        }
-    }
-}
-
 /// Owner-initiated execution panel. Dispatch is only enabled when the
 /// safety gates hold: the owner setting is ON, the task is dispatchable,
 /// and a verified execution target is selected. Nothing here implies
@@ -3445,7 +3374,7 @@ private struct EmptyChartState: View {
 
 private struct RiskRow: View {
     let risk: RiskItemView
-    @Binding var section: DashboardSection?
+    let onNavigate: (NavigationIntent) -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -3461,14 +3390,19 @@ private struct RiskRow: View {
             }
             Spacer()
             if let destination = risk.destination,
-               let target = sectionForDestination(destination) {
+               let intent = RiskDestination.intent(
+                   for: destination,
+                   // RiskItemView carries no task identity, so a verification risk
+                   // resolves to Activity rather than guessing a task to select.
+                   taskId: nil
+               ) {
                 Button {
-                    section = target
+                    onNavigate(intent)
                 } label: {
                     Image(systemName: "arrow.right.circle")
                 }
                 .buttonStyle(.borderless)
-                .help(target.title)
+                .help(intent.section.title)
             }
         }
         .padding(.vertical, 4)
@@ -3477,17 +3411,6 @@ private struct RiskRow: View {
     private var presentation: StatusPresentation { StatusStyle.severity(risk.severity) }
     private var color: Color { presentation.color }
     private var symbol: String { presentation.symbol }
-
-    private func sectionForDestination(_ destination: String) -> DashboardSection? {
-        switch destination {
-        case "projects": return .projects
-        case "models_providers": return .providers
-        case "quota": return .quota
-        case "settings": return .settings
-        case "verification": return .verification
-        default: return nil
-        }
-    }
 }
 
 private struct EmptyStateView: View {

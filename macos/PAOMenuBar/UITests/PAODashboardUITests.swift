@@ -1,26 +1,109 @@
 import XCTest
 
 /// Minimal packaged-app UI regressions for the interactive dashboard.
-/// Exercises real sidebar navigation, overview metric navigation, task
-/// selection, and the new-task surface against the built host application.
+///
+/// These assert the B2 product information architecture — five first-level
+/// destinations, the old backend-shaped ones absent — plus overview metric
+/// navigation, task selection, and the new-task surface, against the built host
+/// application. Labels are the zh-Hans product strings, which is what the owner
+/// actually sees.
 final class PAODashboardUITests: XCTestCase {
+    /// The frozen first-level navigation, in order.
+    private static let destinations = ["总览", "任务", "资源", "活动", "设置"]
+
+    /// Concepts that were reorganized in B2. None may be a sidebar row again.
+    private static let removedDestinations = [
+        "项目", "模型与服务", "额度", "调度决策", "验证", "历史", "执行目标",
+    ]
+
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
 
-    func testSidebarNavigationVisitsEverySection() {
+    func testSidebarOffersExactlyTheFiveProductDestinations() {
+        let app = XCUIApplication()
+        app.launch()
+
+        let sidebar = app.outlines.firstMatch
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 10), "sidebar missing")
+
+        // Exactly five rows, in the frozen order.
+        let rows = sidebar.staticTexts.allElementsBoundByIndex.map(\.label)
+        XCTAssertEqual(rows, Self.destinations, "first-level navigation changed")
+    }
+
+    func testRemovedFirstLevelDestinationsAreNotSidebarRows() {
+        let app = XCUIApplication()
+        app.launch()
+
+        let sidebar = app.outlines.firstMatch
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 10))
+        for removed in Self.removedDestinations {
+            XCTAssertFalse(
+                sidebar.staticTexts[removed].exists,
+                "\(removed) must no longer be a first-level destination"
+            )
+        }
+    }
+
+    func testSidebarNavigationVisitsEveryDestination() {
         let app = XCUIApplication()
         app.launch()
 
         // Every sidebar row must be clickable and must visibly change the
         // detail content (asserted through the window title).
-        let sections = ["任务", "Agents / 执行目标", "提供商", "额度", "调度决策", "验证", "历史", "设置", "总览"]
-        for section in sections {
-            let row = app.staticTexts[section].firstMatch
-            XCTAssertTrue(row.waitForExistence(timeout: 10), "sidebar row missing: \(section)")
+        for destination in Self.destinations {
+            let row = app.staticTexts[destination].firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 10), "sidebar row missing: \(destination)")
             row.click()
-            XCTAssertEqual(app.windows.firstMatch.title, section)
+            XCTAssertEqual(app.windows.firstMatch.title, destination)
         }
+    }
+
+    /// Providers, execution targets and quota collapsed into Resources. All three
+    /// must still be reachable — as surfaces inside it, not as destinations.
+    func testResourcesReachesProvidersExecutionTargetsAndQuota() {
+        let app = XCUIApplication()
+        app.launch()
+
+        let resources = app.staticTexts["资源"].firstMatch
+        XCTAssertTrue(resources.waitForExistence(timeout: 10))
+        resources.click()
+        for surface in ["模型与服务", "执行目标", "额度"] {
+            let tab = app.radioButtons[surface].firstMatch
+            XCTAssertTrue(tab.waitForExistence(timeout: 5), "Resources is missing \(surface)")
+            tab.click()
+        }
+    }
+
+    /// Projects stopped being a destination; it must still be reachable, and its
+    /// registration entry point must still be there (full migration is B7).
+    func testSettingsReachesProjects() {
+        let app = XCUIApplication()
+        app.launch()
+
+        let settings = app.staticTexts["设置"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.click()
+        let projectsTab = app.radioButtons["项目"].firstMatch
+        XCTAssertTrue(projectsTab.waitForExistence(timeout: 5), "Settings is missing Projects")
+        projectsTab.click()
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "添加项目"))
+                .firstMatch.waitForExistence(timeout: 5),
+            "project registration entry point disappeared"
+        )
+    }
+
+    /// History moved under Activity.
+    func testActivityShowsHistory() {
+        let app = XCUIApplication()
+        app.launch()
+
+        let activity = app.staticTexts["活动"].firstMatch
+        XCTAssertTrue(activity.waitForExistence(timeout: 10))
+        activity.click()
+        XCTAssertTrue(app.staticTexts["历史"].waitForExistence(timeout: 5))
     }
 
     func testOverviewMetricTileNavigatesToFilteredTasks() {
@@ -52,17 +135,24 @@ final class PAODashboardUITests: XCTestCase {
         XCTAssertEqual(app.windows.firstMatch.title, "任务")
     }
 
-    func testEmptyStatesOfferNewTaskWhenConnected() {
+    /// Routing stopped being a destination; its explanation now belongs to the
+    /// task it explains, and the no-selection guidance stays actionable.
+    func testTasksNeverPresentsADeadCanvas() {
         let app = XCUIApplication()
         app.launch()
 
-        let routing = app.staticTexts["调度决策"].firstMatch
-        XCTAssertTrue(routing.waitForExistence(timeout: 10))
-        routing.click()
-        // Either a task picker is offered or an actionable empty state with a
-        // new-task entry point; the section must never be a dead panel.
-        let picker = app.menus.firstMatch
+        let tasks = app.staticTexts["任务"].firstMatch
+        XCTAssertTrue(tasks.waitForExistence(timeout: 10))
+        tasks.click()
+        // Either routing detail for a selected task, or an actionable empty state
+        // with a way forward; the canvas must never be a dead panel.
+        let routingExplanation = app.staticTexts["调度说明"].firstMatch
         let newTaskButton = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "新建任务")).firstMatch
-        XCTAssertTrue(picker.waitForExistence(timeout: 5) || newTaskButton.exists)
+        let addProvider = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "添加提供商")).firstMatch
+        XCTAssertTrue(
+            routingExplanation.waitForExistence(timeout: 5)
+                || newTaskButton.exists
+                || addProvider.exists
+        )
     }
 }

@@ -31,6 +31,8 @@ public enum L10n {
         "app.dashboard", "action.openDashboard", "dashboard.overview", "dashboard.projects", "dashboard.tasks",
         "dashboard.agents", "dashboard.providers", "dashboard.quota", "dashboard.routing",
         "dashboard.verification", "dashboard.history", "dashboard.settings",
+        "dashboard.resources", "dashboard.activity",
+        "resources.pickerTitle", "settings.pickerTitle", "settings.tab.general",
         "label.connection", "label.systemHealth", "label.blockers", "label.events",
         "label.search", "label.stateFilter", "label.allStates", "label.taskDetail",
         "label.routingExplanation", "label.actualExecutionTarget", "label.wouldSelect",
@@ -370,6 +372,23 @@ public enum L10n {
     public static func dashboardSection(_ rawValue: String) -> String {
         tr("dashboard.\(rawValue)")
     }
+
+    // MARK: - Sub-surface titles
+    //
+    // These titles no longer belong to a first-level destination. They title a
+    // surface *inside* one (Resources tabs, Settings tabs, Task Detail panels),
+    // so they are reached by name rather than through a navigation raw value.
+
+    public static var sectionProjects: String { tr("dashboard.projects") }
+    public static var sectionProviders: String { tr("dashboard.providers") }
+    public static var sectionExecutionTargets: String { tr("dashboard.agents") }
+    public static var sectionQuota: String { tr("dashboard.quota") }
+    public static var sectionRouting: String { tr("dashboard.routing") }
+    public static var sectionVerification: String { tr("dashboard.verification") }
+    public static var sectionHistory: String { tr("dashboard.history") }
+    public static var resourcesPickerTitle: String { tr("resources.pickerTitle") }
+    public static var settingsPickerTitle: String { tr("settings.pickerTitle") }
+    public static var settingsTabGeneral: String { tr("settings.tab.general") }
 
     public static func authoritativeTaskId(_ taskId: String) -> String {
         tr("submit.authoritativeId", [taskId])

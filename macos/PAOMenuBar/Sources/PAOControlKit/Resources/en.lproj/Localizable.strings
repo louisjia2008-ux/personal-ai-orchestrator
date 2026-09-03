@@ -64,6 +64,8 @@
 "dashboard.verification" = "Verification";
 "dashboard.history" = "History";
 "dashboard.settings" = "Settings";
+"dashboard.resources" = "Resources";
+"dashboard.activity" = "Activity";
 "label.connection" = "Connection";
 "label.systemHealth" = "System health";
 "label.blockers" = "Blockers";
@@ -370,6 +372,9 @@
 
 /* P4.2.6.4 providers and models */
 "providers.pickerTitle" = "Models & Providers";
+"resources.pickerTitle" = "Resource view";
+"settings.pickerTitle" = "Settings view";
+"settings.tab.general" = "General";
 "providers.notConnected" = "Not Connected";
 "providers.surface" = "Surface";
 "providers.providerId" = "Provider ID";
