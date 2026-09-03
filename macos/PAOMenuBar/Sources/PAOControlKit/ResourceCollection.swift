@@ -360,14 +360,15 @@ public enum ResourceCollection {
             let kind: ResourceKind =
                 connection != nil ? .connected : (offer != nil ? .available : .discovered)
             // The registry names it as the owner connected it; discovery's name
-            // is the fallback, and the id itself is the last resort. A resource
-            // is never displayed nameless.
-            let name =
-                connection?.displayName
-                ?? offer?.displayName
-                ?? cards[id]?.displayName
-                ?? health[id]?.displayName
-                ?? id
+            // is the fallback, and the id itself is the last resort. An empty
+            // name falls through as well as a missing one: a daemon that sends
+            // `display_name: ""` would otherwise produce a nameless row, which
+            // is unselectable and unsearchable.
+            let name = displayName(
+                connection?.displayName, offer?.displayName,
+                cards[id]?.displayName, health[id]?.displayName,
+                fallback: id
+            )
             return ResourceSnapshot(
                 providerId: id,
                 displayName: name,
@@ -418,6 +419,18 @@ public enum ResourceCollection {
             guard let field, !field.isEmpty else { return false }
             return field.localizedCaseInsensitiveContains(query)
         }
+    }
+
+    /// First non-blank candidate, or the fallback.
+    private static func displayName(
+        _ candidates: String?..., fallback: String
+    ) -> String {
+        for candidate in candidates {
+            guard let candidate else { continue }
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return fallback
     }
 
     private static func index<T>(
