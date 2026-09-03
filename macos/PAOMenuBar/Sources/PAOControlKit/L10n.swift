@@ -177,6 +177,8 @@ public enum L10n {
         "detail.verifierProfile", "detail.noWorkerRun", "detail.rawWorkerOutput",
         "detail.taskId", "detail.requestId", "detail.routingDecision", "detail.routingRequest",
         "detail.baseSha", "detail.runId", "detail.runStatus", "detail.quotaEvidence",
+        "evidence.observed", "evidence.derived", "evidence.forecast",
+        "evidence.unavailable", "timestamp.justNow",
         "command.focusSearch", "command.previousTask", "command.nextTask",
         "command.copyTaskId", "command.reloadDetail"
     ]
@@ -999,6 +1001,13 @@ public enum L10n {
     public static var detailRunId: String { tr("detail.runId") }
     public static var detailRunStatus: String { tr("detail.runStatus") }
     public static var detailQuotaEvidence: String { tr("detail.quotaEvidence") }
+
+    // Evidence levels (OBSERVED / DERIVED / FORECAST) and timestamps
+    public static var evidenceObserved: String { tr("evidence.observed") }
+    public static var evidenceDerived: String { tr("evidence.derived") }
+    public static var evidenceForecast: String { tr("evidence.forecast") }
+    public static var evidenceUnavailable: String { tr("evidence.unavailable") }
+    public static var timestampJustNow: String { tr("timestamp.justNow") }
 
     // Keyboard commands (hidden buttons; still owner-visible to VoiceOver)
     public static var commandFocusSearch: String { tr("command.focusSearch") }

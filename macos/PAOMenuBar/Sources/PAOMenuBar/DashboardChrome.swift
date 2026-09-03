@@ -1,5 +1,7 @@
 import SwiftUI
 
+import PAOControlKit
+
 /// Shared chrome for every primary Dashboard section.
 ///
 /// Wraps a section's content in a uniform container:
@@ -32,25 +34,41 @@ struct DashboardPageContainer<Content: View>: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    if let symbol {
-                        Image(systemName: symbol)
-                            .foregroundStyle(.secondary)
-                    }
-                    Text(title)
-                        .font(.title2.weight(.semibold))
-                    Spacer()
-                    trailing()
-                }
-                .padding(.bottom, 2)
+            VStack(alignment: .leading, spacing: Spacing.section) {
+                PageHeader(title: title, symbol: symbol, trailing: trailing)
                 content
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 24)
-            .padding(.vertical, 20)
+            .padding(.vertical, Spacing.page)
         }
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+/// Title, optional symbol, and page-level actions for a primary section.
+///
+/// Extracted from `DashboardPageContainer` because the container was doing two
+/// jobs — scrolling canvas and page header — which meant every section that
+/// wanted one had to accept the other. Nine sections render this today, and B2
+/// needs the header without the scroll container.
+struct PageHeader: View {
+    let title: String
+    var symbol: String?
+    var trailing: () -> AnyView = { AnyView(EmptyView()) }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Spacing.inner) {
+            if let symbol {
+                Image(systemName: symbol)
+                    .foregroundStyle(.secondary)
+            }
+            Text(title)
+                .font(.title2.weight(.semibold))
+            Spacer()
+            trailing()
+        }
+        .padding(.bottom, 2)
     }
 }
 
