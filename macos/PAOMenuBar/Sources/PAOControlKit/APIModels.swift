@@ -1579,6 +1579,40 @@ public struct TaskDetailView: Decodable, Equatable, Sendable {
     public let approvals: ApprovalListView
     public let workspace: WorkspaceView?
     public let events: [ActivityEventView]
+    /// Authoritative routing plan: declared roles, per-role lifecycle status, and
+    /// each role's independent decision history. Optional because a daemon
+    /// predating the contract does not send it — `routingSummary` then falls back
+    /// to the legacy single decision. See docs/ROUTING_ROLE_CONTRACT.md.
+    public let routingPlan: RoutingPlanView?
+
+    enum CodingKeys: String, CodingKey {
+        case task
+        case runs
+        case routing
+        case verification
+        case approvals
+        case workspace
+        case events
+        case routingPlan = "routing_plan"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        task = try container.decode(TaskView.self, forKey: .task)
+        runs = try container.decode([RunView].self, forKey: .runs)
+        routing = try container.decodeIfPresent(RoutingDecisionView.self, forKey: .routing)
+        verification = try container.decode(VerificationReportView.self, forKey: .verification)
+        approvals = try container.decode(ApprovalListView.self, forKey: .approvals)
+        workspace = try container.decodeIfPresent(WorkspaceView.self, forKey: .workspace)
+        events = try container.decode([ActivityEventView].self, forKey: .events)
+        routingPlan = try container.decodeIfPresent(RoutingPlanView.self, forKey: .routingPlan)
+    }
+
+    /// Normalized routing projection. Views consume this instead of reassembling
+    /// plan/decision bookkeeping, so routing semantics stay in one tested place.
+    public var routingSummary: TaskRoutingSummary? {
+        TaskRoutingSummary.make(plan: routingPlan, legacyDecision: routing)
+    }
 }
 
 public struct SubmitRequest: Encodable, Equatable, Sendable {
