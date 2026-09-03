@@ -121,22 +121,32 @@ final class PAODashboardUITests: XCTestCase {
         app.launch()
 
         // Create a task through the real new-task surface.
+        let intent = "UI 测试任务：侧栏导航回归"
         app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "新建任务")).firstMatch.click()
         let editor = app.textViews.firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.click()
-        editor.typeText("UI 测试任务：侧栏导航回归")
+        editor.typeText(intent)
         let submit = app.buttons["提交"].firstMatch
         XCTAssertTrue(submit.waitForExistence(timeout: 5))
         submit.click()
 
         // After submit the app navigates to Tasks with the new task selected.
-        XCTAssertTrue(app.staticTexts["任务详情"].waitForExistence(timeout: 15))
+        // B3's Task Detail is headed by the task itself rather than by a
+        // "Task detail" panel title, so the task's own intent is the assertion.
         XCTAssertEqual(app.windows.firstMatch.title, "任务")
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", intent))
+                .firstMatch.waitForExistence(timeout: 15),
+            "the submitted task is not shown in the task workspace"
+        )
     }
 
     /// Routing stopped being a destination; its explanation now belongs to the
     /// task it explains, and the no-selection guidance stays actionable.
+    ///
+    /// B3 keeps this contract: the Tasks canvas either shows a selected task or
+    /// an empty state that says what is missing and what to do about it.
     func testTasksNeverPresentsADeadCanvas() {
         let app = XCUIApplication()
         app.launch()
@@ -146,11 +156,11 @@ final class PAODashboardUITests: XCTestCase {
         tasks.click()
         // Either routing detail for a selected task, or an actionable empty state
         // with a way forward; the canvas must never be a dead panel.
-        let routingExplanation = app.staticTexts["调度说明"].firstMatch
+        let routing = app.staticTexts["调度决策"].firstMatch
         let newTaskButton = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "新建任务")).firstMatch
         let addProvider = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "添加提供商")).firstMatch
         XCTAssertTrue(
-            routingExplanation.waitForExistence(timeout: 5)
+            routing.waitForExistence(timeout: 5)
                 || newTaskButton.exists
                 || addProvider.exists
         )
