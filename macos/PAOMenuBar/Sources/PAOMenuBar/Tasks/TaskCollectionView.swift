@@ -40,12 +40,17 @@ struct TaskCollectionView: View {
             projectMenu
             Spacer(minLength: 0)
             if state.isPopulated {
-                Text(L10n.tasksVisibleCount(shown: state.tasks.count, total: totalCount))
+                // How much of the *loaded* collection the filters are showing.
+                // The store's total belongs to the truncation line below, where
+                // it is paired with the sentence that explains the shortfall;
+                // pairing it here would suggest the filters searched all of it.
+                let counted = L10n.tasksVisibleCount(
+                    shown: state.tasks.count, total: allTasks.count
+                )
+                Text(counted)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.tertiary)
-                    .accessibilityLabel(
-                        L10n.tasksVisibleCount(shown: state.tasks.count, total: totalCount)
-                    )
+                    .accessibilityLabel(counted)
             }
         }
         .padding(.horizontal, Spacing.element)
