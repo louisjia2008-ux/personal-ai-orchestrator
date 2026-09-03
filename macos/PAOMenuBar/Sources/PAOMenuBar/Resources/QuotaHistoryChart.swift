@@ -78,8 +78,6 @@ struct QuotaHistoryChart: View {
         }
     }
 
-    private var colorScale: KeyValuePairs<String, Color> { [:] }
-
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.inner) {
             chart
@@ -137,12 +135,37 @@ struct QuotaHistoryChart: View {
                 }
             }
         }
-        .chartForegroundStyleScale(range: QuotaSeriesStyle.palette)
+        // Both scales are pinned to an explicit domain rather than left to be
+        // inferred from the data. An inferred domain is ordered by first
+        // appearance, which happens to match the sorted order today — and would
+        // stop matching the moment a series' first observation moved. The
+        // legend below indexes the same sorted list, so pinning is what keeps
+        // the swatch beside a name and the line on the plot the same colour.
+        .chartForegroundStyleScale(domain: seriesLabels, range: seriesColors)
+        .chartSymbolScale(domain: seriesLabels, range: seriesSymbols)
         // The legend is rendered below with the series' own names; the built-in
         // one would duplicate it without the accessible summaries.
         .chartLegend(.hidden)
         .frame(height: 180)
         .accessibilityHidden(true)
+    }
+
+    /// The chart's scale domain: every series' label, in the same stable order
+    /// the legend uses.
+    private var seriesLabels: [String] {
+        identities.map { QuotaSeriesStyle.label(for: $0, displayNames: displayNames) }
+    }
+
+    private var seriesColors: [Color] {
+        identities.indices.map(QuotaSeriesStyle.color(at:))
+    }
+
+    /// Shape is the second channel: with two providers on one plot, colour
+    /// alone would separate them, and colour is never allowed to be the only
+    /// thing that does.
+    private var seriesSymbols: [BasicChartSymbolShape] {
+        let shapes: [BasicChartSymbolShape] = [.circle, .square, .triangle, .diamond]
+        return identities.indices.map { shapes[QuotaSeriesStyle.symbolIndex(at: $0)] }
     }
 
     /// Names each series in text with its colour and symbol beside it.

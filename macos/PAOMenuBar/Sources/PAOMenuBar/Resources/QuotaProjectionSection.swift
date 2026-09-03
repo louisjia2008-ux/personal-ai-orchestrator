@@ -123,14 +123,15 @@ struct QuotaOutlookRow: View {
                     .map(L10n.quotaResetsIn)
             )
             if let exhaustionAt = projection.exhaustionAt {
+                // An absolute instant, with the countdown beside it. "In 40
+                // minutes" alone is harder to plan around than "15:40", and the
+                // pair says both without either standing in for the other.
                 ResourceMetric(
                     label: L10n.quotaProjectionExhaustionAt,
                     metric: MetricPresentation(
-                        text: Timestamps.friendly(
-                            ISO8601DateFormatter().string(from: exhaustionAt), now: now
-                        ),
-                        level: .forecast
-                    )
+                        text: Timestamps.absolute(exhaustionAt), level: .forecast
+                    ),
+                    caption: QuotaFormat.timeUntil(exhaustionAt, now: now)
                 )
             } else {
                 ResourceNotice(
