@@ -90,6 +90,14 @@ public final class OrchestratorStore: ObservableObject {
     private var lastSubmit: (intent: String, at: Date)?
     private let idFactory: () -> String
 
+    /// How many tasks the dashboard asks for.
+    ///
+    /// Matches the daemon's MAX_LIST_LIMIT. The daemon clamps anything larger, so
+    /// this is the most a single request can return; beyond it the collection is
+    /// genuinely truncated and `taskCollectionIsTruncated` says so rather than the
+    /// UI quietly showing a subset.
+    public static let taskListLimit: Int = 200
+
     public static let menuOpenInterval: TimeInterval = 2.0
     public static let activeTaskInterval: TimeInterval = 1.0
     public static let backgroundInterval: TimeInterval = 15.0
@@ -127,6 +135,16 @@ public final class OrchestratorStore: ObservableObject {
 
     public var statusSummary: StatusSummary {
         StatusSummary.derive(connection: connection, tasks: tasks?.tasks ?? [], providers: providers)
+    }
+
+    /// True when the daemon holds more tasks than this client fetched.
+    ///
+    /// Task counts are computed over the whole store while the list is bounded, so
+    /// a truncated collection must be visible rather than inferred: a filter that
+    /// silently searches a subset is indistinguishable from one that found nothing.
+    public var taskCollectionIsTruncated: Bool {
+        guard let tasks else { return false }
+        return tasks.tasks.count < tasks.total
     }
 
     public func taskCounts() -> (running: Int, ready: Int, blocked: Int, verified: Int) {
@@ -206,7 +224,21 @@ public final class OrchestratorStore: ObservableObject {
             self.daemonBuild = try? await client.build()
             let dashboard = try await client.dashboard()
             self.dashboard = dashboard
-            self.tasks = TaskListView(tasks: dashboard.recentTasks, total: dashboard.counts.total)
+            // The task collection comes from the authoritative list endpoint, not
+            // from the dashboard's ten-item recent_tasks preview. The dashboard
+            // counts every task in the store, so driving the list from that preview
+            // made search, filtering and every count-to-list navigation operate on
+            // a silently truncated subset.
+            if let listed = try? await client.listTasks(limit: Self.taskListLimit) {
+                self.tasks = listed
+            } else if self.tasks == nil {
+                // First load with the list endpoint unavailable: the preview is
+                // better than nothing, and `total` keeps the shortfall detectable.
+                self.tasks = TaskListView(
+                    tasks: dashboard.recentTasks,
+                    total: dashboard.counts.total
+                )
+            }
             self.projects = dashboard.projects
             if selectedProjectId == nil {
                 selectedProjectId = dashboard.projects.projects.first(where: \.isOnline)?.projectId
