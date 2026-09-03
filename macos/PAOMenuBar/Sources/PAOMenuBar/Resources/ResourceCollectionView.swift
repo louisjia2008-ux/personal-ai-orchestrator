@@ -22,9 +22,11 @@ struct ResourceCollectionView: View {
             header
             Divider()
             content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .controlBackgroundColor))
+        .accessibilityIdentifier("workspace.collection")
     }
 
     // MARK: - Header

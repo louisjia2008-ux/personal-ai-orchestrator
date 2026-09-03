@@ -23,6 +23,7 @@ struct TaskCollectionView: View {
             header
             Divider()
             content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             if isTruncated {
                 Divider()
                 truncationNotice
@@ -30,6 +31,7 @@ struct TaskCollectionView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .controlBackgroundColor))
+        .accessibilityIdentifier("workspace.collection")
     }
 
     // MARK: - Header

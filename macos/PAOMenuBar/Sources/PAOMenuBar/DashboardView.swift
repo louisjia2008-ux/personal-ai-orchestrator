@@ -70,13 +70,21 @@ struct DashboardView: View {
     var body: some View {
         NavigationSplitView {
             sidebar
-                .navigationSplitViewColumnWidth(min: 210, ideal: 230)
+                // Pinned, not flexible: a resizable column let the split view
+                // re-solve the sidebar per destination, which is why it changed
+                // width when the owner switched pages.
+                .navigationSplitViewColumnWidth(DashboardLayoutMetrics.sidebarWidth)
         } detail: {
             detail(for: activeSection)
                 .navigationTitle(activeSection.title)
                 .toolbar { toolbarContent }
         }
-        .frame(minWidth: 1080, minHeight: 640)
+        // Small enough to admit the smallest window the dashboard is designed
+        // for: sidebar + the collection and detail minimums, and no more.
+        .frame(
+            minWidth: DashboardLayoutMetrics.minimumWindowWidth,
+            minHeight: DashboardLayoutMetrics.minimumWindowHeight
+        )
         .sheet(isPresented: $showsNewTaskSheet) {
             NewTaskSheet { submittedTaskId in
                 showsNewTaskSheet = false
@@ -120,6 +128,10 @@ struct DashboardView: View {
     private func sidebarItem(_ candidate: DashboardSection) -> some View {
         Label(candidate.title, systemImage: candidate.symbol)
             .tag(candidate)
+            // Identified by destination, not by title text: since B5 every
+            // page also renders its title in the content header, and a
+            // text query can no longer tell a sidebar row from a page header.
+            .accessibilityIdentifier("sidebar.\(candidate.rawValue)")
     }
 
     @ToolbarContentBuilder
@@ -396,6 +408,7 @@ private struct ProjectsSection: View {
                 }
             }
         }
+        .frame(maxWidth: DashboardLayoutMetrics.tableMaximumWidth, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -507,15 +520,18 @@ private struct OverviewDashboard: View {
     let onNavigate: (NavigationIntent) -> Void
 
     var body: some View {
-        DashboardPageContainer(
-            title: DashboardSection.overview.title,
-            symbol: DashboardSection.overview.symbol
-        ) {
+        DashboardPageContainer {
             let counts = store.dashboard?.counts
             // Equal-width flexible columns plus a shared tile height: the verification
             // tile aggregates two states and previously wrapped its title, which grew
             // that one card and broke the row's alignment.
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 5), spacing: 12) {
+            LazyVGrid(
+                columns: Array(
+                    repeating: GridItem(.flexible(), spacing: DashboardLayoutMetrics.cardSpacing),
+                    count: 5
+                ),
+                spacing: DashboardLayoutMetrics.cardSpacing
+            ) {
                 MetricTile(L10n.kpiRunning, counts?.running ?? 0, symbol: "gearshape.2") {
                     navigateToTasks(filter: "RUNNING")
                 }
@@ -542,9 +558,24 @@ private struct OverviewDashboard: View {
             }
             .fixedSize(horizontal: false, vertical: true)
 
+            // Grid cells rather than a card wrapping a card: the group is a
+            // heading plus tiles, aligned to the same left and right edges as
+            // the KPI row above it.
             if let info = store.dashboard?.basicInfo {
-                DashboardCard(title: L10n.overviewBasicInfo, symbol: "info.circle") {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 10)], spacing: 10) {
+                OverviewGroup(
+                    L10n.overviewBasicInfo,
+                    symbol: "info.circle",
+                    detail: L10n.overviewLastRefresh(Timestamps.friendly(info.lastRefreshSync))
+                ) {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(
+                                .adaptive(minimum: 170),
+                                spacing: DashboardLayoutMetrics.cardSpacing
+                            )
+                        ],
+                        spacing: DashboardLayoutMetrics.cardSpacing
+                    ) {
                         BasicInfoCell(L10n.overviewConnection, info.daemonConnection)
                         BasicInfoCell(L10n.overviewProjects, "\(info.registeredProjects)")
                         BasicInfoCell(L10n.overviewProviders, "\(info.discoveredProviders)")
@@ -554,13 +585,12 @@ private struct OverviewDashboard: View {
                         BasicInfoCell(L10n.overviewRoutingToday, "\(info.routingDecisionsToday)")
                         BasicInfoCell(L10n.overviewQuotaWarnings, "\(info.quotaWarningCount)")
                     }
-                    Text(L10n.overviewLastRefresh(info.lastRefreshSync))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
                 }
             }
 
-            HStack(alignment: .top, spacing: 12) {
+            // Both charts reserve the same plot height, so the two cards in
+            // this row end at the same baseline however wide the window is.
+            HStack(alignment: .top, spacing: DashboardLayoutMetrics.cardSpacing) {
                 DashboardCard(title: L10n.overviewTaskTrend, symbol: "chart.xyaxis.line") {
                     if let trend = store.dashboard?.taskTrend, trend.count >= 2 {
                         TaskTrendChart(buckets: trend)
@@ -576,26 +606,32 @@ private struct OverviewDashboard: View {
                     }
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)
 
-            DashboardCard(title: L10n.overviewRisks, symbol: "exclamationmark.triangle") {
+            OverviewGroup(L10n.overviewRisks, symbol: "exclamationmark.triangle") {
                 if let risks = store.dashboard?.risks, !risks.isEmpty {
-                    ForEach(risks) { risk in
-                        RiskRow(risk: risk, onNavigate: onNavigate)
-                    }
-                    DisclosureGroup(L10n.advancedDetails) {
-                        ForEach(store.dashboard?.importantBlockers ?? [], id: \.self) { raw in
-                            Text(raw)
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
+                    VStack(alignment: .leading, spacing: Spacing.inner) {
+                        ForEach(risks) { risk in
+                            RiskRow(risk: risk, onNavigate: onNavigate)
                         }
+                        DisclosureGroup(L10n.advancedDetails) {
+                            ForEach(store.dashboard?.importantBlockers ?? [], id: \.self) { raw in
+                                Text(raw)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        .font(.caption)
                     }
                 } else {
-                    Text(L10n.noBlockers).foregroundStyle(.secondary)
+                    Text(L10n.noBlockers)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
             }
 
-            DashboardCard(title: L10n.overviewRecentActivity, symbol: "clock") {
+            OverviewGroup(L10n.overviewRecentActivity, symbol: "clock") {
                 EventList(events: store.dashboard?.recentEvents ?? [])
             }
         }
@@ -623,13 +659,13 @@ private struct ActivityDashboard: View {
     @EnvironmentObject private var store: OrchestratorStore
 
     var body: some View {
-        DashboardPageContainer(
-            title: DashboardSection.activity.title,
-            symbol: DashboardSection.activity.symbol
-        ) {
-            DashboardCard(title: L10n.sectionHistory, symbol: "clock.arrow.circlepath") {
-                EventList(events: store.dashboard?.recentEvents ?? [])
-            }
+        DashboardPageContainer {
+            // The events themselves, as one day-grouped table across the main
+            // pane. No card: a chronological list is not a summary panel, and
+            // wrapping it in one is what left Activity as a grey slab.
+            EventList(events: store.dashboard?.recentEvents ?? [], groupsByDay: true)
+                .frame(maxWidth: DashboardLayoutMetrics.tableMaximumWidth, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -659,12 +695,18 @@ private struct SettingsDashboard: View {
     let onNewTask: (String) -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Spacing.section) {
-                PageHeader(
-                    title: DashboardSection.settings.title,
-                    symbol: DashboardSection.settings.symbol
-                )
+        DashboardPageContainer {
+            switch tab {
+            case .general:
+                ClientSettingsSection()
+            case .projects:
+                ProjectsSection(onNewTask: onNewTask)
+            }
+        }
+        // The page's own control belongs in the page's toolbar, beside every
+        // other page's controls, rather than in a second header band.
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
                 Picker(L10n.settingsPickerTitle, selection: $tab) {
                     ForEach(SettingsTab.allCases) { candidate in
                         Text(candidate.title).tag(candidate)
@@ -672,19 +714,9 @@ private struct SettingsDashboard: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-
-                switch tab {
-                case .general:
-                    ClientSettingsSection()
-                case .projects:
-                    ProjectsSection(onNewTask: onNewTask)
-                }
+                .fixedSize()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 24)
-            .padding(.vertical, Spacing.page)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 
@@ -692,10 +724,7 @@ private struct SettingsDashboard: View {
 /// (`PAOMenuBarApp`'s Settings scene) as well as inside the Settings destination.
 struct ClientSettingsDashboard: View {
     var body: some View {
-        DashboardPageContainer(
-            title: DashboardSection.settings.title,
-            symbol: DashboardSection.settings.symbol
-        ) {
+        DashboardPageContainer {
             ClientSettingsSection()
         }
     }
@@ -804,6 +833,7 @@ private struct ClientSettingsSection: View {
             // full mode list is global scheduling configuration, not task detail.
             ActiveSchedulingPolicyCard()
         }
+        .frame(maxWidth: DashboardLayoutMetrics.tableMaximumWidth, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
             Task { await store.loadSchedulingSettings() }
@@ -955,9 +985,11 @@ private struct MetricTile: View {
     let action: () -> Void
     @State private var hovering = false
 
-    /// Every KPI tile reserves the same height regardless of whether it carries a
-    /// secondary line, so five tiles in a row stay geometrically identical.
-    private static let tileHeight: CGFloat = 108
+    /// Every KPI tile reserves the shared tile height regardless of whether it
+    /// carries a secondary line, so five tiles in a row stay geometrically
+    /// identical. The height is a layout token, not a local number: the row's
+    /// alignment contract is shared with the rest of the dashboard.
+    private static let tileHeight = DashboardLayoutMetrics.kpiTileHeight
 
     init(
         _ label: String,
@@ -996,17 +1028,18 @@ private struct MetricTile: View {
             .frame(height: Self.tileHeight, alignment: .top)
             .padding(2)
             .background(
-                RoundedRectangle(cornerRadius: 10)
+                RoundedRectangle(cornerRadius: DashboardLayoutMetrics.cardCornerRadius)
                     .fill(hovering ? Color.accentColor.opacity(0.12) : .clear)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 10)
+                RoundedRectangle(cornerRadius: DashboardLayoutMetrics.cardCornerRadius)
                     .stroke(hovering ? Color.accentColor.opacity(0.45) : .clear, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help(L10n.metricTileHelp)
+        .accessibilityIdentifier("overview.kpiTile")
     }
 }
 
@@ -1020,18 +1053,19 @@ private struct BasicInfoCell: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(value)
-                .font(.title3.weight(.semibold))
-                .lineLimit(1)
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+        DashboardCard {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(value)
+                    .font(.title3.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
     }
 }
 
@@ -1042,19 +1076,33 @@ private struct TaskTrendChart: View {
         max(1, buckets.map { $0.submitted + $0.completed + $0.blocked }.max() ?? 1)
     }
 
+    /// A bar is a bar, not a panel. Columns flex to share the plot, but stop
+    /// growing at a width a bar can still be read as one: four buckets in a
+    /// wide card previously rendered as four rectangles the size of cards.
+    private static let barMaximumWidth: CGFloat = 36
+    private static let labelHeight: CGFloat = 16
+
+    private var plotHeight: CGFloat {
+        DashboardLayoutMetrics.chartHeight - Self.labelHeight - Spacing.tight
+    }
+
     var body: some View {
-        HStack(alignment: .bottom, spacing: 6) {
+        HStack(alignment: .bottom, spacing: Spacing.inner) {
             ForEach(buckets.suffix(12)) { bucket in
-                VStack(spacing: 2) {
+                VStack(spacing: Spacing.tight) {
                     stackedBar(bucket)
                     Text(hour(bucket.bucketStart))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
+                        .frame(height: Self.labelHeight)
                 }
+                // The column shares the plot evenly; the bar inside it stops
+                // at a bar's width. Without the cap, four buckets in a wide
+                // card rendered as four rectangles the size of cards.
                 .frame(maxWidth: .infinity)
             }
         }
-        .frame(height: 150)
+        .frame(height: DashboardLayoutMetrics.chartHeight, alignment: .bottom)
     }
 
     private func stackedBar(_ bucket: TaskTrendBucketView) -> some View {
@@ -1062,16 +1110,19 @@ private struct TaskTrendChart: View {
         let completed = CGFloat(bucket.completed) / CGFloat(maxValue)
         let blocked = CGFloat(bucket.blocked) / CGFloat(maxValue)
         // Series colours come from the states they represent, so the trend reads
-        // with the same vocabulary as the rest of the dashboard.
+        // with the same vocabulary as the rest of the dashboard. Bars flex to
+        // fill the card: fixed-width columns left two slivers stranded in a wide
+        // card.
         return VStack(spacing: 0) {
             Rectangle().fill(StatusStyle.task(state: "BLOCKED").tone.fillColor)
-                .frame(height: max(0, blocked * 120))
+                .frame(height: max(0, blocked * plotHeight))
             Rectangle().fill(StatusStyle.task(state: "COMPLETED").tone.fillColor)
-                .frame(height: max(0, completed * 120))
+                .frame(height: max(0, completed * plotHeight))
             Rectangle().fill(StatusStyle.task(state: "SUBMITTED").tone.fillColor)
-                .frame(height: max(2, submitted * 120))
+                .frame(height: max(2, submitted * plotHeight))
         }
-        .frame(width: 12, height: 120, alignment: .bottom)
+        .frame(height: plotHeight, alignment: .bottom)
+        .frame(maxWidth: Self.barMaximumWidth)
         .clipShape(RoundedRectangle(cornerRadius: 3))
         .help(L10n.taskTrendHelp(submitted: bucket.submitted, completed: bucket.completed, blocked: bucket.blocked))
     }
@@ -1109,7 +1160,7 @@ private struct StateDistributionChart: View {
                 }
             }
         }
-        .frame(minHeight: 150, alignment: .center)
+        .frame(minHeight: DashboardLayoutMetrics.chartHeight, alignment: .center)
     }
 
     /// Chart marks share the task-state vocabulary: the same state must not be
@@ -1129,7 +1180,7 @@ private struct EmptyChartState: View {
     var body: some View {
         Label(message, systemImage: "chart.bar.xaxis")
             .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, minHeight: 150)
+            .frame(maxWidth: .infinity, minHeight: DashboardLayoutMetrics.chartHeight)
     }
 }
 
@@ -1279,24 +1330,35 @@ private struct BuildInformationCard: View {
     }
 }
 
-private struct DashboardCard<Content: View>: View {
+/// One Overview group: the shared section heading plus its content.
+///
+/// Overview is four groups, not four cards. The heading carries the rank and
+/// the content sits directly beneath it at the page's leading edge, so the KPI
+/// row, the basic-information grid and the risk list all start from the same
+/// left edge.
+private struct OverviewGroup<Content: View>: View {
     let title: String
     let symbol: String
-    /// KPI tiles pin this to 1 so a longer title can never grow one card in a row.
-    var titleLineLimit: Int? = nil
+    let detail: String?
     @ViewBuilder var content: Content
 
+    init(
+        _ title: String,
+        symbol: String,
+        detail: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.symbol = symbol
+        self.detail = detail
+        self.content = content()
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label(title, systemImage: symbol)
-                .font(.headline)
-                .lineLimit(titleLineLimit)
-                .minimumScaleFactor(titleLineLimit == nil ? 1.0 : 0.7)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: Spacing.inner) {
+            DashboardSectionHeader(title, symbol: symbol, detail: detail)
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 }

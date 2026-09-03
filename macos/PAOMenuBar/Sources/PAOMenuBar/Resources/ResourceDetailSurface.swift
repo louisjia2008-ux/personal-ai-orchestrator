@@ -53,17 +53,20 @@ struct ResourceDetailSurface: View {
                 }
                 .frame(maxWidth: ContentWidth.reading, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 24)
-                .padding(.vertical, Spacing.page)
+                .padding(.horizontal, DashboardLayoutMetrics.pageHorizontalPadding)
+                .padding(.vertical, DashboardLayoutMetrics.pageVerticalPadding)
             }
             .background(Color(nsColor: .windowBackgroundColor))
+            .accessibilityIdentifier("workspace.detail")
         } else {
             EmptyStateView(
                 title: L10n.emptyResourcesNoSelectionTitle,
                 symbol: "square.stack.3d.up",
                 message: L10n.emptyResourcesNoSelectionMessage
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .background(Color(nsColor: .windowBackgroundColor))
+            .accessibilityIdentifier("workspace.detail")
         }
     }
 

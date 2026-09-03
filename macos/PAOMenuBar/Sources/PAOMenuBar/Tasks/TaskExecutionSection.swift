@@ -140,7 +140,20 @@ struct TaskRoutingReadinessNotice: View {
 
     private var hasTasks: Bool { !(store.tasks?.tasks ?? []).isEmpty }
 
+    /// Whether there is anything here worth a panel.
+    ///
+    /// With a provider connected and tasks already in the list, this notice had
+    /// nothing to add to the empty state it sat under — so it renders nothing
+    /// rather than a panel restating "select a task".
+    private var hasSomethingToSay: Bool { connectedCount == 0 || !hasTasks }
+
     var body: some View {
+        if hasSomethingToSay {
+            notice
+        }
+    }
+
+    private var notice: some View {
         TaskDetailSection(L10n.routingTitle, symbol: "point.topleft.down.curvedto.point.bottomright.up") {
             if connectedCount == 0 {
                 TaskSectionNotice(
