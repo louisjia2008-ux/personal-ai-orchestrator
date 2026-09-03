@@ -64,6 +64,8 @@
 "dashboard.verification" = "验证";
 "dashboard.history" = "历史";
 "dashboard.settings" = "设置";
+"dashboard.resources" = "资源";
+"dashboard.activity" = "活动";
 "label.connection" = "连接";
 "label.systemHealth" = "系统健康";
 "label.blockers" = "阻塞项";
@@ -370,6 +372,9 @@
 
 /* P4.2.6.4 providers and models */
 "providers.pickerTitle" = "模型与服务";
+"resources.pickerTitle" = "资源视图";
+"settings.pickerTitle" = "设置视图";
+"settings.tab.general" = "通用";
 "providers.notConnected" = "未连接";
 "providers.surface" = "服务形态";
 "providers.providerId" = "提供商 ID";
