@@ -197,16 +197,21 @@ struct EmptyStateView: View {
                 .font(.system(size: 44, weight: .light))
                 .foregroundStyle(.tertiary)
             Text(title).font(.title3.weight(.semibold))
+            // No `fixedSize`: it asks the text for its height at whatever width
+            // it is proposed, and a split view probing its detail pane's
+            // minimum width proposes a very narrow one. The tall answer became
+            // the pane's minimum height, so Tasks — the one destination showing
+            // this state in a detail pane — pushed the whole navigation split
+            // taller than the window and slid up under the title bar. A bounded
+            // width is enough; text wraps inside it on its own.
             Text(message)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
             if let hint {
                 Text(hint)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             if let action, let actionTitle {
                 Button(actionTitle, action: action)
@@ -214,7 +219,9 @@ struct EmptyStateView: View {
                     .padding(.top, Spacing.tight)
             }
         }
-        .frame(maxWidth: 380)
+        // A cap, not a fixed width: this view also fills the 312pt collection
+        // column, where a definite 340 would overflow it.
+        .frame(maxWidth: 340)
         .padding(Spacing.element)
     }
 }
