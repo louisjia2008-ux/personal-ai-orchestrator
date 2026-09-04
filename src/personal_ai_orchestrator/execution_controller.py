@@ -147,7 +147,18 @@ def record_worker_exit(
 
         if exit_code != 0:
             run_status = "FAILED"
+            # Keep the worker's own sanitized narration on failure so the
+            # owner can see WHY the worker died ("Usage limit reached for
+            # 5 hour" and similar). Drop everything else: a failed worker's
+            # host-derived metadata (hashes, byte counts) has no authority
+            # and no value, so the failure record stays fail-closed apart
+            # from the narration itself.
             persisted_result: Any = {"exit_code": exit_code}
+            if isinstance(worker_result, dict):
+                if isinstance(worker_result.get("stderr_tail"), str):
+                    persisted_result["stderr_tail"] = worker_result["stderr_tail"]
+                if isinstance(worker_result.get("stdout_tail"), str):
+                    persisted_result["stdout_tail"] = worker_result["stdout_tail"]
             next_state = TaskState.BLOCKED
             reason = f"worker exited unexpectedly with code {exit_code}"
         elif not isinstance(worker_result, dict):

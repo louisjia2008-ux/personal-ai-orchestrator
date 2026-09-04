@@ -493,3 +493,37 @@ def test_missing_worktree_blocks_and_clears_stale_writer_lock(tmp_path: Path) ->
     assert reconcile_workspace_truth(store) == ("t1",)
     assert store.get_task("t1").state is TaskState.BLOCKED
     assert store.get_workspace("t1").writer_token is None
+
+
+def test_unexpected_exit_keeps_only_sanitized_transcript_tails(tmp_path: Path) -> None:
+    store = _running_store(tmp_path)
+    record_worker_exit(
+        store,
+        task_id="t1",
+        run_id="run-1",
+        exit_code=2,
+        worker_result={
+            "exit_code": 2,
+            "stdout_sha256": "h",
+            "stdout_bytes": 1024,
+            "stderr_sha256": "h",
+            "stderr_bytes": 512,
+            "output_truncated": False,
+            "timed_out": False,
+            "stdout_tail": "stdout narrative",
+            "stderr_tail": "Usage limit reached for 5 hour",
+        },
+    )
+    row = store.connection.execute(
+        "SELECT status, result_json FROM runs WHERE run_id='run-1'"
+    ).fetchone()
+    assert row["status"] == "FAILED"
+    import json as _json
+    result = _json.loads(row["result_json"])
+    # Fail-closed: host-derived metadata is gone; the worker's narration
+    # is the only thing that survives so the owner can see WHY.
+    assert result == {
+        "exit_code": 2,
+        "stderr_tail": "Usage limit reached for 5 hour",
+        "stdout_tail": "stdout narrative",
+    }
