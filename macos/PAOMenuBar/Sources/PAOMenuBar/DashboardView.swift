@@ -32,6 +32,15 @@ struct DashboardView: View {
         section ?? DashboardSectionMigration.section(forStoredValue: storedSelection)
     }
 
+    /// The task inspector, which only Tasks has, presented from the navigation
+    /// container rather than from inside the destination.
+    private var taskInspectorPresentation: Binding<Bool> {
+        Binding(
+            get: { activeSection == .tasks && showsTaskInspector },
+            set: { showsTaskInspector = $0 }
+        )
+    }
+
     /// Single entry point for navigation that does not come from the sidebar:
     /// overview risks today, deep links later. Applying the sub-surface context
     /// before the destination means the destination renders already positioned.
@@ -79,6 +88,19 @@ struct DashboardView: View {
                 .navigationTitle(activeSection.title)
                 .toolbar { toolbarContent }
         }
+        // On the navigation split view itself. `.inspector` splits whatever it
+        // is applied to across the full window, so applied to the detail — or
+        // inside the Tasks page, where it started — it nested a second
+        // full-window split inside the navigation split, and the destination
+        // was laid out from the window's top-left instead of the pane's. The
+        // sidebar and the task list slid up under the title bar as soon as the
+        // window was small enough for it to show.
+        .modifier(
+            TaskInspectorPresentation(
+                isPresented: taskInspectorPresentation,
+                detail: store.selectedTaskDetail
+            )
+        )
         // Small enough to admit the smallest window the dashboard is designed
         // for: sidebar + the collection and detail minimums, and no more.
         .frame(
@@ -200,6 +222,30 @@ struct DashboardView: View {
                 store.selectedProjectId = projectId
                 showsNewTaskSheet = true
             }
+        }
+    }
+}
+
+/// The task inspector column.
+///
+/// Attached to the navigation split view's detail, not to the Tasks page
+/// itself. `.inspector` re-hosts the subtree it is applied to as a split of the
+/// whole window: applied inside the detail it laid the destination out from the
+/// window's top edge instead of from below the toolbar, so at small window
+/// sizes Tasks — and the sidebar beside it — slid up under the title bar while
+/// every other destination stayed put.
+private struct TaskInspectorPresentation: ViewModifier {
+    @Binding var isPresented: Bool
+    let detail: TaskDetailView?
+
+    func body(content: Content) -> some View {
+        if #available(macOS 14.0, *) {
+            content.inspector(isPresented: $isPresented) {
+                TaskInspectorContent(detail: detail)
+                    .inspectorColumnWidth(min: 260, ideal: 300, max: 440)
+            }
+        } else {
+            content
         }
     }
 }

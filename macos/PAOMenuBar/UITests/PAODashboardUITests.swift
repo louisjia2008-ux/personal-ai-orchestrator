@@ -305,6 +305,52 @@ final class PAODashboardUITests: XCTestCase {
         }
     }
 
+    /// The smallest window the dashboard supports still puts every destination
+    /// inside its pane.
+    ///
+    /// The regression this pins: a wrapping, centered `Text` under
+    /// `fixedSize(vertical:)` reported a very tall height when the split view
+    /// probed its detail pane's minimum width. That height became the pane's
+    /// minimum, so at 1000x700 Tasks — the one destination showing that empty
+    /// state in a detail pane — pushed the whole navigation split taller than
+    /// the window, and the sidebar slid up under the title bar with it. Every
+    /// other destination stayed put, which is exactly what made it invisible
+    /// until someone shrank the window and clicked Tasks.
+    func testSmallWindowKeepsEveryDestinationInItsPane() {
+        let app = XCUIApplication()
+        app.launch()
+        DashboardWindow.open(in: app)
+
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 20))
+        DashboardWindow.place(window, atSize: "1000x700", test: self)
+
+        var reference: CGRect?
+        for (raw, _) in Self.destinations {
+            let row = sidebarRow(raw, in: app)
+            XCTAssertTrue(row.waitForExistence(timeout: 10), "sidebar row missing: \(raw)")
+            row.click()
+
+            let probe = sidebarRow("overview", in: app)
+            XCTAssertTrue(probe.waitForExistence(timeout: 5))
+            let frame = probe.frame
+
+            // Inside the window, below the title bar — never under it.
+            XCTAssertGreaterThan(
+                frame.minY, window.frame.minY + 30,
+                "\(raw) drew the sidebar under the title bar at 1000x700"
+            )
+            if let reference {
+                XCTAssertEqual(
+                    frame.minY, reference.minY, accuracy: 1.0,
+                    "\(raw) moved the sidebar at 1000x700"
+                )
+            } else {
+                reference = frame
+            }
+        }
+    }
+
     /// The global toolbar actions keep one position on every destination.
     ///
     /// Pixel evidence cannot settle this: a system permission prompt floats over

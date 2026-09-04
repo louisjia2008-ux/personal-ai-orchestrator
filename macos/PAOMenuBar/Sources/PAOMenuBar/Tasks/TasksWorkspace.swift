@@ -92,12 +92,6 @@ struct TasksWorkspace: View {
         .searchable(text: $filter.query, prompt: L10n.tasksSearchPrompt)
         .modifier(SearchFocusBinding(focus: $searchFocused))
         .toolbar { toolbarContent }
-        .modifier(
-            TaskInspectorPresentation(
-                isPresented: $showsInspector,
-                detail: store.selectedTaskDetail
-            )
-        )
         .background(hiddenCommands)
         .onChange(of: selectedTaskId) { newValue in
             // The cancellation result belongs to the task it was requested for.
@@ -185,18 +179,4 @@ private struct SearchFocusBinding: ViewModifier {
 /// macOS 13 has no `.inspector`, and refusing to build for it is not an option:
 /// the same content is reachable there as a disclosure at the end of Task
 /// Detail, which `TaskDetailSurface` renders when the inspector is unavailable.
-private struct TaskInspectorPresentation: ViewModifier {
-    @Binding var isPresented: Bool
-    let detail: TaskDetailView?
 
-    func body(content: Content) -> some View {
-        if #available(macOS 14.0, *) {
-            content.inspector(isPresented: $isPresented) {
-                TaskInspectorContent(detail: detail)
-                    .inspectorColumnWidth(min: 260, ideal: 300, max: 440)
-            }
-        } else {
-            content
-        }
-    }
-}
