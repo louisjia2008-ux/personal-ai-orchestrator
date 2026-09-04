@@ -19,6 +19,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -1619,14 +1620,7 @@ class ControlPlaneService:
             }
             provider_plan_ids[provider_id] = plan_ids
 
-        print(f"DBG registry providers={list(registry.providers)} accounts={len(registry.accounts)} plans={len(registry.plans)} pools={len(registry.quota_pools)} targets={len(registry.execution_targets)} models={len(registry.models)}", file=sys.stderr)
         remaining_by_provider: dict[str, list[float]] = {}
-        try:
-            dpath = Path("/tmp/pao_dbg.log")
-            with dpath.open("a") as f:
-                f.write(f"REG providers={list(registry.providers)} accounts={len(registry.accounts)} plans={len(registry.plans)} pools={len(registry.quota_pools)} targets={len(registry.execution_targets)} models={len(registry.models)}\n")
-        except Exception:
-            pass
         for pool in registry.quota_pools.values():
             provider_id = next(
                 (
@@ -1647,12 +1641,6 @@ class ControlPlaneService:
                 if fraction is None:
                     continue
                 remaining_by_provider.setdefault(provider_id, []).append(fraction)
-        print(f"DBG remaining_by_provider={remaining_by_provider} provider_plan_ids={provider_plan_ids}", file=sys.stderr)
-        try:
-            with open("/tmp/pao_dbg.log", "a") as f:
-                f.write(f"REMAINING={remaining_by_provider} PLAN_IDS={provider_plan_ids}\n")
-        except Exception:
-            pass
 
         candidates: list[DispatchCandidateInput] = []
         now = datetime.now(UTC)
@@ -3055,11 +3043,16 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
             except ValidationError:
                 self._json(400, {"error": "invalid_json_schema"})
             except Exception as exc:
-                import traceback
+                # Operator-supports-us-visible failure: when an unhandled
+                # exception escapes into the catch-all the daemon would
+                # otherwise return a bare 503, swallowing the cause.
+                # A small file under /tmp is the simplest durable trace.
                 try:
-                    with open("/tmp/pao_dbg.log", "a") as f:
-                        f.write(f"500 catchall: {type(exc).__name__}: {exc}\n")
-                        f.write(traceback.format_exc() + "\n")
+                    import traceback
+                    with open("/tmp/pao_control_plane_unavailable.log", "a") as fh:
+                        fh.write(f"{type(exc).__name__}: {exc}\n")
+                        fh.write(traceback.format_exc())
+                        fh.write("\n---\n")
                 except Exception:
                     pass
                 self._json(503, {"error": "control_plane_unavailable"})
