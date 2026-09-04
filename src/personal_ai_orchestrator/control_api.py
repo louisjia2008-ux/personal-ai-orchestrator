@@ -1691,7 +1691,7 @@ class ControlPlaneService:
             score_components=tuple(
                 DispatchRecommendationScoreComponent(
                     name=component.name,
-                    contribution=component.contribution,
+                    contribution=float(component.value) if isinstance(component.value, (int, float)) else 0.0,
                 )
                 for component in evaluation.score_components
             ),
