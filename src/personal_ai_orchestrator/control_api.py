@@ -82,6 +82,27 @@ def datetime_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _opencode_binary_available() -> bool:
+    """Whether a real opencode worker binary can be launched on this host.
+
+    ``shutil.which`` alone only sees the daemon's own ``PATH``. A daemon
+    started by a GUI app inherits the launch-time environment, which on
+    macOS is routinely ``/usr/bin:/bin:/usr/sbin:/sbin`` — the canonical
+    ``~/.opencode/bin/opencode`` install location would be invisible even
+    though discovery itself resolves exactly that path. Mirror discovery's
+    resolution so runtime availability never contradicts the catalog that
+    was discovered through the same binary.
+    """
+
+    if shutil.which("opencode") is not None:
+        return True
+    fallback = Path.home() / ".opencode" / "bin" / "opencode"
+    try:
+        return fallback.is_file() and os.access(fallback, os.X_OK)
+    except OSError:
+        return False
+
+
 class ControlPlaneError(Exception):
     """Sanitized control-plane failure mapped to an HTTP status and error code."""
 
@@ -919,7 +940,7 @@ class ControlPlaneService:
         runtime_provider = target.runtime_provider_id or "opencode"
         if runtime_provider != "opencode":
             return False
-        return shutil.which("opencode") is not None
+        return _opencode_binary_available()
 
     @staticmethod
     def _project_id_for(git_root: str, working_subpath: str | None) -> str:

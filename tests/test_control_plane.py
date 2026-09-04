@@ -1164,3 +1164,44 @@ def test_daemon_control_service_wiring(tmp_path):
         server.stop()
         control_service.store.close()
         shutil.rmtree(socket_dir, ignore_errors=True)
+
+
+def test_opencode_runtime_resolves_the_canonical_install_when_path_is_minimal(tmp_path, monkeypatch):
+    """A GUI-launched daemon sees only /usr/bin:/bin — the binary found by
+    discovery at ~/.opencode/bin/opencode must still count as available."""
+
+    from personal_ai_orchestrator import control_api
+
+    # Simulate the minimal launch environment: nothing on PATH.
+    monkeypatch.setattr(control_api.shutil, "which", lambda name: None)
+
+    home = tmp_path / "gui-home"
+    bin_dir = home / ".opencode" / "bin"
+    bin_dir.mkdir(parents=True)
+    binary = bin_dir / "opencode"
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    binary.chmod(0o755)
+    monkeypatch.setattr(control_api.Path, "home", staticmethod(lambda: home))
+
+    assert control_api._opencode_binary_available() is True
+
+    # Not executable -> not launchable, regardless of presence.
+    binary.chmod(0o644)
+    assert control_api._opencode_binary_available() is False
+
+    # Missing entirely -> unavailable.
+    binary.unlink()
+    assert control_api._opencode_binary_available() is False
+
+
+def test_opencode_runtime_prefers_path_resolution(tmp_path, monkeypatch):
+    from personal_ai_orchestrator import control_api
+
+    monkeypatch.setattr(
+        control_api.shutil, "which", lambda name: "/usr/local/bin/opencode"
+    )
+    # Even with no home install, PATH resolution wins.
+    empty_home = tmp_path / "empty-home"
+    empty_home.mkdir()
+    monkeypatch.setattr(control_api.Path, "home", staticmethod(lambda: empty_home))
+    assert control_api._opencode_binary_available() is True
