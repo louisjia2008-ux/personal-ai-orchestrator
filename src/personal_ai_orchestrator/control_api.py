@@ -1619,6 +1619,7 @@ class ControlPlaneService:
             }
             provider_plan_ids[provider_id] = plan_ids
 
+        print(f"DBG registry providers={list(registry.providers)} accounts={len(registry.accounts)} plans={len(registry.plans)} pools={len(registry.quota_pools)} targets={len(registry.execution_targets)} models={len(registry.models)}", file=sys.stderr)
         remaining_by_provider: dict[str, list[float]] = {}
         for pool in registry.quota_pools.values():
             provider_id = next(
@@ -1640,6 +1641,7 @@ class ControlPlaneService:
                 if fraction is None:
                     continue
                 remaining_by_provider.setdefault(provider_id, []).append(fraction)
+        print(f"DBG remaining_by_provider={remaining_by_provider} provider_plan_ids={provider_plan_ids}", file=sys.stderr)
 
         candidates: list[DispatchCandidateInput] = []
         now = datetime.now(UTC)
