@@ -1621,6 +1621,20 @@ class ControlPlaneService:
             provider_plan_ids[provider_id] = plan_ids
 
         remaining_by_provider: dict[str, list[float]] = {}
+        try:
+            with open("/tmp/pao_candidates_dbg.log", "a") as f:
+                f.write(
+                    f"DBG providers={list(registry.providers)} "
+                    f"accounts={len(registry.accounts)} plans={len(registry.plans)} "
+                    f"pools={len(registry.quota_pools)} targets={len(registry.execution_targets)} "
+                    f"models={len(registry.models)}\n"
+                )
+                for pid, pool in registry.quota_pools.items():
+                    snap = getattr(pool, "snapshot", None)
+                    wins = len(snap.windows) if snap is not None else "?"
+                    f.write(f"  pool {pid} plan_id={pool.plan_id} windows={wins}\n")
+        except Exception:
+            pass
         for pool in registry.quota_pools.values():
             provider_id = next(
                 (
@@ -1641,6 +1655,11 @@ class ControlPlaneService:
                 if fraction is None:
                     continue
                 remaining_by_provider.setdefault(provider_id, []).append(fraction)
+        try:
+            with open("/tmp/pao_candidates_dbg.log", "a") as f:
+                f.write(f"REMAINING={remaining_by_provider} PLAN_IDS={provider_plan_ids}\n\n")
+        except Exception:
+            pass
 
         candidates: list[DispatchCandidateInput] = []
         now = datetime.now(UTC)
