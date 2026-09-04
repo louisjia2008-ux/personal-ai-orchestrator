@@ -1621,8 +1621,6 @@ class ControlPlaneService:
 
         remaining_by_provider: dict[str, list[float]] = {}
         for pool in registry.quota_pools.values():
-            # Find the provider whose plans include this pool. With one
-            # pool per provider in practice, the lookup is single-result.
             provider_id = next(
                 (
                     pid
@@ -1633,7 +1631,11 @@ class ControlPlaneService:
             )
             if provider_id is None:
                 continue
-            for window in pool.windows:
+            # Windows live under pool.snapshot on the registry model.
+            snapshot = getattr(pool, "snapshot", None)
+            if snapshot is None:
+                continue
+            for window in snapshot.windows:
                 fraction = window.remaining_fraction
                 if fraction is None:
                     continue
