@@ -1621,12 +1621,8 @@ class ControlPlaneService:
 
         remaining_by_provider: dict[str, list[float]] = {}
         for pool in registry.quota_pools.values():
-            if pool.plan_id not in {
-                plan_id
-                for plan_ids in provider_plan_ids.values()
-                for plan_id in plan_ids
-            }:
-                continue
+            # Find the provider whose plans include this pool. With one
+            # pool per provider in practice, the lookup is single-result.
             provider_id = next(
                 (
                     pid
