@@ -3054,7 +3054,14 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                 self._json(error.status, {"error": error.code})
             except ValidationError:
                 self._json(400, {"error": "invalid_json_schema"})
-            except Exception:
+            except Exception as exc:
+                import traceback
+                try:
+                    with open("/tmp/pao_dbg.log", "a") as f:
+                        f.write(f"500 catchall: {type(exc).__name__}: {exc}\n")
+                        f.write(traceback.format_exc() + "\n")
+                except Exception:
+                    pass
                 self._json(503, {"error": "control_plane_unavailable"})
 
         def _route(
