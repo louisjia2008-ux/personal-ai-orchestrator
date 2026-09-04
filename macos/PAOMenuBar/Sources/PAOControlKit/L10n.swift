@@ -74,6 +74,12 @@ public enum L10n {
         "label.noVerifiedTargets",
         "label.ownerDispatchFooter",
         "label.workerLogTruncated",
+        "label.recommendDispatch",
+        "label.recommendDispatchHelp",
+        "label.recommendationDismiss",
+        "recommendation.panelTitle",
+        "recommendation.score",
+        "recommendation.quotaState",
         "scheduling.policyManualLinked",
         "scheduling.policyArchived",
         "taskCompletion.title",
@@ -697,6 +703,25 @@ public enum L10n {
 
     /// Caption under a truncated worker log tail.
     public static var workerLogTruncated: String { tr("label.workerLogTruncated") }
+
+    /// Policy-driven dispatch recommender.
+    public static var recommendDispatch: String { tr("label.recommendDispatch") }
+    public static var recommendDispatchHelp: String { tr("label.recommendDispatchHelp") }
+    public static var recommendationDismiss: String { tr("label.recommendationDismiss") }
+    public static func recommendationPanelTitle(_ policy: String) -> String {
+        String(format: tr("recommendation.panelTitle"), policy)
+    }
+    public static func recommendationScore(
+        _ score: Double, _ headroom: Double, _ fresh: Bool
+    ) -> String {
+        String(
+            format: tr("recommendation.score"),
+            score, headroom, fresh ? "✓" : "—"
+        )
+    }
+    public static func recommendationQuotaState(_ state: String) -> String {
+        String(format: tr("recommendation.quotaState"), state)
+    }
 
     /// Honest scheduling-policy semantics in the dispatch area.
     public static var schedulingPolicyManualLinked: String { tr("scheduling.policyManualLinked") }

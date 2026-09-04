@@ -41,7 +41,12 @@ from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
 from personal_ai_orchestrator.provider_registry_manager import (
     ProviderRegistryManager,
 )
-from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
+from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal, QuotaAvailabilityState
+from personal_ai_orchestrator.scheduler import RoutingObjective
+from personal_ai_orchestrator.dispatch_recommender import (
+    DispatchCandidateInput,
+    recommend_owner_dispatch,
+)
 from personal_ai_orchestrator.quota_equivalent_capacity import (
     EquivalentCapacityEstimate,
     estimate_equivalent_capacity,
@@ -183,6 +188,40 @@ class OwnerExecutionSettingsView(_ViewModel):
 
 class OwnerExecutionSettingsUpdateRequest(_ViewModel):
     owner_initiated_execution_enabled: bool
+
+
+class DispatchRecommendationRequest(_ViewModel):
+    """Optional override for the task's archived scheduling_policy."""
+
+    scheduling_policy: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class DispatchRecommendationScoreComponent(_ViewModel):
+    name: str
+    contribution: float
+
+
+class DispatchRecommendationCandidate(_ViewModel):
+    execution_target_id: str
+    model_sku_id: str
+    eligible: bool
+    admitted: bool
+    score: float | None = None
+    headroom_mean: float | None = None
+    evidence_fresh: bool = False
+    runtime_available: bool = False
+    verified: bool = False
+    quota_state: str | None = None
+    score_components: tuple[DispatchRecommendationScoreComponent, ...] = ()
+    reasons: tuple[str, ...] = ()
+
+
+class DispatchRecommendationView(_ViewModel):
+    task_id: str
+    scheduling_policy: str
+    candidates: tuple[DispatchRecommendationCandidate, ...]
+    top_pick: str | None
+    decision_reason: str
 
 
 class RunView(_ViewModel):
@@ -1482,6 +1521,171 @@ class ControlPlaneService:
             )
             thread.start()
         return self._dispatch_view(dispatch)
+
+    def recommend_dispatch(
+        self, task_id: str, payload: dict[str, Any]
+    ) -> DispatchRecommendationView:
+        """Rank all dispatchable targets by the task's archived policy.
+
+        The ranking is the same value object the rest of the scheduler
+        produces, but the capability fit is uniformly 1.0 — owner dispatch
+        does not yet infer task intent into required capabilities, and a
+        guessed number would be less honest than a declared one.
+        """
+
+        self._validate_identifier("task_id", task_id)
+        try:
+            self.store.get_task(task_id)
+        except KeyError as error:
+            raise ControlPlaneError(404, "task_not_found") from None
+
+        try:
+            request = DispatchRecommendationRequest.model_validate(payload or {})
+        except ValidationError as error:
+            raise ControlPlaneError(400, "invalid_json_schema") from error
+
+        task = self.store.get_task(task_id)
+        policy_name = request.scheduling_policy or task.scheduling_policy
+        policy_name = policy_name or RoutingObjective.BALANCED.value
+        try:
+            policy = RoutingObjective(policy_name)
+        except ValueError as error:
+            raise ControlPlaneError(
+                400, f"unknown_scheduling_policy:{policy_name}"
+            ) from error
+
+        candidates = self._collect_dispatch_candidates()
+        recommendation = recommend_owner_dispatch(
+            candidates, policy=policy, now=datetime.now(UTC)
+        )
+
+        candidate_views = tuple(
+            self._dispatch_recommendation_candidate_view(evaluation, candidates)
+            for evaluation in recommendation.evaluations
+        )
+        top = recommendation.top_pick
+        decision_reason = (
+            f"policy={policy.value} admitted {sum(1 for c in candidate_views if c.admitted)} "
+            f"of {len(candidate_views)} candidates; "
+            f"hard eligibility and quota admission gates ran before scoring"
+        )
+        return DispatchRecommendationView(
+            task_id=task_id,
+            scheduling_policy=policy.value,
+            candidates=candidate_views,
+            top_pick=top.execution_target_id if top is not None else None,
+            decision_reason=decision_reason,
+        )
+
+    def _collect_dispatch_candidates(self) -> list[DispatchCandidateInput]:
+        """Gather one DispatchCandidateInput per execution target.
+
+        The provider view is the single source of truth for runtime
+        availability, verification, and quota window observations; the
+        quota-availability journal supplies the dispatch-relevant state.
+        """
+
+        registry = (
+            self.provider_registry_manager.registry()
+            if self.provider_registry_manager is not None
+            else self.registry
+        )
+
+        provider_by_target: dict[str, str] = {
+            target_id: registry.models[target.model_sku_id].provider_id
+            for target_id, target in registry.execution_targets.items()
+            if target.model_sku_id in registry.models
+        }
+
+        # Quota windows live on provider pools, not on individual execution
+        # targets. Every target of one provider inherits that pool.
+        remaining_by_provider: dict[str, tuple[float, ...]] = {}
+        for pool in registry.quota_pools.values():
+            for window in pool.windows:
+                fraction = window.remaining_fraction
+                if fraction is None:
+                    continue
+                remaining_by_provider.setdefault(pool.plan_id, []).append(fraction)
+            # Fallback to provider_id when no plan_id matched: pools are
+            # keyed by pool_id but the convention groups them by plan.
+        # If we still have nothing per-provider, leave empty -> the
+        # candidate is excluded from admission with "no quota observation".
+
+        candidates: list[DispatchCandidateInput] = []
+        now = datetime.now(UTC)
+        for target_id, target in sorted(registry.execution_targets.items()):
+            provider_id = provider_by_target.get(target_id, "")
+            remaining = tuple(remaining_by_provider.get(provider_id, ()))
+
+            runtime_available = (
+                self.runtime_availability.get(target_id)
+                if target_id in self.runtime_availability
+                else self._runtime_available(target_id)
+            )
+            verified = target.execution_verified
+            evidence_observed_at: datetime | None = None
+            if not verified and self.execution_evidence_journal is not None:
+                latest = self.execution_evidence_journal.latest_for_target(target_id)
+                if latest is not None and latest.establishes_verified:
+                    evidence_observed_at = latest.observed_at
+                    verified = True
+
+            availability_state = QuotaAvailabilityState.UNKNOWN
+            if self.quota_availability_journal is not None:
+                evidence = self.quota_availability_journal.load(target_id)
+                if evidence is not None:
+                    availability_state = evidence.state_at(now=now)
+
+            candidates.append(
+                DispatchCandidateInput(
+                    execution_target_id=target_id,
+                    model_sku_id=target.model_sku_id,
+                    runtime_available=bool(runtime_available),
+                    verified=bool(verified),
+                    remaining_fractions=remaining,
+                    evidence_observed_at=evidence_observed_at,
+                    availability_state=availability_state,
+                )
+            )
+        return candidates
+
+    @staticmethod
+    def _dispatch_recommendation_candidate_view(
+        evaluation, candidates: list[DispatchCandidateInput]
+    ) -> DispatchRecommendationCandidate:
+        inputs = next(
+            (c for c in candidates if c.execution_target_id == evaluation.execution_target_id),
+            None,
+        )
+        return DispatchRecommendationCandidate(
+            execution_target_id=evaluation.execution_target_id,
+            model_sku_id=evaluation.model_sku_id,
+            eligible=evaluation.eligible,
+            admitted=evaluation.admitted,
+            score=evaluation.score,
+            headroom_mean=(
+                sum(inputs.remaining_fractions) / len(inputs.remaining_fractions)
+                if inputs and inputs.remaining_fractions
+                else None
+            ),
+            evidence_fresh=bool(
+                inputs and inputs.evidence_observed_at is not None
+            ),
+            runtime_available=bool(inputs and inputs.runtime_available),
+            verified=bool(inputs and inputs.verified),
+            quota_state=(
+                inputs.availability_state.value
+                if inputs else None
+            ),
+            score_components=tuple(
+                DispatchRecommendationScoreComponent(
+                    name=component.name,
+                    contribution=component.contribution,
+                )
+                for component in evaluation.score_components
+            ),
+            reasons=tuple(evaluation.reasons),
+        )
 
     def owner_execution_settings(self) -> OwnerExecutionSettingsView:
         return OwnerExecutionSettingsView(
@@ -2935,6 +3139,10 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                     if payload is None:
                         return
                     self._view(200, request_service.dispatch_task(task_id, payload))
+                    return
+                if count == 4 and rest[2] == "dispatch" and rest[3] == "recommendation" and method == "POST":
+                    payload = self._read_json() or {}
+                    self._view(200, request_service.recommend_dispatch(task_id, payload))
                     return
                 if count == 3 and sub == "approvals" and method == "GET":
                     self._view(200, request_service.approvals_for_task(task_id))

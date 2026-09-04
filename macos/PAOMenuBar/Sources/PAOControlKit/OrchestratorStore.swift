@@ -64,6 +64,10 @@ public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var schedulingSettings: SchedulingSettingsView?
     @Published public private(set) var lastDispatch: DispatchTaskView?
     @Published public private(set) var dispatchNotice: DispatchNotice?
+    /// The latest ranking produced by /v1/tasks/{id}/dispatch/recommendation.
+    /// Cleared when a new task is selected, when a dispatch is launched
+    /// off the recommendation, or when the owner dismisses the panel.
+    @Published public private(set) var dispatchRecommendation: DispatchRecommendationView?
     /// A task that just reached a terminal state, for the completion banner
     /// and the system notification. Owner-initiated cancellations are not
     /// completion events: the owner already knows, they caused it.
@@ -424,6 +428,36 @@ public final class OrchestratorStore: ObservableObject {
             dispatchNotice = .malformedResponse
             ClientLog.operation("dispatch", outcome: "malformed")
         }
+    }
+
+    /// Ask the daemon to rank dispatchable targets by the task's archived
+    /// policy (or ``policy`` override). Pure read: nothing launches, the
+    /// owner still has to click "派发到该目标".
+    public func recommendDispatch(taskId: String, policy: String? = nil) async {
+        do {
+            dispatchRecommendation = try await client.recommendDispatch(
+                taskId: taskId,
+                policy: policy
+            )
+            ClientLog.operation(
+                "recommend_dispatch",
+                outcome: "ok policy=\(dispatchRecommendation?.schedulingPolicy ?? "?")"
+            )
+        } catch let error as PAOClientError {
+            dispatchRecommendation = nil
+            dispatchNotice = .blocked(taskId: taskId, code: error.displayDetail)
+            ClientLog.operation("recommend_dispatch", outcome: error.logCode)
+        } catch {
+            dispatchRecommendation = nil
+            dispatchNotice = .malformedResponse
+            ClientLog.operation("recommend_dispatch", outcome: "malformed")
+        }
+    }
+
+    /// Drop the current ranking. The owner can dismiss the panel or pick a
+    /// different task; either path calls this so a stale view never lingers.
+    public func clearDispatchRecommendation() {
+        dispatchRecommendation = nil
     }
 
     /// Toggle the persisted Owner-Initiated Execution setting. This is a

@@ -768,3 +768,9 @@
 "quota.resetPassed" = "重置时刻已过";
 "quota.observedAge" = "%@前观测";
 "quota.equivalentCapacity.explanation" = "等效容量估算的是受限窗口的剩余单位还能容纳多少个同类任务。它是任务数量，不是百分比，不能与上方的余额合并计算。";
+"label.recommendDispatch" = "按策略推荐";
+"label.recommendDispatchHelp" = "请后台按任务存档的调度策略与实时配额，对所有可派发目标排序。";
+"label.recommendationDismiss" = "关闭";
+"recommendation.panelTitle" = "策略 %@ 下的候选排序";
+"recommendation.score" = "分数 %.1f · 剩余 %.0f%% · 证据 %@";
+"recommendation.quotaState" = "配额状态：%@";

@@ -768,3 +768,9 @@
 "quota.resetPassed" = "reset time has passed";
 "quota.observedAge" = "observed %@ ago";
 "quota.equivalentCapacity.explanation" = "Equivalent capacity estimates how many more tasks of one class fit in the limiting window's remaining units. It is a task count, not a percentage, and cannot be combined with the balances above.";
+"label.recommendDispatch" = "Recommend by policy";
+"label.recommendDispatchHelp" = "Ask the daemon to rank dispatchable targets by the task's archived scheduling policy and quota state.";
+"label.recommendationDismiss" = "Dismiss";
+"recommendation.panelTitle" = "Ranking under policy: %@";
+"recommendation.score" = "score %.1f · headroom %.0f%% · evidence %@";
+"recommendation.quotaState" = "quota state: %@";

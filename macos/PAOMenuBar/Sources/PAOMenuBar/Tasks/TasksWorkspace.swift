@@ -96,6 +96,7 @@ struct TasksWorkspace: View {
         .onChange(of: selectedTaskId) { newValue in
             // The cancellation result belongs to the task it was requested for.
             store.clearCancellationNotice()
+            store.clearDispatchRecommendation()
             guard let newValue else { return }
             Task { await store.loadTaskDetail(taskId: newValue) }
         }
