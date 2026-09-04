@@ -94,12 +94,45 @@ public final class DaemonLifecycleController: ObservableObject {
                     await MainActor.run { self.status = .alreadyRunning }
                     return
                 }
+                if self.preexistingDaemonWasRefusedForBuild() {
+                    await self.terminateStaleHelpers()
+                }
                 try await self.launchBundledDaemon()
             }
         } catch {
             status = .failed(reason: sanitizedReason(error))
         }
         startupTask = nil
+    }
+
+    /// A daemon is alive and speaking our API, but came from a different
+    /// build: it was refused, so it is a leftover from an earlier app
+    /// generation rather than a daemon the owner runs deliberately.
+    private func preexistingDaemonWasRefusedForBuild() -> Bool {
+        if case .buildMismatch = status { return true }
+        return false
+    }
+
+    /// Terminate daemon helpers left behind by an earlier app generation.
+    ///
+    /// Without this, every app rebuild strands the old helper: it keeps
+    /// serving from the unlinked socket inode while the new helper binds
+    /// the path — two processes writing one state database. Only this
+    /// bundle's own absolute helper path is ever signaled, so nothing
+    /// outside this app's product can be matched.
+    private func terminateStaleHelpers() async {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        process.arguments = ["-f", configuration.helperURL.path]
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            // Best effort: a failed cleanup must not block launching ours.
+        }
+        // Give the exited helpers a moment to release the socket and
+        // sqlite handles before the new daemon binds the same path.
+        try? await Task.sleep(for: .milliseconds(500))
     }
 
     private func healthIsCompatible() async -> Bool {
