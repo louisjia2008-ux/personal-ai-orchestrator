@@ -1602,64 +1602,25 @@ class ControlPlaneService:
         # recommendation sees the same windows the UI does. Pool windows
         # are pool-scoped; every target of one provider inherits the
         # windows of every pool that belongs to that provider's plans.
-        plans_by_account: dict[str, list[str]] = {}
-        for plan in registry.plans.values():
-            plans_by_account.setdefault(plan.account_id, []).append(plan.id)
-
-        provider_plan_ids: dict[str, set[str]] = {}
-        for provider_id, provider in sorted(registry.providers.items()):
-            account_ids = [
-                account.id
-                for account in registry.accounts.values()
-                if account.provider_id == provider_id
-            ]
-            plan_ids = {
-                plan_id
-                for account_id in account_ids
-                for plan_id in plans_by_account.get(account_id, [])
-            }
-            provider_plan_ids[provider_id] = plan_ids
-
         remaining_by_provider: dict[str, list[float]] = {}
-        try:
-            with open("/tmp/pao_candidates_dbg.log", "a") as f:
-                f.write(
-                    f"DBG providers={list(registry.providers)} "
-                    f"accounts={len(registry.accounts)} plans={len(registry.plans)} "
-                    f"pools={len(registry.quota_pools)} targets={len(registry.execution_targets)} "
-                    f"models={len(registry.models)}\n"
-                )
-                for pid, pool in registry.quota_pools.items():
-                    snap = getattr(pool, "snapshot", None)
-                    wins = len(snap.windows) if snap is not None else "?"
-                    f.write(f"  pool {pid} plan_id={pool.plan_id} windows={wins}\n")
-        except Exception:
-            pass
-        for pool in registry.quota_pools.values():
-            provider_id = next(
-                (
-                    pid
-                    for pid, plan_ids in provider_plan_ids.items()
-                    if pool.plan_id in plan_ids
-                ),
-                None,
-            )
-            if provider_id is None:
-                continue
-            # Windows live under pool.snapshot on the registry model.
-            snapshot = getattr(pool, "snapshot", None)
-            if snapshot is None:
-                continue
-            for window in snapshot.windows:
-                fraction = window.remaining_fraction
-                if fraction is None:
+        # Quota window fractions do NOT live on the static registry. They
+        # are populated by the live quota refresh service and cached on
+        # disk; the providers() and quota() views both read from there.
+        # The recommender mirrors that: headroom belongs to whatever
+        # provider_id the connection layer reports, not to a registry
+        # plan_id that may not exist on a freshly-bootstrapped install.
+        if self.quota_refresh_service is not None:
+            for observation in self.quota_refresh_service.observations():
+                snapshot = observation.snapshot
+                if snapshot is None:
                     continue
-                remaining_by_provider.setdefault(provider_id, []).append(fraction)
-        try:
-            with open("/tmp/pao_candidates_dbg.log", "a") as f:
-                f.write(f"REMAINING={remaining_by_provider} PLAN_IDS={provider_plan_ids}\n\n")
-        except Exception:
-            pass
+                for window in snapshot.windows:
+                    fraction = window.remaining_fraction
+                    if fraction is None:
+                        continue
+                    remaining_by_provider.setdefault(
+                        observation.provider_id, []
+                    ).append(fraction)
 
         candidates: list[DispatchCandidateInput] = []
         now = datetime.now(UTC)
