@@ -212,6 +212,10 @@ class DispatchRecommendationCandidate(_ViewModel):
     evidence_fresh: bool = False
     runtime_available: bool = False
     verified: bool = False
+    #: True when ``verified`` is the demote-fallback result (latest evidence
+    #: is non-VERIFIED while an older VERIFIED row exists). Lets the
+    #: recommendation panel surface the staleness alongside the score.
+    execution_verified_stale: bool = False
     quota_state: str | None = None
     score_components: tuple[DispatchRecommendationScoreComponent, ...] = ()
     reasons: tuple[str, ...] = ()
@@ -488,6 +492,11 @@ class ExecutionTargetHealthView(_ViewModel):
     runtime_id: str
     enabled: bool
     execution_verified: bool
+    #: True when the latest evidence for this target is non-VERIFIED while
+    #: an older VERIFIED row still exists (demote-fallback semantics). Lets
+    #: the UI surface "we have history, but the most recent run did not
+    #: actually succeed" without re-running the verification probe.
+    execution_verified_stale: bool = False
     runtime_available: bool | None = None
     observed_availability: ObservedAvailabilityView | None = None
 
@@ -1633,13 +1642,24 @@ class ControlPlaneService:
                 if target_id in self.runtime_availability
                 else self._runtime_available(target_id)
             )
-            verified = target.execution_verified
+            # Demote-fallback: prefer the journal's historical VERIFIED over the
+            # static registry flag so transient UNKNOWN evidence does not hide
+            # a real verified history. ``verified_stale`` reflects whether the
+            # fallback fired (latest non-VERIFIED, older VERIFIED exists).
+            verified = False
+            verified_stale = False
             evidence_observed_at: datetime | None = None
-            if not verified and self.execution_evidence_journal is not None:
-                latest = self.execution_evidence_journal.latest_for_target(target_id)
-                if latest is not None and latest.establishes_verified:
-                    evidence_observed_at = latest.observed_at
+            if self.execution_evidence_journal is not None:
+                try:
+                    verified_evidence, stale_since = (
+                        self.execution_evidence_journal.latest_verified_for_target(target_id)
+                    )
+                except Exception:
+                    verified_evidence, stale_since = None, None
+                if verified_evidence is not None:
                     verified = True
+                    evidence_observed_at = verified_evidence.observed_at
+                    verified_stale = stale_since is not None
 
             availability_state = QuotaAvailabilityState.UNKNOWN
             if self.quota_availability_journal is not None:
@@ -1653,6 +1673,7 @@ class ControlPlaneService:
                     model_sku_id=target.model_sku_id,
                     runtime_available=bool(runtime_available),
                     verified=bool(verified),
+                    verified_stale=verified_stale,
                     remaining_fractions=remaining,
                     evidence_observed_at=evidence_observed_at,
                     availability_state=availability_state,
@@ -1684,6 +1705,7 @@ class ControlPlaneService:
             ),
             runtime_available=bool(inputs and inputs.runtime_available),
             verified=bool(inputs and inputs.verified),
+            execution_verified_stale=bool(inputs and inputs.verified_stale),
             quota_state=(
                 inputs.availability_state.value
                 if inputs else None
@@ -2222,20 +2244,29 @@ class ControlPlaneService:
                     confidence=evidence.confidence.value,
                     sanitized_reason_code=evidence.sanitized_reason_code,
                 )
-        execution_verified = target.execution_verified
-        if not execution_verified and self.execution_evidence_journal is not None:
+        # Demote-fallback: journal wins over the static registry flag so a
+        # transient UNKNOWN does not destroy a real verified history. The
+        # stale flag tells the caller when the fallback fired (latest is
+        # non-VERIFIED while an older VERIFIED row exists).
+        execution_verified = False
+        execution_verified_stale = False
+        if self.execution_evidence_journal is not None:
             try:
-                execution_verified = (
-                    self.execution_evidence_journal.target_has_verified_evidence(target.id)
+                verified_evidence, stale_since = (
+                    self.execution_evidence_journal.latest_verified_for_target(target.id)
                 )
             except Exception:
-                execution_verified = False
+                verified_evidence, stale_since = None, None
+            if verified_evidence is not None:
+                execution_verified = True
+                execution_verified_stale = stale_since is not None
         return ExecutionTargetHealthView(
             execution_target_id=target.id,
             model_sku_id=target.model_sku_id,
             runtime_id=target.runtime_id,
             enabled=target.enabled,
             execution_verified=execution_verified,
+            execution_verified_stale=execution_verified_stale,
             runtime_available=(
                 self.runtime_availability.get(target.id)
                 if target.id in self.runtime_availability

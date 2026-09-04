@@ -405,4 +405,93 @@ final class ModelAndStatusTests: XCTestCase {
         XCTAssertNil(task.schedulingPolicy)
         XCTAssertNil(task.manualExecutionTargetId)
     }
+
+    func testExecutionTargetHealthViewDecodesExecutionVerifiedStaleWhenPresent() throws {
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "runtime_id":"opencode",
+          "enabled":true,
+          "execution_verified":true,
+          "execution_verified_stale":true
+        }
+        """
+        let view = try JSONDecoder().decode(
+            ExecutionTargetHealthView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.executionVerified, true)
+        XCTAssertEqual(view.executionVerifiedStale, true)
+        XCTAssertTrue(view.isExecutionVerified)
+        XCTAssertTrue(view.isExecutionVerifiedStale)
+    }
+
+    func testExecutionTargetHealthViewDecodesWithoutExecutionVerifiedStale() throws {
+        // Older daemons never emit the new flag — the lenient decoder must
+        // leave it nil rather than failing the whole provider view.
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "runtime_id":"opencode",
+          "enabled":true,
+          "execution_verified":true
+        }
+        """
+        let view = try JSONDecoder().decode(
+            ExecutionTargetHealthView.self, from: Data(json.utf8)
+        )
+        XCTAssertNil(view.executionVerifiedStale)
+        XCTAssertFalse(view.isExecutionVerifiedStale)
+    }
+
+    func testDispatchRecommendationCandidateDecodesExecutionVerifiedStaleWhenPresent() throws {
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "eligible":true,
+          "admitted":true,
+          "score":1.0,
+          "evidence_fresh":true,
+          "runtime_available":true,
+          "verified":true,
+          "execution_verified_stale":true,
+          "quota_state":"AVAILABLE_OBSERVED",
+          "score_components":[],
+          "reasons":["policy=BALANCED"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationCandidate.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.verified, true)
+        XCTAssertEqual(view.executionVerifiedStale, true)
+        XCTAssertTrue(view.isExecutionVerifiedStale)
+    }
+
+    func testDispatchRecommendationCandidateDecodesWithoutExecutionVerifiedStale() throws {
+        // Older daemons do not emit the new flag — the lenient decoder must
+        // leave it nil rather than failing the recommendation view.
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "eligible":true,
+          "admitted":true,
+          "score":1.0,
+          "evidence_fresh":true,
+          "runtime_available":true,
+          "verified":true,
+          "quota_state":"AVAILABLE_OBSERVED",
+          "score_components":[],
+          "reasons":["policy=BALANCED"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationCandidate.self, from: Data(json.utf8)
+        )
+        XCTAssertNil(view.executionVerifiedStale)
+        XCTAssertFalse(view.isExecutionVerifiedStale)
+    }
 }

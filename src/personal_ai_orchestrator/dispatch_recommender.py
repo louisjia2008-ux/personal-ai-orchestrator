@@ -38,6 +38,12 @@ class DispatchCandidateInput:
     model_sku_id: str
     runtime_available: bool
     verified: bool
+    # True when ``verified`` is the demote-fallback result (latest evidence
+    # is non-VERIFIED while an older VERIFIED row still exists). Lets the
+    # view model surface the staleness alongside the score; never affects
+    # the ranking itself — the recommender still admits the target, the UI
+    # just gets the warning.
+    verified_stale: bool = False
     # Observed quota windows for this target (e.g. 5h + weekly remaining
     # fractions). Empty list means "no observation was reported".
     remaining_fractions: tuple[float, ...] = ()
