@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UserNotifications
 
 import PAOControlKit
 
@@ -130,6 +131,71 @@ struct DashboardView: View {
         .onDisappear { store.dashboardVisible = false }
         .onChange(of: section) { newValue in
             storedSelection = (newValue ?? .overview).rawValue
+        }
+        // A task that finished while the owner was elsewhere. The banner rides
+        // above the workspace instead of replacing content, and its action goes
+        // through the single navigation entry point so the task arrives selected.
+        .overlay(alignment: .top) { completionBanner }
+        .onChange(of: store.taskCompletionNotice) { notice in
+            guard let notice else { return }
+            deliverCompletionNotification(notice)
+        }
+    }
+
+    @ViewBuilder
+    private var completionBanner: some View {
+        if let notice = store.taskCompletionNotice {
+            HStack(spacing: Spacing.inner) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(StatusStyle.verification("VERIFIED").color)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(L10n.taskCompletionTitle(notice.state))
+                        .font(.callout.weight(.semibold))
+                    Text(notice.intent)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: Spacing.inner)
+                Button(L10n.taskCompletionView) {
+                    navigate(to: NavigationIntent(section: .tasks, taskId: notice.taskId))
+                    store.clearTaskCompletionNotice()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                Button {
+                    store.clearTaskCompletionNotice()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(L10n.taskCompletionDismiss)
+            }
+            .padding(Spacing.section)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DashboardLayoutMetrics.cardCornerRadius))
+            .padding(Spacing.section)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .accessibilityElement(children: .contain)
+        }
+    }
+
+    /// System notification for completions the owner did not watch happen.
+    /// Best effort: authorization may be denied, and an active window already
+    /// shows the banner, so the notification is only for the background case.
+    private func deliverCompletionNotification(_ notice: TaskCompletionNotice) {
+        guard !NSApp.isActive else { return }
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = L10n.taskCompletionTitle(notice.state)
+            content.body = notice.intent
+            let request = UNNotificationRequest(
+                identifier: "pao-task-\(notice.taskId)",
+                content: content,
+                trigger: nil
+            )
+            center.add(request)
         }
     }
 

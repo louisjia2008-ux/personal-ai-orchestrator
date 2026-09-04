@@ -29,6 +29,7 @@ from personal_ai_orchestrator.control_client import ControlPlaneClient
 from personal_ai_orchestrator.dispatch_executor import (
     DispatchExecutorConfig,
     OwnerDispatchExecutor,
+    WORKER_TRANSCRIPT_TAIL_BYTES,
     build_worker_env,
 )
 from personal_ai_orchestrator.execution_evidence import (
@@ -993,3 +994,37 @@ def test_launch_gate_rejects_stale_execution_evidence(tmp_path: Path) -> None:
             runtime_available=True,
             execution_evidence_journal=journal,
         )
+
+
+def test_host_result_envelope_carries_sanitized_transcript_tails() -> None:
+    """The owner can finally see what the worker did, safely.
+
+    Tails are bounded, ANSI-free, control-character-free; hashes still
+    cover the full bytes. Worker text remains display evidence only.
+    """
+
+    executor = OwnerDispatchExecutor.__new__(OwnerDispatchExecutor)
+    noisy = (
+        "\x1b[93m\x1b[1m! \x1b[0mpermission requested: edit (README.md)"
+        "；auto-rejecting\n→ Read README.md\n✗ Edit README.md failed\n"
+        "Error: rejected\x00\x07\n"
+    ).encode("utf-8")
+    big = b"x" * (WORKER_TRANSCRIPT_TAIL_BYTES + 4096) + b"|TAIL-MARK|"
+
+    envelope = executor._host_result_envelope(
+        0, stdout=b"", stderr=big + noisy, truncated=True
+    )
+
+    assert envelope["stdout_bytes"] == 0
+    assert envelope["stderr_bytes"] == len(big) + len(noisy)
+    assert envelope["output_truncated"] is True
+    # ANSI and control characters are gone; the narration survives.
+    assert "\x1b" not in envelope["stderr_tail"]
+    assert "\x00" not in envelope["stderr_tail"]
+    assert "permission requested: edit (README.md)" in envelope["stderr_tail"]
+    assert "auto-rejecting" in envelope["stderr_tail"]
+    # The narration lands at the end of the window and the tail stays
+    # bounded by the transcript cap (bytes, not characters).
+    assert envelope["stderr_tail"].endswith("Error: rejected\n")
+    assert len(envelope["stderr_tail"].encode("utf-8")) <= WORKER_TRANSCRIPT_TAIL_BYTES
+    assert envelope["stdout_tail"] == ""

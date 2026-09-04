@@ -386,4 +386,23 @@ final class ModelAndStatusTests: XCTestCase {
         XCTAssertFalse(PAOClientError.httpError(status: 409, code: "task_state_is_terminal").isRunningCancelConflict)
         XCTAssertFalse(PAOClientError.daemonNotRunning.isRunningCancelConflict)
     }
+
+    func testTaskViewDecodesSchedulingPolicyFieldsWhenPresent() throws {
+        let json = """
+        {"task_id":"t-9","request_id":"r-9","intent":"manual target","project_id":"p-1","base_sha":"abc","working_subpath":null,"state":"SUBMITTED","state_version":0,"created_at":"2026-09-04T00:00:00Z","updated_at":"2026-09-04T00:00:00Z","scheduling_policy":"MANUAL","manual_execution_target_id":"zai-coding-plan-glm-5.3"}
+        """
+        let task = try JSONDecoder().decode(TaskView.self, from: Data(json.utf8))
+        XCTAssertEqual(task.schedulingPolicy, "MANUAL")
+        XCTAssertEqual(task.manualExecutionTargetId, "zai-coding-plan-glm-5.3")
+    }
+
+    func testTaskViewDecodesWithoutSchedulingPolicyFields() throws {
+        // Older daemons (and many test fixtures) omit the new fields.
+        let json = """
+        {"task_id":"t-9","request_id":"r-9","intent":"legacy","state":"SUBMITTED","state_version":0,"created_at":"2026-09-04T00:00:00Z","updated_at":"2026-09-04T00:00:00Z"}
+        """
+        let task = try JSONDecoder().decode(TaskView.self, from: Data(json.utf8))
+        XCTAssertNil(task.schedulingPolicy)
+        XCTAssertNil(task.manualExecutionTargetId)
+    }
 }
