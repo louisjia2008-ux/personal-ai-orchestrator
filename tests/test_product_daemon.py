@@ -135,6 +135,49 @@ def test_product_daemon_builds_control_only_daemon_argv() -> None:
     ]
 
 
+def test_product_daemon_argv_enables_owner_dispatch_when_policies_exist() -> None:
+    layout = default_application_support_layout(Path("/Users/example"))
+    repo = layout.runtime_state_root / "policies" / "execution-repo"
+    profile = layout.runtime_state_root / "policies" / "verifier-profile.json"
+    argv = build_daemon_argv(
+        layout,
+        host="127.0.0.1",
+        port=8765,
+        execution_repo=repo,
+        verifier_profile=profile,
+    )
+    assert argv[argv.index("--execution-repo") + 1] == str(repo)
+    assert argv[argv.index("--verifier-profile") + 1] == str(profile)
+
+
+def test_ensure_execution_policies_seeds_once_and_is_idempotent() -> None:
+    from personal_ai_orchestrator.product_daemon import (
+        DEFAULT_VERIFIER_PROFILE,
+        ensure_execution_policies,
+    )
+    from personal_ai_orchestrator.verifier import VerifierProfile
+
+    layout = default_application_support_layout(_short_home("pao-policies-"))
+    seeded = ensure_execution_policies(layout)
+    assert seeded is not None
+    repo, profile_path = seeded
+
+    assert (repo / ".git").is_dir()
+    on_disk = json.loads(profile_path.read_text(encoding="utf-8"))
+    assert on_disk == DEFAULT_VERIFIER_PROFILE
+    # The seeded profile must satisfy the deterministic verifier schema.
+    VerifierProfile.model_validate(on_disk)
+
+    # Re-running never mutates an owner-edited profile or re-inits the repo.
+    profile_path.write_text(
+        json.dumps({"name": "owner-custom", "commands": [], "allowed_paths": []}),
+        encoding="utf-8",
+    )
+    again = ensure_execution_policies(layout)
+    assert again == seeded
+    assert json.loads(profile_path.read_text(encoding="utf-8"))["name"] == "owner-custom"
+
+
 def test_product_daemon_first_boot_success_discovers_exactly_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
