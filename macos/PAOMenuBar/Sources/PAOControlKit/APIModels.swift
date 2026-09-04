@@ -323,11 +323,13 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
     public let runtimeId: String
     public let enabled: Bool
     public let executionVerified: Bool?
+    public let executionVerifiedStale: Bool?
     public let runtimeAvailable: Bool?
     public let observedAvailability: ObservedAvailabilityView?
 
     public var id: String { executionTargetId }
     public var isExecutionVerified: Bool { executionVerified ?? false }
+    public var isExecutionVerifiedStale: Bool { executionVerifiedStale ?? false }
 
     enum CodingKeys: String, CodingKey {
         case executionTargetId = "execution_target_id"
@@ -335,6 +337,7 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
         case runtimeId = "runtime_id"
         case enabled
         case executionVerified = "execution_verified"
+        case executionVerifiedStale = "execution_verified_stale"
         case runtimeAvailable = "runtime_available"
         case observedAvailability = "observed_availability"
     }
@@ -1821,11 +1824,13 @@ public struct DispatchRecommendationCandidate: Decodable, Equatable, Identifiabl
     public let evidenceFresh: Bool
     public let runtimeAvailable: Bool
     public let verified: Bool
+    public let executionVerifiedStale: Bool?
     public let quotaState: String?
     public let scoreComponents: [DispatchRecommendationScoreComponent]
     public let reasons: [String]
 
     public var id: String { executionTargetId }
+    public var isExecutionVerifiedStale: Bool { executionVerifiedStale ?? false }
 
     enum CodingKeys: String, CodingKey {
         case executionTargetId = "execution_target_id"
@@ -1837,6 +1842,7 @@ public struct DispatchRecommendationCandidate: Decodable, Equatable, Identifiabl
         case evidenceFresh = "evidence_fresh"
         case runtimeAvailable = "runtime_available"
         case verified
+        case executionVerifiedStale = "execution_verified_stale"
         case quotaState = "quota_state"
         case scoreComponents = "score_components"
         case reasons
