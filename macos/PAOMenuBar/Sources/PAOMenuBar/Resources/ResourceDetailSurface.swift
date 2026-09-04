@@ -15,6 +15,9 @@ struct ResourceDetailSurface: View {
     let history: QuotaHistoryView?
     let displayNames: [String: String]
     let isRefreshingQuota: Bool
+    /// Why the last quota refresh failed, when it failed. Rendered instead of
+    /// letting a silent failure read as "refresh did nothing".
+    var quotaRefreshError: String?
     let onRefreshQuota: (String) -> Void
     let onConnect: (String) -> Void
     var now: Date = Date()
@@ -23,6 +26,13 @@ struct ResourceDetailSurface: View {
         if let resource {
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.section) {
+                    if let quotaRefreshError {
+                        ResourceNotice(
+                            text: L10n.resourceRefreshFailed(quotaRefreshError),
+                            symbol: "exclamationmark.triangle",
+                            tone: .caution
+                        )
+                    }
                     ResourceDetailHeader(
                         resource: resource,
                         isRefreshingQuota: isRefreshingQuota,

@@ -55,6 +55,10 @@ public final class OrchestratorStore: ObservableObject {
     /// connected provider must stay visible here even with zero quota evidence.
     @Published public private(set) var quota: QuotaOverviewView?
     @Published public private(set) var isRefreshingQuota: Bool = false
+    /// Why the last quota refresh failed, or nil when it succeeded (or has not
+    /// run). A failed refresh keeps the previous projection on screen; without
+    /// this the failure would be indistinguishable from "nothing happened".
+    @Published public private(set) var lastQuotaRefreshError: String?
     @Published public private(set) var activeStatus: ActiveStatusView?
     @Published public private(set) var ownerExecutionSettings: OwnerExecutionSettingsView?
     @Published public private(set) var schedulingSettings: SchedulingSettingsView?
@@ -86,6 +90,7 @@ public final class OrchestratorStore: ObservableObject {
     public let widgetSnapshotWriter: WidgetSnapshotWriter
     private let client: PAOControlClient
     private var refreshTask: Task<Void, Never>?
+    private var quotaAutoRefreshTask: Task<Void, Never>?
     private var backoffSeconds: Double = 2.0
     private var lastSubmit: (intent: String, at: Date)?
     private let idFactory: () -> String
@@ -103,6 +108,18 @@ public final class OrchestratorStore: ObservableObject {
     public static let backgroundInterval: TimeInterval = 15.0
     public static let maximumBackoff: TimeInterval = 60.0
     public static let duplicateSubmitWindow: TimeInterval = 5.0
+
+    /// How often the client asks the daemon to re-collect quota from the
+    /// providers' own read-only endpoints. The projection is re-read on every
+    /// dashboard refresh, but daemon-side collection only happens when
+    /// something asks for it; ten minutes keeps readings current without
+    /// hammering provider APIs.
+    public static let quotaAutoRefreshInterval: TimeInterval = 600
+
+    /// The quota-refresh endpoint answers only after reading every connected
+    /// provider sequentially, so it gets a budget of its own rather than the
+    /// 10-second default every other call shares.
+    private static let quotaRefreshTimeoutSeconds: Double = 30
 
     public init(socketPath: String,
                 daemonConfiguration: DaemonLaunchConfiguration? = nil,
@@ -127,10 +144,12 @@ public final class OrchestratorStore: ObservableObject {
             daemonLifecycle.ensureStarted()
         }
         startRefreshing()
+        startQuotaAutoRefresh()
     }
 
     deinit {
         refreshTask?.cancel()
+        quotaAutoRefreshTask?.cancel()
     }
 
     public var statusSummary: StatusSummary {
@@ -604,17 +623,40 @@ public final class OrchestratorStore: ObservableObject {
         isRefreshingQuota = true
         defer { isRefreshingQuota = false }
         do {
-            let result = try await client.refreshQuota(providerId: providerId)
+            let result = try await client.refreshQuota(
+                providerId: providerId,
+                timeoutSeconds: Self.quotaRefreshTimeoutSeconds
+            )
             self.quota = result.overview
+            self.lastQuotaRefreshError = nil
             ClientLog.operation("refresh_quota", outcome: result.overview.state.lowercased())
         } catch let error as PAOClientError {
             self.lastError = error
+            self.lastQuotaRefreshError = error.logCode
             // A failed refresh must not blank the page: keep the last
             // projection and let the card report the failure.
             self.quota = try? await client.quota()
             ClientLog.operation("refresh_quota", outcome: error.logCode)
         } catch {
+            self.lastQuotaRefreshError = "malformed"
             ClientLog.operation("refresh_quota", outcome: "malformed")
+        }
+    }
+
+    /// Daemon-side quota collection on a fixed cadence, so readings stay
+    /// current without the owner clicking anything. Reuses
+    /// ``refreshQuota()`` — and therefore its coalescing guard — so an
+    /// automatic cycle never races a manual click, and stays quiet while the
+    /// daemon is unreachable.
+    private func startQuotaAutoRefresh() {
+        quotaAutoRefreshTask?.cancel()
+        quotaAutoRefreshTask = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.quotaAutoRefreshInterval))
+                guard !Task.isCancelled else { break }
+                guard self.connection.isConnected else { continue }
+                await self.refreshQuota()
+            }
         }
     }
 

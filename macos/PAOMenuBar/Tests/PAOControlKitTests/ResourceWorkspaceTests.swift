@@ -366,6 +366,58 @@ final class ResourceWorkspaceTests: XCTestCase {
         XCTAssertEqual(resource.quotaBindings[0].remainingFraction, 0.6)
     }
 
+    func testPlanWindowsAndPoolTwinsRenderOnceEvenWhenThePlanNamesAFamily() {
+        // The live daemon keys a card on the surface id ("minimax-cn") while
+        // the plan payload names the provider family ("minimax"). Identity
+        // follows the card — the daemon's own history key — so the same pool
+        // and window reported through both payloads is one binding, not two
+        // identical FIVE_HOUR and WEEKLY cards.
+        let pool = QuotaPoolHealthView(
+            quotaPoolId: "minimax-token-plan-cn",
+            name: "minimax-token-plan-cn",
+            planId: "token-plan",
+            state: "AVAILABLE",
+            confidence: "EXACT",
+            measurementSourceType: "PROVIDER_API",
+            observedAt: nil,
+            windows: [
+                QuotaWindowHealthView(
+                    windowId: "5h", windowKind: "FIVE_HOUR", state: "AVAILABLE",
+                    confidence: "EXACT", remainingFraction: 0.97, resetAt: nil
+                ),
+                QuotaWindowHealthView(
+                    windowId: "weekly", windowKind: "WEEKLY", state: "AVAILABLE",
+                    confidence: "EXACT", remainingFraction: 0.49, resetAt: nil
+                )
+            ]
+        )
+        let resource = ResourceCollection.snapshots(
+            providers: nil,
+            connections: connections(connected: [connection("minimax-cn")]),
+            quota: overview([
+                card(
+                    "minimax-cn",
+                    plan: plan(
+                        "minimax",
+                        poolId: "minimax-token-plan-cn",
+                        windows: [
+                            window("5h", kind: "FIVE_HOUR", remaining: 0.97, resetAt: nil),
+                            window("weekly", kind: "WEEKLY", remaining: 0.49, resetAt: nil)
+                        ],
+                        limiting: "weekly"
+                    ),
+                    pools: [pool]
+                )
+            ])
+        )[0]
+        XCTAssertEqual(resource.quotaBindings.count, 2)
+        XCTAssertEqual(Set(resource.quotaBindings.map(\.windowKind)), ["FIVE_HOUR", "WEEKLY"])
+        // The plan's copy wins and carries the daemon's limiting verdict.
+        let weekly = resource.quotaBindings.first { $0.windowKind == "WEEKLY" }
+        XCTAssertEqual(weekly?.isLimiting, true)
+        XCTAssertEqual(weekly?.remainingFraction, 0.49)
+    }
+
     // MARK: - Providers without quota
 
     func testAProviderWithoutQuotaTelemetryIsStillAResource() {
