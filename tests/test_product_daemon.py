@@ -137,22 +137,27 @@ def test_product_daemon_builds_control_only_daemon_argv() -> None:
 
 def test_product_daemon_argv_enables_owner_dispatch_when_policies_exist() -> None:
     layout = default_application_support_layout(Path("/Users/example"))
-    repo = layout.runtime_state_root / "policies" / "execution-repo"
-    profile = layout.runtime_state_root / "policies" / "verifier-profile.json"
+    policies = layout.runtime_state_root / "policies"
+    repo = policies / "execution-repo"
+    profile = policies / "verifier-profile.json"
+    worker = policies / "worker-opencode.json"
     argv = build_daemon_argv(
         layout,
         host="127.0.0.1",
         port=8765,
         execution_repo=repo,
         verifier_profile=profile,
+        worker_permission_config=worker,
     )
     assert argv[argv.index("--execution-repo") + 1] == str(repo)
     assert argv[argv.index("--verifier-profile") + 1] == str(profile)
+    assert argv[argv.index("--worker-permission-config") + 1] == str(worker)
 
 
 def test_ensure_execution_policies_seeds_once_and_is_idempotent() -> None:
     from personal_ai_orchestrator.product_daemon import (
         DEFAULT_VERIFIER_PROFILE,
+        DEFAULT_WORKER_PERMISSION_CONFIG,
         ensure_execution_policies,
     )
     from personal_ai_orchestrator.verifier import VerifierProfile
@@ -160,13 +165,17 @@ def test_ensure_execution_policies_seeds_once_and_is_idempotent() -> None:
     layout = default_application_support_layout(_short_home("pao-policies-"))
     seeded = ensure_execution_policies(layout)
     assert seeded is not None
-    repo, profile_path = seeded
+    repo, profile_path, worker_path = seeded
 
     assert (repo / ".git").is_dir()
     on_disk = json.loads(profile_path.read_text(encoding="utf-8"))
     assert on_disk == DEFAULT_VERIFIER_PROFILE
     # The seeded profile must satisfy the deterministic verifier schema.
     VerifierProfile.model_validate(on_disk)
+    # The worker sandbox allows edits inside the worktree, denies shell/web.
+    worker = json.loads(worker_path.read_text(encoding="utf-8"))
+    assert worker == DEFAULT_WORKER_PERMISSION_CONFIG
+    assert worker["permission"] == {"edit": "allow", "bash": "deny", "webfetch": "deny"}
 
     # Re-running never mutates an owner-edited profile or re-inits the repo.
     profile_path.write_text(
