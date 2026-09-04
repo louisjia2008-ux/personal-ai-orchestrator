@@ -243,4 +243,91 @@ final class OrchestratorStoreTests: XCTestCase {
         // collections, independent of the 2-second read-only projection poll.
         XCTAssertEqual(OrchestratorStore.quotaAutoRefreshInterval, 600)
     }
+
+    func testTaskCompletionNoticeIsPublishedOnVerifiedTransition() async throws {
+        // Two daemons share one socket path so the store transitions
+        // across two list responses without touching its connection state.
+        // The override is registered BEFORE the standard set so it wins the
+        // first-match lookup for the task list endpoint.
+        let path = temporarySocketPath("completion-verified")
+
+        let running = TestDaemon()
+        running.route(
+            "GET",
+            "/v1/tasks?limit=\(OrchestratorStore.taskListLimit)",
+            body: #"""
+            {"tasks":[{"task_id":"t-finish","request_id":"r-finish","intent":"verify me","state":"RUNNING","state_version":4,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:01:00Z"}],"total":1}
+            """#
+        )
+        registerStandardRoutes(running)
+        try running.start(socketPath: path)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
+        await store.refreshNow()
+        XCTAssertNil(store.taskCompletionNotice)
+
+        running.stop()
+        try? FileManager.default.removeItem(atPath: path)
+
+        let finished = TestDaemon()
+        finished.route(
+            "GET",
+            "/v1/tasks?limit=\(OrchestratorStore.taskListLimit)",
+            body: #"""
+            {"tasks":[{"task_id":"t-finish","request_id":"r-finish","intent":"verify me","state":"VERIFIED","state_version":5,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:02:00Z"}],"total":1}
+            """#
+        )
+        registerStandardRoutes(finished)
+        try finished.start(socketPath: path)
+        defer { finished.stop() }
+
+        await store.refreshNow()
+        XCTAssertEqual(
+            store.taskCompletionNotice,
+            TaskCompletionNotice(taskId: "t-finish", state: "VERIFIED", intent: "verify me")
+        )
+
+        store.clearTaskCompletionNotice()
+        XCTAssertNil(store.taskCompletionNotice)
+    }
+
+    func testTaskCompletionNoticeSkipsOwnerCancellation() async throws {
+        // The owner already caused the cancellation: it is not news.
+        let path = temporarySocketPath("completion-cancel")
+
+        let running = TestDaemon()
+        running.route(
+            "GET",
+            "/v1/tasks?limit=\(OrchestratorStore.taskListLimit)",
+            body: #"""
+            {"tasks":[{"task_id":"t-stop","request_id":"r-stop","intent":"please stop","state":"RUNNING","state_version":3,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:01:00Z"}],"total":1}
+            """#
+        )
+        registerStandardRoutes(running)
+        try running.start(socketPath: path)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
+        await store.refreshNow()
+        XCTAssertNil(store.taskCompletionNotice)
+
+        running.stop()
+        try? FileManager.default.removeItem(atPath: path)
+
+        let cancelled = TestDaemon()
+        cancelled.route(
+            "GET",
+            "/v1/tasks?limit=\(OrchestratorStore.taskListLimit)",
+            body: #"""
+            {"tasks":[{"task_id":"t-stop","request_id":"r-stop","intent":"please stop","state":"CANCELLED","state_version":4,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:02:00Z"}],"total":1}
+            """#
+        )
+        registerStandardRoutes(cancelled)
+        try cancelled.start(socketPath: path)
+        defer { cancelled.stop() }
+
+        await store.refreshNow()
+        XCTAssertNil(store.taskCompletionNotice)
+    }
 }

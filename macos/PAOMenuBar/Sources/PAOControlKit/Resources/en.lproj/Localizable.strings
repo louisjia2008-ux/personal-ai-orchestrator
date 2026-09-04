@@ -145,6 +145,12 @@
 "label.workerRun" = "Worker run";
 "label.noVerifiedTargets" = "No execution-verified target available.";
 "label.ownerDispatchFooter" = "Worker runs inside the task worktree; the main repository stays untouched. Only deterministic host verification can produce VERIFIED.";
+"label.workerLogTruncated" = "Output was capped by the host; only the final 8 KB is kept.";
+"scheduling.policyManualLinked" = "MANUAL policy: this target was recorded at submit time and is preselected here.";
+"scheduling.policyArchived" = "This policy is archived with the task. Automatic target selection starts when Production ACTIVE routing is enabled; until then you dispatch by hand.";
+"taskCompletion.title" = "Task finished: %@";
+"taskCompletion.view" = "View";
+"taskCompletion.dismiss" = "Dismiss";
 "label.taskNotDispatchable" = "Task state %@ is not dispatchable.";
 "label.observedState" = "Observed state";
 "label.measurementSource" = "Measurement source";

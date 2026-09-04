@@ -145,6 +145,12 @@
 "label.workerRun" = "工作进程";
 "label.noVerifiedTargets" = "没有已验证执行能力的执行目标。";
 "label.ownerDispatchFooter" = "工作进程仅在任务工作树内运行；主仓库保持不变。只有确定性宿主验证才能产生 VERIFIED。";
+"label.workerLogTruncated" = "输出已按宿主上限截断，仅保留末尾 8 KB。";
+"scheduling.policyManualLinked" = "MANUAL 策略：该目标在提交任务时已记录，此处已自动预选。";
+"scheduling.policyArchived" = "此策略随任务存档。自动目标选择将在 Production ACTIVE 路由启用后接管；现阶段由你手动派发。";
+"taskCompletion.title" = "任务结束：%@";
+"taskCompletion.view" = "查看";
+"taskCompletion.dismiss" = "关闭";
 "label.taskNotDispatchable" = "任务状态 %@ 不可派发。";
 "label.observedState" = "观察状态";
 "label.measurementSource" = "测量来源";

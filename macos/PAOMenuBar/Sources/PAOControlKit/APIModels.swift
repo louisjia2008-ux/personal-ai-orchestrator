@@ -66,6 +66,11 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
     public let stateVersion: Int
     public let createdAt: String
     public let updatedAt: String
+    /// Scheduling policy archived with the task at submit time. Optional:
+    /// daemons and fixtures predating the field simply omit it.
+    public let schedulingPolicy: String?
+    /// The target a MANUAL policy named at submit time.
+    public let manualExecutionTargetId: String?
 
     public var id: String { taskId }
 
@@ -80,6 +85,54 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
         case stateVersion = "state_version"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case schedulingPolicy = "scheduling_policy"
+        case manualExecutionTargetId = "manual_execution_target_id"
+    }
+
+    public init(
+        taskId: String,
+        requestId: String,
+        intent: String,
+        projectId: String? = nil,
+        baseSha: String? = nil,
+        workingSubpath: String? = nil,
+        state: String,
+        stateVersion: Int,
+        createdAt: String,
+        updatedAt: String,
+        schedulingPolicy: String? = nil,
+        manualExecutionTargetId: String? = nil
+    ) {
+        self.taskId = taskId
+        self.requestId = requestId
+        self.intent = intent
+        self.projectId = projectId
+        self.baseSha = baseSha
+        self.workingSubpath = workingSubpath
+        self.state = state
+        self.stateVersion = stateVersion
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.schedulingPolicy = schedulingPolicy
+        self.manualExecutionTargetId = manualExecutionTargetId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        taskId = try container.decode(String.self, forKey: .taskId)
+        requestId = try container.decode(String.self, forKey: .requestId)
+        intent = try container.decode(String.self, forKey: .intent)
+        projectId = try container.decodeIfPresent(String.self, forKey: .projectId)
+        baseSha = try container.decodeIfPresent(String.self, forKey: .baseSha)
+        workingSubpath = try container.decodeIfPresent(String.self, forKey: .workingSubpath)
+        state = try container.decode(String.self, forKey: .state)
+        stateVersion = try container.decode(Int.self, forKey: .stateVersion)
+        createdAt = try container.decode(String.self, forKey: .createdAt)
+        updatedAt = try container.decode(String.self, forKey: .updatedAt)
+        schedulingPolicy = try container.decodeIfPresent(String.self, forKey: .schedulingPolicy)
+        manualExecutionTargetId = try container.decodeIfPresent(
+            String.self, forKey: .manualExecutionTargetId
+        )
     }
 }
 
@@ -179,6 +232,18 @@ public struct RunView: Decodable, Equatable, Identifiable, Sendable {
     public var stderrSHA256: String? { result?["stderr_sha256"]?.stringValue }
     public var outputTruncated: Bool? { result?["output_truncated"]?.boolValue }
     public var timedOut: Bool? { result?["timed_out"]?.boolValue }
+
+    /// Bounded sanitized narration of what the worker actually did.
+    /// opencode narrates progress on stderr; stdout is usually empty.
+    public var stderrTail: String? {
+        guard let value = result?["stderr_tail"]?.stringValue, !value.isEmpty else { return nil }
+        return value
+    }
+
+    public var stdoutTail: String? {
+        guard let value = result?["stdout_tail"]?.stringValue, !value.isEmpty else { return nil }
+        return value
+    }
 }
 
 public struct RunListView: Decodable, Equatable, Sendable {

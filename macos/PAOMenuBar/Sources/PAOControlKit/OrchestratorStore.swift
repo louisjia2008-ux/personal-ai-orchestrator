@@ -64,6 +64,10 @@ public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var schedulingSettings: SchedulingSettingsView?
     @Published public private(set) var lastDispatch: DispatchTaskView?
     @Published public private(set) var dispatchNotice: DispatchNotice?
+    /// A task that just reached a terminal state, for the completion banner
+    /// and the system notification. Owner-initiated cancellations are not
+    /// completion events: the owner already knows, they caused it.
+    @Published public private(set) var taskCompletionNotice: TaskCompletionNotice?
     @Published public private(set) var daemonBuild: BuildView?
     @Published public private(set) var lastError: PAOClientError?
     @Published public private(set) var lastSubmittedTaskId: String?
@@ -92,6 +96,7 @@ public final class OrchestratorStore: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var quotaAutoRefreshTask: Task<Void, Never>?
     private var backoffSeconds: Double = 2.0
+    private var previousTaskStates: [String: String] = [:]
     private var lastSubmit: (intent: String, at: Date)?
     private let idFactory: () -> String
 
@@ -176,6 +181,45 @@ public final class OrchestratorStore: ObservableObject {
         )
     }
 
+    /// Terminal states a task never leaves. A transition into one of these
+    /// from a live state is the completion event the dashboard announces.
+    private static let terminalTaskStates: Set<String> = [
+        "VERIFIED", "COMPLETED", "FAILED", "BLOCKED", "CANCELLED"
+    ]
+
+    /// States worth interrupting the owner for. Cancellation is excluded:
+    /// it is owner-initiated feedback, not news.
+    private static let announcedTaskStates: Set<String> = [
+        "VERIFIED", "COMPLETED", "FAILED", "BLOCKED"
+    ]
+
+    private func detectTaskCompletions(in tasks: [TaskView]) {
+        var next: [String: String] = [:]
+        for task in tasks {
+            next[task.taskId] = task.state
+            guard let previous = previousTaskStates[task.taskId],
+                  Self.terminalTaskStates.contains(task.state),
+                  !Self.terminalTaskStates.contains(previous),
+                  Self.announcedTaskStates.contains(task.state)
+            else { continue }
+            taskCompletionNotice = TaskCompletionNotice(
+                taskId: task.taskId,
+                state: task.state,
+                intent: task.intent
+            )
+            ClientLog.operation(
+                "task_completed",
+                outcome: "\(task.taskId)=\(task.state)"
+            )
+        }
+        previousTaskStates = next
+    }
+
+    /// Dismiss the completion banner. The underlying task stays selectable.
+    public func clearTaskCompletionNotice() {
+        taskCompletionNotice = nil
+    }
+
     // MARK: - Refresh policy
 
     private func startRefreshing() {
@@ -250,6 +294,7 @@ public final class OrchestratorStore: ObservableObject {
             // a silently truncated subset.
             if let listed = try? await client.listTasks(limit: Self.taskListLimit) {
                 self.tasks = listed
+                detectTaskCompletions(in: listed.tasks)
             } else if self.tasks == nil {
                 // First load with the list endpoint unavailable: the preview is
                 // better than nothing, and `total` keeps the shortfall detectable.
@@ -768,5 +813,18 @@ extension PAOClientError {
         case .invalidSocketPath: return "invalid_socket_path"
         case .transportFailure: return "transport_failure"
         }
+    }
+}
+
+/// A task that reached a terminal state while the dashboard was watching.
+public struct TaskCompletionNotice: Equatable, Sendable {
+    public let taskId: String
+    public let state: String
+    public let intent: String
+
+    public init(taskId: String, state: String, intent: String) {
+        self.taskId = taskId
+        self.state = state
+        self.intent = intent
     }
 }

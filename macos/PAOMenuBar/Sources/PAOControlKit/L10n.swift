@@ -73,6 +73,12 @@ public enum L10n {
         "label.workerRun",
         "label.noVerifiedTargets",
         "label.ownerDispatchFooter",
+        "label.workerLogTruncated",
+        "scheduling.policyManualLinked",
+        "scheduling.policyArchived",
+        "taskCompletion.title",
+        "taskCompletion.view",
+        "taskCompletion.dismiss",
         "label.taskNotDispatchable",
         "label.observedState", "label.measurementSource", "label.confidence",
         "label.observedAt", "label.reasonCode", "empty.availabilityUnknown",
@@ -688,6 +694,21 @@ public enum L10n {
     public static var workerRun: String { tr("label.workerRun") }
     public static var noVerifiedTargets: String { tr("label.noVerifiedTargets") }
     public static var ownerDispatchFooter: String { tr("label.ownerDispatchFooter") }
+
+    /// Caption under a truncated worker log tail.
+    public static var workerLogTruncated: String { tr("label.workerLogTruncated") }
+
+    /// Honest scheduling-policy semantics in the dispatch area.
+    public static var schedulingPolicyManualLinked: String { tr("scheduling.policyManualLinked") }
+    public static var schedulingPolicyArchived: String { tr("scheduling.policyArchived") }
+
+    /// Completion banner and notification.
+    public static func taskCompletionTitle(_ state: String) -> String {
+        String(format: tr("taskCompletion.title"), state)
+    }
+
+    public static var taskCompletionView: String { tr("taskCompletion.view") }
+    public static var taskCompletionDismiss: String { tr("taskCompletion.dismiss") }
 
     public static func taskNotDispatchable(_ state: String) -> String {
         String(format: tr("label.taskNotDispatchable"), state)

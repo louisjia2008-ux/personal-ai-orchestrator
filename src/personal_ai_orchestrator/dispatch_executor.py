@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -85,6 +86,13 @@ from personal_ai_orchestrator.worktree_manager import ManagedWorktree, WorktreeM
 
 MAX_WORKER_STDOUT_BYTES = 256 * 1024
 MAX_WORKER_STDERR_BYTES = 64 * 1024
+
+# Bounded, sanitized transcript tails kept in the run result so the owner
+# can see what the worker actually did. The worker's text keeps zero task
+# authority — it is evidence for human eyes, never an input to any gate.
+WORKER_TRANSCRIPT_TAIL_BYTES = 8 * 1024
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 # Minimum execution environment for the authenticated OpenCode runtime.
 # This is deliberately NOT the discovery blocklist reuse: discovery strips
@@ -1140,7 +1148,18 @@ class OwnerDispatchExecutor:
         return returncode, stdout, stderr, truncated
 
     @staticmethod
+    def _sanitize_transcript(data: bytes) -> str:
+        """Bounded, printable, ANSI-free worker text for human eyes only."""
+
+        tail = data[-WORKER_TRANSCRIPT_TAIL_BYTES:]
+        text = tail.decode("utf-8", errors="replace")
+        text = _ANSI_ESCAPE_RE.sub("", text)
+        text = _CONTROL_CHARS_RE.sub("", text)
+        return text
+
+    @classmethod
     def _host_result_envelope(
+        cls,
         exit_code: int,
         stdout: bytes,
         stderr: bytes,
@@ -1148,7 +1167,12 @@ class OwnerDispatchExecutor:
         truncated: bool,
         timeout: bool = False,
     ) -> dict[str, Any]:
-        """Host-derived metadata only. Worker text has zero task authority."""
+        """Host-derived metadata only. Worker text has zero task authority.
+
+        The transcript tails are sanitized display evidence: the owner can
+        finally see what the worker did (opencode narrates progress on
+        stderr) without the raw bytes ever feeding a gate or a decision.
+        """
 
         return {
             "exit_code": exit_code,
@@ -1158,6 +1182,8 @@ class OwnerDispatchExecutor:
             "stderr_bytes": len(stderr),
             "output_truncated": truncated,
             "timed_out": timeout,
+            "stdout_tail": cls._sanitize_transcript(stdout),
+            "stderr_tail": cls._sanitize_transcript(stderr),
         }
 
     def _fail_pre_worker(

@@ -52,10 +52,64 @@ struct TaskExecutionSection: View {
                 TaskFieldRow(label: L10n.detailRunStatus, value: run.status)
             }
             dispatch
+            workerLog
         }
         .onAppear {
             if selectedTargetId.isEmpty {
-                selectedTargetId = verifiedTargets.first?.executionTargetId ?? ""
+                selectedTargetId = preferredTargetId
+            }
+        }
+    }
+
+    /// The target the task itself names first: a MANUAL scheduling policy
+    /// recorded its choice at submit time, and honoring it here is the one
+    /// place the policy visibly drives execution today. Everything else
+    /// falls back to the first execution-verified target.
+    private var preferredTargetId: String {
+        if let manual = detail.task.manualExecutionTargetId,
+           verifiedTargets.contains(where: { $0.executionTargetId == manual }) {
+            return manual
+        }
+        return verifiedTargets.first?.executionTargetId ?? ""
+    }
+
+    /// What the worker actually did, in the worker's own narration.
+    ///
+    /// opencode narrates progress on stderr (reads, edits, failures); stdout
+    /// is usually empty. The daemon stores a bounded sanitized tail — this is
+    /// display evidence, never an input to any gate.
+    @ViewBuilder
+    private var workerLog: some View {
+        if let run = detail.runs.last, run.status != "RUNNING",
+           run.stderrTail != nil || run.stdoutTail != nil {
+            VStack(alignment: .leading, spacing: Spacing.tight) {
+                Divider()
+                Text(L10n.detailRawWorkerOutput)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if run.outputTruncated == true {
+                    Text(L10n.workerLogTruncated)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: Spacing.tight) {
+                        if let stderr = run.stderrTail {
+                            Text(stderr)
+                                .font(.system(.caption, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                        if let stdout = run.stdoutTail {
+                            Text(stdout)
+                                .font(.system(.caption, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                .frame(maxHeight: 160)
+                .border(Color(nsColor: .separatorColor), width: 1)
             }
         }
     }
@@ -111,6 +165,16 @@ struct TaskExecutionSection: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                }
+                if let policy = detail.task.schedulingPolicy {
+                    TaskFieldRow(
+                        label: L10n.newTaskSchedulingPolicy,
+                        value: L10n.schedulingPolicyName(policy)
+                    )
+                    Text(policy == "MANUAL" ? L10n.schedulingPolicyManualLinked : L10n.schedulingPolicyArchived)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Text(L10n.ownerDispatchFooter)
                     .font(.caption)
