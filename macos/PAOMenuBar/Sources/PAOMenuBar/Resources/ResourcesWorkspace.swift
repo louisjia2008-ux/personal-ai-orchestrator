@@ -99,6 +99,7 @@ struct ResourcesWorkspace: View {
                     history: store.quota?.history,
                     displayNames: displayNames,
                     isRefreshingQuota: store.isRefreshingQuota,
+                    quotaRefreshError: store.lastQuotaRefreshError,
                     onRefreshQuota: { providerId in
                         Task { await store.refreshQuota(providerId: providerId) }
                     },

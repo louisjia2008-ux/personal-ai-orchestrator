@@ -194,11 +194,14 @@ public struct ResourceSnapshot: Equatable, Identifiable, Sendable {
     /// Every quota binding this resource owns, from the plan first and the
     /// health pools second.
     ///
-    /// The two sources are kept apart rather than reconciled. The plan pool and
-    /// the discovery pools can carry the same `pool_id`, or the discovery pool
-    /// can be identified by the provider id because the collector reported none
-    /// — the client cannot tell those apart, so it never merges one into the
-    /// other and never counts a window twice.
+    /// The daemon reports the same pool through two payloads — the plan-first
+    /// projection and the quota-pool surface — and they can agree completely.
+    /// A binding's identity is the daemon's own history key, built on the
+    /// provider *surface* id rather than the plan's provider family id: when
+    /// both payloads describe the same `(surface, pool, window)`, that is one
+    /// series and it renders once. Pools with genuinely different ids stay
+    /// separate, because the client cannot tell those apart and never merges
+    /// one into the other.
     public var quotaBindings: [QuotaBindingSnapshot] {
         var bindings: [QuotaBindingSnapshot] = []
         var seen: Set<String> = []
@@ -206,8 +209,12 @@ public struct ResourceSnapshot: Equatable, Identifiable, Sendable {
         if let plan {
             let limitingId = plan.bindingWindow?.windowId
             for window in plan.windows {
+                // `plan.providerId` names the provider family ("minimax"),
+                // not the surface this card is keyed on ("minimax-cn").
+                // Keying on the surface id matches the daemon's history
+                // observations and makes the dedupe below actually fire.
                 let series = QuotaSeriesIdentity(
-                    providerId: plan.providerId,
+                    providerId: providerId,
                     quotaPoolId: plan.poolId,
                     windowId: window.windowId
                 )

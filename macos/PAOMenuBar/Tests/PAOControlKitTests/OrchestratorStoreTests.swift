@@ -202,4 +202,45 @@ final class OrchestratorStoreTests: XCTestCase {
         await store.refreshProviders()
         XCTAssertEqual(store.providerDiscoveryStatus?.discoveryState, "DISCOVERED")
     }
+
+    func testQuotaRefreshFailureIsSurfacedNotSilent() async throws {
+        // Routes match first-registered, so the failing route goes in before
+        // the standard set: the 200 never becomes reachable in this daemon.
+        let daemon = TestDaemon()
+        daemon.route(
+            "POST",
+            "/v1/quota/refresh",
+            status: 500,
+            body: "{\"error\":\"collector_failed\"}"
+        )
+        registerStandardRoutes(daemon)
+        let path = temporarySocketPath("quota-refresh-fail")
+        try daemon.start(socketPath: path)
+        defer { daemon.stop() }
+
+        let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
+        await store.refreshQuota()
+        XCTAssertEqual(store.lastQuotaRefreshError, "http_500_collector_failed")
+        // The failed refresh kept the last projection on screen.
+        XCTAssertNotNil(store.quota)
+
+        // A later successful refresh clears the failure: the notice is a
+        // statement about the last attempt, not a permanent scarlet letter.
+        let healthy = TestDaemon()
+        registerStandardRoutes(healthy)
+        let healthyPath = temporarySocketPath("quota-refresh-ok")
+        try healthy.start(socketPath: healthyPath)
+        defer { healthy.stop() }
+
+        let recovered = OrchestratorStore(socketPath: healthyPath, idFactory: { "fixed" })
+        await recovered.refreshQuota()
+        XCTAssertNil(recovered.lastQuotaRefreshError)
+        XCTAssertNotNil(recovered.quota)
+    }
+
+    func testQuotaAutoRefreshRunsEveryTenMinutes() {
+        // Owner-requested cadence: ten minutes between daemon-side quota
+        // collections, independent of the 2-second read-only projection poll.
+        XCTAssertEqual(OrchestratorStore.quotaAutoRefreshInterval, 600)
+    }
 }
