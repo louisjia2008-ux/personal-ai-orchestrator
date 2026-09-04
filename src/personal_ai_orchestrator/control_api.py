@@ -1597,19 +1597,51 @@ class ControlPlaneService:
             if target.model_sku_id in registry.models
         }
 
-        # Quota windows live on provider pools, not on individual execution
-        # targets. Every target of one provider inherits that pool.
-        remaining_by_provider: dict[str, tuple[float, ...]] = {}
+        # Mirror the providers() view's plan → provider resolution so the
+        # recommendation sees the same windows the UI does. Pool windows
+        # are pool-scoped; every target of one provider inherits the
+        # windows of every pool that belongs to that provider's plans.
+        plans_by_account: dict[str, list[str]] = {}
+        for plan in registry.plans.values():
+            plans_by_account.setdefault(plan.account_id, []).append(plan.id)
+
+        provider_plan_ids: dict[str, set[str]] = {}
+        for provider_id, provider in sorted(registry.providers.items()):
+            account_ids = [
+                account.id
+                for account in registry.accounts.values()
+                if account.provider_id == provider_id
+            ]
+            plan_ids = {
+                plan_id
+                for account_id in account_ids
+                for plan_id in plans_by_account.get(account_id, [])
+            }
+            provider_plan_ids[provider_id] = plan_ids
+
+        remaining_by_provider: dict[str, list[float]] = {}
         for pool in registry.quota_pools.values():
+            if pool.plan_id not in {
+                plan_id
+                for plan_ids in provider_plan_ids.values()
+                for plan_id in plan_ids
+            }:
+                continue
+            provider_id = next(
+                (
+                    pid
+                    for pid, plan_ids in provider_plan_ids.items()
+                    if pool.plan_id in plan_ids
+                ),
+                None,
+            )
+            if provider_id is None:
+                continue
             for window in pool.windows:
                 fraction = window.remaining_fraction
                 if fraction is None:
                     continue
-                remaining_by_provider.setdefault(pool.plan_id, []).append(fraction)
-            # Fallback to provider_id when no plan_id matched: pools are
-            # keyed by pool_id but the convention groups them by plan.
-        # If we still have nothing per-provider, leave empty -> the
-        # candidate is excluded from admission with "no quota observation".
+                remaining_by_provider.setdefault(provider_id, []).append(fraction)
 
         candidates: list[DispatchCandidateInput] = []
         now = datetime.now(UTC)
