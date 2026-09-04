@@ -108,6 +108,26 @@ public struct PAOControlClient: Sendable {
         try await post("/v1/tasks/\(taskId)/dispatch", body: request)
     }
 
+    /// Ask the daemon to rank all dispatchable targets for ``taskId`` by
+    /// the task's archived scheduling policy (or ``policy`` override).
+    /// The ranking is pure: no state mutates, no worker is launched.
+    public func recommendDispatch(
+        taskId: String,
+        policy: String? = nil
+    ) async throws -> DispatchRecommendationView {
+        struct RecommendationBody: Encodable {
+            let schedulingPolicy: String?
+
+            enum CodingKeys: String, CodingKey {
+                case schedulingPolicy = "scheduling_policy"
+            }
+        }
+        return try await post(
+            "/v1/tasks/\(taskId)/dispatch/recommendation",
+            body: RecommendationBody(schedulingPolicy: policy)
+        )
+    }
+
     public func getDispatch(requestId: String) async throws -> DispatchTaskView {
         try await get("/v1/dispatches/\(requestId)")
     }

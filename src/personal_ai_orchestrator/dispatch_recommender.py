@@ -1,0 +1,216 @@
+"""Owner-dispatch target recommendation.
+
+Pure, deterministic ranking of execution targets by a scheduling policy,
+with hard eligibility gates applied before scoring.
+
+Distinct from :mod:`scheduler.route_task`: this recommender does NOT
+require a :class:`TaskProfile`. Owner-dispatch has no natural-language-
+to-capability inference path yet, so capability fit is uniformly 1.0
+and the policy weights redistribute into the signals it does know —
+quota headroom, evidence freshness, runtime availability. The reasoning
+is reported per candidate, so the owner can see what was and was not
+considered.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Iterable, Mapping, Sequence
+
+from personal_ai_orchestrator.quota_availability import (
+    QuotaAvailabilityState,
+)
+from personal_ai_orchestrator.scheduler import (
+    CandidateEvaluation,
+    RoutingObjective,
+    _objective_weights,
+    _score_candidate,
+)
+
+
+@dataclass(frozen=True)
+class DispatchCandidateInput:
+    """Inputs for one execution target, gathered by the control plane."""
+
+    execution_target_id: str
+    model_sku_id: str
+    runtime_available: bool
+    verified: bool
+    # Observed quota windows for this target (e.g. 5h + weekly remaining
+    # fractions). Empty list means "no observation was reported".
+    remaining_fractions: tuple[float, ...] = ()
+    # Evidence freshness: when the target last passed a real worker
+    # invocation. ``None`` means never or stale beyond the cap.
+    evidence_observed_at: datetime | None = None
+    # Availability state from the quota admission journal. ``UNKNOWN``
+    # when no journal entry exists.
+    availability_state: QuotaAvailabilityState = QuotaAvailabilityState.UNKNOWN
+
+
+@dataclass(frozen=True)
+class DispatchRecommendation:
+    """Ranked list of :class:`CandidateEvaluation`, top pick first."""
+
+    policy: RoutingObjective
+    evaluations: tuple[CandidateEvaluation, ...]
+
+    @property
+    def top_pick(self) -> CandidateEvaluation | None:
+        for evaluation in self.evaluations:
+            if evaluation.admitted:
+                return evaluation
+        return None
+
+
+# A target seen at most this many days ago is treated as 'fresh evidence'.
+_EVIDENCE_FRESH_DAYS = 7
+
+
+def _hard_eligibility(
+    candidate: DispatchCandidateInput,
+    *,
+    now: datetime,
+) -> tuple[bool, str]:
+    """Pre-score gates: verified, runtime-available, not exhausted."""
+
+    if not candidate.verified:
+        return False, "execution target has not been runtime-verified"
+    if not candidate.runtime_available:
+        return False, "worker runtime is unavailable on this host"
+    if candidate.availability_state is QuotaAvailabilityState.EXHAUSTED_OBSERVED:
+        return False, "quota observed as exhausted for the current window"
+    if candidate.availability_state is QuotaAvailabilityState.COOLDOWN:
+        return False, "quota is in cooldown after exhaustion"
+    if not candidate.remaining_fractions:
+        return False, "no quota observation reported for this target"
+    if min(candidate.remaining_fractions) <= 0.0:
+        return False, "every quota window reports zero remaining"
+    return True, ""
+
+
+def _headroom(candidate: DispatchCandidateInput) -> float:
+    """Average remaining fraction across all observed windows.
+
+    The min is too punishing — one exhausted sub-window of a multi-window
+    plan would zero out an otherwise-healthy candidate — and the max is
+    too generous — one free window says nothing about the others. The
+    mean is the conservative middle.
+    """
+
+    if not candidate.remaining_fractions:
+        return 0.0
+    return sum(candidate.remaining_fractions) / len(candidate.remaining_fractions)
+
+
+def _freshness_bonus(candidate: DispatchCandidateInput, *, now: datetime) -> float:
+    """Targets seen recently are more trustworthy than silent ones."""
+
+    observed_at = candidate.evidence_observed_at
+    if observed_at is None:
+        return -5.0
+    age_days = (now - observed_at).total_seconds() / 86400.0
+    if age_days < 0 or age_days > _EVIDENCE_FRESH_DAYS:
+        return -5.0
+    return max(0.0, _EVIDENCE_FRESH_DAYS - age_days) * 1.0
+
+
+def _score(
+    candidate: DispatchCandidateInput,
+    *,
+    policy: RoutingObjective,
+    now: datetime,
+) -> tuple[float, tuple[tuple[str, float], ...]]:
+    quality_weight, quota_weight, latency_weight, cost_weight = _objective_weights(policy)
+
+    headroom = _headroom(candidate)
+    freshness = _freshness_bonus(candidate, now=now)
+
+    # Capability fit is unknown without a TaskProfile. Declare 1.0 openly
+    # rather than inferring intent — the policy redistributes its weight
+    # onto the signals it does know.
+    capability_fit = 1.0
+
+    components: list[tuple[str, float]] = [
+        ("quality_capability_fit", quality_weight * capability_fit * 25.0),
+        ("quota_headroom_mean", quota_weight * headroom * 40.0),
+        ("evidence_freshness", quality_weight * freshness),
+    ]
+    score = sum(value for _, value in components)
+    # Penalise UNKNOWN availability state, even when remaining fractions
+    # were reported: a fresh collector result and stale journal disagree.
+    if candidate.availability_state is QuotaAvailabilityState.UNKNOWN:
+        score -= 8.0
+
+    return round(score, 8), tuple(components)
+
+
+def recommend_owner_dispatch(
+    candidates: Iterable[DispatchCandidateInput],
+    *,
+    policy: RoutingObjective,
+    now: datetime,
+) -> DispatchRecommendation:
+    """Rank :class:`DispatchCandidateInput` by ``policy`` and admit gates."""
+
+    evaluations: list[CandidateEvaluation] = []
+    for candidate in candidates:
+        eligible, ineligible_reason = _hard_eligibility(candidate, now=now)
+        if not eligible:
+            evaluations.append(
+                CandidateEvaluation(
+                    execution_target_id=candidate.execution_target_id,
+                    model_sku_id=candidate.model_sku_id,
+                    eligible=False,
+                    admitted=False,
+                    score=None,
+                    reasons=(ineligible_reason,),
+                )
+            )
+            continue
+        score, components = _score(candidate, policy=policy, now=now)
+        evaluations.append(
+            CandidateEvaluation(
+                execution_target_id=candidate.execution_target_id,
+                model_sku_id=candidate.model_sku_id,
+                eligible=True,
+                admitted=True,
+                score=score,
+                score_components=tuple(
+                    _component(name=name, contribution=value)
+                    for name, value in components
+                ),
+                reasons=(
+                    (
+                        f"policy={policy.value}, "
+                        f"headroom={_headroom(candidate):.2f}, "
+                        f"verified={candidate.verified}, "
+                        f"runtime={candidate.runtime_available}"
+                    ),
+                ),
+            )
+        )
+    evaluations.sort(
+        key=lambda item: (
+            -float(item.score) if item.score is not None else math.inf,
+            item.execution_target_id,
+        )
+    )
+    return DispatchRecommendation(policy=policy, evaluations=tuple(evaluations))
+
+
+def _component(name: str, contribution: float) -> "ScoreComponent":
+    # Local re-export shim so this module stays decoupled from
+    # scheduler's exported ScoreComponent. Keeps the recommendation
+    # value object identical to the rest of the scheduler's output.
+    from personal_ai_orchestrator.scheduler import ScoreComponent
+
+    return ScoreComponent(name=name, value=round(contribution, 8))
+
+
+__all__ = [
+    "DispatchCandidateInput",
+    "DispatchRecommendation",
+    "recommend_owner_dispatch",
+]

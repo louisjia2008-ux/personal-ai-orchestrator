@@ -1805,3 +1805,57 @@ public struct OwnerExecutionSettingsUpdateRequest: Encodable, Equatable, Sendabl
         self.ownerInitiatedExecutionEnabled = ownerInitiatedExecutionEnabled
     }
 }
+
+public struct DispatchRecommendationScoreComponent: Decodable, Equatable, Sendable {
+    public let name: String
+    public let contribution: Double
+}
+
+public struct DispatchRecommendationCandidate: Decodable, Equatable, Identifiable, Sendable {
+    public let executionTargetId: String
+    public let modelSkuId: String
+    public let eligible: Bool
+    public let admitted: Bool
+    public let score: Double?
+    public let headroomMean: Double?
+    public let evidenceFresh: Bool
+    public let runtimeAvailable: Bool
+    public let verified: Bool
+    public let quotaState: String?
+    public let scoreComponents: [DispatchRecommendationScoreComponent]
+    public let reasons: [String]
+
+    public var id: String { executionTargetId }
+
+    enum CodingKeys: String, CodingKey {
+        case executionTargetId = "execution_target_id"
+        case modelSkuId = "model_sku_id"
+        case eligible
+        case admitted
+        case score
+        case headroomMean = "headroom_mean"
+        case evidenceFresh = "evidence_fresh"
+        case runtimeAvailable = "runtime_available"
+        case verified
+        case quotaState = "quota_state"
+        case scoreComponents = "score_components"
+        case reasons
+    }
+}
+
+public struct DispatchRecommendationView: Decodable, Equatable, Sendable {
+    public let taskId: String
+    public let schedulingPolicy: String
+    public let candidates: [DispatchRecommendationCandidate]
+    public let topPick: String?
+    public let decisionReason: String
+
+    enum CodingKeys: String, CodingKey {
+        case taskId = "task_id"
+        case schedulingPolicy = "scheduling_policy"
+        case candidates
+        case topPick = "top_pick"
+        case decisionReason = "decision_reason"
+    }
+}
+

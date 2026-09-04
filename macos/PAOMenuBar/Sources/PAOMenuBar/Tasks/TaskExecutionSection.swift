@@ -153,18 +153,17 @@ struct TaskExecutionSection: View {
                     .controlSize(.small)
                     .disabled(!canDispatch)
                     .help(canDispatch ? L10n.dispatchHelp : L10n.dispatchBlockedHint)
-                }
-                if let result = store.lastDispatch, result.task.taskId == detail.task.taskId {
-                    TaskFieldRow(label: L10n.dispatchStatus, value: result.status)
-                    if let code = result.failureCode {
-                        TaskFieldRow(label: L10n.failureCode, value: code, monospaced: true)
+                    Button {
+                        Task {
+                            await store.recommendDispatch(taskId: detail.task.taskId)
+                        }
+                    } label: {
+                        Label(L10n.recommendDispatch, systemImage: "wand.and.stars")
                     }
-                    if let reason = result.reason {
-                        Text(reason)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(!ownerSettingEnabled || verifiedTargets.isEmpty)
+                    .help(L10n.recommendDispatchHelp)
                 }
                 if let policy = detail.task.schedulingPolicy {
                     TaskFieldRow(
@@ -176,6 +175,22 @@ struct TaskExecutionSection: View {
                         .foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if let recommendation = store.dispatchRecommendation,
+                   recommendation.taskId == detail.task.taskId {
+                    DispatchRecommendationPanel(
+                        recommendation: recommendation,
+                        onDismiss: { store.clearDispatchRecommendation() },
+                        onDispatch: { targetId in
+                            Task {
+                                await store.dispatch(
+                                    taskId: detail.task.taskId,
+                                    executionTargetId: targetId
+                                )
+                                store.clearDispatchRecommendation()
+                            }
+                        }
+                    )
+                }
                 Text(L10n.ownerDispatchFooter)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -185,10 +200,88 @@ struct TaskExecutionSection: View {
     }
 }
 
-/// Whether routing could pick anything at all, shown when no task is selected.
-///
-/// Task-independent readiness: with no connected provider every future task will
-/// stall at routing, and that is worth knowing before one is selected.
+/// What the policy-driven recommender returned for this task: top pick first,
+/// every other target with the reason it was admitted, demoted, or excluded.
+struct DispatchRecommendationPanel: View {
+    let recommendation: DispatchRecommendationView
+    let onDismiss: () -> Void
+    let onDispatch: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.tight) {
+            Divider()
+            HStack {
+                Text(L10n.recommendationPanelTitle(recommendation.schedulingPolicy))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(L10n.recommendationDismiss)
+            }
+            Text(recommendation.decisionReason)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: Spacing.tight) {
+                ForEach(recommendation.candidates) { candidate in
+                    DispatchRecommendationRow(
+                        candidate: candidate,
+                        isTopPick: candidate.executionTargetId == recommendation.topPick,
+                        onDispatch: { onDispatch(candidate.executionTargetId) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+struct DispatchRecommendationRow: View {
+    let candidate: DispatchRecommendationCandidate
+    let isTopPick: Bool
+    let onDispatch: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Spacing.inner) {
+            Image(systemName: candidate.admitted
+                  ? (isTopPick ? "star.fill" : "checkmark.circle")
+                  : "xmark.circle")
+                .foregroundStyle(isTopPick ? .yellow : StatusStyle.attention(.blocked).color)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(candidate.executionTargetId)
+                    .font(.system(.caption, design: .monospaced))
+                if let score = candidate.score {
+                    Text(L10n.recommendationScore(
+                        score,
+                        candidate.headroomMean ?? 0,
+                        candidate.evidenceFresh
+                    ))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+                if let state = candidate.quotaState, state != "AVAILABLE_OBSERVED" {
+                    Text(L10n.recommendationQuotaState(state))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                ForEach(candidate.reasons, id: \.self) { reason in
+                    Text(reason)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            Spacer(minLength: 0)
+            if candidate.admitted {
+                Button(L10n.dispatch, action: onDispatch)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.mini)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
 struct TaskRoutingReadinessNotice: View {
     @EnvironmentObject private var store: OrchestratorStore
     let onNewTask: () -> Void

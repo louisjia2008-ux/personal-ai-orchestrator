@@ -189,6 +189,12 @@ public final class DaemonLifecycleController: ObservableObject {
         process.executableURL = configuration.helperURL
         process.arguments = configuration.arguments
         process.currentDirectoryURL = URL(fileURLWithPath: configuration.layout.appSupportRoot)
+        // opencode's auth.json holds the API keys the owner has already
+        // provisioned. Pass them through as environment variables so the
+        // bundled daemon's quota collectors register against the live
+        // provider endpoints instead of returning AUTH_REQUIRED for every
+        // token plan the owner is paying for.
+        process.environment = daemonEnvironment()
         let stderr = Pipe()
         process.standardError = stderr
         process.terminationHandler = { [weak self] process in
@@ -215,6 +221,19 @@ public final class DaemonLifecycleController: ObservableObject {
         }
         let stderrData = stderr.fileHandleForReading.availableData
         throw LifecycleError.startupTimeout(stderrData.isEmpty ? nil : stderrData)
+    }
+
+    /// The environment for the bundled daemon. The host environment is the
+    /// source of truth for system values (PATH, locale, etc.); opencode's
+    /// auth.json contributes the provider API keys the GUI launch context
+    /// otherwise strips out. Whatever the parent app has not set explicitly
+    /// is preserved, so toolchain and locale carry through.
+    private func daemonEnvironment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        for entry in OpencodeAuthSource.read() {
+            env[entry.environmentName] = entry.key
+        }
+        return env
     }
 
     private func withExclusiveLock<T>(
