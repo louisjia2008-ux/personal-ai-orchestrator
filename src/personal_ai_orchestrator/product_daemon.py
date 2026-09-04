@@ -19,6 +19,8 @@ provider truth to the Dashboard, not autonomous routing.
 from __future__ import annotations
 
 import argparse
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -98,8 +100,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def build_daemon_argv(layout: ApplicationSupportLayout, *, host: str, port: int) -> list[str]:
-    return [
+def build_daemon_argv(
+    layout: ApplicationSupportLayout,
+    *,
+    host: str,
+    port: int,
+    execution_repo: Path | None = None,
+    verifier_profile: Path | None = None,
+) -> list[str]:
+    argv = [
         "--config",
         str(layout.runtime_config),
         "--state-db",
@@ -114,6 +123,54 @@ def build_daemon_argv(layout: ApplicationSupportLayout, *, host: str, port: int)
         str(port),
         "--control-only",
     ]
+    if execution_repo is not None:
+        argv += ["--execution-repo", str(execution_repo)]
+    if verifier_profile is not None:
+        argv += ["--verifier-profile", str(verifier_profile)]
+    return argv
+
+
+#: The deterministic, no-arbitrary-commands verifier every bundled daemon
+#: ships with. The owner may replace the JSON on disk; the daemon only
+#: seeds it when missing.
+DEFAULT_VERIFIER_PROFILE: dict[str, object] = {
+    "name": "product-default",
+    "commands": [],
+    "allowed_paths": [],
+    "require_diff_check": True,
+}
+
+
+def ensure_execution_policies(layout: ApplicationSupportLayout) -> tuple[Path, Path] | None:
+    """Create the host-owned owner-dispatch policy artifacts, idempotently.
+
+    Returns ``(execution_repo, verifier_profile_path)``, or ``None`` when the
+    host cannot support owner dispatch (no git, unwritable state) — in that
+    case the daemon still boots, exactly like today, with dispatch reserved
+    but never executed.
+    """
+
+    policies = layout.runtime_state_root / "policies"
+    execution_repo = policies / "execution-repo"
+    verifier_profile = policies / "verifier-profile.json"
+    try:
+        policies.mkdir(parents=True, exist_ok=True)
+        if not (execution_repo / ".git").is_dir():
+            execution_repo.mkdir(exist_ok=True)
+            subprocess.run(
+                ["git", "init", "-q", str(execution_repo)],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+        if not verifier_profile.is_file():
+            verifier_profile.write_text(
+                json.dumps(DEFAULT_VERIFIER_PROFILE, indent=2) + "\n",
+                encoding="utf-8",
+            )
+    except Exception:
+        return None
+    return execution_repo, verifier_profile
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -140,8 +197,17 @@ def main(argv: list[str] | None = None) -> int:
     # manager is then handed to ``daemon.main`` so the bundled daemon
     # and the manager share the exact same in-memory state.
     manager = resolve_dynamic_registry(layout=layout)
+    policies = ensure_execution_policies(layout)
+    if policies is None:
+        print("pao-daemon: execution policies unavailable", file=sys.stderr)
     return daemon_main(
-        build_daemon_argv(layout, host=args.host, port=args.port),
+        build_daemon_argv(
+            layout,
+            host=args.host,
+            port=args.port,
+            execution_repo=policies[0] if policies else None,
+            verifier_profile=policies[1] if policies else None,
+        ),
         provider_registry_manager=manager,
     )
 
@@ -151,9 +217,11 @@ if __name__ == "__main__":  # pragma: no cover - exercised by subprocess/package
 
 
 __all__ = [
+    "DEFAULT_VERIFIER_PROFILE",
     "PRODUCT_CATALOG_SNAPSHOT_ID",
     "build_daemon_argv",
     "default_product_config",
+    "ensure_execution_policies",
     "main",
     "parse_args",
     "resolve_dynamic_registry",
