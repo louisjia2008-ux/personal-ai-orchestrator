@@ -17,6 +17,13 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from personal_ai_orchestrator.quota_burn import (
+    BurnAssessment,
+    BurnPressure,
+    assess as _assess,
+    infer_window_started_at as _infer_window_started_at,
+)
+
 
 class QuotaState(StrEnum):
     AVAILABLE = "AVAILABLE"
@@ -267,22 +274,15 @@ class QuotaWindowSnapshot(RegistryModel):
         handler never crashes on a partial observation.
         """
 
-        from personal_ai_orchestrator.quota_burn import (
-            BurnAssessment as _BurnAssessment,
-            BurnPressure as _BurnPressure,
-            assess as _assess,
-            infer_window_started_at as _infer_window_started_at,
-        )
-
         if self.reset_at is None or self.window_kind.duration_seconds() is None:
             return (
-                _BurnAssessment(
+                BurnAssessment(
                     expected_used_fraction=None,
                     actual_used_fraction=None,
                     deviation=None,
                     remaining_fraction=None,
                     seconds_to_reset=None,
-                    pressure=_BurnPressure.UNMETERED,
+                    pressure=BurnPressure.UNMETERED,
                     pressure_score=0.0,
                 ),
                 False,
