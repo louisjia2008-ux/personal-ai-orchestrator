@@ -286,33 +286,44 @@ def test_assess_returns_assessment_dataclass() -> None:
 def test_infer_window_started_at_for_five_hour_and_weekly() -> None:
     reset_at = datetime(2026, 9, 1, 13, 0, 0, tzinfo=UTC)
     five_hour_start = infer_window_started_at(
-        reset_at=reset_at, kind=QuotaWindowKind.FIVE_HOUR
+        reset_at=reset_at, duration_seconds=QuotaWindowKind.FIVE_HOUR.duration_seconds()
     )
     assert five_hour_start == reset_at - timedelta(hours=5)
 
-    weekly_start = infer_window_started_at(reset_at=reset_at, kind=QuotaWindowKind.WEEKLY)
+    weekly_start = infer_window_started_at(
+        reset_at=reset_at,
+        duration_seconds=QuotaWindowKind.WEEKLY.duration_seconds(),
+    )
     assert weekly_start == reset_at - timedelta(days=7)
 
 
 def test_infer_window_started_at_for_monthly_and_daily() -> None:
     reset_at = datetime(2026, 9, 1, 13, 0, 0, tzinfo=UTC)
-    monthly_start = infer_window_started_at(reset_at=reset_at, kind=QuotaWindowKind.MONTHLY)
+    monthly_start = infer_window_started_at(
+        reset_at=reset_at,
+        duration_seconds=QuotaWindowKind.MONTHLY.duration_seconds(),
+    )
     assert monthly_start == reset_at - timedelta(days=30)
-    daily_start = infer_window_started_at(reset_at=reset_at, kind=QuotaWindowKind.DAILY)
+    daily_start = infer_window_started_at(
+        reset_at=reset_at,
+        duration_seconds=QuotaWindowKind.DAILY.duration_seconds(),
+    )
     assert daily_start == reset_at - timedelta(days=1)
 
 
-def test_infer_window_started_at_raises_for_unknown_kind() -> None:
+def test_infer_window_started_at_raises_for_non_positive_duration() -> None:
     reset_at = datetime(2026, 9, 1, 13, 0, 0, tzinfo=UTC)
-    with pytest.raises(ValueError, match="no inferable start"):
-        infer_window_started_at(reset_at=reset_at, kind=QuotaWindowKind.UNKNOWN)
+    with pytest.raises(ValueError, match="duration_seconds"):
+        infer_window_started_at(reset_at=reset_at, duration_seconds=0.0)
+    with pytest.raises(ValueError, match="duration_seconds"):
+        infer_window_started_at(reset_at=reset_at, duration_seconds=-1.0)
 
 
 def test_infer_window_started_at_raises_for_naive_reset_at() -> None:
     with pytest.raises(ValueError, match="tz-aware"):
         infer_window_started_at(
             reset_at=datetime(2026, 9, 1, 13, 0, 0),  # noqa: DTZ001
-            kind=QuotaWindowKind.WEEKLY,
+            duration_seconds=QuotaWindowKind.WEEKLY.duration_seconds(),
         )
 
 

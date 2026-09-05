@@ -291,8 +291,13 @@ class QuotaWindowSnapshot(RegistryModel):
         inferred = False
         started_at = self.window_started_at
         if started_at is None:
+            # Short-circuit above guarantees ``duration_seconds() is not None``
+            # and the table only stores positive durations, so the cast is safe.
+            duration = self.window_kind.duration_seconds()
+            assert duration is not None and duration > 0.0
             started_at = _infer_window_started_at(
-                reset_at=self.reset_at, kind=self.window_kind
+                reset_at=self.reset_at,
+                duration_seconds=duration,
             )
             inferred = True
 
