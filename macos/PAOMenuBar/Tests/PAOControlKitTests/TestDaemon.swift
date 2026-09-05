@@ -130,6 +130,28 @@ let healthBody = """
 {"status":"ok","api_version":"v1"}
 """
 
+/// Build a /v1/health canned body that surfaces the WP0 supervisor fields.
+/// Pass ``lastTickAt`` and ``intervalSeconds`` to assert ordering / cadence;
+/// leave them empty when the test only needs the supervisor step list.
+func supervisorHealthBody(
+    lastTickAt: String = "2026-09-05T00:00:00Z",
+    intervalSeconds: Double = 5.0,
+    steps: [(name: String, lastRunAt: String, lastDurationMs: Double, consecutiveFailures: Int, inBackoff: Bool)] = [
+        ("heartbeat", "2026-09-05T00:00:00Z", 0.3, 0, false)
+    ]
+) -> String {
+    let stepJSON = steps
+        .map { step in
+            """
+            {"name":"\(step.name)","last_run_at":"\(step.lastRunAt)","last_duration_ms":\(step.lastDurationMs),"consecutive_failures":\(step.consecutiveFailures),"in_backoff":\(step.inBackoff ? "true" : "false")}
+            """
+        }
+        .joined(separator: ",")
+    return """
+    {"status":"ok","api_version":"v1","last_tick_at":"\(lastTickAt)","tick_interval_seconds":\(intervalSeconds),"supervisor_steps":[\(stepJSON)]}
+    """
+}
+
 let tasksBody = """
 {"tasks":[{"task_id":"t-1","request_id":"r-1","intent":"fix bug","state":"RUNNING","state_version":2,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:01:00Z"},{"task_id":"t-2","request_id":"r-2","intent":"add test","state":"BLOCKED","state_version":3,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:02:00Z"}],"total":2}
 """

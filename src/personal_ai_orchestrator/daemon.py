@@ -11,7 +11,10 @@ from pathlib import Path
 
 from personal_ai_orchestrator.activation import ActiveRoutingGate
 from personal_ai_orchestrator.control_api import ControlPlaneServer, ControlPlaneService
-from personal_ai_orchestrator.daemon_supervisor import build_default_supervisor
+from personal_ai_orchestrator.daemon_supervisor import (
+    DaemonSupervisor,
+    build_default_supervisor,
+)
 from personal_ai_orchestrator.dispatch_executor import (
     DispatchExecutorConfig,
     OwnerDispatchExecutor,
@@ -188,11 +191,16 @@ def build_control_service(
     quota_collectors: dict[str, object] | None = None,
     verifier_profile=None,
     worker_permission_config: Path | None = None,
+    supervisor: DaemonSupervisor | None = None,
 ) -> ControlPlaneService:
     """Build the control-plane facade over the same durable truth.
 
     When ``execution_repo`` is provided (host-owned repository policy),
-    owner dispatch executes real isolated worktree workers.
+    owner dispatch executes real isolated worktree workers. The optional
+    ``supervisor`` (WP0) is wired into the control plane so ``/v1/health``
+    can surface the heartbeat status; callers that do not run a supervisor
+    (CLI tools, ad-hoc scripts) can omit it and ``/v1/health`` still works,
+    just without ``last_tick_at`` / ``supervisor_steps``.
     """
 
     registry = (
@@ -260,6 +268,7 @@ def build_control_service(
         execution_evidence_journal=execution_evidence_journal,
         dispatch_executor=executor,
         quota_refresh_service=quota_refresh_service,
+        supervisor=supervisor,
     )
 
 
@@ -307,6 +316,17 @@ def main(
     )
     control_server: ControlPlaneServer | None = None
     control_service: ControlPlaneService | None = None
+    # WP0: heartbeat cadence — wired through both --control-only and the
+    # routing path so ``/v1/health`` always reports a live ``last_tick_at``.
+    # Build the supervisor BEFORE the control service so it can carry the
+    # same reference; both share the routing service's SafetyKernelStore
+    # (which points at the same SQLite file the control plane reads).
+    tick_interval_seconds = _resolve_tick_interval_seconds(args)
+    supervisor = build_default_supervisor(
+        interval_seconds=tick_interval_seconds,
+        clock=lambda: datetime.now(UTC),
+        audit_store=service.store,
+    )
     if args.control_socket is not None:
         control_service = build_control_service(
             config=config,
@@ -317,21 +337,10 @@ def main(
             worktree_root=args.worktree_root,
             verifier_profile=load_verifier_profile(args.verifier_profile),
             worker_permission_config=args.worker_permission_config,
+            supervisor=supervisor,
         )
         control_server = ControlPlaneServer(control_service, args.control_socket)
         control_server.start_background()
-    # WP0: heartbeat cadence — wired through both --control-only and the
-    # routing path so ``/v1/health`` always reports a live ``last_tick_at``.
-    tick_interval_seconds = _resolve_tick_interval_seconds(args)
-    supervisor = build_default_supervisor(
-        interval_seconds=tick_interval_seconds,
-        clock=lambda: datetime.now(UTC),
-        audit_store=(
-            control_service.store
-            if control_service is not None
-            else service.store
-        ),
-    )
     if args.control_only:
         if control_server is None:
             raise SystemExit("--control-only requires --control-socket")

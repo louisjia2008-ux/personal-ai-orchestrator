@@ -9,16 +9,76 @@ public enum APIVersion {
     public static let v1 = "v1"
 }
 
+public struct SupervisorStepView: Decodable, Equatable, Sendable {
+    public let name: String
+    public let lastRunAt: String?
+    public let lastDurationMs: Double?
+    public let consecutiveFailures: Int
+    public let inBackoff: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case lastRunAt = "last_run_at"
+        case lastDurationMs = "last_duration_ms"
+        case consecutiveFailures = "consecutive_failures"
+        case inBackoff = "in_backoff"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.name = try container.decode(String.self, forKey: .name)
+        self.lastRunAt = try container.decodeIfPresent(String.self, forKey: .lastRunAt)
+        self.lastDurationMs = try container.decodeIfPresent(Double.self, forKey: .lastDurationMs)
+        self.consecutiveFailures = try container.decodeIfPresent(Int.self, forKey: .consecutiveFailures) ?? 0
+        self.inBackoff = try container.decodeIfPresent(Bool.self, forKey: .inBackoff) ?? false
+    }
+
+    /// Parsed ``lastRunAt`` as a ``Date``, or `` ``None`` when the field
+    /// is absent / unparseable. UI code should always go through this so
+    /// the timestamp formatting lives in one place.
+    public var lastRunDate: Date? {
+        guard let raw = lastRunAt else { return nil }
+        return TaskTiming.parseTimestamp(raw)
+    }
+}
+
 public struct HealthView: Decodable, Equatable, Sendable {
     public let status: String
     public let apiVersion: String
+    public let lastTickAt: String?
+    public let tickIntervalSeconds: Double?
+    public let supervisorSteps: [SupervisorStepView]
 
     enum CodingKeys: String, CodingKey {
         case status
         case apiVersion = "api_version"
+        case lastTickAt = "last_tick_at"
+        case tickIntervalSeconds = "tick_interval_seconds"
+        case supervisorSteps = "supervisor_steps"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.status = try container.decode(String.self, forKey: .status)
+        self.apiVersion = try container.decode(String.self, forKey: .apiVersion)
+        self.lastTickAt = try container.decodeIfPresent(String.self, forKey: .lastTickAt)
+        self.tickIntervalSeconds = try container.decodeIfPresent(Double.self, forKey: .tickIntervalSeconds)
+        self.supervisorSteps = try container.decodeIfPresent([SupervisorStepView].self, forKey: .supervisorSteps) ?? []
     }
 
     public var isCompatible: Bool { apiVersion == APIVersion.v1 }
+
+    /// Parsed ``lastTickAt`` as a ``Date``. `` ``None`` when the daemon has
+    /// not ticked yet (or the field is missing on a pre-WP0 daemon).
+    public var lastTickDate: Date? {
+        guard let raw = lastTickAt else { return nil }
+        return TaskTiming.parseTimestamp(raw)
+    }
+
+    /// Find the first supervisor step matching ``name``, if any.
+    public func step(named name: String) -> SupervisorStepView? {
+        supervisorSteps.first { $0.name == name }
+    }
 }
 
 /// Daemon build identity, so the dashboard can prove both halves of the stack
