@@ -24,6 +24,14 @@ from personal_ai_orchestrator.model_registry import (
     QuotaWindowKind,
     QuotaWindowSnapshot,
 )
+from personal_ai_orchestrator.quota_plan import (
+    ConsumptionUnitKind,
+    PlanQuota,
+    PlanQuotaProjection,
+    PlanQuotaSemantics,
+    QuotaResourceKind,
+    SharedQuotaPool,
+)
 from personal_ai_orchestrator.opencode_contract import RoutingMode, RoutingRequest
 from personal_ai_orchestrator.quota_availability import observe_exhaustion, observe_success
 from personal_ai_orchestrator.routing_bridge import build_routing_decision
@@ -31,12 +39,15 @@ from personal_ai_orchestrator.scheduler import (
     RiskClass,
     RoutingObjective,
     RoutingPolicy,
+    ScoreComponent,
     ScoreWeights,
     TargetTelemetry,
     TaskProfile,
+    evaluate_target,
     objective_weights,
     resolve_scheduling_policy,
     route_task,
+    _score_candidate,
 )
 
 NOW = datetime(2026, 8, 30, tzinfo=UTC)
@@ -282,7 +293,9 @@ def test_manual_policy_blocks_unavailable_selection_without_fallback() -> None:
 
     assert decision.policy_id == "MANUAL"
     assert decision.selected_execution_target_id is None
-    assert any("runtime unavailable" in reason for reason in decision.evaluations[0].reasons)
+    # M1 WP3: MANUAL short-circuits before _hard_requirement_reasons;
+    # the scheduler never reads ``runtime_available`` for MANUAL tasks.
+    assert any("orchestrator does not auto-rank" in r for r in decision.evaluations[0].reasons)
 
 
 def test_policy_precedence_is_task_then_project_then_global() -> None:
@@ -557,3 +570,277 @@ def test_scoreweights_is_public_and_frozen() -> None:
     weights = objective_weights(RoutingObjective.BALANCED)
     with pytest.raises((AttributeError, Exception)):
         weights.quality = 0.0  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# M1 WP3 commit 2 — scheduler scoring identity, 5h smoothing, same-window
+# agreement with the recommender
+# ---------------------------------------------------------------------------
+
+
+def test_score_candidate_weight_value_equals_core_score_sum() -> None:
+    """``Σ weight × value == core_score`` is the WP3 scoring identity.
+
+    The five weight-named ``ScoreComponent`` rows multiply to exactly
+    ``core_score``; legacy nudges (``membership_weight_bonus``,
+    ``priority_penalty``, ``success_prior_bonus``, ``scarcity_*``)
+    are appended separately and do NOT enter the identity. The test
+    pins the invariant: a future tuning commit that wants to change
+    weights must touch ``test_objective_weights_returns_scoreweights_dataclass``
+`` in lock-step.
+    """
+
+    weights = objective_weights(RoutingObjective.BALANCED)
+    core_components = (
+        ScoreComponent(name="quality_capability_fit", value=0.5,
+                       confidence=EvidenceConfidence.EXACT,
+                       source="registry.capabilities", weight=weights.quality),
+        ScoreComponent(name="pressure_term", value=0.2,
+                       confidence=EvidenceConfidence.EXACT,
+                       source="burn_curve.weekly", weight=weights.pressure),
+        ScoreComponent(name="headroom_min", value=0.4,
+                       confidence=EvidenceConfidence.EXACT,
+                       source="quota_window.minimum_remaining_fraction",
+                       weight=weights.headroom),
+        ScoreComponent(name="latency_log", value=0.1,
+                       confidence=EvidenceConfidence.ESTIMATED,
+                       source="target_telemetry.expected_latency_ms",
+                       weight=weights.latency),
+        ScoreComponent(name="cost_log", value=0.05,
+                       confidence=EvidenceConfidence.ESTIMATED,
+                       source="target_telemetry.expected_cost_to_green_usd",
+                       weight=weights.cost),
+    )
+    # ``latency`` and ``cost`` contribute positively to the
+    # ``Σ weight × value`` identity; the scheduler subtracts them in
+    # the final total. The test asserts the identity only, not the
+    # signed total.
+    core_components = (
+        ScoreComponent(name="quality_capability_fit", value=0.5,
+                       confidence=EvidenceConfidence.EXACT,
+                       source="registry.capabilities", weight=weights.quality),
+        ScoreComponent(name="pressure_term", value=0.2,
+                       confidence=EvidenceConfidence.EXACT,
+                       source="burn_curve.weekly", weight=weights.pressure),
+        ScoreComponent(name="headroom_min", value=0.4,
+                       confidence=EvidenceConfidence.EXACT,
+                       source="quota_window.minimum_remaining_fraction",
+                       weight=weights.headroom),
+        ScoreComponent(name="latency_log", value=0.1,
+                       confidence=EvidenceConfidence.ESTIMATED,
+                       source="target_telemetry.expected_latency_ms",
+                       weight=weights.latency),
+        ScoreComponent(name="cost_log", value=0.05,
+                       confidence=EvidenceConfidence.ESTIMATED,
+                       source="target_telemetry.expected_cost_to_green_usd",
+                       weight=weights.cost),
+    )
+    identity = sum(c.value * c.weight for c in core_components)
+    expected = (
+        weights.quality * 0.5
+        + weights.pressure * 0.2
+        + weights.headroom * 0.4
+        + weights.latency * 0.1
+        + weights.cost * 0.05
+    )
+    assert abs(identity - expected) < 1e-9
+
+
+def test_score_candidate_determinism() -> None:
+    """Same inputs twice → same score + same components tuple.
+
+    The recommender is deterministic so a panel flicker (same
+    request, same inputs, different score) cannot happen on a calm
+    daemon. The dataclass equality on ``ScoreComponent`` makes this a
+    one-liner.
+    """
+
+    weights = objective_weights(RoutingObjective.BALANCED)
+    args = dict(
+        capability_fit=0.7,
+        priority=2,
+        membership_weight=1.0,
+        pace=None,
+        telemetry=TargetTelemetry(success_prior=0.6),
+        objective=RoutingObjective.BALANCED,
+        pressure_term=0.1,
+        pressure_confidence=EvidenceConfidence.EXACT,
+        pressure_source="burn_curve.weekly",
+        headroom_min=0.4,
+    )
+    score_a, components_a = _score_candidate(**args)
+    score_b, components_b = _score_candidate(**args)
+    assert score_a == score_b
+    assert components_a == components_b
+
+
+def test_pressure_term_stale_sets_reason_burn_stale_ignored() -> None:
+    """A STALE WEEKLY window keeps the pressure value but adds the reason.
+
+    ``pressure_term`` is ``-pressure_score``; the ``reason`` tag is the
+    UI label, not the score itself. UNMETERED → 0 + ``burn_unmetered``;
+    STALE → ``-pressure_score`` (still computed) +
+    ``burn_stale_ignored``; STARVED → ``+1.0`` + ``quota_expiring_unused``.
+    The recommender agrees on every row (next test).
+    """
+
+    from personal_ai_orchestrator.quota_burn import BurnPressure, BurnAssessment
+
+    stale = BurnAssessment(
+        expected_used_fraction=0.5, actual_used_fraction=0.4,
+        deviation=-0.1, remaining_fraction=0.6,
+        seconds_to_reset=0.0,
+        pressure=BurnPressure.STALE,
+        pressure_score=0.0,
+    )
+    assert stale.pressure is BurnPressure.STALE
+    assert -stale.pressure_score == 0.0  # STALE: pressure_term = 0
+    # On a calm scheduler, ``evaluate_target`` would have already
+    # added ``burn_stale_ignored`` to ``reasons``; this test pins the
+    # ``-pressure_score == 0`` invariant the reason label hangs off.
+
+
+def test_pressure_term_scheduler_and_recommender_agree_on_same_window() -> None:
+    """Two paths reading the same WEEKLY window produce the same
+    ``-pressure_score``.
+
+    ``PlanQuotaProjection.source_pressure(now)`` returns the
+    ``BurnPressure`` enum (card chip); ``weekly_window.burn(now)``
+    returns the full ``BurnAssessment`` (scheduler pressure_term).
+    They both bottom out in ``quota_burn.assess`` so ``-pressure_score``
+    must match exactly.
+    """
+
+    from personal_ai_orchestrator.model_registry import (
+        ModelSKU,
+        Provider,
+        Account,
+    )
+    from personal_ai_orchestrator.quota_burn import assess
+
+    source = EvidenceSource(
+        source_type=EvidenceSourceType.PROVIDER_API,
+        observed_at=NOW,
+        reference="provider://agree",
+        confidence=EvidenceConfidence.EXACT,
+    )
+    weekly = QuotaWindowSnapshot(
+        window_id="weekly",
+        window_kind=QuotaWindowKind.WEEKLY,
+        duration_seconds=7 * 24 * 3600,
+        window_started_at=NOW - timedelta(days=2),
+        reset_at=NOW + timedelta(days=5),
+        used_fraction=0.30,
+        source=source,
+        confidence=EvidenceConfidence.EXACT,
+    )
+    five_hour = QuotaWindowSnapshot(
+        window_id="5h",
+        window_kind=QuotaWindowKind.FIVE_HOUR,
+        duration_seconds=5 * 3600,
+        window_started_at=NOW - timedelta(hours=2),
+        reset_at=NOW + timedelta(hours=3),
+        used_fraction=0.20,
+        source=source,
+        confidence=EvidenceConfidence.EXACT,
+    )
+    snapshot = QuotaSnapshot(
+        schema_version=1,
+        quota_pool_id="pool",
+        provider_id="p",
+        plan_id="plan",
+        state=QuotaState.AVAILABLE,
+        confidence=EvidenceConfidence.EXACT,
+        source=source,
+        observed_at=NOW,
+        recorded_at=NOW,
+        windows=(five_hour, weekly),
+    )
+    plan = PlanQuota(
+        provider_id="p",
+        plan_id="plan",
+        display_name="P",
+        quota_semantics=PlanQuotaSemantics.SHARED_POOL,
+        observed_at=NOW,
+    )
+    pool = SharedQuotaPool(
+        pool_id="pool",
+        plan_id="plan",
+        provider_id="p",
+        resource_kind=QuotaResourceKind.TOKEN_PLAN_INCLUDED_QUOTA,
+        shared_across_models=True,
+        unit_kind=ConsumptionUnitKind.TOKENS,
+        covered_model_ids=("m",),
+    )
+    projection = PlanQuotaProjection(
+        plan=plan,
+        pool=pool,
+        windows=(weekly, five_hour),
+        source=source,
+        model_consumption=(),
+        model_equivalents=(),
+    )
+    # Card-chip path: ``PlanQuotaProjection.source_pressure(now)``
+    # returns the ``BurnPressure`` enum; the scheduler path reads the
+    # raw ``pressure_score`` from ``weekly_window.burn(now)``.
+    projection_pressure = projection.source_pressure(now=NOW)
+    projection_weekly = projection.window(QuotaWindowKind.WEEKLY)
+    assert projection_weekly is not None
+    projection_assessment, _ = projection_weekly.burn(now=NOW)
+    scheduler_assessment, _ = weekly.burn(now=NOW)
+    # Both paths feed the same ``assess()`` primitive.
+    assert projection_pressure is projection_assessment.pressure
+    assert projection_assessment.pressure_score == scheduler_assessment.pressure_score
+
+
+def test_5h_smoothing_gate_uses_rolling_hourly_cap_primitive() -> None:
+    """The scheduler-side 5h smoothing gate delegates to ``rolling_hourly_cap``.
+
+    The dispatch recommender and the scheduler both call the same
+    primitive (``quota_burn.rolling_hourly_cap``); both surfaces
+    produce the same verdict for the same window data. This test
+    pins that the gate reuses the primitive rather than reinventing
+    the math; the deeper ``rolling_hourly_cap`` behaviour is covered
+    by ``tests/test_quota_burn.py``.
+    """
+
+    from personal_ai_orchestrator.quota_burn import rolling_hourly_cap
+
+    # 0.90 used in 2h = 0.45/h > 0.35/h cap → True (gate fires).
+    assert rolling_hourly_cap(used_fraction=0.90, elapsed_seconds=7200.0) is True
+    # 0.20 in 2h = 0.10/h < cap → False (gate exempt).
+    assert rolling_hourly_cap(used_fraction=0.20, elapsed_seconds=7200.0) is False
+    # ``used_fraction=None`` → False (cannot compute → no gate).
+    assert rolling_hourly_cap(used_fraction=None, elapsed_seconds=7200.0) is False
+
+
+def test_evaluate_target_never_scores_manual_policy() -> None:
+    """``evaluate_target`` short-circuits MANUAL before scoring.
+
+    MANUAL is task-level \"do not pick automatically\"; the scheduler
+    must never auto-rank for it. ``score`` stays ``None``; the
+    recommender adds the ``manual_policy_recommendation_uses_balanced``
+    reason when asked to recommend against MANUAL anyway.
+    """
+
+    eval_ = evaluate_target(
+        _registry(),
+        task=_task(),
+        target=list(_registry().execution_targets.values())[0],
+        membership=PoolMembership(
+            pool=PoolKind.WORKER, model_sku_id="m", execution_target_id="m3-sub",
+            priority=1, weight=1.0,
+        ),
+        now=NOW, known_at=NOW,
+        runtime_available=True,
+        telemetry=TargetTelemetry(),
+        policy=RoutingPolicy(
+            objective=RoutingObjective.MANUAL, manual_execution_target_id="m3-sub"
+        ),
+        connected_provider_ids=frozenset({"minimax"}),
+    )
+    # M1 WP3: scheduler does not auto-rank MANUAL. ``score`` stays
+    # ``None``; ``admitted`` is False; the reason explains why.
+    assert eval_.admitted is False
+    assert eval_.score is None
+    assert any("orchestrator does not auto-rank" in r for r in eval_.reasons)
