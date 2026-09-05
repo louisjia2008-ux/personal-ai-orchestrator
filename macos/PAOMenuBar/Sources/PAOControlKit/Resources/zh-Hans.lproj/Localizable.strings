@@ -748,6 +748,16 @@
 "quota.projection.noExhaustion" = "预计在重置前不会耗尽。";
 "quota.projection.footer" = "这是预测，不是读数。它把测得的消耗速率直线外推到重置时刻，并假设其余条件不变。";
 
+// M1 WP1 burn pressure chips. STARVED 译为"将过期未用"：判定含义是
+// 窗口里还剩很多额度但即将重置，并非"快耗尽"。
+"quota.pressure.unmetered" = "未计量";
+"quota.pressure.stale" = "数据过期";
+"quota.pressure.exhausted" = "已耗尽";
+"quota.pressure.starved" = "将过期未用";
+"quota.pressure.ahead" = "消耗偏快";
+"quota.pressure.behind" = "消耗偏慢";
+"quota.pressure.onTrack" = "按计划";
+
 "quota.projection.unavailable.NO_HISTORY" = "该窗口尚无可用的额度观测记录。";
 "quota.projection.unavailable.INSUFFICIENT_OBSERVATIONS" = "本重置窗口内仅有一次读数，测算速率至少需要两次。";
 "quota.projection.unavailable.NO_ELAPSED_TIME" = "本窗口内各次读数的时间戳相同，无法测算速率。";

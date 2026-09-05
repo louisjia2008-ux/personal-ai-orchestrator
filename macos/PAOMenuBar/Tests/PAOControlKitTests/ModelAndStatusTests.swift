@@ -495,6 +495,53 @@ final class ModelAndStatusTests: XCTestCase {
         XCTAssertFalse(view.isExecutionVerifiedStale)
     }
 
+    // MARK: - §M1 WP1 sourcePressure on the dispatch candidate
+
+    func testDispatchRecommendationCandidateDecodesSourcePressureWhenPresent() throws {
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "eligible":true,
+          "admitted":true,
+          "score":1.0,
+          "evidence_fresh":true,
+          "runtime_available":true,
+          "verified":true,
+          "quota_state":"AVAILABLE_OBSERVED",
+          "source_pressure":"STARVED",
+          "score_components":[],
+          "reasons":["policy=BALANCED"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationCandidate.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.sourcePressure, "STARVED")
+    }
+
+    func testDispatchRecommendationCandidateDecodesWithoutSourcePressure() throws {
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "eligible":true,
+          "admitted":true,
+          "score":1.0,
+          "evidence_fresh":true,
+          "runtime_available":true,
+          "verified":true,
+          "quota_state":"AVAILABLE_OBSERVED",
+          "score_components":[],
+          "reasons":["policy=BALANCED"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationCandidate.self, from: Data(json.utf8)
+        )
+        XCTAssertNil(view.sourcePressure)
+    }
+
     func testRunViewDecodesPidAliveWhenPresent() throws {
         let json = """
         {

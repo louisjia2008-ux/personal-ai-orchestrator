@@ -67,6 +67,9 @@ public struct QuotaBindingSnapshot: Equatable, Identifiable, Sendable {
     public let observedAt: String?
     /// Whether the daemon named this the window that currently limits the plan.
     public let isLimiting: Bool
+    /// M1 WP1 burn assessment for this window (expected vs actual used,
+    /// deviation, pressure, score). nil when the daemon predates WP1.
+    public let burn: QuotaBurnView?
 
     public var id: String { series.key }
 
@@ -89,7 +92,8 @@ public struct QuotaBindingSnapshot: Equatable, Identifiable, Sendable {
         unit: String? = nil,
         resetAt: String? = nil,
         observedAt: String? = nil,
-        isLimiting: Bool = false
+        isLimiting: Bool = false,
+        burn: QuotaBurnView? = nil
     ) {
         self.series = series
         self.poolName = poolName
@@ -103,6 +107,7 @@ public struct QuotaBindingSnapshot: Equatable, Identifiable, Sendable {
         self.resetAt = resetAt
         self.observedAt = observedAt
         self.isLimiting = isLimiting
+        self.burn = burn
     }
 }
 
@@ -232,7 +237,8 @@ public struct ResourceSnapshot: Equatable, Identifiable, Sendable {
                         unit: window.unit,
                         resetAt: window.resetAt,
                         observedAt: plan.observedAt,
-                        isLimiting: window.windowId == limitingId
+                        isLimiting: window.windowId == limitingId,
+                        burn: window.burn
                     )
                 )
             }

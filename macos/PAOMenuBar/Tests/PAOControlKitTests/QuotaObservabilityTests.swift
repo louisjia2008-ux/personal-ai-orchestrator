@@ -223,4 +223,86 @@ final class QuotaObservabilityTests: XCTestCase {
         XCTAssertEqual(view.pageState, .connectedButQuotaUnknown)
         XCTAssertEqual(view.providers.count, 1)
     }
+
+    // MARK: - §M1 WP1 burn sub-object + sourcePressure
+
+    func testQuotaPlanWindowDecodesBurnSubObject() throws {
+        let view = try JSONDecoder().decode(
+            QuotaOverviewView.self, from: Data(quotaObservedWithBurnBody.utf8)
+        )
+        let card = try XCTUnwrap(view.providers.first)
+        let plan = try XCTUnwrap(card.plan)
+        let window = try XCTUnwrap(plan.windows.first)
+        let burn = try XCTUnwrap(window.burn)
+        XCTAssertEqual(burn.pressure, "ON_TRACK")
+        XCTAssertFalse(burn.windowStartInferred)
+        XCTAssertEqual(burn.expectedUsedFraction ?? 0, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(burn.actualUsedFraction ?? 0, 0.58, accuracy: 1e-9)
+        XCTAssertEqual(burn.deviation ?? 0, 0.08, accuracy: 1e-9)
+        XCTAssertEqual(burn.remainingFraction ?? 0, 0.42, accuracy: 1e-9)
+        XCTAssertEqual(burn.secondsToReset ?? 0, 3600.0, accuracy: 1e-9)
+        XCTAssertEqual(burn.pressureScore, 0.13, accuracy: 1e-9)
+    }
+
+    func testQuotaPlanWindowDecodesWithoutBurnSubObject() throws {
+        // Pre-WP1 daemons do not emit ``burn`` — decode must succeed with
+        // ``burn == nil`` so an upgrade does not blank the Quota page.
+        // We hand-build a minimal plan-window payload here because the
+        // shared canned bodies only exercise ``quota_pools`` (which is a
+        // different view-model that does not carry burn at all).
+        let payload = """
+        {
+          "state": "CONNECTED_WITH_QUOTA_OBSERVATIONS",
+          "summary": {"connected_provider_count": 1, "quota_observable_provider_count": 1, "quota_unknown_provider_count": 0, "quota_warning_count": 0, "quota_exhausted_count": 0},
+          "providers": [{
+            "provider_id": "p", "display_name": "P", "connection_state": "CONNECTED",
+            "auth_state": null, "plan_surface": null, "region": null,
+            "quota_state": "OBSERVED", "confidence": "EXACT",
+            "measurement_source": "PROVIDER_API", "observed_at": "2026-08-31T00:00:00Z",
+            "readonly_source_available": true, "collector_available": true,
+            "last_refresh_status": null, "last_refresh_at": null, "failure_reason": null,
+            "credential_source": "ENV_VAR",
+            "quota_pools": [],
+            "plan": {
+              "provider_id": "p", "plan_id": "plan", "display_name": "P",
+              "quota_semantics": "SHARED_POOL",
+              "pool_id": "pool", "resource_kind": "TOKEN_PLAN_INCLUDED_QUOTA",
+              "shared_across_models": true, "unit_kind": "TOKENS",
+              "covered_model_ids": [],
+              "state": "AVAILABLE", "confidence": "EXACT",
+              "observed_at": null, "unknown_reason": null,
+              "active_workload_scope": "UNKNOWN", "workload_scope_notes": [],
+              "binding_window": {"window_id": null, "window_kind": null, "remaining_fraction": null, "reset_at": null, "seconds_until_reset": null, "reason": "NO_KNOWN_REMAINING", "confidence": "UNKNOWN"},
+              "model_consumption": [], "model_equivalents": [], "equivalent_capacity": [],
+              "windows": [{"window_id": "5h", "window_kind": "FIVE_HOUR", "state": "AVAILABLE", "confidence": "EXACT", "remaining_fraction": 0.5, "reset_at": "2026-08-31T05:00:00Z"}]
+            }
+          }],
+          "history": {"observations": [], "retention_limit": 500}
+        }
+        """
+        let view = try JSONDecoder().decode(
+            QuotaOverviewView.self, from: Data(payload.utf8)
+        )
+        let plan = try XCTUnwrap(view.providers.first?.plan)
+        let window = try XCTUnwrap(plan.windows.first)
+        XCTAssertNil(window.burn)
+    }
+
+    func testQuotaProviderCardDecodesSourcePressure() throws {
+        let view = try JSONDecoder().decode(
+            QuotaOverviewView.self, from: Data(quotaObservedWithBurnBody.utf8)
+        )
+        let card = try XCTUnwrap(view.providers.first)
+        XCTAssertEqual(card.sourcePressure, "ON_TRACK")
+    }
+
+    func testQuotaProviderCardDecodesWithoutSourcePressure() throws {
+        // Pre-WP1 daemons omit ``source_pressure`` — decode must succeed
+        // with ``sourcePressure == nil``.
+        let view = try JSONDecoder().decode(
+            QuotaOverviewView.self, from: Data(quotaUnknownBody.utf8)
+        )
+        let card = try XCTUnwrap(view.providers.first)
+        XCTAssertNil(card.sourcePressure)
+    }
 }

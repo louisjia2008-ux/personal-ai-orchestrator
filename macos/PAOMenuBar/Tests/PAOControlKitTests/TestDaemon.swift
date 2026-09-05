@@ -264,6 +264,63 @@ let quotaRefreshBody = """
 {"refreshed_provider_ids": ["zai-coding-plan"], "overview": \(quotaUnknownBody)}
 """
 
+/// M1 WP1 — observed quota body that carries the burn sub-object on the
+/// 5h window and a ``source_pressure`` on the provider card. Used by
+/// the new decoder tests and any UI smoke that needs a populated chip.
+let quotaObservedWithBurnBody = """
+{
+  "state": "CONNECTED_WITH_QUOTA_OBSERVATIONS",
+  "summary": {"connected_provider_count": 1, "quota_observable_provider_count": 1, "quota_unknown_provider_count": 0, "quota_warning_count": 0, "quota_exhausted_count": 0},
+  "providers": [
+    {
+      "provider_id": "minimax-cn-coding-plan",
+      "display_name": "MiniMax CN Coding Plan",
+      "connection_state": "CONNECTED",
+      "auth_state": "AUTHENTICATED",
+      "plan_surface": "Coding Plan",
+      "region": "cn",
+      "quota_state": "OBSERVED",
+      "confidence": "EXACT",
+      "measurement_source": "PROVIDER_API",
+      "observed_at": "2026-08-31T00:00:00Z",
+      "readonly_source_available": true,
+      "collector_available": true,
+      "last_refresh_status": "SUCCESS",
+      "last_refresh_at": "2026-08-31T00:00:00Z",
+      "failure_reason": null,
+      "credential_source": "ENV_VAR",
+      "quota_pools": [],
+      "source_pressure": "ON_TRACK",
+      "plan": {
+        "provider_id": "minimax-cn-coding-plan",
+        "plan_id": "coding-plan",
+        "display_name": "MiniMax CN Coding Plan",
+        "quota_semantics": "SHARED_POOL",
+        "pool_id": "minimax-coding-plan-cn",
+        "resource_kind": "TOKEN_PLAN_INCLUDED_QUOTA",
+        "shared_across_models": true,
+        "unit_kind": "TOKENS",
+        "covered_model_ids": ["minimax-m2"],
+        "state": "AVAILABLE",
+        "confidence": "EXACT",
+        "observed_at": "2026-08-31T00:00:00Z",
+        "unknown_reason": null,
+        "active_workload_scope": "CODING_TEXT",
+        "workload_scope_notes": [],
+        "binding_window": {"window_id": null, "window_kind": null, "remaining_fraction": null, "reset_at": null, "seconds_until_reset": null, "reason": "NO_KNOWN_REMAINING", "confidence": "UNKNOWN"},
+        "model_consumption": [],
+        "model_equivalents": [],
+        "equivalent_capacity": [],
+        "windows": [
+          {"window_id": "5h", "window_kind": "FIVE_HOUR", "state": "AVAILABLE", "confidence": "EXACT", "remaining_fraction": 0.42, "remaining_units": null, "total_units": null, "unit": null, "reset_at": "2026-08-31T05:00:00Z", "burn": {"expected_used_fraction": 0.5, "actual_used_fraction": 0.58, "deviation": 0.08, "remaining_fraction": 0.42, "seconds_to_reset": 3600.0, "pressure": "ON_TRACK", "pressure_score": 0.13, "window_start_inferred": false}}
+        ]
+      }
+    }
+  ],
+  "history": {"observations": [], "retention_limit": 500}
+}
+"""
+
 func registerStandardRoutes(_ daemon: TestDaemon) {
     daemon.route("GET", "/v1/health", body: healthBody)
     daemon.route("GET", "/v1/dashboard", body: dashboardBody)
