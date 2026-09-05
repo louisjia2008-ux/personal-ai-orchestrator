@@ -786,3 +786,11 @@
 "recommendation.panelTitle" = "策略 %@ 下的候选排序";
 "recommendation.score" = "分数 %.1f · 剩余 %.0f%% · 证据 %@";
 "recommendation.quotaState" = "配额状态：%@";
+// M1 WP2 — tier picker + chip labels.
+"newTask.minTier" = "最低档位";
+"newTask.minTierHelp" = "任务要求的模型档位下限；低于该档位的 target 不会被推荐。";
+"tier.t0" = "旗舰";
+"tier.t1" = "主力";
+"tier.t2" = "快速";
+"tier.t3" = "免费";
+"tier.unknown" = "未知";

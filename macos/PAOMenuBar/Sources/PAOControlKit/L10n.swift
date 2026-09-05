@@ -282,6 +282,9 @@ public enum L10n {
         "quota.pressure.exhausted", "quota.pressure.starved",
         "quota.pressure.ahead", "quota.pressure.behind",
         "quota.pressure.onTrack",
+        // M1 WP2: tier picker + chip labels.
+        "newTask.minTier", "newTask.minTierHelp",
+        "tier.t0", "tier.t1", "tier.t2", "tier.t3", "tier.unknown",
         "quota.projection.unavailable.NO_HISTORY",
         "quota.projection.unavailable.INSUFFICIENT_OBSERVATIONS",
         "quota.projection.unavailable.NO_ELAPSED_TIME",
@@ -1570,6 +1573,42 @@ public enum L10n {
         case "BEHIND": return quotaPressureBehind
         case "ON_TRACK": return quotaPressureOnTrack
         default: return pressure
+        }
+    }
+
+    // MARK: M1 WP2 — tier picker + tier chip labels
+
+    /// ``newTask.minTier`` — picker title for the task-submit sheet.
+    public static var newTaskMinTier: String { tr("newTask.minTier") }
+
+    /// ``newTask.minTierHelp`` — help text shown under the tier picker.
+    public static var newTaskMinTierHelp: String { tr("newTask.minTierHelp") }
+
+    /// ``tier.t0`` — flagship tier.
+    public static var tierT0: String { tr("tier.t0") }
+
+    /// ``tier.t1`` — workhorse tier.
+    public static var tierT1: String { tr("tier.t1") }
+
+    /// ``tier.t2`` — fast tier.
+    public static var tierT2: String { tr("tier.t2") }
+
+    /// ``tier.t3`` — free tier.
+    public static var tierT3: String { tr("tier.t3") }
+
+    /// ``tier.unknown`` — table could not classify the target.
+    public static var tierUnknown: String { tr("tier.unknown") }
+
+    /// Localize a tier enum value. ``T0..T3`` map to the canonical
+    /// names; any other string returns ``tierUnknown`` so a future tier
+    /// addition does not crash pre-localization callers.
+    public static func tierLabel(_ tier: String) -> String {
+        switch tier {
+        case "T0": return tierT0
+        case "T1": return tierT1
+        case "T2": return tierT2
+        case "T3": return tierT3
+        default: return tierUnknown
         }
     }
 

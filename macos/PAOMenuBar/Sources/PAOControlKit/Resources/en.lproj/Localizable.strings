@@ -787,3 +787,11 @@
 "recommendation.panelTitle" = "Ranking under policy: %@";
 "recommendation.score" = "score %.1f · headroom %.0f%% · evidence %@";
 "recommendation.quotaState" = "quota state: %@";
+// M1 WP2 — tier picker + chip labels.
+"newTask.minTier" = "Minimum tier";
+"newTask.minTierHelp" = "Hard requirement on model tier; targets below this tier are not recommended.";
+"tier.t0" = "Flagship";
+"tier.t1" = "Workhorse";
+"tier.t2" = "Fast";
+"tier.t3" = "Free";
+"tier.unknown" = "Unknown";

@@ -542,6 +542,169 @@ final class ModelAndStatusTests: XCTestCase {
         XCTAssertNil(view.sourcePressure)
     }
 
+    // MARK: - §M1 WP2 — min_tier / tier / tier_match_reason / modelTiersSource
+
+    func testTaskViewDecodesMinTierWhenPresent() throws {
+        let json = """
+        {"task_id":"t-9","request_id":"r-9","intent":"flagship only","state":"SUBMITTED","state_version":0,"created_at":"2026-09-04T00:00:00Z","updated_at":"2026-09-04T00:00:00Z","min_tier":"T0"}
+        """
+        let task = try JSONDecoder().decode(TaskView.self, from: Data(json.utf8))
+        XCTAssertEqual(task.minTier, "T0")
+    }
+
+    func testTaskViewDecodesWithoutMinTier() throws {
+        // Pre-WP2 daemons / older fixtures omit the field; the decoder
+        // must leave ``minTier`` nil rather than failing the request.
+        let json = """
+        {"task_id":"t-9","request_id":"r-9","intent":"legacy","state":"SUBMITTED","state_version":0,"created_at":"2026-09-04T00:00:00Z","updated_at":"2026-09-04T00:00:00Z"}
+        """
+        let task = try JSONDecoder().decode(TaskView.self, from: Data(json.utf8))
+        XCTAssertNil(task.minTier)
+    }
+
+    func testSubmitRequestEncodesMinTierWhenProvided() throws {
+        // ``SubmitRequest`` is Encodable — the SwiftUI picker in
+        // commit 5 passes the chosen tier here. JSON keys must match
+        // the daemon's snake_case schema.
+        let request = SubmitRequest(
+            taskId: "menubar-abc",
+            requestId: "menubar-req-abc",
+            projectId: "project-fixture",
+            intent: "flagship only",
+            schedulingPolicy: "BALANCED",
+            manualExecutionTargetId: nil,
+            minTier: "T0"
+        )
+        let data = try JSONEncoder().encode(request)
+        let payload = String(data: data, encoding: .utf8) ?? ""
+        XCTAssertTrue(payload.contains("\"min_tier\":\"T0\""))
+    }
+
+    func testSubmitRequestEncodesWithoutMinTier() throws {
+        // The picker default leaves ``minTier`` nil; the encoder must
+        // emit no ``min_tier`` key so the daemon applies its own
+        // T1 default rather than seeing ``null``.
+        let request = SubmitRequest(
+            taskId: "menubar-abc",
+            requestId: "menubar-req-abc",
+            projectId: "project-fixture",
+            intent: "default"
+        )
+        let data = try JSONEncoder().encode(request)
+        let payload = String(data: data, encoding: .utf8) ?? ""
+        XCTAssertFalse(payload.contains("min_tier"))
+    }
+
+    func testExecutionTargetHealthViewDecodesTierFieldsWhenPresent() throws {
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "runtime_id":"opencode",
+          "enabled":true,
+          "execution_verified":true,
+          "runtime_available":true,
+          "observed_availability":null,
+          "tier":"T1",
+          "tier_match_reason":"glob"
+        }
+        """
+        let view = try JSONDecoder().decode(
+            ExecutionTargetHealthView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.tier, "T1")
+        XCTAssertEqual(view.tierMatchReason, "glob")
+    }
+
+    func testExecutionTargetHealthViewDecodesWithoutTierFields() throws {
+        // Pre-WP2 daemons (and fixtures that predate commit 4) omit
+        // ``tier`` and ``tier_match_reason``. The decoder must leave
+        // them nil rather than failing the request.
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "runtime_id":"opencode",
+          "enabled":true,
+          "execution_verified":true,
+          "runtime_available":true,
+          "observed_availability":null
+        }
+        """
+        let view = try JSONDecoder().decode(
+            ExecutionTargetHealthView.self, from: Data(json.utf8)
+        )
+        XCTAssertNil(view.tier)
+        XCTAssertNil(view.tierMatchReason)
+    }
+
+    func testDispatchRecommendationCandidateDecodesTierFieldsWhenPresent() throws {
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "eligible":true,
+          "admitted":true,
+          "score":22.5,
+          "evidence_fresh":true,
+          "runtime_available":true,
+          "verified":true,
+          "quota_state":"AVAILABLE_OBSERVED",
+          "source_pressure":"ON_TRACK",
+          "tier":"T0",
+          "tier_match_reason":"exact",
+          "score_components":[],
+          "reasons":["tier=T0 min_tier=T1 match=exact"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationCandidate.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.tier, "T0")
+        XCTAssertEqual(view.tierMatchReason, "exact")
+    }
+
+    func testDispatchRecommendationCandidateDecodesWithoutTierFields() throws {
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "eligible":true,
+          "admitted":true,
+          "score":22.5,
+          "evidence_fresh":true,
+          "runtime_available":true,
+          "verified":true,
+          "quota_state":"AVAILABLE_OBSERVED",
+          "score_components":[],
+          "reasons":["policy=BALANCED"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationCandidate.self, from: Data(json.utf8)
+        )
+        XCTAssertNil(view.tier)
+        XCTAssertNil(view.tierMatchReason)
+    }
+
+    func testHealthViewDecodesModelTiersSourceWhenPresent() throws {
+        let json = """
+        {"status":"ok","api_version":"v1","last_tick_at":"2026-09-05T00:00:00Z","tick_interval_seconds":5.0,"supervisor_steps":[],"model_tiers_source":"owner_file"}
+        """
+        let view = try JSONDecoder().decode(HealthView.self, from: Data(json.utf8))
+        XCTAssertEqual(view.modelTiersSource, "owner_file")
+    }
+
+    func testHealthViewDecodesWithoutModelTiersSource() throws {
+        // Pre-WP2 daemons omit ``model_tiers_source``; the Swift
+        // dashboard renders the absence as "Tier table: not wired".
+        let json = """
+        {"status":"ok","api_version":"v1","last_tick_at":"2026-09-05T00:00:00Z","tick_interval_seconds":5.0,"supervisor_steps":[]}
+        """
+        let view = try JSONDecoder().decode(HealthView.self, from: Data(json.utf8))
+        XCTAssertNil(view.modelTiersSource)
+    }
+
     func testRunViewDecodesPidAliveWhenPresent() throws {
         let json = """
         {

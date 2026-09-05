@@ -25,6 +25,9 @@ struct QuickSubmitView: View {
         "BALANCED", "QUALITY_FIRST", "QUOTA_SAVER", "SPEED_FIRST", "MANUAL",
     ]
 
+    /// M1 WP2: tier floor options.
+    private static let selectableTiers = ["T0", "T1", "T2", "T3"]
+
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(L10n.quickSubmit).font(.subheadline).foregroundStyle(.secondary)
@@ -38,6 +41,15 @@ struct QuickSubmitView: View {
             Picker(L10n.newTaskSchedulingPolicy, selection: $store.selectedSchedulingPolicy) {
                 ForEach(Self.selectablePolicies, id: \.self) { policy in
                     Text(L10n.schedulingPolicyName(policy)).tag(policy)
+                }
+            }
+            .pickerStyle(.menu)
+            // M1 WP2: tier floor picker; mirrors the dashboard sheet
+            // but rendered inline because the quick-submit view is
+            // dense.
+            Picker(L10n.newTaskMinTier, selection: $store.selectedMinTier) {
+                ForEach(Self.selectableTiers, id: \.self) { tier in
+                    Text(L10n.tierLabel(tier)).tag(tier)
                 }
             }
             .pickerStyle(.menu)

@@ -48,6 +48,10 @@ public struct HealthView: Decodable, Equatable, Sendable {
     public let lastTickAt: String?
     public let tickIntervalSeconds: Double?
     public let supervisorSteps: [SupervisorStepView]
+    /// M1 WP2: which tier table the daemon is running. ``"owner_file"``
+    /// means a host-owned JSON was loaded; ``"default_fallback"`` means
+    /// the shipped defaults were used. ``nil`` on pre-WP2 daemons.
+    public let modelTiersSource: String?
 
     enum CodingKeys: String, CodingKey {
         case status
@@ -55,6 +59,7 @@ public struct HealthView: Decodable, Equatable, Sendable {
         case lastTickAt = "last_tick_at"
         case tickIntervalSeconds = "tick_interval_seconds"
         case supervisorSteps = "supervisor_steps"
+        case modelTiersSource = "model_tiers_source"
     }
 
     public init(from decoder: Decoder) throws {
@@ -64,6 +69,7 @@ public struct HealthView: Decodable, Equatable, Sendable {
         self.lastTickAt = try container.decodeIfPresent(String.self, forKey: .lastTickAt)
         self.tickIntervalSeconds = try container.decodeIfPresent(Double.self, forKey: .tickIntervalSeconds)
         self.supervisorSteps = try container.decodeIfPresent([SupervisorStepView].self, forKey: .supervisorSteps) ?? []
+        self.modelTiersSource = try container.decodeIfPresent(String.self, forKey: .modelTiersSource)
     }
 
     public var isCompatible: Bool { apiVersion == APIVersion.v1 }
@@ -131,6 +137,11 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
     public let schedulingPolicy: String?
     /// The target a MANUAL policy named at submit time.
     public let manualExecutionTargetId: String?
+    /// M1 WP2: minimum capability tier required for the dispatch target.
+    /// Defaults to ``"T1"`` (workhorse) on pre-WP2 daemons so existing
+    /// tasks render the picker at the same default without a separate
+    /// backwards-compat round-trip.
+    public let minTier: String?
 
     public var id: String { taskId }
 
@@ -147,6 +158,7 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
         case updatedAt = "updated_at"
         case schedulingPolicy = "scheduling_policy"
         case manualExecutionTargetId = "manual_execution_target_id"
+        case minTier = "min_tier"
     }
 
     public init(
@@ -161,7 +173,8 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
         createdAt: String,
         updatedAt: String,
         schedulingPolicy: String? = nil,
-        manualExecutionTargetId: String? = nil
+        manualExecutionTargetId: String? = nil,
+        minTier: String? = nil
     ) {
         self.taskId = taskId
         self.requestId = requestId
@@ -175,6 +188,7 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
         self.updatedAt = updatedAt
         self.schedulingPolicy = schedulingPolicy
         self.manualExecutionTargetId = manualExecutionTargetId
+        self.minTier = minTier
     }
 
     public init(from decoder: Decoder) throws {
@@ -193,6 +207,7 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
         manualExecutionTargetId = try container.decodeIfPresent(
             String.self, forKey: .manualExecutionTargetId
         )
+        minTier = try container.decodeIfPresent(String.self, forKey: .minTier)
     }
 }
 
@@ -396,6 +411,14 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
     public let executionVerifiedStale: Bool?
     public let runtimeAvailable: Bool?
     public let observedAvailability: ObservedAvailabilityView?
+    /// M1 WP2: capability tier for this target. ``nil`` means the
+    /// host-owned tier table could not classify the target — the
+    /// dashboard falls back to its "unknown" label and the
+    /// recommender assumes T1 in scoring.
+    public let tier: String?
+    /// One of ``"exact"`` / ``"glob"`` / ``"default"`` — lets the UI
+    /// label a pattern match as such.
+    public let tierMatchReason: String?
 
     public var id: String { executionTargetId }
     public var isExecutionVerified: Bool { executionVerified ?? false }
@@ -410,6 +433,52 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
         case executionVerifiedStale = "execution_verified_stale"
         case runtimeAvailable = "runtime_available"
         case observedAvailability = "observed_availability"
+        case tier
+        case tierMatchReason = "tier_match_reason"
+    }
+
+    public init(
+        executionTargetId: String,
+        modelSkuId: String,
+        runtimeId: String,
+        enabled: Bool,
+        executionVerified: Bool? = nil,
+        executionVerifiedStale: Bool? = nil,
+        runtimeAvailable: Bool? = nil,
+        observedAvailability: ObservedAvailabilityView? = nil,
+        tier: String? = nil,
+        tierMatchReason: String? = nil
+    ) {
+        self.executionTargetId = executionTargetId
+        self.modelSkuId = modelSkuId
+        self.runtimeId = runtimeId
+        self.enabled = enabled
+        self.executionVerified = executionVerified
+        self.executionVerifiedStale = executionVerifiedStale
+        self.runtimeAvailable = runtimeAvailable
+        self.observedAvailability = observedAvailability
+        self.tier = tier
+        self.tierMatchReason = tierMatchReason
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        executionTargetId = try container.decode(String.self, forKey: .executionTargetId)
+        modelSkuId = try container.decode(String.self, forKey: .modelSkuId)
+        runtimeId = try container.decode(String.self, forKey: .runtimeId)
+        enabled = try container.decode(Bool.self, forKey: .enabled)
+        executionVerified = try container.decodeIfPresent(Bool.self, forKey: .executionVerified)
+        executionVerifiedStale = try container.decodeIfPresent(
+            Bool.self, forKey: .executionVerifiedStale
+        )
+        runtimeAvailable = try container.decodeIfPresent(Bool.self, forKey: .runtimeAvailable)
+        observedAvailability = try container.decodeIfPresent(
+            ObservedAvailabilityView.self, forKey: .observedAvailability
+        )
+        tier = try container.decodeIfPresent(String.self, forKey: .tier)
+        tierMatchReason = try container.decodeIfPresent(
+            String.self, forKey: .tierMatchReason
+        )
     }
 }
 
@@ -1854,6 +1923,9 @@ public struct SubmitRequest: Encodable, Equatable, Sendable {
     public let schedulingPolicy: String?
     /// Only ever set alongside a `MANUAL` policy; the daemon rejects other pairings.
     public let manualExecutionTargetId: String?
+    /// M1 WP2: capability tier floor. ``nil`` (the SwiftUI default) means
+    /// the daemon normalises to ``"T1"`` (workhorse) at storage time.
+    public let minTier: String?
 
     enum CodingKeys: String, CodingKey {
         case taskId = "task_id"
@@ -1862,6 +1934,7 @@ public struct SubmitRequest: Encodable, Equatable, Sendable {
         case intent
         case schedulingPolicy = "scheduling_policy"
         case manualExecutionTargetId = "manual_execution_target_id"
+        case minTier = "min_tier"
     }
 
     public init(
@@ -1870,7 +1943,8 @@ public struct SubmitRequest: Encodable, Equatable, Sendable {
         projectId: String,
         intent: String,
         schedulingPolicy: String? = nil,
-        manualExecutionTargetId: String? = nil
+        manualExecutionTargetId: String? = nil,
+        minTier: String? = nil
     ) {
         self.taskId = taskId
         self.requestId = requestId
@@ -1878,6 +1952,7 @@ public struct SubmitRequest: Encodable, Equatable, Sendable {
         self.intent = intent
         self.schedulingPolicy = schedulingPolicy
         self.manualExecutionTargetId = manualExecutionTargetId
+        self.minTier = minTier
     }
 }
 
@@ -1997,6 +2072,14 @@ public struct DispatchRecommendationCandidate: Decodable, Equatable, Identifiabl
     public let sourcePressure: String?
     public let scoreComponents: [DispatchRecommendationScoreComponent]
     public let reasons: [String]
+    /// M1 WP2: capability tier for this candidate. ``nil`` when the
+    /// host-owned tier table could not classify the target (the
+    /// recommender assumes T1 in scoring and the reasons tuple records
+    /// ``tier_unknown_assumed_T1``).
+    public let tier: String?
+    /// One of ``"exact"`` / ``"glob"`` / ``"default"`` — lets the UI
+    /// label a pattern match as such.
+    public let tierMatchReason: String?
 
     public var id: String { executionTargetId }
     public var isExecutionVerifiedStale: Bool { executionVerifiedStale ?? false }
@@ -2016,6 +2099,8 @@ public struct DispatchRecommendationCandidate: Decodable, Equatable, Identifiabl
         case sourcePressure = "source_pressure"
         case scoreComponents = "score_components"
         case reasons
+        case tier
+        case tierMatchReason = "tier_match_reason"
     }
 
     public init(from decoder: Decoder) throws {
@@ -2036,6 +2121,8 @@ public struct DispatchRecommendationCandidate: Decodable, Equatable, Identifiabl
             [DispatchRecommendationScoreComponent].self, forKey: .scoreComponents
         ) ?? []
         reasons = try container.decodeIfPresent([String].self, forKey: .reasons) ?? []
+        tier = try container.decodeIfPresent(String.self, forKey: .tier)
+        tierMatchReason = try container.decodeIfPresent(String.self, forKey: .tierMatchReason)
     }
 }
 
