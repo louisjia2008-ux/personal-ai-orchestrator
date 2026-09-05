@@ -288,6 +288,12 @@ struct DispatchRecommendationRow: View {
                 if !candidate.scoreComponents.isEmpty {
                     DisclosureGroup("Score components") {
                         VStack(alignment: .leading, spacing: 2) {
+                            // M1 WP3 fix (F4): ``c.contribution`` is
+                            // now a computed ``weight × value`` —
+                            // the wire shape carries raw ``value``
+                            // and ``weight`` separately so a tuning
+                            // commit that changes either shows up on
+                            // the panel without a server round-trip.
                             ForEach(candidate.scoreComponents, id: \.name) { c in
                                 Text(componentLine(name: c.name, weight: c.weight, contribution: c.contribution))
                                     .font(.caption2.monospaced())

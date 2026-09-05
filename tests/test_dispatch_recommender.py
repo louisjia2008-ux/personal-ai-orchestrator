@@ -324,16 +324,21 @@ def test_target_below_min_tier_is_hard_eliminated_with_explicit_reason() -> None
 def test_target_above_min_tier_pays_a_gentle_capability_fit_penalty() -> None:
     """A T0 target for a T1 task is mildly penalised (capability_fit = 0.9).
 
-    The penalty shows up in the ``quality_capability_fit`` score component
-    on the admitted evaluation. M1 WP3 folds the legacy
-    ``* 25.0`` scaling into the quality-value term itself, so the
-    numeric assertion pins the post-WP3 arithmetic directly.
+    The penalty shows up in the ``quality_capability_fit`` score
+    component on the admitted evaluation. M1 WP3 fix (F2) makes
+    ``capability_fit`` a pure tier function — the legacy
+    ``freshness / 5.0`` folding is gone, so the numeric assertion
+    pins the post-F2 arithmetic directly (``quality_weight ×
+    capability_fit``; freshness rides on its own row in the same
+    Σ-identity).
     """
 
-    # Use a target with no recent evidence so the freshness
-    # contribution is -1.0 (clamped). That way the score-component
-    # value is ``capability_fit - 1.0`` and the multiplier check is
-    # exact.
+    # Pre-F2 used ``age_days=30`` to make freshness deterministic
+    # (clamped at -5.0). Post-F2 freshness rides on its own row
+    # but the helper still returns -5.0 for missing or stale
+    # evidence; the assertion below targets only the
+    # ``quality_capability_fit`` row so the freshness value is
+    # irrelevant.
     t0 = _tier_candidate(
         "flagship/m9", tier=ModelTier.T0, tier_match_reason="exact", age_days=30,
     )
@@ -349,10 +354,14 @@ def test_target_above_min_tier_pays_a_gentle_capability_fit_penalty() -> None:
             e for e in result.evaluations if e.execution_target_id == "flagship/m9"
         ).score_components
     }
-    # quality_weight=0.7 for BALANCED; capability_fit=0.9;
-    # quality_value = 0.9 + (-5.0)/5 = -0.1.
-    # component = 0.7 * -0.1 = -0.07.
-    assert abs(components["quality_capability_fit"] - (-0.07)) < 1e-9
+    # quality_weight=0.7 for BALANCED; capability_fit=0.9 (T0
+    # above T1 floor: 1.0 - 0.1 * 1); no freshness folding. The
+    # raw value is 0.9 and ``weight`` carries the multiplier.
+    # Pre-F2 the row read ``-0.07`` because freshness (-5.0) was
+    # folded into the value at ``/5.0``; the F2 fix separates
+    # them so the row reads ``0.9`` and the freshness row reads
+    # ``-5.0`` on its own.
+    assert abs(components["quality_capability_fit"] - 0.9) < 1e-9
 
 
 def test_tier_unknown_is_treated_as_T1_and_recorded_in_reasons() -> None:
@@ -521,36 +530,57 @@ def test_stale_source_pressure_term_is_zero_with_reason() -> None:
 def test_score_identity_holds_for_recommender() -> None:
     """``Σ weight × value == core_score`` for one candidate.
 
-    The recommender path mirrors the scheduler path: same five
-    weight-named components, same Σ identity. A future tuning commit
-    must touch ``test_objective_weights_returns_scoreweights_dataclass``
-    in lock-step.
+    M1 WP3 fix (F2 + F4): the recommender emits the **same six**
+    weight-named components the scheduler does, and each
+    component row is the **raw unweighted value** the Σ identity
+    is built from. The test iterates ``score_components`` and
+    multiplies each row's ``value`` by its ``weight``; the sum
+    must equal the rank score (modulo the UNKNOWN-availability
+    penalty the recommender applies outside the Σ).
     """
 
-    objective_weights(RoutingObjective.BALANCED)  # noqa: F841 — pins the table
+    from personal_ai_orchestrator.scheduler import FRESHNESS_WEIGHT
+
     candidate = _candidate(
         "p/m",
         remaining=(0.6, 0.6),
         windows=(_weekly_window(used_fraction=0.4),),
         age_days=30,  # freshness=-5 so the value contribution is deterministic
     )
-    score, components, _ = _score(
-        candidate,
+    result = recommend_owner_dispatch(
+        [candidate],
         policy=RoutingObjective.BALANCED,
         now=FIXED_NOW,
         min_tier=ModelTier.T1,
     )
-    # ``components`` from ``_score`` is a tuple of ``(name, value)``
-    # pairs where ``value`` is **already weighted** (``weight ×
-    # underlying value`` baked in). The Σ identity the test pins is
-    # therefore ``Σ component_value == score``. The scheduler path
-    # surfaces ``value`` separately from ``weight`` on the wire; the
-    # recommender keeps them folded in ``value`` for backwards
-    # compatibility with the legacy ``score_components`` consumer.
-    expected = sum(value for _, value in components)
-    # Subtract the UNKNOWN-availability penalty if present (the
-    # only score-modifier outside the five-term Σ).
-    assert abs(score - expected) < 1e-9
+    top = result.top_pick
+    assert top is not None
+    # The Σ-identity covers exactly the six weight-named rows. The
+    # scheduler path appends ``legacy_nudge`` rows for shadow
+    # compatibility (the recommender does not); either way the
+    # identity is on the six named ones.
+    core_names = {
+        "quality_capability_fit",
+        "pressure_term",
+        "headroom_min",
+        "latency_log",
+        "cost_log",
+        "freshness",
+    }
+    core_rows = [c for c in top.score_components if c.name in core_names]
+    assert {c.name for c in core_rows} == core_names
+    expected = sum(
+        (c.value or 0.0) * (c.weight or 0.0) for c in core_rows
+    )
+    # The recommender subtracts ``8.0`` when ``availability_state
+    # is UNKNOWN``; the fixture's candidate is
+    # ``AVAILABLE_OBSERVED`` so the penalty does not fire.
+    assert abs((top.score or 0.0) - expected) < 1e-9
+    # Sanity: the freshness row carries ``FRESHNESS_WEIGHT`` and
+    # the freshness value is the helper's -5.0 for stale evidence.
+    freshness_row = next(c for c in core_rows if c.name == "freshness")
+    assert freshness_row.weight == FRESHNESS_WEIGHT
+    assert freshness_row.value == -5.0
 
 
 def test_recommend_owner_dispatch_is_deterministic() -> None:

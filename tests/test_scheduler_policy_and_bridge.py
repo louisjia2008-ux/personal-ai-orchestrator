@@ -581,16 +581,21 @@ def test_scoreweights_is_public_and_frozen() -> None:
 def test_score_candidate_weight_value_equals_core_score_sum() -> None:
     """``Σ weight × value == core_score`` is the WP3 scoring identity.
 
-    The five weight-named ``ScoreComponent`` rows multiply to exactly
-    ``core_score``; legacy nudges (``membership_weight_bonus``,
+    M1 WP3 fix (F2): the ``Σ weight × value == core_score``
+    identity now holds over the **six** weight-named components
+    (quality, pressure, headroom, latency, cost, freshness); the
+    legacy nudges (``membership_weight_bonus``,
     ``priority_penalty``, ``success_prior_bonus``, ``scarcity_*``)
-    are appended separately and do NOT enter the identity. The test
-    pins the invariant: a future tuning commit that wants to change
-    weights must touch ``test_objective_weights_returns_scoreweights_dataclass``
-`` in lock-step.
+    are appended separately and do NOT enter the identity. The
+    test iterates the six weight-named rows and asserts the
+    identity; a future tuning commit that wants to change
+    weights must touch
+    ``test_objective_weights_returns_scoreweights_dataclass`` in
+    lock-step.
     """
 
     weights = objective_weights(RoutingObjective.BALANCED)
+    freshness_weight = 0.2  # M1 WP3 fix (F2) — see scheduler.FRESHNESS_WEIGHT
     core_components = (
         ScoreComponent(name="quality_capability_fit", value=0.5,
                        confidence=EvidenceConfidence.EXACT,
@@ -610,30 +615,10 @@ def test_score_candidate_weight_value_equals_core_score_sum() -> None:
                        confidence=EvidenceConfidence.ESTIMATED,
                        source="target_telemetry.expected_cost_to_green_usd",
                        weight=weights.cost),
-    )
-    # ``latency`` and ``cost`` contribute positively to the
-    # ``Σ weight × value`` identity; the scheduler subtracts them in
-    # the final total. The test asserts the identity only, not the
-    # signed total.
-    core_components = (
-        ScoreComponent(name="quality_capability_fit", value=0.5,
-                       confidence=EvidenceConfidence.EXACT,
-                       source="registry.capabilities", weight=weights.quality),
-        ScoreComponent(name="pressure_term", value=0.2,
-                       confidence=EvidenceConfidence.EXACT,
-                       source="burn_curve.weekly", weight=weights.pressure),
-        ScoreComponent(name="headroom_min", value=0.4,
-                       confidence=EvidenceConfidence.EXACT,
-                       source="quota_window.minimum_remaining_fraction",
-                       weight=weights.headroom),
-        ScoreComponent(name="latency_log", value=0.1,
+        ScoreComponent(name="freshness", value=2.0,
                        confidence=EvidenceConfidence.ESTIMATED,
-                       source="target_telemetry.expected_latency_ms",
-                       weight=weights.latency),
-        ScoreComponent(name="cost_log", value=0.05,
-                       confidence=EvidenceConfidence.ESTIMATED,
-                       source="target_telemetry.expected_cost_to_green_usd",
-                       weight=weights.cost),
+                       source="execution_evidence.age",
+                       weight=freshness_weight),
     )
     identity = sum(c.value * c.weight for c in core_components)
     expected = (
@@ -642,8 +627,58 @@ def test_score_candidate_weight_value_equals_core_score_sum() -> None:
         + weights.headroom * 0.4
         + weights.latency * 0.1
         + weights.cost * 0.05
+        + freshness_weight * 2.0
     )
     assert abs(identity - expected) < 1e-9
+
+
+def test_score_candidate_emits_six_weight_named_components() -> None:
+    """``_score_candidate`` now produces exactly six weight-named rows.
+
+    M1 WP3 fix (F2): the freshness row joins the five pre-existing
+    weight-named rows. The test guards against accidental renames
+    or removals; the legacy ``auxiliary_terms`` (membership
+    weight, priority penalty, success prior, scarcity surplus /
+    conserve) are appended separately with ``weight=None`` and are
+    not part of this assertion.
+    """
+
+    weights = objective_weights(RoutingObjective.BALANCED)
+    score, components = _score_candidate(
+        capability_fit=0.5,
+        priority=1,
+        # Zero membership weight + zero priority penalty so the
+        # auxiliary score is empty and the Σ identity covers the
+        # whole rank score.
+        membership_weight=0.0,
+        pace=None,
+        telemetry=TargetTelemetry(),
+        objective=RoutingObjective.BALANCED,
+        pressure_term=0.2,
+        headroom_min=0.4,
+        freshness_observed_at=NOW - timedelta(days=1),
+        score_now=NOW,
+    )
+    weight_names = {"quality_capability_fit", "pressure_term", "headroom_min",
+                    "latency_log", "cost_log", "freshness"}
+    weight_rows = [c for c in components if c.name in weight_names]
+    assert {c.name for c in weight_rows} == weight_names
+    # Each weight-named row carries the matching weight from the
+    # preset (or ``FRESHNESS_WEIGHT`` for ``freshness``).
+    by_name = {c.name: c for c in weight_rows}
+    assert by_name["quality_capability_fit"].weight == weights.quality
+    assert by_name["pressure_term"].weight == weights.pressure
+    assert by_name["headroom_min"].weight == weights.headroom
+    assert by_name["latency_log"].weight == weights.latency
+    assert by_name["cost_log"].weight == weights.cost
+    assert by_name["freshness"].weight == 0.2
+    # Σ identity over the six named rows.
+    identity = sum(
+        (c.value or 0.0) * (c.weight or 0.0) for c in weight_rows
+    )
+    # The pre-known identity: with no membership/priority/scarcity
+    # nudges, the score equals the identity.
+    assert abs(score - identity) < 1e-9
 
 
 def test_score_candidate_determinism() -> None:
