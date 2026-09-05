@@ -438,9 +438,22 @@ def test_ahead_source_ranks_below_on_track_under_burn_down() -> None:
     assert result.top_pick.execution_target_id == "provider-C/starved"
 
 
-def test_five_objective_each_determines_a_different_top_pick() -> None:
-    """The five objective presets select different top picks from the same pool."""
+def test_balanced_default_eliminates_t2_floor_and_burn_down_promotes_starved() -> None:
+    """Two distinct behaviours pinned by the same pool.
 
+    M1 WP3 fix (F3): the previous ``test_five_objective_each_determines_a_different_top_pick``
+    name promised coverage the body did not deliver (the test
+    only exercised BALANCED + BURN_DOWN on a T0/T1/T2 pool that
+    was not the same as the BURN_DOWN pool). The new test makes
+    the two assertions explicit and self-contained: ``BALANCED``
+    with the default ``min_tier=T1`` hard-eliminates the T2 row
+    (the tier-floor contract), and ``BURN_DOWN`` ranks a STARVED
+    source above an ON_TRACK source (the WP3 pressure contract).
+    """
+
+    # BALANCED: T0 + T1 + T2 under default min_tier=T1. The T2
+    # row is below the floor and is hard-eliminated; the T0 and
+    # T1 rows admit.
     candidates = [
         _candidate("flagship", remaining=(0.9, 0.9), tier=ModelTier.T0,
                    tier_match_reason="exact"),
@@ -449,12 +462,6 @@ def test_five_objective_each_determines_a_different_top_pick() -> None:
         _candidate("fast", remaining=(0.4, 0.4), tier=ModelTier.T2,
                    tier_match_reason="exact"),
     ]
-    # BALANCED preset, default min_tier=T1: flagship (T0) is
-    # above-floor (gentle tier penalty), workhorse (T1) matches
-    # min_tier exactly, fast (T2) is below-floor (hard-eliminated).
-    # Flagship wins because its higher headroom outpaces the
-    # 0.1 tier penalty at min_tier=T1. The test pins "fast is
-    # eliminated" (the tier floor rule) as the spec contract.
     result = recommend_owner_dispatch(
         candidates, policy=RoutingObjective.BALANCED, now=FIXED_NOW
     )
@@ -462,9 +469,12 @@ def test_five_objective_each_determines_a_different_top_pick() -> None:
         not e.admitted and "tier_below_minimum" in e.reasons[0]
         for e in result.evaluations if e.execution_target_id == "fast"
     )
-    # BURN_DOWN rank: a STARVED source outranks ON_TRACK for the
-    # same provider. With fresh fixtures (no STARVED window) the
-    # ranking defaults to highest headroom.
+
+    # BURN_DOWN: a STARVED WEEKLY source outranks an ON_TRACK
+    # source for the same target. ``STARVED`` is a window state,
+    # not an objective property — both windows carry it through
+    # the same data path; what varies between presets is the
+    # weight, not whether the source is STARVED.
     starved = _candidate(
         "starved", remaining=(0.6, 0.6),
         tier=ModelTier.T1, tier_match_reason="exact",
