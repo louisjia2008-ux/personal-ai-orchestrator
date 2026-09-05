@@ -19,7 +19,12 @@ interval. The contract is deliberately small:
   from throttled mode). Heartbeats do not write audit by design;
 - the heartbeat step is registered automatically and updates an
   in-memory ``DaemonSupervisorSnapshot`` that ``/v1/health`` reads. No
-  SQLite touch on the hot path.
+  SQLite touch on the hot path;
+- the injected ``clock`` must return a tz-aware ``datetime`` in UTC;
+  the supervisor validates it **at construction** and re-validates on
+  every tick. A naive clock is fatal in both places — silently
+  skipping ticks would leave the daemon alive but never tick, which
+  is the worst "false alive" failure mode for the dashboard.
 
 WP0 keeps a single ``heartbeat`` step registered; WP1 will add the
 quota-pressure + backoff + supervised-auto periodic steps behind the
@@ -132,6 +137,12 @@ class DaemonSupervisor:
     ) -> None:
         if interval_seconds <= 0:
             raise ValueError("interval_seconds must be > 0")
+        # Fail-fast on a naive clock at construction. A supervisor that
+        # silently drops every tick because its clock is broken leaves
+        # the daemon alive but never advancing ``last_tick_at`` — that
+        # is the worst "false alive" failure mode the dashboard can
+        # surface, so we reject it before the daemon thread starts.
+        _require_utc(clock())
         self._interval = float(interval_seconds)
         self._clock: Callable[[], datetime] = clock
         self._audit_store = audit_store
@@ -166,15 +177,11 @@ class DaemonSupervisor:
         """
         while not stop.is_set():
             tick_started_monotonic = time.monotonic()
-            try:
-                tick_at = _require_utc(self._clock())
-            except ValueError:
-                # Clock returned a naive datetime. Treat the tick as
-                # failed but keep the loop alive — the daemon owner
-                # should fix their clock, not crash the daemon.
-                LOG.warning("supervisor clock returned a naive datetime; skipping tick")
-                self._sleep_remaining(stop, tick_started_monotonic)
-                continue
+            # Defensive: ``__init__`` already validated ``clock``, but a
+            # clock that later flips to naive (e.g. someone replaced
+            # the default with a wall-clock that loses tz) must surface
+            # as a daemon failure rather than a silent tick skip.
+            tick_at = _require_utc(self._clock())
             self._run_tick(tick_at)
             self._sleep_remaining(stop, tick_started_monotonic)
 
