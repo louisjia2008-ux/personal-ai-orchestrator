@@ -278,6 +278,17 @@ class SafetyKernelStore:
             (task_id, event_type, _json(payload), _now()),
         )
 
+    def record_system_event(self, event_type: str, payload: Any) -> None:
+        """Public entry for non-task host events (daemon supervisor, etc.).
+
+        The audit_events table accepts ``task_id = NULL`` for events that
+        do not belong to any one task (e.g. supervisor step failures, backoff
+        transitions, periodic reconciliation sweeps). Cross-module callers
+        must use this wrapper instead of reaching into the private
+        ``_audit`` directly so the system-event contract stays in one place.
+        """
+        self._audit(task_id=None, event_type=event_type, payload=payload)
+
     def register_project(
         self,
         *,
