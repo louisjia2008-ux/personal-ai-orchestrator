@@ -31,7 +31,11 @@ from personal_ai_orchestrator.model_registry import QuotaWindowKind
 from personal_ai_orchestrator.quota_availability import (
     QuotaAvailabilityState,
 )
-from personal_ai_orchestrator.quota_burn import BurnPressure, assess
+from personal_ai_orchestrator.quota_burn import (
+    BurnPressure,
+    assess,
+    infer_window_started_at,
+)
 from personal_ai_orchestrator.scheduler import (
     CandidateEvaluation,
     RoutingObjective,
@@ -91,10 +95,10 @@ def source_pressure_for(
     """Pick the WEEKLY window and return its ``assess`` pressure.
 
     No WEEKLY window → ``UNMETERED``. A WEEKLY window without the data
-    ``assess`` needs (no ``reset_at`` for the kind, missing
+    ``assess`` needs (no canonical duration for the kind, missing
     ``used_fraction``, etc.) also surfaces as ``UNMETERED`` because
-    :class:`QuotaWindowSnapshot.burn`'s short-circuits do. The function
-    never raises on partial observation — the same fail-closed contract
+    ``QuotaWindowSnapshot.burn``'s short-circuits do. The function never
+    raises on partial observation — the same fail-closed contract
     ``assess`` honours at the lowest layer.
     """
 
@@ -106,11 +110,10 @@ def source_pressure_for(
         kind_duration = weekly.kind.duration_seconds()
         if kind_duration is None:
             return BurnPressure.UNMETERED
-        # Mirror ``infer_window_started_at``'s logic without depending on
-        # the helper — keeps this function standalone-testable.
-        from datetime import timedelta as _timedelta
-
-        started_at = weekly.reset_at - _timedelta(seconds=kind_duration)
+        started_at = infer_window_started_at(
+            reset_at=weekly.reset_at,
+            duration_seconds=kind_duration,
+        )
     assessment = assess(
         window_started_at=started_at,
         reset_at=weekly.reset_at,

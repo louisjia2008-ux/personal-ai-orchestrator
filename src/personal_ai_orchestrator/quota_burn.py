@@ -28,8 +28,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 
-from personal_ai_orchestrator.model_registry import QuotaWindowKind
-
 
 class BurnPressure(StrEnum):
     """Classification of one window's burn curve at ``now``.
@@ -92,21 +90,28 @@ def _coerce_used_fraction(used_fraction: float | None) -> float | None:
 
 
 def infer_window_started_at(
-    *, reset_at: datetime, kind: QuotaWindowKind
+    *, reset_at: datetime, duration_seconds: float
 ) -> datetime:
-    """Infer ``reset_at - duration(kind)`` for windows the collector omits.
+    """Infer ``reset_at - duration_seconds`` for windows the collector omits.
 
-    Raises ``ValueError`` for kinds with no canonical duration (``UNKNOWN``,
-    ``CUSTOM``). The caller is expected to check ``kind.duration_seconds()``
-    is not ``None`` first and treat those kinds as ``UNMETERED`` instead
-    of routing here.
+    The kind → duration lookup lives in :mod:`model_registry`; callers
+    pass the resolved seconds in. Keeping this module free of any
+    project-internal import lets it sit at the bottom of the dependency
+    DAG (``quota_burn ← model_registry ← dispatch_recommender``) without
+    a cycle.
+
+    Raises ``ValueError`` when ``duration_seconds <= 0`` — a non-positive
+    duration means the caller forgot to short-circuit on
+    ``kind.duration_seconds() is None``. The error mentions the field
+    name so the call site is obvious in a stack trace.
     """
 
     _require_aware(reset_at, field_name="reset_at")
-    duration = kind.duration_seconds()
-    if duration is None:
-        raise ValueError(f"no inferable start for window_kind={kind.value}")
-    return reset_at - timedelta(seconds=duration)
+    if duration_seconds <= 0.0:
+        raise ValueError(
+            "duration_seconds must be > 0; check kind.duration_seconds() first"
+        )
+    return reset_at - timedelta(seconds=duration_seconds)
 
 
 def assess(
