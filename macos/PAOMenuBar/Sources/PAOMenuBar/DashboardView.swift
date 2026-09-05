@@ -351,6 +351,11 @@ private struct NewTaskSheet: View {
         "BALANCED", "QUALITY_FIRST", "QUOTA_SAVER", "SPEED_FIRST", "MANUAL",
     ]
 
+    /// M1 WP2: tier floor options. Order matters for the menu — T0 at
+    /// the top, T3 at the bottom — so the default ``T1`` selection
+    /// lives in the middle of the list.
+    private static let selectableTiers = ["T0", "T1", "T2", "T3"]
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(L10n.newTaskTitle)
@@ -382,6 +387,20 @@ private struct NewTaskSheet: View {
             }
             .pickerStyle(.menu)
             Text(L10n.schedulingPolicyDetail(store.selectedSchedulingPolicy))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // M1 WP2: tier floor picker. Defaults to T1 (workhorse) so
+            // existing user behaviour is preserved; an owner who wants
+            // to pin a flagship-only task picks T0.
+            Picker(L10n.newTaskMinTier, selection: $store.selectedMinTier) {
+                ForEach(Self.selectableTiers, id: \.self) { tier in
+                    Text(L10n.tierLabel(tier)).tag(tier)
+                }
+            }
+            .pickerStyle(.menu)
+            Text(L10n.newTaskMinTierHelp)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

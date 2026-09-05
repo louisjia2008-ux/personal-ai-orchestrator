@@ -273,6 +273,16 @@ struct DispatchRecommendationRow: View {
                 }
             }
             Spacer(minLength: 0)
+            // M1 WP2: tier chip on the recommendation row. Same
+            // neutral tone and SF Symbol map as the Resources-page
+            // target row so the two chip renderers stay in sync.
+            if let tier = candidate.tier {
+                ResourceChip(
+                    text: L10n.tierLabel(tier),
+                    tone: .neutral,
+                    symbol: tierSymbol(tier)
+                )
+            }
             if candidate.admitted {
                 Button(L10n.dispatch, action: onDispatch)
                     .buttonStyle(.borderedProminent)
@@ -280,6 +290,19 @@ struct DispatchRecommendationRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    /// M1 WP2: SF Symbol for the tier chip on the recommendation row.
+    /// Mirrors :func:`ExecutionTargetRow.tierSymbol` on the Resources
+    /// page so a single chip shape covers both surfaces.
+    private func tierSymbol(_ tier: String) -> String {
+        switch tier {
+        case "T0": return "bolt.fill"
+        case "T1": return "gearshape.fill"
+        case "T2": return "hare.fill"
+        case "T3": return "leaf.fill"
+        default: return "questionmark.circle"
+        }
     }
 }
 struct TaskRoutingReadinessNotice: View {

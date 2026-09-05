@@ -85,6 +85,11 @@ public final class OrchestratorStore: ObservableObject {
     @Published public var selectedProjectId: String?
     @Published public var selectedSchedulingPolicy: String = "BALANCED"
     @Published public var selectedManualExecutionTargetId: String?
+    /// M1 WP2: tier floor for new submits. Defaults to ``"T1"`` so
+    /// existing tasks and pre-WP2 storage read cleanly. Picker
+    /// changes flow into ``SubmitRequest.minTier``; the daemon
+    /// normalises to "T1" on None.
+    @Published public var selectedMinTier: String = "T1"
 
     /// Whether the dashboard binary and the connected daemon came from the same
     /// commit. Surfaced in Settings so stale-stack truth is never presented as live.
@@ -574,7 +579,8 @@ public final class OrchestratorStore: ObservableObject {
             projectId: projectId,
             intent: trimmed,
             schedulingPolicy: policy,
-            manualExecutionTargetId: manualTarget
+            manualExecutionTargetId: manualTarget,
+            minTier: selectedMinTier
         )
         do {
             let task = try await client.submit(request)

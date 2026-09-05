@@ -46,6 +46,19 @@ struct ExecutionTargetRow: View {
     /// scheduler would refuse.
     private var isRunnable: Bool { target.enabled && target.isExecutionVerified }
 
+    /// M1 WP2: SF Symbol for the tier chip. ``bolt`` (T0), ``gear``
+    /// (T1), ``hare`` (T2), ``leaf`` (T3). ``questionmark.circle``
+    /// for any string the table could not classify.
+    private func tierSymbol(_ tier: String) -> String {
+        switch tier {
+        case "T0": return "bolt.fill"
+        case "T1": return "gearshape.fill"
+        case "T2": return "hare.fill"
+        case "T3": return "leaf.fill"
+        default: return "questionmark.circle"
+        }
+    }
+
     /// The observed availability, when the daemon recorded one. Absent
     /// availability is `unknown`, never healthy.
     private var availability: StatusPresentation {
@@ -68,6 +81,15 @@ struct ExecutionTargetRow: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
+                // M1 WP2: tier chip. Always neutral tone — the tier
+                // is a property of the target, not an alert.
+                if let tier = target.tier {
+                    ResourceChip(
+                        text: L10n.tierLabel(tier),
+                        tone: .neutral,
+                        symbol: tierSymbol(tier)
+                    )
+                }
                 ResourceChip(
                     text: isRunnable ? "VERIFIED" : "UNVERIFIED",
                     tone: isRunnable ? .positive : .caution,
