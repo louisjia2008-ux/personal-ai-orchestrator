@@ -10,6 +10,14 @@ and the policy weights redistribute into the signals it does know —
 quota headroom, evidence freshness, runtime availability. The reasoning
 is reported per candidate, so the owner can see what was and was not
 considered.
+
+M1 WP1 adds ``CandidateWindowInput`` and ``DispatchCandidateInput.windows``:
+the per-window data the recommender (and the card-rendering
+``source_pressure`` shim) needs to call ``quota_burn.assess`` for one
+window at a time. ``source_pressure_for`` is the pure function both the
+recommender and the dashboard will read; it sits here rather than in
+``quota_burn`` so it can speak ``DispatchCandidateInput`` without
+``quota_burn`` knowing what a dispatch candidate is.
 """
 
 from __future__ import annotations
@@ -19,15 +27,34 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, Mapping, Sequence
 
+from personal_ai_orchestrator.model_registry import QuotaWindowKind
 from personal_ai_orchestrator.quota_availability import (
     QuotaAvailabilityState,
 )
+from personal_ai_orchestrator.quota_burn import BurnPressure, assess
 from personal_ai_orchestrator.scheduler import (
     CandidateEvaluation,
     RoutingObjective,
     _objective_weights,
     _score_candidate,
 )
+
+
+@dataclass(frozen=True)
+class CandidateWindowInput:
+    """One observed quota window for a dispatch candidate.
+
+    Stripped of the ``duration_seconds`` / ``confidence`` /
+    ``measurement_source`` metadata on :class:`QuotaWindowSnapshot` —
+    only the three fields the burn truth table needs. Lives here rather
+    than in :mod:`quota_burn` so the burn module never has to learn the
+    dispatch shape.
+    """
+
+    kind: QuotaWindowKind
+    window_started_at: datetime | None
+    reset_at: datetime
+    used_fraction: float | None
 
 
 @dataclass(frozen=True)
@@ -47,12 +74,50 @@ class DispatchCandidateInput:
     # Observed quota windows for this target (e.g. 5h + weekly remaining
     # fractions). Empty list means "no observation was reported".
     remaining_fractions: tuple[float, ...] = ()
+    # M1 WP1: per-window observation the recommender / card can pass to
+    # ``quota_burn.assess``. Empty tuple is the no-observation default.
+    windows: tuple[CandidateWindowInput, ...] = ()
     # Evidence freshness: when the target last passed a real worker
     # invocation. ``None`` means never or stale beyond the cap.
     evidence_observed_at: datetime | None = None
     # Availability state from the quota admission journal. ``UNKNOWN``
     # when no journal entry exists.
     availability_state: QuotaAvailabilityState = QuotaAvailabilityState.UNKNOWN
+
+
+def source_pressure_for(
+    windows: Sequence[CandidateWindowInput], *, now: datetime
+) -> BurnPressure:
+    """Pick the WEEKLY window and return its ``assess`` pressure.
+
+    No WEEKLY window → ``UNMETERED``. A WEEKLY window without the data
+    ``assess`` needs (no ``reset_at`` for the kind, missing
+    ``used_fraction``, etc.) also surfaces as ``UNMETERED`` because
+    :class:`QuotaWindowSnapshot.burn`'s short-circuits do. The function
+    never raises on partial observation — the same fail-closed contract
+    ``assess`` honours at the lowest layer.
+    """
+
+    weekly = next((w for w in windows if w.kind is QuotaWindowKind.WEEKLY), None)
+    if weekly is None:
+        return BurnPressure.UNMETERED
+    started_at = weekly.window_started_at
+    if started_at is None:
+        kind_duration = weekly.kind.duration_seconds()
+        if kind_duration is None:
+            return BurnPressure.UNMETERED
+        # Mirror ``infer_window_started_at``'s logic without depending on
+        # the helper — keeps this function standalone-testable.
+        from datetime import timedelta as _timedelta
+
+        started_at = weekly.reset_at - _timedelta(seconds=kind_duration)
+    assessment = assess(
+        window_started_at=started_at,
+        reset_at=weekly.reset_at,
+        used_fraction=weekly.used_fraction,
+        now=now,
+    )
+    return assessment.pressure
 
 
 @dataclass(frozen=True)
@@ -216,7 +281,9 @@ def _component(name: str, contribution: float) -> "ScoreComponent":
 
 
 __all__ = [
+    "CandidateWindowInput",
     "DispatchCandidateInput",
     "DispatchRecommendation",
     "recommend_owner_dispatch",
+    "source_pressure_for",
 ]

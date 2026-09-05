@@ -50,8 +50,10 @@ from personal_ai_orchestrator.provider_registry_manager import (
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal, QuotaAvailabilityState
 from personal_ai_orchestrator.scheduler import RoutingObjective
 from personal_ai_orchestrator.dispatch_recommender import (
+    CandidateWindowInput,
     DispatchCandidateInput,
     recommend_owner_dispatch,
+    source_pressure_for,
 )
 from personal_ai_orchestrator.quota_equivalent_capacity import (
     EquivalentCapacityEstimate,
@@ -222,6 +224,12 @@ class DispatchRecommendationCandidate(_ViewModel):
     #: recommendation panel surface the staleness alongside the score.
     execution_verified_stale: bool = False
     quota_state: str | None = None
+    #: M1 WP1 burn pressure for this candidate's WEEKLY window at the
+    #: handler's ``now``. Mirrors the provider-card-level
+    #: ``source_pressure`` field. ``None`` until commit 4 wires the
+    #: recommender pipeline; we still surface it here so the dashboard
+    #: can render the chip alongside the score without a second API call.
+    source_pressure: str | None = None
     score_components: tuple[DispatchRecommendationScoreComponent, ...] = ()
     reasons: tuple[str, ...] = ()
 
@@ -1653,12 +1661,16 @@ class ControlPlaneService:
             ) from error
 
         candidates = self._collect_dispatch_candidates()
+        # One ``now`` shared by the score path and the per-candidate
+        # source_pressure projection, so the score and the chip agree on
+        # the same instant even if the request takes ~1 ms to render.
+        now = datetime.now(UTC)
         recommendation = recommend_owner_dispatch(
-            candidates, policy=policy, now=datetime.now(UTC)
+            candidates, policy=policy, now=now
         )
 
         candidate_views = tuple(
-            self._dispatch_recommendation_candidate_view(evaluation, candidates)
+            self._dispatch_recommendation_candidate_view(evaluation, candidates, now=now)
             for evaluation in recommendation.evaluations
         )
         top = recommendation.top_pick
@@ -1700,6 +1712,11 @@ class ControlPlaneService:
         # are pool-scoped; every target of one provider inherits the
         # windows of every pool that belongs to that provider's plans.
         remaining_by_provider: dict[str, list[float]] = {}
+        # M1 WP1: per-window snapshots keyed by provider_id. ``source_pressure``
+        # needs the kind + reset_at + used_fraction, not just the remaining
+        # fraction. Empty for providers the quota refresh service has not
+        # read yet (e.g. before the first ``refresh_quota`` call).
+        windows_by_provider: dict[str, list[CandidateWindowInput]] = {}
         # Quota window fractions do NOT live on the static registry. They
         # are populated by the live quota refresh service and cached on
         # disk; the providers() and quota() views both read from there.
@@ -1712,6 +1729,20 @@ class ControlPlaneService:
                 if snapshot is None:
                     continue
                 for window in snapshot.windows:
+                    if window.reset_at is None:
+                        # ``source_pressure`` short-circuits on missing
+                        # reset_at anyway; don't bother carrying it through.
+                        continue
+                    windows_by_provider.setdefault(
+                        observation.provider_id, []
+                    ).append(
+                        CandidateWindowInput(
+                            kind=window.window_kind,
+                            window_started_at=window.window_started_at,
+                            reset_at=window.reset_at,
+                            used_fraction=window.used_fraction,
+                        )
+                    )
                     fraction = window.remaining_fraction
                     if fraction is None:
                         continue
@@ -1763,6 +1794,7 @@ class ControlPlaneService:
                     verified=bool(verified),
                     verified_stale=verified_stale,
                     remaining_fractions=remaining,
+                    windows=tuple(windows_by_provider.get(provider_id, ())),
                     evidence_observed_at=evidence_observed_at,
                     availability_state=availability_state,
                 )
@@ -1771,7 +1803,10 @@ class ControlPlaneService:
 
     @staticmethod
     def _dispatch_recommendation_candidate_view(
-        evaluation, candidates: list[DispatchCandidateInput]
+        evaluation,
+        candidates: list[DispatchCandidateInput],
+        *,
+        now: datetime,
     ) -> DispatchRecommendationCandidate:
         inputs = next(
             (c for c in candidates if c.execution_target_id == evaluation.execution_target_id),
@@ -1798,6 +1833,11 @@ class ControlPlaneService:
                 inputs.availability_state.value
                 if inputs else None
             ),
+            source_pressure=(
+                source_pressure_for(inputs.windows, now=now)
+                if inputs is not None
+                else None
+            ).value,
             score_components=tuple(
                 DispatchRecommendationScoreComponent(
                     name=component.name,

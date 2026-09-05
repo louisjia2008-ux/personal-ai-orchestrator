@@ -13,10 +13,14 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from personal_ai_orchestrator.dispatch_recommender import (
+    CandidateWindowInput,
     DispatchCandidateInput,
     recommend_owner_dispatch,
+    source_pressure_for,
 )
+from personal_ai_orchestrator.model_registry import QuotaWindowKind
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityState
+from personal_ai_orchestrator.quota_burn import BurnPressure
 from personal_ai_orchestrator.scheduler import RoutingObjective
 
 
@@ -150,3 +154,87 @@ def test_score_components_record_what_was_counted():
     assert any(
         c.name == "quality_capability_fit" for c in result.top_pick.score_components
     )
+
+
+# ---------------------------------------------------------------------------
+# M1 WP1 — CandidateWindowInput + source_pressure_for pipeline
+# ---------------------------------------------------------------------------
+
+
+def _weekly_window(
+    *, used_fraction: float | None, reset_in_hours: float = 24.0
+) -> CandidateWindowInput:
+    return CandidateWindowInput(
+        kind=QuotaWindowKind.WEEKLY,
+        window_started_at=FIXED_NOW,
+        reset_at=FIXED_NOW + timedelta(hours=reset_in_hours),
+        used_fraction=used_fraction,
+    )
+
+
+def test_dispatch_candidate_input_windows_defaults_to_empty_tuple() -> None:
+    """WP1 must not break existing 36 tests; ``windows`` defaults to ``()``."""
+
+    candidate = _candidate("provider-A/m2.5")
+    assert candidate.windows == ()
+
+
+def test_dispatch_candidate_input_windows_round_trips_through_recommender() -> None:
+    """The ``windows`` field reaches the recommender as an attribute on the input."""
+
+    candidate = DispatchCandidateInput(
+        execution_target_id="provider-A/m2.5",
+        model_sku_id="provider-A/m2.5",
+        runtime_available=True,
+        verified=True,
+        remaining_fractions=(0.8, 0.9),
+        windows=(_weekly_window(used_fraction=0.5),),
+        evidence_observed_at=FIXED_NOW - timedelta(days=1),
+        availability_state=QuotaAvailabilityState.AVAILABLE_OBSERVED,
+    )
+    # Field is preserved verbatim on the dataclass; the recommender does
+    # not mutate it (WP1 is pipeline-only, scoring is WP3's job).
+    assert candidate.windows[0].kind is QuotaWindowKind.WEEKLY
+    assert candidate.windows[0].used_fraction == 0.5
+
+
+def test_source_pressure_for_returns_starved_for_weekly_close_to_reset() -> None:
+    """80% remaining, 1 h to reset → STARVED (per the truth table)."""
+
+    windows = (_weekly_window(used_fraction=0.20, reset_in_hours=1.0),)
+    assert source_pressure_for(windows, now=FIXED_NOW) is BurnPressure.STARVED
+
+
+def test_source_pressure_for_returns_unmetered_when_no_weekly_window() -> None:
+    """No WEEKLY window → UNMETERED, not a guess from a 5h window."""
+
+    windows = (
+        CandidateWindowInput(
+            kind=QuotaWindowKind.FIVE_HOUR,
+            window_started_at=FIXED_NOW,
+            reset_at=FIXED_NOW + timedelta(hours=5),
+            used_fraction=0.5,
+        ),
+    )
+    assert source_pressure_for(windows, now=FIXED_NOW) is BurnPressure.UNMETERED
+
+
+def test_source_pressure_for_returns_unmetered_when_weekly_used_fraction_is_none() -> None:
+    """``used_fraction=None`` short-circuits to UNMETERED via ``assess``."""
+
+    windows = (_weekly_window(used_fraction=None),)
+    assert source_pressure_for(windows, now=FIXED_NOW) is BurnPressure.UNMETERED
+
+
+def test_source_pressure_for_infers_window_started_at_when_omitted() -> None:
+    """No ``window_started_at`` → infer from kind, fall through to ``assess``."""
+
+    inferred_window = CandidateWindowInput(
+        kind=QuotaWindowKind.WEEKLY,
+        window_started_at=None,
+        reset_at=FIXED_NOW + timedelta(hours=24),
+        used_fraction=0.5,
+    )
+    # Inferred start = reset_at - 7d = ~6 d before now, so 50% used at the
+    # 6-day mark of a 7-day window is BEHIND (used less than ideal).
+    assert source_pressure_for((inferred_window,), now=FIXED_NOW) is BurnPressure.BEHIND
