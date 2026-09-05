@@ -179,6 +179,46 @@ Acceptance evidence:
 - A pre-WP1 daemon decodes cleanly on a WP1 app: every new field is
   `null` / absent; no blank page, no missing chip.
 
+### P0 M1 WP2 tier (PASS on `feat/m1-wp2-tiers`)
+
+Acceptance evidence:
+
+- Connect a provider that exposes an execution target whose
+  `execution_target_id` is matched by the default tier table
+  (`zai-coding-plan-*`, `minimax-cn-coding-plan-*`, `minimax-*`,
+  `opencode-*-free`). The Resources page renders a tier chip
+  (`Flagship / Workhorse / Fast / Free` / `旗舰 / 主力 / 快速 /
+  免费`) next to the existing VERIFIED/UNVERIFIED chip. The chip
+  uses `.neutral` tone always — tier is a property of the target,
+  not an alert.
+- An unclassified target (none of the patterns match) renders
+  the "Unknown" / "未知" chip. The recommender still admits it; the
+  candidate's reasons tuple records `tier_unknown_assumed_T1`.
+- Submit a task with `min_tier="T0"` from the New Task sheet's
+  Picker. `POST /v1/tasks` carries `min_tier: "T0"`; the stored
+  row reads `min_tier: "T0"` through `TaskView`. A T1 target's
+  reasons tuple records `tier=T1 min_tier=T0 match=glob` and the
+  candidate is hard-eliminated (the corresponding evaluation has
+  `admitted: false` and the reason
+  `tier_below_minimum(tier=T1,min_tier=T0)`).
+- Submit a task with `min_tier="T1"` (the default). T1 and T0
+  targets are admitted; T2 targets are eliminated with reason
+  `tier_below_minimum(tier=T2,min_tier=T1)`. The T0 target pays
+  the 0.1 capability_fit penalty (`quality_capability_fit` score
+  component = 22.5 instead of 25.0).
+- `/v1/health` carries `model_tiers_source: "default_fallback"`
+  on a fresh install (no host-owned `model-tiers.json`) or
+  `"owner_file"` when the host has installed one. Replacing the
+  file with malformed JSON and restarting the daemon keeps
+  owner dispatch online; `model_tiers_source` reads
+  `"default_fallback"` and the `MODEL_TIERS_INVALID` system event
+  is recorded for the owner to read.
+- A pre-WP2 daemon decodes cleanly on a WP2 app: every new field
+  is `null` / absent; the picker defaults to T1; the chip selector
+  falls back to "Unknown"; `model_tiers_source` reads `null`. The
+  submit path emits no `min_tier` key when the picker is at its
+  default so the daemon applies its own T1 default.
+
 ## 6. MiniMax real provider acceptance
 
 Use the already hardened local Stage C contract tracked by PR #17 with the target Mac's **existing

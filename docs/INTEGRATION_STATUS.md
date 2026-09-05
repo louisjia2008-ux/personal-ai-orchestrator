@@ -513,6 +513,187 @@ WP1 deliberately ships no new daemon-side periodic step. WP2–WP7
 register their work behind the same `DaemonSupervisor` registry WP0
 introduced without touching `daemon.py` again.
 
+## M1 WP2 — model tier table (`feat/m1-wp2-tiers`)
+
+WP2 turns the dispatch recommender's flat `capability_fit = 1.0` into
+a tier-aware function. Every task carries a `min_tier` floor (T0
+flagship, T1 workhorse, T2 fast, T3 free); every target is classified
+against a host-owned tier table at startup; the recommender hard-
+eliminates a target strictly below `min_tier` and applies a gentle
+penalty (`1.0 - 0.1 * (tier_index(min_tier) - tier_index(tier))`) to
+an over-qualified target. The verdict surfaces on three wire
+shapes — the per-target `ExecutionTargetHealthView.tier`, the
+recommendation candidate `DispatchRecommendationCandidate.tier`,
+and the task's `TaskView.min_tier` — and the Swift dashboard reads
+all three.
+
+### `model_tiers.py` — pure module
+
+- `ModelTier(StrEnum)`: T0/T1/T2/T3. Lower index = higher capability.
+- `tier_index(t)` + `meets_minimum(t, min)`: 4×4 matrix covered by
+  parametrised tests.
+- `TierEntry(tier, caps)`: frozen dataclass. `caps` is reserved for
+  WP3 per-capability score components.
+- `TierTable(entries, default)`: frozen dataclass + `lookup(target_key)`
+  returning `(entry, reason)` where reason is one of `"exact"` /
+  `"glob"` / `"default"`. Patterns use `fnmatch`; longest match wins.
+- `parse_tier_table(raw)`: strict validator (`version == 1`, every
+  entry is `{tier, caps}`, tier ∈ ModelTier, caps non-empty strings).
+  Every error message names the offending field.
+- `merge_tier_tables(default, override)`: override patterns replace
+  same-key default patterns; the rest is a union.
+- `DEFAULT_TIER_TABLE_JSON`: shipped defaults cover the four
+  zai-coding-plan / minimax-{cn-,}coding-plan / minimax-* families
+  (T1) and `opencode-*-free` (T3, pre-installed for WP4 free-tier
+  targets). Everything else falls back to the default T1 entry.
+
+### `target_key` format
+
+A `target_key` is one `execution_target_id`: a string of the shape
+`"{provider_id}-{sku}"` (single dash, never a slash). The dash
+shape is the same one `provider_discovery.py:1290` synthesises at
+discovery time (`f"{record.provider_id}-{sku}"`). `fnmatch` `*`
+matches any character **including dashes**, so `opencode-*-free`
+matches both `opencode-glm-4.5-free` and `opencode-glm-free`. The
+host that wants narrower matching must spell out each pattern
+explicitly; always scope a free-tier glob to a provider prefix so a
+future `minimax-cn-coding-plan-GLM-4.5-free` SKU does not silently
+inherit a free-tier classification.
+
+### Fourth host-owned artifact
+
+`runtime-state/policies/model-tiers.json` joins the existing three
+(execution-repo, verifier-profile.json, worker-opencode.json) with
+the same idempotent-seed / owner-edits-never-overwritten rule. The
+daemon loads it on startup; the loader returns `(table, source)`
+where `source` is one of `"owner_file"` / `"default_fallback"`
+and surfaces on `/v1/health.model_tiers_source`. A malformed file
+emits `MODEL_TIERS_INVALID` (`{path, error, error_type}`) via
+`store.record_system_event` and falls back to the shipped defaults
+— owner dispatch never goes dark because of a tier-table typo.
+The table is loaded exactly once at startup; there is no hot reload
+by design (the table is small, the recommender is a hot path, and
+a mid-session swap would silently change every recommendation in
+flight). A host that wants to change the table restarts the daemon.
+
+### Storage + control API
+
+- `TaskRecord.min_tier: str = "T1"` + `_ensure_column("tasks",
+  "min_tier", "TEXT NOT NULL DEFAULT 'T1'")`. The schema bump is
+  idempotent; legacy stores read "T1" via a `row["min_tier"]`
+  fallback in `_task_from_row`.
+- `TaskSubmitRequest.min_tier: str | None = None` (Pydantic
+  validator rejects strings outside the four known values with a
+  `400 invalid_min_tier`). `None` normalises to "T1" at storage.
+- `TaskView.min_tier: str = "T1"` defaults so the Swift picker and
+  the recommender see the same default.
+- `ControlPlaneService.tier_table` + `model_tiers_source` are
+  populated by `daemon.build_control_service` after
+  `load_model_tiers(path, audit=store)`. `open_request` threads
+  them through to the request-local copy.
+- `_collect_dispatch_candidates` resolves each target's tier via
+  `self.tier_table.lookup(target_id)`; the resulting
+  `(ModelTier, match_reason)` tuple flows into
+  `DispatchCandidateInput.tier` / `.tier_match_reason`.
+- `_execution_target_view` does the same for the per-target
+  provider-card surface.
+
+### Recommender integration
+
+- `DispatchCandidateInput.tier: ModelTier | None = None` +
+  `tier_match_reason: str | None = None`. Defaults keep every
+  existing call site compiling.
+- `_hard_eligibility` adds the tier-floor check. A target strictly
+  below `min_tier` returns
+  `(False, "tier_below_minimum(tier={T2},min_tier={T1})")` so the
+  UI can render the reason verbatim. `tier is None` does NOT
+  eliminate — the scoring path treats None as T1 and the reasons
+  tuple records `tier_unknown_assumed_T1` so the UI can flag it.
+- `_score` uses
+  `capability_fit = 1.0 - 0.1 * (tier_index(min_tier) - tier_index(tier or T1))`,
+  clamped to `[0, 1]`. Gentle penalty by design — WP3's pressure
+  term can absorb it. The floor is hard because picking a model
+  below the task's tier is the kind of decision no policy override
+  should undo.
+- `recommend_owner_dispatch` accepts
+  `min_tier: ModelTier = ModelTier.T1` (default keeps every
+  existing call site behaving identically). The reasons tuple
+  includes `tier=T1 min_tier=T1 match=exact|glob|default` on every
+  admitted candidate.
+
+### `ensure_execution_policies` consumer map (all four callsites)
+
+The four-artifact return value is consumed as follows (line numbers
+on `feat/m1-wp2-tiers @ 1a49405`):
+
+- `product_daemon.ensure_execution_policies` returns the 4-tuple
+  (`src/personal_ai_orchestrator/product_daemon.py:160`).
+- `product_daemon.main` unpacks policies and passes the fourth
+  path to `build_daemon_argv` (`product_daemon.py:222-235`).
+- `daemon.parse_args` exposes `--model-tiers-path`
+  (`daemon.py:122-128`).
+- `daemon.build_control_service` loads the JSON via
+  `load_model_tiers(path, audit=store)` and threads the result into
+  `ControlPlaneService(tier_table=..., model_tiers_source=...)`
+  (`daemon.py:248-273, 334-339`).
+- `daemon.main` passes `args.model_tiers_path` through
+  (`daemon.py:407`).
+
+### Swift surface
+
+- `SubmitRequest.minTier: String?` (Encodable; nil emits no JSON
+  key so the daemon applies its T1 default). `TaskView.minTier`,
+  `ExecutionTargetHealthView.tier` / `.tierMatchReason`,
+  `DispatchRecommendationCandidate.tier` / `.tierMatchReason`,
+  `HealthView.modelTiersSource`: all `decodeIfPresent` so pre-WP2
+  fixtures still parse cleanly.
+- `OrchestratorStore.selectedMinTier: String = "T1"` (default T1
+  preserves existing user behaviour).
+- `DashboardView.NewTaskSheet`: four-tier `Picker` with help line.
+- `QuickSubmitView`: same picker, inline.
+- `Resources/ResourceExecutionTargetsSection.ExecutionTargetRow`:
+  tier chip alongside the existing VERIFIED/UNVERIFIED chip.
+  `tone: .neutral` always; SF Symbol map
+  `bolt.fill` / `gearshape.fill` / `hare.fill` / `leaf.fill`.
+- `Tasks/TaskExecutionSection.DispatchRecommendationRow`: same tier
+  chip on the recommendation panel.
+
+### Default table content (final)
+
+The shipped `model-tiers.json` covers every known provider family
+on the basis of `provider_discovery.PROVIDER_FAMILIES`:
+
+```json
+{
+  "version": 1,
+  "tiers": {
+    "zai-coding-plan-*":                   {"tier": "T1", "caps": ["coding"]},
+    "minimax-cn-coding-plan-*":            {"tier": "T1", "caps": ["coding"]},
+    "minimax-coding-plan-*":               {"tier": "T1", "caps": ["coding"]},
+    "minimax-*":                           {"tier": "T1", "caps": []},
+    "opencode-*-free":                     {"tier": "T3", "caps": []}
+  }
+}
+```
+
+The `opencode-*-free` glob is a pre-installed placeholder for the
+WP4 free-tier targets that do not exist yet. The host that wants
+narrower matching must spell out each pattern explicitly.
+
+### Audit-only-on-failure stays in force
+
+`/v1/health.model_tiers_source` is read-only projection, not a
+journal write. `MODEL_TIERS_INVALID` is the only system event WP2
+emits, and only on a malformed host file.
+
+### Backward compatibility
+
+Every new field on the wire is Optional. Pre-WP2 daemons decode
+cleanly: `TaskView.minTier` reads `nil`, the `tier` chip selector
+falls back to its "unknown" label, `HealthView.modelTiersSource`
+reads `nil`. WP2 is pipeline-only; scoring weights are not touched
+(WP3's job).
+
 ## P3.6 live provider and Shadow campaign
 
 P3.6 provider-surface discovery on 2026-08-30 found no supported machine-readable remaining-quota

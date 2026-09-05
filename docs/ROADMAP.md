@@ -329,7 +329,7 @@ Known limitation inherited by M1:
 
 ---
 
-## M1 — 额度压力驱动调度 (WP0 + WP1 DELIVERED 2026-09-05 on `feat/m1-wp0-daemon-tick` + `feat/m1-wp1-burn`)
+## M1 — 额度压力驱动调度 (WP0 + WP1 + WP2 DELIVERED 2026-09-05 on `feat/m1-wp0-daemon-tick` + `feat/m1-wp1-burn` + `feat/m1-wp2-tiers`)
 
 Goal: turn the existing scheduler into one that burns subscription quota
 before it expires, drops simple tasks to free / low-tier models, and adds
@@ -342,7 +342,7 @@ Working order (each WP ships as its own branch from `fix/m0-trust`):
 | --- | ------ | ----------- |
 | WP0 | `feat/m1-wp0-daemon-tick` | real daemon tick (`DaemonSupervisor`) so periodic steps have a host; `/v1/health` exposes `last_tick_at` and `tick_interval_seconds` |
 | WP1 | `feat/m1-wp1-burn` | DONE — `quota_burn.py` (pure functions) + `CandidateWindowInput` + per-window `burn` sub-object + provider-card / candidate `source_pressure` |
-| WP2 | `feat/m1-wp2-tiers` | `model-tiers.json` as the fourth `ensure_execution_policies` artifact; `min_tier` end-to-end; tier-based capability_fit |
+| WP2 | `feat/m1-wp2-tiers` | DONE — `model_tiers.py` + `runtime-state/policies/model-tiers.json` + `TaskRecord.min_tier` (TEXT NOT NULL DEFAULT 'T1') + tier-aware `_hard_eligibility` / `_score` + Swift picker + tier chip on Resources + DispatchRecommendation |
 | WP3 | `feat/m1-wp3-pressure-scoring` | `ScoreWeights` (scheduler + recommender share it); pressure + headroom weights; `RoutingObjective.BURN_DOWN` for the BURN_DOWN preset; smoothing / STARVED branches |
 | WP4 | `feat/m1-wp4-unlimited-pool` | `QuotaWindowKind.UNMETERED` + `UnlimitedPool`; opencode-free entry on `ProviderFamilySpec`; discovery reads real `opencode models` output (fixture-driven) |
 | WP5a | `feat/m1-wp5a-supervised-auto-core` | state machine additions (`AUTO_PLANNED`, `AUTO_GRACE`), `scheduling_settings.mode`, project-level three-field settings (`supervised_auto_allowed`, `unattended_allowed`, `grace_seconds`), `POST /v1/tasks/{id}/auto/{ack,veto,dispatch-now}`, scheduler-side tick `supervised_auto_step(now)` |
