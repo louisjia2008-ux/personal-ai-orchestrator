@@ -531,4 +531,61 @@ final class ModelAndStatusTests: XCTestCase {
         XCTAssertNil(view.pidAlive)
         XCTAssertFalse(view.isProcessAlive)
     }
+
+    func testHealthViewDecodesSupervisorFieldsWhenPresent() throws {
+        let json = """
+        {
+          "status":"ok",
+          "api_version":"v1",
+          "last_tick_at":"2026-09-05T00:00:00Z",
+          "tick_interval_seconds":5.0,
+          "supervisor_steps":[
+            {"name":"heartbeat","last_run_at":"2026-09-05T00:00:00Z","last_duration_ms":0.3,"consecutive_failures":0,"in_backoff":false}
+          ]
+        }
+        """
+        let view = try JSONDecoder().decode(HealthView.self, from: Data(json.utf8))
+        XCTAssertEqual(view.status, "ok")
+        XCTAssertEqual(view.tickIntervalSeconds, 5.0)
+        XCTAssertNotNil(view.lastTickAt)
+        XCTAssertNotNil(view.lastTickDate)
+        XCTAssertEqual(view.supervisorSteps.count, 1)
+        XCTAssertEqual(view.supervisorSteps[0].name, "heartbeat")
+        XCTAssertEqual(view.supervisorSteps[0].consecutiveFailures, 0)
+        XCTAssertFalse(view.supervisorSteps[0].inBackoff)
+        XCTAssertNotNil(view.step(named: "heartbeat"))
+        XCTAssertNil(view.step(named: "unknown"))
+    }
+
+    func testHealthViewDecodesWithoutSupervisorFields() throws {
+        // Older (pre-WP0) daemons never emit last_tick_at / supervisor_steps;
+        // the lenient decoder must leave the new ones nil / empty rather
+        // than rejecting the whole /v1/health response.
+        let json = """
+        {"status":"ok","api_version":"v1"}
+        """
+        let view = try JSONDecoder().decode(HealthView.self, from: Data(json.utf8))
+        XCTAssertEqual(view.status, "ok")
+        XCTAssertTrue(view.isCompatible)
+        XCTAssertNil(view.lastTickAt)
+        XCTAssertNil(view.lastTickDate)
+        XCTAssertNil(view.tickIntervalSeconds)
+        XCTAssertTrue(view.supervisorSteps.isEmpty)
+    }
+
+    func testSupervisorStepViewDecodesWithoutOptionalFields() throws {
+        // The minimum payload (name only) must still decode so the future
+        // can register steps that just confirm a heartbeat. Other
+        // optional fields default to zero/false when missing.
+        let json = """
+        {"name":"heartbeat"}
+        """
+        let view = try JSONDecoder().decode(SupervisorStepView.self, from: Data(json.utf8))
+        XCTAssertEqual(view.name, "heartbeat")
+        XCTAssertNil(view.lastRunAt)
+        XCTAssertNil(view.lastRunDate)
+        XCTAssertNil(view.lastDurationMs)
+        XCTAssertEqual(view.consecutiveFailures, 0)
+        XCTAssertFalse(view.inBackoff)
+    }
 }

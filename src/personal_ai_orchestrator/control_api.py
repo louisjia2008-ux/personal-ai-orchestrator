@@ -35,6 +35,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from personal_ai_orchestrator.activation import ActiveRoutingGate
 from personal_ai_orchestrator.approval import ApprovalAuthority
 from personal_ai_orchestrator.build_identity import resolve_build_identity
+from personal_ai_orchestrator.daemon_supervisor import (
+    DaemonSupervisor,
+    DaemonSupervisorSnapshot,
+    SupervisorStepSnapshot,
+)
 from personal_ai_orchestrator.execution_controller import validate_execution_target_launch
 from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
 from personal_ai_orchestrator.model_registry import EvidenceConfidence, ModelRegistry
@@ -858,9 +863,25 @@ class ApprovalListView(_ViewModel):
     approvals: tuple[ApprovalView, ...]
 
 
+class SupervisorStepView(_ViewModel):
+    """One periodic step registered with the daemon supervisor (WP0)."""
+
+    name: str
+    last_run_at: str | None = None
+    last_duration_ms: float | None = None
+    consecutive_failures: int = 0
+    in_backoff: bool = False
+
+
 class HealthView(_ViewModel):
     status: str
     api_version: str
+    #: ``/v1/health`` is the single source of truth for whether the
+    #: bundled daemon is still ticking. ``None`` until the first tick
+    #: has run (typically within one ``tick_interval_seconds`` of boot).
+    last_tick_at: str | None = None
+    tick_interval_seconds: float | None = None
+    supervisor_steps: tuple[SupervisorStepView, ...] = ()
 
 
 class BuildView(_ViewModel):
@@ -952,6 +973,11 @@ class ControlPlaneService:
     #: control plane still works (reporting UNKNOWN truthfully) before the
     #: daemon wires a runtime-state root.
     quota_refresh_service: QuotaRefreshService | None = None
+    #: Optional DaemonSupervisor reference (WP0). ``/v1/health`` reads its
+    #: snapshot to surface ``last_tick_at``, ``tick_interval_seconds`` and
+    #: per-step status. ``None`` is allowed — the bundled daemon always
+    #: wires one in, but unit tests / ad-hoc CLIs do not have to.
+    supervisor: DaemonSupervisor | None = None
 
     @property
     def owner_initiated_execution_enabled(self) -> bool:
@@ -975,6 +1001,7 @@ class ControlPlaneService:
             execution_evidence_journal=self.execution_evidence_journal,
             dispatch_executor=self.dispatch_executor,
             quota_refresh_service=self.quota_refresh_service,
+            supervisor=self.supervisor,
         )
 
     @staticmethod
@@ -2964,7 +2991,35 @@ class ControlPlaneService:
         )
 
     def health(self) -> HealthView:
-        return HealthView(status="ok", api_version=CONTROL_API_VERSION)
+        if self.supervisor is None:
+            return HealthView(
+                status="ok",
+                api_version=CONTROL_API_VERSION,
+            )
+        snapshot: DaemonSupervisorSnapshot = self.supervisor.snapshot()
+        steps_view: tuple[SupervisorStepView, ...] = tuple(
+            SupervisorStepView(
+                name=step.name,
+                last_run_at=(
+                    step.last_run_at.isoformat() if step.last_run_at is not None else None
+                ),
+                last_duration_ms=step.last_duration_ms,
+                consecutive_failures=step.consecutive_failures,
+                in_backoff=step.in_backoff,
+            )
+            for step in snapshot.steps
+        )
+        return HealthView(
+            status="ok",
+            api_version=CONTROL_API_VERSION,
+            last_tick_at=(
+                snapshot.last_tick_at.isoformat()
+                if snapshot.last_tick_at is not None
+                else None
+            ),
+            tick_interval_seconds=snapshot.interval_seconds,
+            supervisor_steps=steps_view,
+        )
 
     def build(self) -> BuildView:
         """Report which commit produced this daemon, or ``unknown`` if unresolvable."""
