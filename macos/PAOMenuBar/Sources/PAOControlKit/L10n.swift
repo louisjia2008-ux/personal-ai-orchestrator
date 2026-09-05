@@ -285,6 +285,8 @@ public enum L10n {
         // M1 WP2: tier picker + chip labels.
         "newTask.minTier", "newTask.minTierHelp",
         "tier.t0", "tier.t1", "tier.t2", "tier.t3", "tier.unknown",
+        // WP5b (brought forward): stale-verification chip.
+        "target.verifiedStale",
         "quota.projection.unavailable.NO_HISTORY",
         "quota.projection.unavailable.INSUFFICIENT_OBSERVATIONS",
         "quota.projection.unavailable.NO_ELAPSED_TIME",
@@ -1611,6 +1613,13 @@ public enum L10n {
         default: return tierUnknown
         }
     }
+
+    // MARK: WP5b — stale-verification chip on target rows
+
+    /// ``target.verifiedStale`` — the chip rendered when the latest
+    /// evidence for an execution target is non-VERIFIED while an older
+    /// VERIFIED row still exists (demote-fallback semantics).
+    public static var targetVerifiedStale: String { tr("target.verifiedStale") }
 
     public static var quotaProjectionTitle: String { tr("quota.projection.title") }
     public static var quotaProjectionRemainingAtReset: String {

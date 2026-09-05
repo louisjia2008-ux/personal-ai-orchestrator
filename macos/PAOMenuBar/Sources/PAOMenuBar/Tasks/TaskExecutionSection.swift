@@ -283,6 +283,16 @@ struct DispatchRecommendationRow: View {
                     symbol: tierSymbol(tier)
                 )
             }
+            // WP5b: stale-verification chip on the recommendation row.
+            // Same caution tone + SF Symbol as the Resources-page
+            // target row so the chip renderers stay in sync.
+            if candidate.isExecutionVerifiedStale {
+                ResourceChip(
+                    text: L10n.targetVerifiedStale,
+                    tone: .caution,
+                    symbol: "exclamationmark.triangle"
+                )
+            }
             if candidate.admitted {
                 Button(L10n.dispatch, action: onDispatch)
                     .buttonStyle(.borderedProminent)
