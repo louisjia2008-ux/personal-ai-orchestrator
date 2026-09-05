@@ -798,4 +798,92 @@ final class ModelAndStatusTests: XCTestCase {
         XCTAssertEqual(view.consecutiveFailures, 0)
         XCTAssertFalse(view.inBackoff)
     }
+    // MARK: - §M1 WP3 — headroomMin + score-component weight + BURN_DOWN
+
+    func testDispatchRecommendationCandidateDecodesHeadroomMinWhenPresent() throws {
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "eligible":true,
+          "admitted":true,
+          "score":1.0,
+          "headroom_mean":0.7,
+          "headroom_min":0.6,
+          "evidence_fresh":true,
+          "runtime_available":true,
+          "verified":true,
+          "quota_state":"AVAILABLE_OBSERVED",
+          "score_components":[],
+          "reasons":["policy=BALANCED"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationCandidate.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.headroomMin, 0.6)
+        XCTAssertEqual(view.headroomMean, 0.7)
+    }
+
+    func testDispatchRecommendationCandidateDecodesWithoutHeadroomMin() throws {
+        // Pre-WP3 daemons do not emit ``headroom_min``; the decoder
+        // must leave the field nil rather than failing the request.
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "eligible":true,
+          "admitted":true,
+          "score":1.0,
+          "headroom_mean":0.7,
+          "evidence_fresh":true,
+          "runtime_available":true,
+          "verified":true,
+          "quota_state":"AVAILABLE_OBSERVED",
+          "score_components":[],
+          "reasons":["policy=BALANCED"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationCandidate.self, from: Data(json.utf8)
+        )
+        XCTAssertNil(view.headroomMin)
+        XCTAssertEqual(view.headroomMean, 0.7)
+    }
+
+    func testDispatchRecommendationScoreComponentDecodesWeightWhenPresent() throws {
+        let json = """
+        {"name":"quality_capability_fit","contribution":1.4,"weight":0.7}
+        """
+        let c = try JSONDecoder().decode(
+            DispatchRecommendationScoreComponent.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(c.name, "quality_capability_fit")
+        XCTAssertEqual(c.contribution, 1.4)
+        XCTAssertEqual(c.weight, 0.7)
+    }
+
+    func testDispatchRecommendationScoreComponentDecodesWithoutWeight() throws {
+        // Pre-WP2 daemons / fixtures omit ``weight``; the decoder
+        // must leave the field nil.
+        let json = """
+        {"name":"quality_capability_fit","contribution":1.4}
+        """
+        let c = try JSONDecoder().decode(
+            DispatchRecommendationScoreComponent.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(c.name, "quality_capability_fit")
+        XCTAssertEqual(c.contribution, 1.4)
+        XCTAssertNil(c.weight)
+    }
+
+    func testL10nBurnDownPolicyNameAndDetail() {
+        // M1 WP3: BURN_DOWN is the new pressure-first preset. The
+        // picker reads this label; the detail line explains the bias.
+        XCTAssertEqual(L10n.schedulingPolicyName("BURN_DOWN"), L10n.policyBurnDown)
+        XCTAssertEqual(
+            L10n.schedulingPolicyDetail("BURN_DOWN"), L10n.policyBurnDownDetail
+        )
+        XCTAssertNotEqual(L10n.policyBurnDown, L10n.policyBurnDownDetail)
+    }
 }

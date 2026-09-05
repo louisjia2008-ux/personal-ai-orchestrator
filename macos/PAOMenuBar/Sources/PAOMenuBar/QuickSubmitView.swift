@@ -21,9 +21,7 @@ struct QuickSubmitView: View {
             .flatMap(\.executionTargets)
     }
 
-    private static let selectablePolicies = [
-        "BALANCED", "QUALITY_FIRST", "QUOTA_SAVER", "SPEED_FIRST", "MANUAL",
-    ]
+    private static let selectablePolicies = SelectablePolicyFallback.policies + ["MANUAL"]
 
     /// M1 WP2: tier floor options.
     private static let selectableTiers = ["T0", "T1", "T2", "T3"]

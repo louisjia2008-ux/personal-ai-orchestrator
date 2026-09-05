@@ -347,9 +347,7 @@ private struct NewTaskSheet: View {
             .flatMap(\.executionTargets)
     }
 
-    private static let selectablePolicies = [
-        "BALANCED", "QUALITY_FIRST", "QUOTA_SAVER", "SPEED_FIRST", "MANUAL",
-    ]
+    private static let selectablePolicies = SelectablePolicyFallback.policies + ["MANUAL"]
 
     /// M1 WP2: tier floor options. Order matters for the menu — T0 at
     /// the top, T3 at the bottom — so the default ``T1`` selection
@@ -888,7 +886,7 @@ private struct ClientSettingsSection: View {
             // preference that routing could not honour.
             DashboardCard(title: L10n.settingsDefaultSchedulingPolicy, symbol: "slider.horizontal.3") {
                 let selectable = store.schedulingSettings?.selectablePolicies
-                    ?? ["BALANCED", "QUALITY_FIRST", "QUOTA_SAVER", "SPEED_FIRST"]
+                    ?? SelectablePolicyFallback.policies
                 Picker(
                     L10n.settingsDefaultSchedulingPolicy,
                     selection: Binding(
