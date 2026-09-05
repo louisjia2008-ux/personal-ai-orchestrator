@@ -527,3 +527,49 @@ def test_unexpected_exit_keeps_only_sanitized_transcript_tails(tmp_path: Path) -
         "stderr_tail": "Usage limit reached for 5 hour",
         "stdout_tail": "stdout narrative",
     }
+
+
+def test_failure_result_payload_signal_only_omits_exit_code() -> None:
+    from personal_ai_orchestrator.execution_controller import _failure_result_payload
+
+    payload = _failure_result_payload(exit_code=None, signal=9, worker_result=None)
+    assert payload == {"signal": 9}
+
+
+def test_failure_result_payload_preserves_only_tails_from_worker_result() -> None:
+    from personal_ai_orchestrator.execution_controller import _failure_result_payload
+
+    payload = _failure_result_payload(
+        exit_code=2,
+        signal=None,
+        worker_result={
+            "stdout_sha256": "h",
+            "stdout_bytes": 1024,
+            "stderr_sha256": "h",
+            "stderr_bytes": 512,
+            "stdout_tail": "stdout narrative",
+            "stderr_tail": "Usage limit reached for 5 hour",
+            "extra_unknown_key": "ignored",
+        },
+    )
+    assert payload == {
+        "exit_code": 2,
+        "stderr_tail": "Usage limit reached for 5 hour",
+        "stdout_tail": "stdout narrative",
+    }
+
+
+def test_human_reason_for_failure_names_exit_code_and_signal() -> None:
+    from personal_ai_orchestrator.execution_controller import (
+        _human_reason_for_failure,
+    )
+
+    assert _human_reason_for_failure(exit_code=2, signal=None) == (
+        "worker exited unexpectedly with code 2"
+    )
+    assert _human_reason_for_failure(exit_code=None, signal=9) == (
+        "worker exited unexpectedly (signal 9)"
+    )
+    assert _human_reason_for_failure(exit_code=None, signal=None) == (
+        "worker exited unexpectedly"
+    )

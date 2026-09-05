@@ -34,6 +34,46 @@ def _render_result(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
 
 
+def _failure_result_payload(*, exit_code: int | None, signal: int | None, worker_result: Any) -> dict[str, Any]:
+    """Build a fail-closed run-result payload from the worker's sanitized narration.
+
+    Used by both the normal failure path (non-zero exit code) and the
+    emergency-repair path (process died, no envelope, possibly killed by a
+    signal). The returned dict carries only what the owner needs to make
+    sense of the death: exit code (or signal name), and the worker's own
+    ``stdout_tail`` / ``stderr_tail`` if it had a chance to write them.
+    Host-derived metadata (hashes, byte counts, ``timed_out``) is dropped
+    here on purpose — it carries zero authority and would only obscure the
+    real cause.
+    """
+
+    payload: dict[str, Any] = {}
+    if exit_code is not None:
+        payload["exit_code"] = exit_code
+    if signal is not None:
+        payload["signal"] = signal
+    if isinstance(worker_result, dict):
+        if isinstance(worker_result.get("stderr_tail"), str):
+            payload["stderr_tail"] = worker_result["stderr_tail"]
+        if isinstance(worker_result.get("stdout_tail"), str):
+            payload["stdout_tail"] = worker_result["stdout_tail"]
+    return payload
+
+
+def _human_reason_for_failure(*, exit_code: int | None, signal: int | None) -> str:
+    """One-line reason a human can read off the run-row.
+
+    Mirrors the audit-reason style so the run row's stored ``reason`` and
+    the persisted run-row's ``result_json`` agree on what happened.
+    """
+
+    if signal is not None:
+        return f"worker exited unexpectedly (signal {signal})"
+    if exit_code is not None:
+        return f"worker exited unexpectedly with code {exit_code}"
+    return "worker exited unexpectedly"
+
+
 def validate_execution_target_launch(
     registry: ModelRegistry,
     *,
@@ -153,14 +193,11 @@ def record_worker_exit(
             # host-derived metadata (hashes, byte counts) has no authority
             # and no value, so the failure record stays fail-closed apart
             # from the narration itself.
-            persisted_result: Any = {"exit_code": exit_code}
-            if isinstance(worker_result, dict):
-                if isinstance(worker_result.get("stderr_tail"), str):
-                    persisted_result["stderr_tail"] = worker_result["stderr_tail"]
-                if isinstance(worker_result.get("stdout_tail"), str):
-                    persisted_result["stdout_tail"] = worker_result["stdout_tail"]
+            persisted_result = _failure_result_payload(
+                exit_code=exit_code, signal=None, worker_result=worker_result
+            )
             next_state = TaskState.BLOCKED
-            reason = f"worker exited unexpectedly with code {exit_code}"
+            reason = _human_reason_for_failure(exit_code=exit_code, signal=None)
         elif not isinstance(worker_result, dict):
             run_status = "INVALID_RESULT"
             persisted_result = {"exit_code": exit_code}
