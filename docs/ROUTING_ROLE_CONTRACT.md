@@ -226,7 +226,9 @@ implementing roles must produce shapes that decode against them.
 | `plan_primary_reviewer_auditor.json` | All three roles |
 | `plan_reviewer_declared_unassigned.json` | REVIEWER declared, no decision yet |
 | `plan_reviewer_reroute.json` | REVIEWER with two decisions, second supersedes |
+| `plan_completed_error_outcome.json` | `COMPLETED` + `ERROR` outcome (verifier failure) |
 | `plan_completed_failure_outcome.json` | `COMPLETED` + `FAIL` (a real verdict) |
+| `plan_unknown_role_status.json` | Forward-compat: unknown role/status, must decode verbatim |
 
 ## Open items for the execution layer
 

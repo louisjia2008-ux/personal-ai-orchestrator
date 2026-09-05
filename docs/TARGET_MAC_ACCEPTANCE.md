@@ -1,6 +1,6 @@
 # Target Mac Acceptance Gate
 
-Status: `REQUIRED_BEFORE_PRODUCTION_ACTIVE`
+Status: `PASS_LOCAL_P0_P1_ROUTING_PROVIDER_OWNER_DISPATCH_AND_M0_TRUST_HARDENING`
 
 GitHub CI can prove deterministic cross-platform code behavior, but it cannot prove the target
 Mac's provider-native authentication, Keychain boundaries, process cleanup, filesystem isolation,
@@ -55,6 +55,27 @@ Use a newly created disposable Git repository only. Verify:
 If the worker can modify the source/main checkout through any execution path, P0 fails. Do not
 paper over this with a prompt instruction; fix the outer workspace/process isolation boundary.
 
+### P0 owner-initiated dispatch (PASS on `feat/p4-final-ui-repair @ 63a524b`)
+
+Acceptance evidence:
+
+- `POST /v1/tasks/{id}/dispatch` creates the `owner_dispatches` row, atomically
+  transitions `READY → RUNNING` via `SafetyKernelStore.start_dispatched_worker`,
+  spawns the supervised worker thread, and finishes with `VERIFIED` only when
+  the deterministic host verifier produces and persists an immutable
+  `evidence_id`;
+- the worker sandbox is the host-owned `worker-opencode.json` seeded by
+  `product_daemon.ensure_execution_policies()`. Edits are scoped to the
+  assigned worktree, bash and webfetch are denied;
+- the main repo stays bit-identical across the run. `MAIN_REPO_MUTATED`
+  fails the dispatch before any worker spawns;
+- `POST /v1/tasks/{id}/dispatch/recommendation` ranks every dispatchable
+  target by the task's archived policy; the chosen target flows through the
+  same handler as the manual dispatch;
+- the macOS app shows both the manual dispatch and the recommendation panel,
+  and surfaces a completion banner plus a macOS local notification when the
+  task reaches a terminal state and the window is not focused.
+
 ## 4. P1 deterministic-verifier acceptance
 
 Against the disposable task worktree, inject each failure separately:
@@ -97,6 +118,24 @@ Verify:
 - policy and quota snapshot references resolve to immutable evidence.
 
 Static runtime configuration cannot authorize production ACTIVE.
+
+### P0 M0 trust hardening (PASS on `fix/m0-trust`)
+
+- A1: `ExecutionEvidenceJournal.latest_verified_for_target` falls back
+  from UNKNOWN to historical VERIFIED. `execution_verified_stale` is
+  exposed on `ExecutionTargetHealthView` and
+  `DispatchRecommendationCandidate` so the UI can render the staleness.
+- A2: `QuotaAvailabilityState.UNCERTAIN_LOCKED` fires after
+  `UNCERTAIN_LOCKED_THRESHOLD` (=3) consecutive failed quota collections
+  for the same target. A single `observe_success()` releases the lock
+  atomically. Admission rejects with `QUOTA_UNKNOWN`.
+- A3: `_emergency_repair` now persists `signal: 9` plus
+  `emergency_repair: true` and a human-readable reason. The owner can
+  finally tell SIGKILL from a clean failure.
+- A4: `RunView.pid_alive` is computed by `os.kill(pid, 0)`; the Swift
+  inspector renders "已退出" instead of a stale "running pid N".
+- A5: `pytest-rerunfailures` retries the daemon SIGINT shutdown test up
+  to 3 times.
 
 ## 6. MiniMax real provider acceptance
 

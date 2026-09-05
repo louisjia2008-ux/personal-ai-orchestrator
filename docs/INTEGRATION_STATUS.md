@@ -1,6 +1,6 @@
 # Integration Status
 
-Status: `INTEGRATION_IMPLEMENTED / LOCAL_MAC_ACCEPTED / P3_9_2_OBSERVED_EXHAUSTION_RECOVERY_GOVERNOR_PARTIAL_ACCEPTED`
+Status: `INTEGRATION_IMPLEMENTED / LOCAL_MAC_ACCEPTED / P4_2_4_B_OWNER_DISPATCH_DELIVERED_WITH_TRANSPARENCY_AND_POLICY_RECOMMENDER`
 
 This document records what the `integration/end-to-end-shadow-safety` line implements and what
 still requires evidence that cannot be fabricated on GitHub-hosted runners.
@@ -338,6 +338,80 @@ This evidence covers the local P0 Safety Kernel, P1 deterministic verifier, loop
 OpenCode adapter fail-closed semantics, SHADOW record-only behavior and negative ACTIVE gate
 combinations. It does not include provider-native MiniMax/Z.AI quota truth, multiple real Shadow
 reset cycles, Keychain-specific credential handoff, or production owner approval.
+
+## P4.2.4-B owner-initiated dispatch (fix/p4-final-ui-repair)
+
+The owner-dispatch surface — manual target selection and the policy-driven
+"按策略派发" / "按策略推荐" panel — was delivered end-to-end on
+`fix/p4-final-ui-repair` and re-validated on `feat/p4-final-ui-repair` head
+`63a524b`. Owner acceptance evidence:
+
+- A disposable main repo + worktree + verifier profile is provisioned by
+  `product_daemon.ensure_execution_policies()`, which is idempotent and
+  fail-soft: the daemon still boots without owner-dispatch capability when
+  the policies are unavailable.
+- `POST /v1/tasks/{id}/dispatch` creates the `owner_dispatches` row,
+  atomically transitions `READY → RUNNING` via
+  `SafetyKernelStore.start_dispatched_worker`, and spawns a daemon thread
+  that supervises the worker.
+- The worker runs against a host-owned sandbox `worker-opencode.json` that
+  allows edits inside the assigned worktree and denies bash / webfetch
+  outright. The repo stays bit-identical across the run or the task fails
+  closed with `MAIN_REPO_MUTATED`.
+- The worker run row's persisted result includes the bounded sanitized
+  `stdout_tail` and `stderr_tail` (8 KiB, ANSI-free, control-char-free).
+  Owner-facing fields: task id, request id, execution target, scheduling
+  policy, scheduling policy detail line, manual target (when policy =
+  MANUAL), worker transcript tail, run status, exit code, output hashes.
+- `POST /v1/tasks/{id}/dispatch/recommendation` ranks every
+  dispatchable target by the task's archived policy and returns the top
+  pick + per-row score / headroom / evidence_fresh / quota_state / reasons.
+  Each row has its own "Dispatch" button that flows through the same
+  handler as the manual dispatch.
+- `POST /v1/tasks/{id}/cancel` cancels the active supervised process with
+  the host-owned exact pid check; cancellation cannot deadlock behind a
+  switch lease.
+- The macOS app shows the manual dispatch and the recommendation panel
+  on the task detail surface, with localized dispatch buttons
+  (`action.dispatch`) and policy labels (`policy.manual`,
+  `recommendation.panelTitle`).
+
+Known limitations inherited by M0/M1:
+
+- `recommend_owner_dispatch` uniformly sets capability_fit = 1.0 — owner
+  dispatch does not infer intent into required capabilities. M1 WP2
+  replaces this with tier-based matching.
+- `_admit_quota` collapses quota state per provider rather than per
+  binding window; UNCERTAIN_LOCKED fires per-target but the threshold is
+  per-target, not per-pool-per-window.
+- `target.execution_verified` is no longer consulted as a launch gate;
+  the journal is the single source of truth (with `latest_verified_for_target`
+  providing the demote-fallback so a transient UNKNOWN does not destroy a
+  real verified history).
+
+## P0 M0 trust hardening (fix/m0-trust)
+
+The M0 line made the displayed state trustworthy:
+
+- A1: `ExecutionEvidenceJournal.latest_verified_for_target` returns
+  `(verified_evidence, stale_since)`. `ExecutionTargetHealthView` and
+  `DispatchRecommendationCandidate` expose `execution_verified_stale` so
+  the UI can render "we have history, but the latest run did not
+  actually succeed" without re-running the verification probe.
+- A2: `QuotaAvailabilityState.UNCERTAIN_LOCKED` fires after
+  `UNCERTAIN_LOCKED_THRESHOLD` (=3) consecutive failed quota collections
+  for the same target. A single `observe_success()` resets the streak and
+  releases the lock atomically. Admission rejects with `QUOTA_UNKNOWN`.
+- A3: `_emergency_repair` now persists a self-describing payload
+  (`signal: 9` for SIGKILL, plus `emergency_repair: true`) and a
+  human-readable reason ("worker exited unexpectedly (signal 9)").
+  `_failure_result_payload()` is the single helper used by both the
+  normal failure path and the emergency-repair path.
+- A4: `RunView.pid_alive` is computed by `os.kill(pid, 0)` against RUNNING
+  rows; the Swift inspector renders "已退出" instead of the stale
+  "running pid N" the moment the OS confirms the worker is gone.
+- A5: `pytest-rerunfailures` added to the dev extras; the daemon SIGINT
+  shutdown test is decorated with `@pytest.mark.flaky(reruns=3, reruns_delay=1)`.
 
 ## P3.6 live provider and Shadow campaign
 
