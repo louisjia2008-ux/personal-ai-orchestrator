@@ -639,6 +639,120 @@ def test_quota_uncertain_locked_blocks_after_three_consecutive_failures(
         _close(snapshot)
 
 
+def test_quota_require_quota_certainty_false_does_not_relax_uncertain_locked(
+    tmp_path: Path,
+) -> None:
+    """``require_quota_certainty=False`` must not unlock UNCERTAIN_LOCKED.
+
+    The lock fires for *the lack of evidence* (consecutive UNKNOWNs), not for
+    the lack of certainty after evidence. With ``require_quota_certainty``
+    at its default (``False``), a collector that keeps returning UNKNOWN
+    must still drive the streak and trip the lock on the third dispatch.
+    The rejection reason must carry the failure count so the owner can
+    distinguish "host could not probe" from "probe said quota unknown".
+    """
+
+    from personal_ai_orchestrator.quota_availability import (
+        UNCERTAIN_LOCKED_THRESHOLD,
+        QuotaAvailabilityState,
+    )
+
+    harness = ExecutorHarness(tmp_path)
+    # Force the default (False) explicitly so the test cannot silently
+    # drift if the config default changes.
+    assert harness.executor.config.require_quota_certainty is False
+    harness.executor._quota_collectors["zai-coding-plan"] = FakeCollector(
+        QuotaCollectionResult(status=QuotaCollectionStatus.UNKNOWN)
+    )
+    journal = QuotaAvailabilityJournal(harness.runtime_root)
+
+    outcomes = []
+    for index in range(UNCERTAIN_LOCKED_THRESHOLD):
+        request_id = f"dispatch-uncert-{index}"
+        harness.reserve(task_id=f"task-uncert-{index}", request_id=request_id)
+        harness.run(request_id)
+        snapshot = harness.snapshot(task_id=f"task-uncert-{index}")
+        try:
+            outcomes.append(
+                {
+                    "state": snapshot["task"].state,
+                    "failure_code": snapshot["dispatch_failure_code"],
+                }
+            )
+        finally:
+            _close(snapshot)
+
+    # First two dispatches admit even though the underlying state is UNKNOWN
+    # (require_quota_certainty=False), but each one bumps the streak.
+    assert outcomes[0]["state"] is TaskState.VERIFIED
+    assert outcomes[0]["failure_code"] is None
+    assert outcomes[1]["state"] is TaskState.VERIFIED
+    assert outcomes[1]["failure_code"] is None
+
+    # Third dispatch trips the lock; the rejection reason must carry the
+    # failure count so the owner can read the streak directly off the
+    # QuotaAdmission.evidence rather than only via the failure_code.
+    assert outcomes[2]["state"] is TaskState.BLOCKED
+    assert outcomes[2]["failure_code"] == "QUOTA_UNKNOWN"
+
+    evidence = journal.load("zai-coding-plan-glm-5.3")
+    assert evidence is not None
+    assert evidence.consecutive_failures >= UNCERTAIN_LOCKED_THRESHOLD
+    assert evidence.state_at(now=datetime.now(UTC)) is (
+        QuotaAvailabilityState.UNCERTAIN_LOCKED
+    )
+
+
+def test_quota_unknown_collector_growth_stays_locked_without_relaxation(
+    tmp_path: Path,
+) -> None:
+    """No-collector branch (branch A) must keep the lock, not bypass it.
+
+    When the provider has no registered collector, ``_admit_quota`` falls
+    through to ``unknown_availability(previous=...)`` on every call. The
+    streak therefore grows exactly as it would for a real UNKNOWN-collecting
+    provider, and the lock must fire after ``UNCERTAIN_LOCKED_THRESHOLD``
+    consecutive calls. The lack of a collector must never be mistaken for
+    a clean billable launch — the host must NOT relax the lock just
+    because it has no probe.
+    """
+
+    from personal_ai_orchestrator.quota_availability import (
+        UNCERTAIN_LOCKED_THRESHOLD,
+        QuotaAvailabilityState,
+    )
+
+    harness = ExecutorHarness(tmp_path)
+    # No collector registered for this provider — exercises the
+    # ``collector is None`` branch of ``_admit_quota``.
+    assert "zai-coding-plan" not in harness.executor._quota_collectors
+    journal = QuotaAvailabilityJournal(harness.runtime_root)
+
+    for index in range(UNCERTAIN_LOCKED_THRESHOLD):
+        request_id = f"dispatch-no-collector-{index}"
+        harness.reserve(task_id=f"task-no-collector-{index}", request_id=request_id)
+        harness.run(request_id)
+
+    # The third call's evidence must be UNCERTAIN_LOCKED and the task
+    # must be BLOCKED, not silently admitted.
+    final = harness.snapshot(task_id=f"task-no-collector-2")
+    try:
+        assert final["task"].state is TaskState.BLOCKED
+        assert final["dispatch_failure_code"] == "QUOTA_UNKNOWN"
+    finally:
+        _close(final)
+
+    # The journal must record consecutive_failures == threshold, NOT be
+    # silently cleared because the provider has no collector.
+    evidence = journal.load("zai-coding-plan-glm-5.3")
+    assert evidence is not None
+    assert evidence.consecutive_failures == UNCERTAIN_LOCKED_THRESHOLD
+    assert evidence.state_at(now=datetime.now(UTC)) is (
+        QuotaAvailabilityState.UNCERTAIN_LOCKED
+    )
+    assert evidence.confidence is EvidenceConfidence.UNKNOWN
+
+
 def test_quota_uncertain_locked_clears_after_successful_collector_run(
     tmp_path: Path,
 ) -> None:
