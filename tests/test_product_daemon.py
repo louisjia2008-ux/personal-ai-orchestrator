@@ -165,7 +165,7 @@ def test_ensure_execution_policies_seeds_once_and_is_idempotent() -> None:
     layout = default_application_support_layout(_short_home("pao-policies-"))
     seeded = ensure_execution_policies(layout)
     assert seeded is not None
-    repo, profile_path, worker_path = seeded
+    repo, profile_path, worker_path, tiers_path = seeded
 
     assert (repo / ".git").is_dir()
     on_disk = json.loads(profile_path.read_text(encoding="utf-8"))
@@ -176,15 +176,52 @@ def test_ensure_execution_policies_seeds_once_and_is_idempotent() -> None:
     worker = json.loads(worker_path.read_text(encoding="utf-8"))
     assert worker == DEFAULT_WORKER_PERMISSION_CONFIG
     assert worker["permission"] == {"edit": "allow", "bash": "deny", "webfetch": "deny"}
+    # The model tiers table is the M1 WP2 fourth artifact. The seeded
+    # JSON parses cleanly and contains the shipped defaults.
+    tiers = json.loads(tiers_path.read_text(encoding="utf-8"))
+    assert tiers["version"] == 1
+    assert "zai-coding-plan-*" in tiers["tiers"]
+    assert "opencode-*-free" in tiers["tiers"]
 
     # Re-running never mutates an owner-edited profile or re-inits the repo.
     profile_path.write_text(
         json.dumps({"name": "owner-custom", "commands": [], "allowed_paths": []}),
         encoding="utf-8",
     )
+    tiers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tiers": {
+                    "owner-flagship-model": {"tier": "T0", "caps": []},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     again = ensure_execution_policies(layout)
     assert again == seeded
     assert json.loads(profile_path.read_text(encoding="utf-8"))["name"] == "owner-custom"
+    again_tiers = json.loads(tiers_path.read_text(encoding="utf-8"))
+    assert "owner-flagship-model" in again_tiers["tiers"]
+    assert "zai-coding-plan-*" not in again_tiers["tiers"]
+
+
+def test_ensure_execution_policies_model_tiers_default_loads_cleanly() -> None:
+    """The seeded model-tiers.json must parse with ``parse_tier_table``.
+
+    Catches a regression where the on-disk default drifts from
+    ``DEFAULT_TIER_TABLE_JSON``.
+    """
+
+    from personal_ai_orchestrator.model_tiers import parse_tier_table
+    from personal_ai_orchestrator.product_daemon import ensure_execution_policies
+
+    layout = default_application_support_layout(_short_home("pao-policies-tier-"))
+    seeded = ensure_execution_policies(layout)
+    assert seeded is not None
+    _, _, _, tiers_path = seeded
+    parse_tier_table(json.loads(tiers_path.read_text(encoding="utf-8")))  # raises on bad JSON
 
 
 def test_product_daemon_first_boot_success_discovers_exactly_once(
