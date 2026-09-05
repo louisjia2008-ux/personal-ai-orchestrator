@@ -19,6 +19,7 @@ from personal_ai_orchestrator.dispatch_recommender import (
     source_pressure_for,
 )
 from personal_ai_orchestrator.model_registry import QuotaWindowKind
+from personal_ai_orchestrator.model_tiers import ModelTier
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityState
 from personal_ai_orchestrator.quota_burn import BurnPressure
 from personal_ai_orchestrator.scheduler import RoutingObjective
@@ -238,3 +239,112 @@ def test_source_pressure_for_infers_window_started_at_when_omitted() -> None:
     # Inferred start = reset_at - 7d = ~6 d before now, so 50% used at the
     # 6-day mark of a 7-day window is BEHIND (used less than ideal).
     assert source_pressure_for((inferred_window,), now=FIXED_NOW) is BurnPressure.BEHIND
+
+
+# ---------------------------------------------------------------------------
+# M1 WP2 — tier-aware capability_fit + hard tier floor
+# ---------------------------------------------------------------------------
+
+
+def _tier_candidate(
+    target_id: str,
+    *,
+    tier: ModelTier | None = None,
+    tier_match_reason: str | None = None,
+) -> DispatchCandidateInput:
+    return DispatchCandidateInput(
+        execution_target_id=target_id,
+        model_sku_id=f"{target_id}/model",
+        runtime_available=True,
+        verified=True,
+        remaining_fractions=(0.8, 0.9),
+        evidence_observed_at=FIXED_NOW - timedelta(days=1),
+        availability_state=QuotaAvailabilityState.AVAILABLE_OBSERVED,
+        tier=tier,
+        tier_match_reason=tier_match_reason,
+    )
+
+
+def test_default_min_tier_is_T1_and_keeps_existing_rankings_unchanged() -> None:
+    """Adding ``min_tier`` with a T1 default must not flip any existing test.
+
+    Same shape as ``test_quota_saver_prefers_target_with_more_headroom`` —
+    a T0 / T1 / T2 mix under default ``min_tier=T1`` produces the same
+    ranking the old code produced, modulo the 0.1 capability-fit
+    penalty on the T0 row and the hard floor eliminating the T2 row.
+    """
+
+    t0 = _tier_candidate("flagship/m9", tier=ModelTier.T0, tier_match_reason="exact")
+    t1 = _tier_candidate("workhorse/m7", tier=ModelTier.T1, tier_match_reason="exact")
+    t2 = _tier_candidate("fast/m5", tier=ModelTier.T2, tier_match_reason="exact")
+    result = recommend_owner_dispatch(
+        [t0, t1, t2], policy=RoutingObjective.BALANCED, now=FIXED_NOW
+    )
+    # T0 and T1 are at or above the default floor; T2 is below it.
+    admitted_ids = {e.execution_target_id for e in result.evaluations if e.admitted}
+    assert admitted_ids == {"flagship/m9", "workhorse/m7"}
+    blocked = next(e for e in result.evaluations if e.execution_target_id == "fast/m5")
+    assert blocked.admitted is False
+    assert any(
+        reason == "tier_below_minimum(tier=T2,min_tier=T1)" for reason in blocked.reasons
+    )
+
+
+def test_target_below_min_tier_is_hard_eliminated_with_explicit_reason() -> None:
+    """A T2 target for a T0 task must NOT be admitted; the reason names both tiers."""
+
+    t0 = _tier_candidate("flagship/m9", tier=ModelTier.T0, tier_match_reason="exact")
+    t2 = _tier_candidate("fast/m5", tier=ModelTier.T2, tier_match_reason="exact")
+    result = recommend_owner_dispatch(
+        [t0, t2], policy=RoutingObjective.BALANCED, now=FIXED_NOW, min_tier=ModelTier.T0
+    )
+    t2_eval = next(
+        e for e in result.evaluations if e.execution_target_id == "fast/m5"
+    )
+    assert t2_eval.admitted is False
+    assert any(
+        reason == "tier_below_minimum(tier=T2,min_tier=T0)" for reason in t2_eval.reasons
+    )
+
+
+def test_target_above_min_tier_pays_a_gentle_capability_fit_penalty() -> None:
+    """A T0 target for a T1 task is mildly penalised (capability_fit = 0.9).
+
+    The penalty shows up in the ``quality_capability_fit`` score component
+    on the admitted evaluation; the exact arithmetic is owned by the
+    recommender, this test just pins the single-tier-above case so a
+    future refactor cannot silently halve or double it.
+    """
+
+    t0 = _tier_candidate("flagship/m9", tier=ModelTier.T0, tier_match_reason="exact")
+    t1 = _tier_candidate("workhorse/m7", tier=ModelTier.T1, tier_match_reason="exact")
+    result = recommend_owner_dispatch(
+        [t0, t1], policy=RoutingObjective.BALANCED, now=FIXED_NOW, min_tier=ModelTier.T1
+    )
+    components = {
+        c.name: c.value
+        for c in next(
+            e for e in result.evaluations if e.execution_target_id == "flagship/m9"
+        ).score_components
+    }
+    # quality_weight=1.0 for BALANCED; capability_fit = 1.0 - 0.1*(1-0) = 0.9.
+    # component = 1.0 * 0.9 * 25.0 = 22.5.
+    assert components["quality_capability_fit"] == 22.5
+
+
+def test_tier_unknown_is_treated_as_T1_and_recorded_in_reasons() -> None:
+    """A target whose tier the table could not classify still admits.
+
+    The score path treats ``None`` as T1 (no penalty); the reasons
+    tuple records ``tier_unknown_assumed_T1`` so the UI can label it.
+    """
+
+    unknown = _tier_candidate("unknown/m1")  # tier defaults to None
+    result = recommend_owner_dispatch(
+        [unknown], policy=RoutingObjective.BALANCED, now=FIXED_NOW, min_tier=ModelTier.T1
+    )
+    eval_ = result.top_pick
+    assert eval_ is not None
+    assert "tier_unknown_assumed_T1" in eval_.reasons[0]
+    assert "min_tier=T1" in eval_.reasons[0]
+    assert "match=default" in eval_.reasons[0]

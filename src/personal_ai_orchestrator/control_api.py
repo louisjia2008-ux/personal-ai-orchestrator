@@ -55,6 +55,7 @@ from personal_ai_orchestrator.dispatch_recommender import (
     recommend_owner_dispatch,
     source_pressure_for,
 )
+from personal_ai_orchestrator.model_tiers import ModelTier
 from personal_ai_orchestrator.quota_equivalent_capacity import (
     EquivalentCapacityEstimate,
     estimate_equivalent_capacity,
@@ -243,6 +244,13 @@ class DispatchRecommendationCandidate(_ViewModel):
     source_pressure: str | None = None
     score_components: tuple[DispatchRecommendationScoreComponent, ...] = ()
     reasons: tuple[str, ...] = ()
+    # M1 WP2: capability tier for this candidate. ``None`` when the
+    # host-owned tier table could not classify the target (the
+    # recommender assumes T1 in scoring and the reasons tuple records
+    # ``tier_unknown_assumed_T1``). ``tier_match_reason`` is one of
+    # ``\"exact\"`` / ``\"glob\"`` / ``\"default\"``.
+    tier: str | None = None
+    tier_match_reason: str | None = None
 
 
 class DispatchRecommendationView(_ViewModel):
@@ -535,6 +543,12 @@ class ExecutionTargetHealthView(_ViewModel):
     execution_verified_stale: bool = False
     runtime_available: bool | None = None
     observed_availability: ObservedAvailabilityView | None = None
+    # M1 WP2: capability tier for this target. ``None`` means the
+    # host-owned tier table could not classify the target — the Swift
+    # dashboard falls back to its "unknown" label and the recommender
+    # assumes T1 in scoring.
+    tier: str | None = None
+    tier_match_reason: str | None = None
 
 
 class ProviderHealthView(_ViewModel):
@@ -1710,8 +1724,17 @@ class ControlPlaneService:
         # source_pressure projection, so the score and the chip agree on
         # the same instant even if the request takes ~1 ms to render.
         now = datetime.now(UTC)
+        # M1 WP2: pull the task's tier floor. ``min_tier`` was added in
+        # commit 3 and defaults to \"T1\" so existing tasks read cleanly.
+        # Unknown strings from a corrupt row fall back to T1 rather than
+        # 400 — the recommender must not refuse a stored task on a UI
+        # typo in a column the daemon never wrote.
+        try:
+            min_tier_value = ModelTier(task.min_tier)
+        except ValueError:
+            min_tier_value = ModelTier.T1
         recommendation = recommend_owner_dispatch(
-            candidates, policy=policy, now=now
+            candidates, policy=policy, now=now, min_tier=min_tier_value
         )
 
         candidate_views = tuple(
@@ -1831,6 +1854,15 @@ class ControlPlaneService:
                 if evidence is not None:
                     availability_state = evidence.state_at(now=now)
 
+            # M1 WP2: classify the target against the host-owned tier
+            # table. ``None`` here flows all the way through to the
+            # candidate view-model and the chip renders as "unknown".
+            tier_value = None
+            tier_match_reason = None
+            if self.tier_table is not None:
+                entry, tier_match_reason = self.tier_table.lookup(target_id)
+                tier_value = entry.tier
+
             candidates.append(
                 DispatchCandidateInput(
                     execution_target_id=target_id,
@@ -1842,6 +1874,8 @@ class ControlPlaneService:
                     windows=tuple(windows_by_provider.get(provider_id, ())),
                     evidence_observed_at=evidence_observed_at,
                     availability_state=availability_state,
+                    tier=tier_value,
+                    tier_match_reason=tier_match_reason,
                 )
             )
         return candidates
@@ -1891,6 +1925,14 @@ class ControlPlaneService:
                 for component in evaluation.score_components
             ),
             reasons=tuple(evaluation.reasons),
+            tier=(
+                inputs.tier.value
+                if inputs is not None and inputs.tier is not None
+                else None
+            ),
+            tier_match_reason=(
+                inputs.tier_match_reason if inputs is not None else None
+            ),
         )
 
     def owner_execution_settings(self) -> OwnerExecutionSettingsView:
@@ -2434,6 +2476,15 @@ class ControlPlaneService:
             if verified_evidence is not None:
                 execution_verified = True
                 execution_verified_stale = stale_since is not None
+        # M1 WP2: classify the target against the host-owned tier
+        # table. ``None`` means the table is not wired (ad-hoc CLI) or
+        # could not classify the target — both surface as ``tier=None``
+        # on the view-model.
+        tier_value: str | None = None
+        tier_match_reason: str | None = None
+        if self.tier_table is not None:
+            entry, tier_match_reason = self.tier_table.lookup(target.id)
+            tier_value = entry.tier.value
         return ExecutionTargetHealthView(
             execution_target_id=target.id,
             model_sku_id=target.model_sku_id,
@@ -2447,6 +2498,8 @@ class ControlPlaneService:
                 else self._runtime_available(target.id)
             ),
             observed_availability=observed,
+            tier=tier_value,
+            tier_match_reason=tier_match_reason,
         )
 
     def providers(self) -> ProviderHealthListView:

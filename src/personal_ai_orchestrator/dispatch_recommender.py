@@ -5,11 +5,13 @@ with hard eligibility gates applied before scoring.
 
 Distinct from :mod:`scheduler.route_task`: this recommender does NOT
 require a :class:`TaskProfile`. Owner-dispatch has no natural-language-
-to-capability inference path yet, so capability fit is uniformly 1.0
-and the policy weights redistribute into the signals it does know —
-quota headroom, evidence freshness, runtime availability. The reasoning
-is reported per candidate, so the owner can see what was and was not
-considered.
+to-capability inference path yet, so capability fit was uniformly 1.0
+through P4. M1 WP2 makes ``capability_fit`` tier-aware: a flagship T0
+target for a T1 task is mildly penalised ("overkill"); a T2 target for
+the same T1 task is hard-eliminated ("below the task's floor"). The
+penalty is gentle by design — WP3's pressure term can absorb it — and
+the elimination is hard because a tier below the floor is the kind of
+"this is the wrong model" decision no policy override should undo.
 
 M1 WP1 adds ``CandidateWindowInput`` and ``DispatchCandidateInput.windows``:
 the per-window data the recommender (and the card-rendering
@@ -28,6 +30,13 @@ from datetime import datetime
 from typing import Iterable, Mapping, Sequence
 
 from personal_ai_orchestrator.model_registry import QuotaWindowKind
+from personal_ai_orchestrator.model_tiers import (
+    DEFAULT_TIER_ENTRY,
+    ModelTier,
+    TierTable,
+    meets_minimum,
+    tier_index,
+)
 from personal_ai_orchestrator.quota_availability import (
     QuotaAvailabilityState,
 )
@@ -87,6 +96,15 @@ class DispatchCandidateInput:
     # Availability state from the quota admission journal. ``UNKNOWN``
     # when no journal entry exists.
     availability_state: QuotaAvailabilityState = QuotaAvailabilityState.UNKNOWN
+    # M1 WP2: capability tier for this target, resolved from the host
+    # tier table. ``None`` means the recommender could not classify the
+    # target — capability_fit then assumes T1 (the default entry) and
+    # the reasons tuple records ``tier_unknown_assumed_T1`` so the UI
+    # can flag it. ``tier_match_reason`` is one of ``\"exact\"``,
+    # ``\"glob\"``, ``\"default\"`` so the dashboard can label pattern
+    # matches as such.
+    tier: ModelTier | None = None
+    tier_match_reason: str | None = None
 
 
 def source_pressure_for(
@@ -146,8 +164,18 @@ def _hard_eligibility(
     candidate: DispatchCandidateInput,
     *,
     now: datetime,
+    min_tier: ModelTier,
 ) -> tuple[bool, str]:
-    """Pre-score gates: verified, runtime-available, not exhausted."""
+    """Pre-score gates: verified, runtime-available, not exhausted, tier-met.
+
+    M1 WP2 added the tier floor check. A target whose resolved tier
+    is strictly below ``min_tier`` is hard-eliminated — the reason
+    string carries both tiers so the UI can render it verbatim
+    without a second lookup. A target with ``tier is None`` (the
+    table could not classify it) is NOT eliminated; the score path
+    treats ``None`` as the default ``ModelTier.T1`` and the reasons
+    tuple records ``tier_unknown_assumed_T1``.
+    """
 
     if not candidate.verified:
         return False, "execution target has not been runtime-verified"
@@ -161,6 +189,11 @@ def _hard_eligibility(
         return False, "no quota observation reported for this target"
     if min(candidate.remaining_fractions) <= 0.0:
         return False, "every quota window reports zero remaining"
+    if candidate.tier is not None and not meets_minimum(candidate.tier, min_tier):
+        return (
+            False,
+            f"tier_below_minimum(tier={candidate.tier.value},min_tier={min_tier.value})",
+        )
     return True, ""
 
 
@@ -195,16 +228,25 @@ def _score(
     *,
     policy: RoutingObjective,
     now: datetime,
+    min_tier: ModelTier,
 ) -> tuple[float, tuple[tuple[str, float], ...]]:
     quality_weight, quota_weight, latency_weight, cost_weight = _objective_weights(policy)
 
     headroom = _headroom(candidate)
     freshness = _freshness_bonus(candidate, now=now)
 
-    # Capability fit is unknown without a TaskProfile. Declare 1.0 openly
-    # rather than inferring intent — the policy redistributes its weight
-    # onto the signals it does know.
-    capability_fit = 1.0
+    # M1 WP2 capability fit: gentle penalty for \"overkill\" (target tier
+    # higher than min_tier), zero penalty for \"exact match\", and the
+    # hard-eliminated \"below floor\" case is already filtered out by
+    # ``_hard_eligibility``. ``tier is None`` is treated as T1 so an
+    # unclassified target gets the same score a T1 target would.
+    effective_tier = candidate.tier if candidate.tier is not None else ModelTier.T1
+    capability_fit = 1.0 - 0.1 * (
+        tier_index(min_tier) - tier_index(effective_tier)
+    )
+    # The penalty is clamped so a far-above-min tier cannot push
+    # capability_fit below zero — the scoring math stays readable.
+    capability_fit = max(0.0, min(1.0, capability_fit))
 
     components: list[tuple[str, float]] = [
         ("quality_capability_fit", quality_weight * capability_fit * 25.0),
@@ -225,12 +267,21 @@ def recommend_owner_dispatch(
     *,
     policy: RoutingObjective,
     now: datetime,
+    min_tier: ModelTier = ModelTier.T1,
 ) -> DispatchRecommendation:
-    """Rank :class:`DispatchCandidateInput` by ``policy`` and admit gates."""
+    """Rank :class:`DispatchCandidateInput` by ``policy`` and admit gates.
+
+    ``min_tier`` defaults to ``ModelTier.T1`` (workhorse) so every
+    existing call site that did not think about tier keeps producing
+    the same ranking — a flagship T0 target for a T1-default task is
+    mildly penalised, a T2 target is hard-eliminated.
+    """
 
     evaluations: list[CandidateEvaluation] = []
     for candidate in candidates:
-        eligible, ineligible_reason = _hard_eligibility(candidate, now=now)
+        eligible, ineligible_reason = _hard_eligibility(
+            candidate, now=now, min_tier=min_tier
+        )
         if not eligible:
             evaluations.append(
                 CandidateEvaluation(
@@ -243,7 +294,14 @@ def recommend_owner_dispatch(
                 )
             )
             continue
-        score, components = _score(candidate, policy=policy, now=now)
+        score, components = _score(
+            candidate, policy=policy, now=now, min_tier=min_tier
+        )
+        tier_reason = (
+            "tier_unknown_assumed_T1"
+            if candidate.tier is None
+            else f"tier={candidate.tier.value}"
+        )
         evaluations.append(
             CandidateEvaluation(
                 execution_target_id=candidate.execution_target_id,
@@ -260,7 +318,9 @@ def recommend_owner_dispatch(
                         f"policy={policy.value}, "
                         f"headroom={_headroom(candidate):.2f}, "
                         f"verified={candidate.verified}, "
-                        f"runtime={candidate.runtime_available}"
+                        f"runtime={candidate.runtime_available}, "
+                        f"{tier_reason} min_tier={min_tier.value} "
+                        f"match={candidate.tier_match_reason or 'default'}"
                     ),
                 ),
             )
