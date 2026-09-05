@@ -19,6 +19,7 @@ from personal_ai_orchestrator.dispatch_recommender import (
     recommend_owner_dispatch,
     source_pressure_for,
 )
+from personal_ai_orchestrator.control_api import DispatchRecommendationCandidate
 from personal_ai_orchestrator.model_registry import QuotaWindowKind
 from personal_ai_orchestrator.model_tiers import ModelTier
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityState
@@ -597,3 +598,81 @@ def test_manual_policy_uses_balanced_with_explicit_reason() -> None:
     assert "policy=BALANCED" in top.reasons[0]
     assert "manual_policy_recommendation_uses_balanced" in top.reasons[0]
     assert result.policy is RoutingObjective.MANUAL  # wire label preserved
+
+
+# ---------------------------------------------------------------------------
+# M1 WP3 fix (F1) — headroom_mean rides on its own field; effective_pace
+# stays None on the recommender path so the field keeps its
+# ``QuotaSnapshot.effective_pace`` contract.
+# ---------------------------------------------------------------------------
+
+
+def test_recommender_headroom_mean_uses_explicit_field_not_effective_pace() -> None:
+    """``headroom_mean`` must NOT be smuggled into ``effective_pace``.
+
+    WP3 carried the headroom mean in ``effective_pace`` because no
+    dedicated field existed. That broke the ``effective_pace``
+    contract — on the recommender path the value was a headroom mean,
+    on the scheduler path it was the ``QuotaSnapshot.effective_pace``
+    scarcity-classifier input. The fix moves the mean to
+    ``headroom_mean_fraction`` and leaves ``effective_pace`` at its
+    default ``None`` on the recommender path.
+    """
+
+    candidate = _candidate(
+        "provider-A/m3",
+        remaining=(0.6, 0.9),
+    )
+    result = recommend_owner_dispatch(
+        [candidate], policy=RoutingObjective.BALANCED, now=FIXED_NOW
+    )
+    top = result.top_pick
+    assert top is not None
+    # ``headroom_mean_fraction`` carries the arithmetic mean of
+    # ``remaining_fractions`` — a real value, not None.
+    assert top.headroom_mean_fraction is not None
+    assert abs(top.headroom_mean_fraction - 0.75) < 1e-9
+    # ``effective_pace`` stays at its default — the recommender has
+    # no ``QuotaSnapshot`` so there is no value to smuggle in.
+    assert top.effective_pace is None
+    # The wire-shape candidate view mirrors the dedicated field so
+    # the Swift UI can render both numbers alongside the score.
+    view = DispatchRecommendationCandidate.model_validate(
+        {
+            "execution_target_id": top.execution_target_id,
+            "model_sku_id": top.model_sku_id,
+            "eligible": top.eligible,
+            "admitted": top.admitted,
+            "score": top.score,
+            "headroom_mean": top.headroom_mean_fraction,
+            "headroom_min": min((0.6, 0.9)),
+            "evidence_fresh": True,
+            "runtime_available": True,
+            "verified": True,
+            "quota_state": "AVAILABLE_OBSERVED",
+            "score_components": [],
+            "reasons": top.reasons,
+        }
+    )
+    assert view.headroom_mean == 0.75
+
+
+def test_recommender_scheduler_paths_agree_effective_pace_contract() -> None:
+    """Both paths leave ``effective_pace`` as ``None`` for the same input.
+
+    The scheduler path fills ``effective_pace`` from
+    ``QuotaSnapshot.effective_pace``; the recommender path has no
+    snapshot and so leaves the field at its default. A future
+    observer must not see a headroom mean in either field.
+    """
+
+    candidate = _candidate("p/m", remaining=(0.6, 0.9))
+    result = recommend_owner_dispatch(
+        [candidate], policy=RoutingObjective.BALANCED, now=FIXED_NOW
+    )
+    top = result.top_pick
+    assert top is not None
+    assert top.effective_pace is None
+    # Sanity: the headroom mean and min are two distinct numbers.
+    assert top.headroom_mean_fraction is not None
+    assert abs(top.headroom_mean_fraction - 0.75) < 1e-9

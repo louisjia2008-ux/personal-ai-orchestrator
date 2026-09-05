@@ -158,6 +158,19 @@ class CandidateEvaluation(RegistryModel):
     scarcity_class: ScarcityClass = ScarcityClass.UNKNOWN
     minimum_remaining_fraction: float | None = None
     usable_headroom_fraction: float | None = None
+    #: M1 WP3 fix (F1): explicit mean headroom across all observed
+    #: quota windows for this candidate. Distinct from
+    #: ``minimum_remaining_fraction`` (the binding-window minimum that
+    #: drives ``headroom_term``) and from ``effective_pace`` (the
+    #: scarcity-classifier input — a single ``float | None`` from the
+    #: ``QuotaSnapshot``). Prior to the fix the recommender smuggled
+    #: the mean into ``effective_pace`` because no dedicated field
+    #: existed; that broke the ``effective_pace`` contract (it is no
+    #: longer equal to the original ``QuotaSnapshot`` value) and made
+    #: the field a synonym for ``headroom_mean`` in one path only. The
+    #: scheduler's own path (which fills ``effective_pace`` from
+    #: ``snapshot.effective_pace``) was unaffected.
+    headroom_mean_fraction: float | None = None
     predicted_burn_fraction: float | None = None
     observed_availability_state: str | None = None
     score_components: tuple[ScoreComponent, ...] = ()
