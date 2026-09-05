@@ -299,22 +299,43 @@ def test_warn_threshold_logs_slow_step_but_keeps_loop(
     assert any(s.name == "slow" for s in snapshot.steps)
 
 
-def test_naive_clock_is_rejected() -> None:
-    """The supervisor refuses a clock that returns tz-naive datetimes."""
+def test_naive_clock_is_rejected_at_construction() -> None:
+    """A naive clock fails the supervisor at ``__init__``.
 
-    supervisor = DaemonSupervisor(
-        interval_seconds=0.01, clock=NaiveClock()  # type: ignore[arg-type]
-    )
+    Silently skipping ticks would leave the daemon alive but never
+    advancing ``last_tick_at`` — the worst "false alive" failure mode.
+    We surface the bad clock before the daemon thread starts.
+    """
+
+    with pytest.raises(ValueError, match="tz-aware"):
+        DaemonSupervisor(
+            interval_seconds=0.01,
+            clock=NaiveClock(),  # type: ignore[arg-type]
+        )
+
+
+def test_naive_clock_is_rejected_at_runtime() -> None:
+    """A clock that turns naive mid-run raises out of ``run()``.
+
+    The construction-time check is the primary guard; this is the
+    defensive belt-and-braces check inside ``run()`` itself, in case
+    someone hot-swaps the clock for one that loses tzinfo.
+    """
+
+    good_calls = {"n": 0}
+
+    def flaky_clock() -> datetime:
+        good_calls["n"] += 1
+        if good_calls["n"] == 1:
+            return datetime.now(UTC)
+        return datetime.now()  # naive, second call
+
+    supervisor = DaemonSupervisor(interval_seconds=0.01, clock=flaky_clock)
     supervisor.register("noop", lambda _now: None)
 
     stop = threading.Event()
-    thread = threading.Thread(target=supervisor.run, args=(stop,), daemon=True)
-    thread.start()
-    time.sleep(0.05)
-    stop.set()
-    thread.join(timeout=2.0)
-    # No assertion on last_tick_at — naive clocks must NOT advance it.
-    assert supervisor.snapshot().last_tick_at is None
+    with pytest.raises(ValueError, match="tz-aware"):
+        supervisor.run(stop)
 
 
 def test_snapshot_is_immutable_and_exposes_required_view() -> None:
