@@ -1,5 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from personal_ai_orchestrator.activation import ActiveRoutingGate
 from personal_ai_orchestrator.model_registry import (
     Account,
@@ -29,8 +31,10 @@ from personal_ai_orchestrator.scheduler import (
     RiskClass,
     RoutingObjective,
     RoutingPolicy,
+    ScoreWeights,
     TargetTelemetry,
     TaskProfile,
+    objective_weights,
     resolve_scheduling_policy,
     route_task,
 )
@@ -466,3 +470,90 @@ def test_weak_positive_observed_success_does_not_authorize_unknown_subscription_
     assert candidate.observed_availability_state == "AVAILABLE_OBSERVED"
     assert any("quota confidence unknown" in reason for reason in candidate.reasons)
     assert decision.selected_execution_target_id is None
+
+
+# ---------------------------------------------------------------------------
+# M1 WP3 — objective_weights returns the shared ScoreWeights dataclass
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "objective,expected",
+    [
+        (
+            RoutingObjective.QUALITY_FIRST,
+            ScoreWeights(quality=1.4, pressure=0.2, headroom=0.3, latency=0.4, cost=0.1),
+        ),
+        (
+            RoutingObjective.QUOTA_SAVER,
+            ScoreWeights(quality=0.5, pressure=0.4, headroom=0.3, latency=0.5, cost=1.0),
+        ),
+        (
+            RoutingObjective.SPEED_FIRST,
+            ScoreWeights(quality=0.9, pressure=0.6, headroom=0.4, latency=1.6, cost=0.5),
+        ),
+        (
+            RoutingObjective.BURN_DOWN,
+            ScoreWeights(quality=0.4, pressure=1.0, headroom=0.6, latency=0.4, cost=0.2),
+        ),
+        # BALANCED + MANUAL both fall back to the BALANCED preset.
+        # MANUAL is a "do not pick automatically" task-level override;
+        # ``evaluate_target`` short-circuits it before scoring; the
+        # recommender adds ``manual_policy_recommendation_uses_balanced``
+        # to the reasons when asked to recommend against MANUAL
+        # anyway. ``objective_weights(MANUAL)`` therefore equals the
+        # BALANCED preset so the recommender's score math does not
+        # silently down-rank a manual pick.
+        (
+            RoutingObjective.BALANCED,
+            ScoreWeights(quality=0.7, pressure=0.6, headroom=0.4, latency=1.0, cost=0.3),
+        ),
+        (
+            RoutingObjective.MANUAL,
+            ScoreWeights(quality=0.7, pressure=0.6, headroom=0.4, latency=1.0, cost=0.3),
+        ),
+    ],
+)
+def test_objective_weights_returns_scoreweights_dataclass(
+    objective: RoutingObjective, expected: ScoreWeights
+) -> None:
+    """The shared ``ScoreWeights`` covers every owner-facing objective.
+
+    The exact floats are part of the contract — a future tuning
+    commit must touch this assertion so the recommender test (which
+    pins the Σ weight×value == score identity) does not silently
+    drift.
+    """
+
+    assert objective_weights(objective) == expected
+
+
+def test_burn_down_emphasises_pressure_term() -> None:
+    """BURN_DOWN's ``pressure`` weight must exceed every other preset.
+
+    The whole point of BURN_DOWN is to make a STARVED source rank
+    above an ON_TRACK one for the same provider. The assertion pins
+    the ordering — a future tuning commit must keep
+    ``pressure >= 1.0`` and strictly above the other presets.
+    """
+
+    burn_down = objective_weights(RoutingObjective.BURN_DOWN)
+    for other in (
+        RoutingObjective.BALANCED,
+        RoutingObjective.QUALITY_FIRST,
+        RoutingObjective.QUOTA_SAVER,
+        RoutingObjective.SPEED_FIRST,
+    ):
+        assert burn_down.pressure > objective_weights(other).pressure
+
+
+def test_scoreweights_is_public_and_frozen() -> None:
+    """``ScoreWeights`` is part of the public surface (``__all__``).
+
+    Frozen-ness guarantees the dataclass is hashable + safe to share
+    across the scheduler and recommender without defensive copies.
+    """
+
+    weights = objective_weights(RoutingObjective.BALANCED)
+    with pytest.raises((AttributeError, Exception)):
+        weights.quality = 0.0  # type: ignore[misc]

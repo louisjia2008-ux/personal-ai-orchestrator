@@ -327,9 +327,10 @@ def test_target_above_min_tier_pays_a_gentle_capability_fit_penalty() -> None:
             e for e in result.evaluations if e.execution_target_id == "flagship/m9"
         ).score_components
     }
-    # quality_weight=1.0 for BALANCED; capability_fit = 1.0 - 0.1*(1-0) = 0.9.
-    # component = 1.0 * 0.9 * 25.0 = 22.5.
-    assert components["quality_capability_fit"] == 22.5
+# quality_weight=0.7 for BALANCED (M1 WP3 ScoreWeights);
+        # capability_fit = 1.0 - 0.1*(1-0) = 0.9.
+        # component = 0.7 * 0.9 * 25.0 = 15.75.
+    assert components["quality_capability_fit"] == 15.75
 
 
 def test_tier_unknown_is_treated_as_T1_and_recorded_in_reasons() -> None:

@@ -48,8 +48,8 @@ from personal_ai_orchestrator.quota_burn import (
 from personal_ai_orchestrator.scheduler import (
     CandidateEvaluation,
     RoutingObjective,
-    _objective_weights,
     _score_candidate,
+    objective_weights,
 )
 
 
@@ -230,14 +230,18 @@ def _score(
     now: datetime,
     min_tier: ModelTier,
 ) -> tuple[float, tuple[tuple[str, float], ...]]:
-    quality_weight, quota_weight, latency_weight, cost_weight = _objective_weights(policy)
+    weights = objective_weights(policy)
+    quality_weight = weights.quality
+    quota_weight = weights.headroom
+    latency_weight = weights.latency
+    cost_weight = weights.cost
 
     headroom = _headroom(candidate)
     freshness = _freshness_bonus(candidate, now=now)
 
-    # M1 WP2 capability fit: gentle penalty for \"overkill\" (target tier
-    # higher than min_tier), zero penalty for \"exact match\", and the
-    # hard-eliminated \"below floor\" case is already filtered out by
+    # M1 WP2 capability fit: gentle penalty for "overkill" (target tier
+    # higher than min_tier), zero penalty for "exact match", and the
+    # hard-eliminated "below floor" case is already filtered out by
     # ``_hard_eligibility``. ``tier is None`` is treated as T1 so an
     # unclassified target gets the same score a T1 target would.
     effective_tier = candidate.tier if candidate.tier is not None else ModelTier.T1

@@ -222,6 +222,42 @@ def test_global_default_rejects_manual(tmp_path: Path) -> None:
         settings.set_default_policy("MANUAL")
 
 
+# --------------------------------------------------------------------------
+# M1 WP3 — BURN_DOWN joins the owner-facing selector list
+# --------------------------------------------------------------------------
+
+
+def test_settings_default_policy_can_be_set_to_BURN_DOWN(tmp_path: Path) -> None:
+    """BURN_DOWN joins BALANCED/QUALITY_FIRST/QUOTA_SAVER/SPEED_FIRST.
+
+    The pressure-first preset makes a STARVED target rank above an
+    ON_TRACK one for the same provider. ``MANUAL`` stays excluded —
+    a global default cannot name a target that is valid for every
+    future task.
+    """
+
+    path = tmp_path / "scheduling-settings.json"
+    settings = SchedulingSettings(path)
+    settings.set_default_policy("BURN_DOWN")
+    assert settings.default_policy == "BURN_DOWN"
+
+    # Reload — the host-owned file persists across daemon restarts.
+    assert SchedulingSettings(path).default_policy == "BURN_DOWN"
+
+
+def test_settings_default_rejects_unknown_policy(tmp_path: Path) -> None:
+    """The owner-facing selector list is closed.
+
+    ``BURN_DOWN`` is the only WP3 addition; any other string is
+    rejected by ``set_default_policy`` so a future typo never quietly
+    defaults the whole system to an unsupported objective.
+    """
+
+    settings = SchedulingSettings(tmp_path / "scheduling-settings.json")
+    with pytest.raises(ValueError, match="unsupported_global_scheduling_policy"):
+        settings.set_default_policy("UNKNOWN_OBJECTIVE")
+
+
 def test_corrupt_settings_fail_closed_to_balanced(tmp_path: Path) -> None:
     path = tmp_path / "scheduling-settings.json"
     path.write_text("{ this is not json", encoding="utf-8")
