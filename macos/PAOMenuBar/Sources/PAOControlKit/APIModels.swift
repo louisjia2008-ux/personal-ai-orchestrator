@@ -2049,6 +2049,24 @@ public struct OwnerExecutionSettingsUpdateRequest: Encodable, Equatable, Sendabl
 public struct DispatchRecommendationScoreComponent: Decodable, Equatable, Sendable {
     public let name: String
     public let contribution: Double
+    /// M1 WP3: weight the recommender applied to the underlying
+    /// value. ``decodeIfPresent`` keeps pre-WP2 clients parsing;
+    /// missing → nil so the UI can render "weight unknown" rather
+    /// than guessing.
+    public let weight: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case contribution
+        case weight
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        contribution = try container.decode(Double.self, forKey: .contribution)
+        weight = try container.decodeIfPresent(Double.self, forKey: .weight)
+    }
 }
 
 public struct DispatchRecommendationCandidate: Decodable, Equatable, Identifiable, Sendable {
@@ -2058,6 +2076,12 @@ public struct DispatchRecommendationCandidate: Decodable, Equatable, Identifiabl
     public let admitted: Bool
     public let score: Double?
     public let headroomMean: Double?
+    /// M1 WP3: binding-window minimum. Drives the ``headroom_term``
+    /// score column; ``None`` propagates the "every window has
+    /// missing data" signal end-to-end (the recommender surfaces
+    /// ``headroom_unmetered`` in the same response). ``headroomMean``
+    /// stays alongside for the UI.
+    public let headroomMin: Double?
     public let evidenceFresh: Bool
     public let runtimeAvailable: Bool
     public let verified: Bool
@@ -2091,6 +2115,7 @@ public struct DispatchRecommendationCandidate: Decodable, Equatable, Identifiabl
         case admitted
         case score
         case headroomMean = "headroom_mean"
+        case headroomMin = "headroom_min"
         case evidenceFresh = "evidence_fresh"
         case runtimeAvailable = "runtime_available"
         case verified
@@ -2123,6 +2148,7 @@ public struct DispatchRecommendationCandidate: Decodable, Equatable, Identifiabl
         reasons = try container.decodeIfPresent([String].self, forKey: .reasons) ?? []
         tier = try container.decodeIfPresent(String.self, forKey: .tier)
         tierMatchReason = try container.decodeIfPresent(String.self, forKey: .tierMatchReason)
+        headroomMin = try container.decodeIfPresent(Double.self, forKey: .headroomMin)
     }
 }
 
@@ -2142,3 +2168,17 @@ public struct DispatchRecommendationView: Decodable, Equatable, Sendable {
     }
 }
 
+
+
+/// M1 WP3: the single source of truth for the owner-facing
+/// selectable policy list. The Swift dashboard reads this as the
+/// fallback when the daemon has not yet pushed
+/// ``SchedulingSettingsView.selectablePolicies`` (e.g. settings
+/// store uninitialised on first launch). Includes ``BURN_DOWN``
+/// because M1 WP3 makes it the pressure-first preset.
+public enum SelectablePolicyFallback {
+    public static let policies: [String] = [
+        "BALANCED", "QUALITY_FIRST", "QUOTA_SAVER",
+        "SPEED_FIRST", "BURN_DOWN",
+    ]
+}

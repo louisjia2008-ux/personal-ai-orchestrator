@@ -173,6 +173,10 @@ struct QuotaMeter: View {
     let fraction: Double?
     let level: EvidenceLevel
     let tone: StatusTone
+    /// M1 WP3 ideal-pace tick. ``nil`` (default) → no tick rendered
+    /// (pre-WP3 behaviour, back-compat with every fixture that
+    /// does not yet expose ``expectedUsedFraction``).
+    var idealPaceTick: Double?
 
     private var mayFill: Bool {
         level.mayFillMeter && fraction != nil
@@ -187,6 +191,18 @@ struct QuotaMeter: View {
                     Capsule()
                         .fill(tone.fillColor)
                         .frame(width: geometry.size.width * CGFloat(min(1, max(0, fraction))))
+                }
+                if let tick = idealPaceTick {
+                    // Vertical line at the ideal-pace position. ``0.0
+                    // ≤ tick ≤ 1.0``; the WP3 default skips it via the
+                    // ``nil`` branch above.
+                    Rectangle()
+                        .fill(Color(nsColor: .labelColor).opacity(0.6))
+                        .frame(width: 1.5)
+                        .frame(height: 12)
+                        .offset(x: geometry.size.width
+                                * CGFloat(min(1, max(0, tick))) - 0.75)
+                        .accessibilityLabel("ideal pace")
                 }
             }
         }

@@ -50,6 +50,34 @@ final class RoutingContractTests: XCTestCase {
         }
     }
 
+    // MARK: - M1 WP3 — BURN_DOWN round-trip (inline JSON, no new fixture)
+
+    func testBurnDownPolicyStringDecodesAndRenders() throws {
+        // Per spec correction: an inline JSON body proves BURN_DOWN
+        // does not crash a Swift decoder that previously only knew the
+        // legacy five strings. ``scheduling_policy`` is the lenient
+        // ``String`` decoder; ``schedulingPolicyName`` must render the
+        // new label via the WP3 BURN_DOWN branch.
+        let json = """
+        {
+          "task_id":"t-burn",
+          "scheduling_policy":"BURN_DOWN",
+          "candidates":[],
+          "top_pick":null,
+          "decision_reason":"burn_down ranks STARVED first"
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.schedulingPolicy, "BURN_DOWN")
+        XCTAssertEqual(
+            L10n.schedulingPolicyName(view.schedulingPolicy),
+            L10n.policyBurnDown
+        )
+        XCTAssertNotEqual(L10n.policyBurnDown, L10n.policyBurnDownDetail)
+    }
+
     // MARK: - Backward compatibility
 
     func testLegacyDaemonYieldsSynthesizedPrimaryOnlyPlan() throws {

@@ -253,10 +253,16 @@ struct DispatchRecommendationRow: View {
                 Text(candidate.executionTargetId)
                     .font(.system(.caption, design: .monospaced))
                 if let score = candidate.score {
+                    // M1 WP3: bind-window minimum drives the score;
+                    // ``headroomMin`` is the headline number alongside
+                    // the score. ``headroomMean`` is still on the
+                    // view-model for parity (test_surface) and for
+                    // the score-text fallback when ``headroomMin`` is
+                    // nil because every window has missing data.
+                    let headroom = candidate.headroomMin
+                        ?? candidate.headroomMean ?? 0
                     Text(L10n.recommendationScore(
-                        score,
-                        candidate.headroomMean ?? 0,
-                        candidate.evidenceFresh
+                        score, headroom, candidate.evidenceFresh
                     ))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -270,6 +276,27 @@ struct DispatchRecommendationRow: View {
                     Text(reason)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
+                }
+                // M1 WP3: explainable score rows. Five ``weight ×
+                // value`` components expand below the reason list;
+                // the ``weight`` column is the recommender-applied
+                // multiplier from the same ``ScoreWeights`` dataclass
+                // the daemon uses. ``weight: nil`` renders as
+                // ``"unknown"`` so a future tuning commit cannot
+                // accidentally drop the multiplier without surfacing
+                // it on the panel.
+                if !candidate.scoreComponents.isEmpty {
+                    DisclosureGroup("Score components") {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(candidate.scoreComponents, id: \.name) { c in
+                                Text(componentLine(name: c.name, weight: c.weight, contribution: c.contribution))
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        .padding(.leading, 4)
+                    }
+                    .font(.caption2)
                 }
             }
             Spacer(minLength: 0)
@@ -313,6 +340,21 @@ struct DispatchRecommendationRow: View {
         case "T3": return "leaf.fill"
         default: return "questionmark.circle"
         }
+    }
+
+    /// M1 WP3: render the per-row weight as ``"0.70"`` (two decimals
+    /// so the owner can compare ``pressure=1.0`` vs ``quality=0.7``
+    /// at a glance) or ``"unknown"`` when ``weight`` is nil.
+    private func weightLabel(_ weight: Double?) -> String {
+        guard let weight else { return "unknown" }
+        return String(format: "%.2f", weight)
+    }
+
+    /// M1 WP3: build the score-row text. Avoids backslash-escape
+    /// gymnastics inside the string interpolation.
+    private func componentLine(name: String, weight: Double?, contribution: Double) -> String {
+        return "\(name): weight \(weightLabel(weight)) × value " +
+            String(format: "%.3f", contribution)
     }
 }
 struct TaskRoutingReadinessNotice: View {

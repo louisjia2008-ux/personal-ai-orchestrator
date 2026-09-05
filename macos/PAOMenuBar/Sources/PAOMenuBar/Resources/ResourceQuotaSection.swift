@@ -168,7 +168,15 @@ struct QuotaBindingRow: View {
             if binding.isReadable, let fraction = binding.remainingFraction {
                 // Observed, so the meter may be filled.
                 QuotaMeter(
-                    fraction: fraction, level: .observed, tone: binding.status.tone
+                    fraction: fraction,
+                    level: .observed,
+                    tone: binding.status.tone,
+                    // M1 WP3 ideal-pace tick (the spec §3.5
+                    // deferred this from WP1). ``burn.expectedUsedFraction``
+                    // is non-nil only when the burn was computed —
+                    // pre-WP3 fixtures leave it nil and the meter
+                    // renders without the tick.
+                    idealPaceTick: binding.burn?.expectedUsedFraction,
                 )
                 HStack(spacing: Spacing.inner) {
                     Text(

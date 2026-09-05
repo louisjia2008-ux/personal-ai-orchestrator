@@ -121,9 +121,10 @@ public enum L10n {
         "kpi.running", "kpi.ready", "kpi.blocked", "kpi.verification", "kpi.completed",
         "kpi.verificationDetail",
         "policy.balanced", "policy.qualityFirst", "policy.quotaSaver",
-        "policy.speedFirst", "policy.manual",
+        "policy.speedFirst", "policy.burnDown", "policy.manual",
         "policy.balanced.detail", "policy.qualityFirst.detail",
-        "policy.quotaSaver.detail", "policy.speedFirst.detail", "policy.manual.detail",
+        "policy.quotaSaver.detail", "policy.speedFirst.detail",
+        "policy.burnDown.detail", "policy.manual.detail",
         "policy.title", "policy.change", "policy.useGlobalDefault",
         "policy.globalDefault", "policy.resolutionSource",
         "policy.source.task", "policy.source.project", "policy.source.global",
@@ -585,6 +586,7 @@ public enum L10n {
         case "QUALITY_FIRST": return tr("policy.qualityFirst")
         case "QUOTA_SAVER": return tr("policy.quotaSaver")
         case "SPEED_FIRST": return tr("policy.speedFirst")
+        case "BURN_DOWN": return tr("policy.burnDown")
         case "MANUAL": return tr("policy.manual")
         default: return policy
         }
@@ -596,6 +598,7 @@ public enum L10n {
         case "QUALITY_FIRST": return tr("policy.qualityFirst.detail")
         case "QUOTA_SAVER": return tr("policy.quotaSaver.detail")
         case "SPEED_FIRST": return tr("policy.speedFirst.detail")
+        case "BURN_DOWN": return tr("policy.burnDown.detail")
         case "MANUAL": return tr("policy.manual.detail")
         default: return policy
         }
@@ -1620,6 +1623,14 @@ public enum L10n {
     /// evidence for an execution target is non-VERIFIED while an older
     /// VERIFIED row still exists (demote-fallback semantics).
     public static var targetVerifiedStale: String { tr("target.verifiedStale") }
+
+    // MARK: M1 WP3 — BURN_DOWN objective
+
+    /// ``policy.burnDown`` — picker label for the pressure-first preset.
+    public static var policyBurnDown: String { tr("policy.burnDown") }
+
+    /// ``policy.burnDown.detail`` — picker help text for BURN_DOWN.
+    public static var policyBurnDownDetail: String { tr("policy.burnDown.detail") }
 
     public static var quotaProjectionTitle: String { tr("quota.projection.title") }
     public static var quotaProjectionRemainingAtReset: String {

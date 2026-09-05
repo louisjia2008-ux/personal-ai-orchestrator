@@ -796,3 +796,6 @@
 "tier.unknown" = "未知";
 // WP5b (brought forward) — stale-verification chip on target rows.
 "target.verifiedStale" = "验证已过时";
+// M1 WP3 — BURN_DOWN objective (pressure-first preset).
+"policy.burnDown" = "用尽额度";
+"policy.burnDown.detail" = "优先使用即将过期未用的额度";
