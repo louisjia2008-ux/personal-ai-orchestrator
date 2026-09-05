@@ -15,16 +15,29 @@ struct ResourceQuotaSection: View {
 
     private var bindings: [QuotaBindingSnapshot] { resource.quotaBindings }
 
-    /// M1 WP1 burn pressure → tone. STARVED uses the healthy tone (the
-    /// verdict means "lots of remaining quota about to reset" — not
-    /// "almost empty"). AHEAD uses caution (orchestrator should
-    /// throttle). UNMETERED / STALE use unknown (honest states, not
-    /// failures).
+    /// M1 WP1 burn pressure → tone. The verdict governs the tone, not
+    /// the row position:
+    ///
+    /// - ``EXHAUSTED`` uses critical (no quota left, the dashboard must
+    ///   show it loud).
+    /// - ``AHEAD`` and ``STARVED`` use caution (the verdict is a
+    ///   signal that action is required: throttle, or let it expire).
+    ///   STARVED's label is "Expiring unused" — the meaning is "lots of
+    ///   remaining about to reset", and that is a caution, not good
+    ///   news. WP6 will dispatch on this row.
+    /// - ``BEHIND`` and ``ON_TRACK`` use positive (the burn curve is in
+    ///   a healthy place relative to the ideal line).
+    /// - ``UNMETERED`` uses neutral (free / unmeasured is a determined
+    ///   state, not a missing signal).
+    /// - ``STALE`` uses unknown (cached data on an expired window — the
+    ///   UI should not advertise it as either good or bad).
     static func pressureTone(_ pressure: String) -> StatusTone {
         switch pressure {
-        case "EXHAUSTED", "AHEAD": return .caution
-        case "STARVED", "BEHIND", "ON_TRACK": return .positive
-        case "UNMETERED", "STALE": return .unknown
+        case "EXHAUSTED": return .critical
+        case "AHEAD", "STARVED": return .caution
+        case "BEHIND", "ON_TRACK": return .positive
+        case "UNMETERED": return .neutral
+        case "STALE": return .unknown
         default: return .unknown
         }
     }
