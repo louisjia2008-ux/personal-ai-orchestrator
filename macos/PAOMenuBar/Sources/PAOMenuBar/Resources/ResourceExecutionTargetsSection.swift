@@ -90,6 +90,18 @@ struct ExecutionTargetRow: View {
                         symbol: tierSymbol(tier)
                     )
                 }
+                // WP5b: stale-verification chip. Demote-fallback
+                // semantics — the latest evidence is non-VERIFIED
+                // while an older VERIFIED row exists. Renders a
+                // caution chip so the owner can spot a target whose
+                // history disagrees with its most recent run.
+                if target.isExecutionVerifiedStale {
+                    ResourceChip(
+                        text: L10n.targetVerifiedStale,
+                        tone: .caution,
+                        symbol: "exclamationmark.triangle"
+                    )
+                }
                 ResourceChip(
                     text: isRunnable ? "VERIFIED" : "UNVERIFIED",
                     tone: isRunnable ? .positive : .caution,

@@ -794,3 +794,5 @@
 "tier.t2" = "快速";
 "tier.t3" = "免费";
 "tier.unknown" = "未知";
+// WP5b (brought forward) — stale-verification chip on target rows.
+"target.verifiedStale" = "验证已过时";
