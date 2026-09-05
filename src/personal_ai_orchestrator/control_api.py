@@ -1725,16 +1725,26 @@ class ControlPlaneService:
         # the same instant even if the request takes ~1 ms to render.
         now = datetime.now(UTC)
         # M1 WP2: pull the task's tier floor. ``min_tier`` was added in
-        # commit 3 and defaults to \"T1\" so existing tasks read cleanly.
-        # Unknown strings from a corrupt row fall back to T1 rather than
-        # 400 — the recommender must not refuse a stored task on a UI
-        # typo in a column the daemon never wrote.
+        # WP2 commit 3 and defaults to ``"T1"`` so existing tasks read
+        # cleanly. An unknown string here means the row is corrupt
+        # (the submit handler validates ``TaskSubmitRequest.min_tier``
+        # so the daemon never writes a bad value), but the recommender
+        # still must not 500 on it. We degrade to T1, surface a reason
+        # on every admitted candidate, and record a system event so
+        # the owner can see the corruption rather than guess.
+        invalid_min_tier: str | None = None
         try:
             min_tier_value = ModelTier(task.min_tier)
         except ValueError:
+            invalid_min_tier = task.min_tier
             min_tier_value = ModelTier.T1
+            self.store.record_system_event(
+                "TASK_MIN_TIER_INVALID",
+                {"task_id": task_id, "raw": task.min_tier},
+            )
         recommendation = recommend_owner_dispatch(
-            candidates, policy=policy, now=now, min_tier=min_tier_value
+            candidates, policy=policy, now=now, min_tier=min_tier_value,
+            invalid_min_tier=invalid_min_tier,
         )
 
         candidate_views = tuple(
