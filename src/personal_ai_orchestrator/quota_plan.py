@@ -60,6 +60,7 @@ from personal_ai_orchestrator.model_registry import (
     QuotaWindowSnapshot,
     RegistryModel,
 )
+from personal_ai_orchestrator.quota_burn import BurnPressure
 from personal_ai_orchestrator.quota_workload_scope import QuotaWorkloadScope
 
 
@@ -425,6 +426,24 @@ class PlanQuotaProjection(RegistryModel):
             if candidate.window_kind is window_kind:
                 return candidate
         return None
+
+    def source_pressure(self, *, now: datetime) -> BurnPressure:
+        """Pressure of the plan's weekly window at ``now``; UNMETERED otherwise.
+
+        The plan-level source_pressure is what the dashboard renders
+        next to the provider card. It delegates to the same ``assess``
+        primitive the recommender uses (commit 3 introduces
+        ``source_pressure_for`` over a sequence of ``CandidateWindowInput``;
+        both paths bottom out in :func:`quota_burn.assess`), so the card
+        and the recommender never disagree about which row of the truth
+        table fired.
+        """
+
+        weekly = self.window(QuotaWindowKind.WEEKLY)
+        if weekly is None:
+            return BurnPressure.UNMETERED
+        assessment, _inferred = weekly.burn(now=now)
+        return assessment.pressure
 
     def equivalents_in_active_workload(self) -> tuple[ModelEquivalentView, ...]:
         """Provider scope views that belong to the workload this plan projects.

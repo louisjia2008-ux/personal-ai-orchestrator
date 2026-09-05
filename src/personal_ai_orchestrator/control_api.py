@@ -575,6 +575,33 @@ class QuotaProviderCardView(_ViewModel):
     #: plan balance may be UNKNOWN while model consumption is known, and that
     #: combination is exactly what this field exists to carry.
     plan: QuotaPlanView | None = None
+    #: Burn pressure of the plan's WEEKLY window at the handler's ``now``.
+    #: ``None`` when the plan carries no WEEKLY window — the dashboard
+    #: renders the card without a pressure chip in that case rather than
+    #: inventing one. Mirrors what the recommender will eventually score
+    #: against; both paths read the same ``assess`` primitive.
+    source_pressure: str | None = None
+
+
+class QuotaBurnView(_ViewModel):
+    """M1 WP1 burn assessment for one plan window.
+
+    All five numerical fields are ``None`` for ``UNMETERED`` (the window
+    was never read) and carry the real values for ``STALE`` so the bar
+    can still draw on cached data. ``pressure`` is always present so the
+    UI can pick a chip without branching on Optional. ``pressure_score``
+    is signed: positive = orchestrator should consume less, negative =
+    consume more; WP3 reads it through ``pressure_weight * -pressure_score``.
+    """
+
+    expected_used_fraction: float | None = None
+    actual_used_fraction: float | None = None
+    deviation: float | None = None
+    remaining_fraction: float | None = None
+    seconds_to_reset: float | None = None
+    pressure: str = "UNMETERED"
+    pressure_score: float = 0.0
+    window_start_inferred: bool = False
 
 
 class QuotaPlanWindowView(_ViewModel):
@@ -582,6 +609,9 @@ class QuotaPlanWindowView(_ViewModel):
 
     ``remaining_fraction`` is populated only for EXACT/ESTIMATED windows, so a
     client cannot draw a bar for a figure the provider never gave us.
+    ``burn`` carries the M1 WP1 burn assessment (expected vs actual used,
+    deviation, pressure, score). All fields are optional so a pre-WP1
+    daemon still decodes.
     """
 
     window_id: str
@@ -593,6 +623,7 @@ class QuotaPlanWindowView(_ViewModel):
     total_units: float | None = None
     unit: str | None = None
     reset_at: str | None = None
+    burn: QuotaBurnView | None = None
 
 
 class BindingWindowView(_ViewModel):
@@ -2617,13 +2648,42 @@ class ControlPlaneService:
         )
 
     @staticmethod
-    def _plan_view(observation: QuotaProviderObservation) -> QuotaPlanView | None:
+    def _burn_view_for_window(
+        window, *, now: datetime
+    ) -> QuotaBurnView | None:
+        """Render the M1 WP1 burn view-model for one plan window.
+
+        Returns ``None`` when the window has no ``reset_at`` (UNMETERED
+        short-circuits inside `` ``burn``); the UI renders no chip in
+        that case rather than drawing an empty one.
+        """
+
+        if window.reset_at is None:
+            return None
+        assessment, inferred = window.burn(now=now)
+        return QuotaBurnView(
+            expected_used_fraction=assessment.expected_used_fraction,
+            actual_used_fraction=assessment.actual_used_fraction,
+            deviation=assessment.deviation,
+            remaining_fraction=assessment.remaining_fraction,
+            seconds_to_reset=assessment.seconds_to_reset,
+            pressure=assessment.pressure.value,
+            pressure_score=assessment.pressure_score,
+            window_start_inferred=inferred,
+        )
+
+    @staticmethod
+    def _plan_view(
+        observation: QuotaProviderObservation, *, now: datetime
+    ) -> QuotaPlanView | None:
         """Render the shared-plan projection the Quota page leads with.
 
         Returns ``None`` only when there is no plan evidence at all. A plan
         whose *balance* is UNKNOWN still renders, because the per-model
         consumption and equivalents beside it are real, and dropping the whole
         card to hide the one unknown reports less than we know.
+        ``now`` is injected by the caller so all per-window burn figures and
+        the card-level ``source_pressure`` agree on the same instant.
         """
 
         projection = observation.projection
@@ -2649,6 +2709,7 @@ class ControlPlaneService:
                 total_units=window.total_units,
                 unit=window.unit,
                 reset_at=iso(window.reset_at),
+                burn=ControlPlaneService._burn_view_for_window(window, now=now),
             )
             for window in projection.windows
         )
@@ -2798,6 +2859,18 @@ class ControlPlaneService:
             if observation is not None
             else ()
         )
+        # One ``now`` for the entire card so the per-window ``burn`` figures
+        # and the provider-level ``source_pressure`` compare like-for-like
+        # — and so two providers rendered in the same response agree on
+        # "now" rather than disagreeing across the ~1 ms gap between two
+        # ``datetime.now(UTC)`` calls.
+        now = datetime.now(UTC)
+        plan_view = (
+            self._plan_view(observation, now=now) if observation is not None else None
+        )
+        source_pressure: str | None = None
+        if observation is not None and observation.projection is not None:
+            source_pressure = observation.projection.source_pressure(now=now).value
         return QuotaProviderCardView(
             provider_id=connection.provider_id,
             display_name=connection.display_name,
@@ -2834,7 +2907,8 @@ class ControlPlaneService:
                 observation.credential_source if observation is not None else "NONE"
             ),
             quota_pools=pools,
-            plan=(self._plan_view(observation) if observation is not None else None),
+            plan=plan_view,
+            source_pressure=source_pressure,
         )
 
     def quota(self) -> QuotaOverviewView:

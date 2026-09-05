@@ -252,6 +252,60 @@ class QuotaWindowSnapshot(RegistryModel):
         value = self.remaining_fraction / remaining_time_fraction
         return value if isfinite(value) else None
 
+    def burn(self, *, now: datetime) -> tuple[BurnAssessment, bool]:
+        """Classify this window's burn curve at ``now``.
+
+        Returns ``(assessment, window_start_inferred)``. The second flag
+        is ``True`` iff the caller did not provide ``window_started_at``
+        and we inferred it from the window kind's canonical duration. A
+        view-model that drops the flag would silently hide the signal
+        the dashboard needs to label the bar with "(estimated start)".
+
+        The snapshot-level short-circuits (no ``reset_at``, no canonical
+        duration for the kind, ``used_fraction`` is ``None``) all surface
+        as ``BurnPressure.UNMETERED`` rather than raising, so the quota
+        handler never crashes on a partial observation.
+        """
+
+        from personal_ai_orchestrator.quota_burn import (
+            BurnAssessment as _BurnAssessment,
+            BurnPressure as _BurnPressure,
+            assess as _assess,
+            infer_window_started_at as _infer_window_started_at,
+        )
+
+        if self.reset_at is None or self.window_kind.duration_seconds() is None:
+            return (
+                _BurnAssessment(
+                    expected_used_fraction=None,
+                    actual_used_fraction=None,
+                    deviation=None,
+                    remaining_fraction=None,
+                    seconds_to_reset=None,
+                    pressure=_BurnPressure.UNMETERED,
+                    pressure_score=0.0,
+                ),
+                False,
+            )
+
+        inferred = False
+        started_at = self.window_started_at
+        if started_at is None:
+            started_at = _infer_window_started_at(
+                reset_at=self.reset_at, kind=self.window_kind
+            )
+            inferred = True
+
+        return (
+            _assess(
+                window_started_at=started_at,
+                reset_at=self.reset_at,
+                used_fraction=self.used_fraction,
+                now=now,
+            ),
+            inferred,
+        )
+
 
 class QuotaSnapshot(RegistryModel):
     """Immutable observation with a stable identity suitable for routing replay."""
