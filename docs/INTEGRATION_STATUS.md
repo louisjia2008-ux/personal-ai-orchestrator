@@ -407,6 +407,18 @@ The M0 line made the displayed state trustworthy:
   human-readable reason ("worker exited unexpectedly (signal 9)").
   `_failure_result_payload()` is the single helper used by both the
   normal failure path and the emergency-repair path.
+
+Known limitation inherited by M1 (carry into M1, fix in M2):
+
+- **Emergency kill does not drain the worker pipes.** The supervisor
+  cancels the process group with SIGKILL on the emergency-repair path,
+  but does not capture the pipe buffers; `_failure_result_payload()`
+  therefore emits `signal: 9` and a synthesised reason, never the
+  worker's last stdout/stderr tail. Bounded tails (ANSI / control
+  stripped, 8 KiB each) are only available on the normal exit path
+  where the supervisor drains the pipes before reap. Do **not** try
+  to fix this in M1; M2 migrates to `opencode serve` and the session
+  abort API will replace the SIGKILL path entirely.
 - A4: `RunView.pid_alive` is computed by `os.kill(pid, 0)` against RUNNING
   rows; the Swift inspector renders "已退出" instead of the stale
   "running pid N" the moment the OS confirms the worker is gone.
