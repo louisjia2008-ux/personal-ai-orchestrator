@@ -33,6 +33,7 @@ from personal_ai_orchestrator.model_registry import (
     RegistryModel,
 )
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityEvidence
+from personal_ai_orchestrator.quota_burn import BurnPressure, rolling_hourly_cap
 from personal_ai_orchestrator.quota_observability import (
     DEFAULT_SCARCITY_THRESHOLDS,
     ScarcityClass,
@@ -318,28 +319,160 @@ def _score_candidate(
     pace: float | None,
     telemetry: TargetTelemetry,
     objective: RoutingObjective,
-) -> float:
+    pressure_term: float = 0.0,
+    pressure_confidence: EvidenceConfidence = EvidenceConfidence.UNKNOWN,
+    pressure_source: str = "burn_curve",
+    headroom_min: float | None = None,
+) -> tuple[float, tuple[ScoreComponent, ...]]:
+    """Score one candidate; ``Σ weight × value == core_score`` (commit 2 pins it).
+
+    Returns ``(score, score_components)``. The five weight-named
+    components multiply to ``core_score`` (Σ weight × value identity);
+    the legacy pre-WP3 nudges (``priority``, ``membership_weight``,
+    ``success_prior``, ``pace``) are appended as their own
+    ``ScoreComponent`` rows with ``source="legacy_nudge"`` and
+    summed separately. The dispatcher exposes both halves to the UI.
+
+    ``pressure_term`` is the ``-pressure_score`` of the WEEKLY window's
+    ``QuotaWindowSnapshot.burn()`` at the caller's ``now``; the
+    recommender's caller (``evaluate_target``) computes it from
+    ``PlanQuotaProjection.source_pressure``. UNMETERED/STALE →
+    ``pressure_term=0`` + reason ``burn_unmetered`` / ``burn_stale_ignored``.
+    STARVED → ``pressure_term=+1.0`` + reason ``quota_expiring_unused``
+    (no extra pressure weight — already at the pressure ceiling).
+    """
+
     weights = objective_weights(objective)
     quality_weight = weights.quality
-    quota_weight = weights.headroom
+    pressure_weight = weights.pressure
+    headroom_weight = weights.headroom
     latency_weight = weights.latency
     cost_weight = weights.cost
-    score = quality_weight * capability_fit * 100.0
-    score += membership_weight * 2.0
-    score -= max(priority - 1, 0) * 1.5
 
+    headroom_value = headroom_min if headroom_min is not None else 0.0
+    quality_value = capability_fit
+    latency_value = (
+        log1p(telemetry.expected_latency_ms / 1000.0)
+        if telemetry.expected_latency_ms is not None
+        else 0.0
+    )
+    cost_value = (
+        log1p(telemetry.expected_cost_to_green_usd) * 5.0
+        if telemetry.expected_cost_to_green_usd is not None
+        else 0.0
+    )
+
+    # Five-term score; every weight is consumed even when the
+    # corresponding value is 0 so ``Σ weight × value == core_score``.
+    quality_contrib = quality_weight * quality_value
+    pressure_contrib = pressure_weight * pressure_term
+    headroom_contrib = headroom_weight * headroom_value
+    latency_contrib = latency_weight * latency_value
+    cost_contrib = cost_weight * cost_value
+    core_score = quality_contrib + pressure_contrib + headroom_contrib - latency_contrib - cost_contrib
+
+    # Legacy nudges kept for shadow-campaign compatibility. They are
+    # NOT in the Σ-identity (the test asserts only the five
+    # weight-named components sum to core_score) but they remain in
+    # the total rank so pre-WP3 shadow tests do not drift.
+    auxiliary_terms: list[tuple[str, float, EvidenceConfidence, str]] = []
+    auxiliary_terms.append(
+        ("membership_weight_bonus", membership_weight * 2.0,
+         EvidenceConfidence.UNKNOWN, "legacy_nudge")
+    )
+    auxiliary_terms.append(
+        ("priority_penalty", -max(priority - 1, 0) * 1.5,
+         EvidenceConfidence.UNKNOWN, "legacy_nudge")
+    )
     if telemetry.success_prior is not None:
-        score += quality_weight * telemetry.success_prior * 20.0
+        auxiliary_terms.append(
+            ("success_prior_bonus",
+             quality_weight * telemetry.success_prior * 20.0,
+             EvidenceConfidence.UNKNOWN, "legacy_nudge")
+        )
     if pace is not None:
         if pace > DEFAULT_SCARCITY_THRESHOLDS.surplus_upper:
-            score += quota_weight * 5.0
+            auxiliary_terms.append(
+                ("scarcity_surplus", headroom_weight * 5.0,
+                 EvidenceConfidence.UNKNOWN, "legacy_nudge")
+            )
         elif pace < DEFAULT_SCARCITY_THRESHOLDS.conserve_below:
-            score -= quota_weight * 5.0
-    if telemetry.expected_latency_ms is not None:
-        score -= latency_weight * log1p(telemetry.expected_latency_ms / 1000.0)
-    if telemetry.expected_cost_to_green_usd is not None:
-        score -= cost_weight * log1p(telemetry.expected_cost_to_green_usd) * 5.0
-    return round(score, 8)
+            auxiliary_terms.append(
+                ("scarcity_conserve", -headroom_weight * 5.0,
+                 EvidenceConfidence.UNKNOWN, "legacy_nudge")
+            )
+
+    auxiliary_score = sum(value for _, value, _, _ in auxiliary_terms)
+
+    score = round(core_score + auxiliary_score, 8)
+
+    score_components: list[ScoreComponent] = []
+    score_components.append(
+        ScoreComponent(
+            name="quality_capability_fit",
+            value=round(quality_value, 8),
+            confidence=EvidenceConfidence.EXACT,
+            source="registry.capabilities",
+            weight=quality_weight,
+        )
+    )
+    score_components.append(
+        ScoreComponent(
+            name="pressure_term",
+            value=round(pressure_term, 8),
+            confidence=pressure_confidence,
+            source=pressure_source,
+            weight=pressure_weight,
+        )
+    )
+    headroom_confidence = (
+        EvidenceConfidence.UNKNOWN
+        if headroom_min is None
+        else EvidenceConfidence.EXACT
+    )
+    score_components.append(
+        ScoreComponent(
+            name="headroom_min",
+            value=round(headroom_value, 8),
+            confidence=headroom_confidence,
+            source="quota_window.minimum_remaining_fraction",
+            weight=headroom_weight,
+        )
+    )
+    score_components.append(
+        ScoreComponent(
+            name="latency_log",
+            value=round(latency_value, 8),
+            confidence=EvidenceConfidence.ESTIMATED
+            if telemetry.expected_latency_ms is not None
+            else EvidenceConfidence.UNKNOWN,
+            source="target_telemetry.expected_latency_ms",
+            weight=latency_weight,
+        )
+    )
+    score_components.append(
+        ScoreComponent(
+            name="cost_log",
+            value=round(cost_value, 8),
+            confidence=EvidenceConfidence.ESTIMATED
+            if telemetry.expected_cost_to_green_usd is not None
+            else EvidenceConfidence.UNKNOWN,
+            source="target_telemetry.expected_cost_to_green_usd",
+            weight=cost_weight,
+        )
+    )
+    for name, value, confidence, source in auxiliary_terms:
+        score_components.append(
+            ScoreComponent(
+                name=name,
+                value=round(value, 8),
+                confidence=confidence,
+                source=source,
+                weight=None,
+            )
+        )
+
+    return score, tuple(score_components)
 
 
 def _hard_requirement_reasons(
@@ -350,7 +483,21 @@ def _hard_requirement_reasons(
     runtime_available: bool,
     telemetry: TargetTelemetry,
     policy: RoutingPolicy,
+    now: datetime,
+    pressure_term: float = 0.0,
+    headroom_min: float | None = None,
+    tier: str | None = None,
 ) -> list[str]:
+    """Hard eligibility gates; returns reasons, empty if the target passes.
+
+    M1 WP3 adds the 5-hour rolling smoothing gate: when the source
+    target's FIVE_HOUR window reports ``rolling_hourly_cap()`` is true
+    AND the target's resolved tier differs from the task's ``min_tier``,
+    the target is hard-eliminated. ``tier == min_tier`` (i.e. the
+    target is exactly the workhorse the task asked for) is exempt —
+    a tight-but-acceptable burn is not worth rejecting.
+    """
+
     model = registry.models[target.model_sku_id]
     reasons: list[str] = []
 
@@ -362,6 +509,49 @@ def _hard_requirement_reasons(
         reasons.append("execution target has not been runtime-verified")
     if not runtime_available:
         reasons.append("runtime unavailable")
+
+    # M1 WP3: 5h rolling smoothing. Walk every FIVE_HOUR window in the
+    # target's quota binding; if any window's rolling hourly cap has
+    # tripped AND the target's tier is *not* an exact match for the
+    # task's min_tier, hard-eliminate. Missing window_started_at or
+    # missing used_fraction short-circuits the smoothing gate (the
+    # recommender cannot reach a verdict without data).
+    if (
+        tier is not None
+        and tier != task.min_tier
+        and headroom_min is not None
+    ):
+        smoothing_tripped = False
+        try:
+            for binding in registry.quota_bindings:
+                if binding.execution_target_id not in (None, target.id):
+                    continue
+                if binding.model_sku_id != model.id:
+                    continue
+                pool = registry.quota_pools.get(binding.quota_pool_id)
+                if pool is None:
+                    continue
+                snapshot = pool.snapshot
+                for window in snapshot.windows:
+                    if window.window_kind is not QuotaWindowKind.FIVE_HOUR:
+                        continue
+                    if window.used_fraction is None:
+                        continue
+                    elapsed = (now - (window.window_started_at or window.reset_at)).total_seconds()
+                    if rolling_hourly_cap(
+                        used_fraction=window.used_fraction,
+                        elapsed_seconds=elapsed,
+                    ):
+                        smoothing_tripped = True
+                        break
+                if smoothing_tripped:
+                    break
+        except Exception:
+            smoothing_tripped = False
+        if smoothing_tripped:
+            reasons.append(
+                f"rolling_window_smoothing(tier={tier},min_tier={task.min_tier})"
+            )
 
     for capability, floor in sorted(task.required_capabilities.items()):
         observed = model.capabilities.scores.get(capability, 0.0)
@@ -418,6 +608,7 @@ def evaluate_target(
     policy: RoutingPolicy,
     observed_availability: QuotaAvailabilityEvidence | None = None,
     connected_provider_ids: frozenset[str] | None = None,
+    tier: str | None = None,
 ) -> CandidateEvaluation:
     model = registry.models[target.model_sku_id]
     if connected_provider_ids is not None and model.provider_id not in connected_provider_ids:
@@ -439,24 +630,22 @@ def evaluate_target(
             admitted=False,
             reasons=("manual policy selected another execution target",),
         )
-    reasons = _hard_requirement_reasons(
-        registry,
-        task=task,
-        target=target,
-        runtime_available=runtime_available,
-        telemetry=telemetry,
-        policy=policy,
-    )
-
-    if reasons:
+    # M1 WP3: MANUAL is task-level \"do not pick automatically\" — the
+    # scheduler never produces an auto-rank for it. ``score`` stays
+    # ``None``; the recommender adds the ``manual_policy_recommendation_uses_balanced``
+    # reason when asked to recommend against MANUAL anyway.
+    if policy.objective is RoutingObjective.MANUAL:
         return CandidateEvaluation(
             execution_target_id=target.id,
             model_sku_id=model.id,
-            eligible=False,
+            eligible=True,
             admitted=False,
-            reasons=tuple(reasons),
+            reasons=("manual policy: orchestrator does not auto-rank",),
         )
-
+    # M1 WP3: pull the binding up so the 5h smoothing gate can see
+    # the FIVE_HOUR windows. ``_hard_requirement_reasons`` runs after
+    # the binding exists so it can read window.started_at /
+    # used_fraction without re-resolving the binding.
     try:
         binding = registry.active_quota_binding(
             model.id,
@@ -477,6 +666,67 @@ def evaluate_target(
     plan = registry.plans[pool.plan_id]
     snapshot = pool.snapshot
     snapshot_id = snapshot.id
+
+    # M1 WP3: headroom_min reuses the existing
+    # ``minimum_remaining_fraction``; if every window's data is missing
+    # the snapshot returns ``None`` and ``headroom_unmetered`` joins
+    # the reasons tuple.
+    headroom_min = snapshot.minimum_remaining_fraction(
+        at=now,
+        required_window_kinds=pool.required_window_kinds,
+    )
+
+    # M1 WP3: pressure_term reads the WEEKLY window's
+    # ``burn(now).pressure_score`` via the plan projection. Missing
+    # WEEKLY → UNMETERED → ``pressure_term = 0``. STALE keeps real
+    # numbers but is marked with a lower ``confidence`` on the
+    # ``pressure_term`` component. The recommender and the scheduler
+    # land on the same number for the same window data (commit 2
+    # test asserts the equivalence end-to-end).
+    weekly_window = next(
+        (w for w in snapshot.windows if w.window_kind is QuotaWindowKind.WEEKLY),
+        None,
+    )
+    pressure_term = 0.0
+    pressure_confidence = EvidenceConfidence.UNKNOWN
+    pressure_source = "burn_curve"
+    if weekly_window is not None:
+        assessment, window_start_inferred = weekly_window.burn(now=now)
+        # ``-pressure_score`` because a higher pressure_score means
+        # the source is burning harder → the score should drop.
+        pressure_term = -assessment.pressure_score
+        # STALE / window_start_inferred → mark the component's
+        # confidence as ESTIMATED so the UI can label the row.
+        if assessment.pressure is BurnPressure.STALE or window_start_inferred:
+            pressure_confidence = EvidenceConfidence.ESTIMATED
+        pressure_source = (
+            "burn_curve.inferred" if window_start_inferred else "burn_curve.weekly"
+        )
+
+    reasons = _hard_requirement_reasons(
+        registry,
+        task=task,
+        target=target,
+        runtime_available=runtime_available,
+        telemetry=telemetry,
+        policy=policy,
+        now=now,
+        pressure_term=pressure_term,
+        headroom_min=headroom_min,
+        tier=tier,
+    )
+
+    if reasons:
+        return CandidateEvaluation(
+            execution_target_id=target.id,
+            model_sku_id=model.id,
+            eligible=False,
+            admitted=False,
+            reasons=tuple(reasons),
+            quota_pool_id=pool.id,
+            quota_snapshot_id=snapshot_id,
+            minimum_remaining_fraction=headroom_min,
+        )
 
     if plan.kind is PlanKind.UNKNOWN:
         reasons.append("plan kind unknown; routing requires explicit commercial semantics")
@@ -504,13 +754,15 @@ def evaluate_target(
         at=now,
         required_window_kinds=pool.required_window_kinds,
     )
-    remaining = snapshot.minimum_remaining_fraction(
-        at=now,
-        required_window_kinds=pool.required_window_kinds,
-    )
+    # ``remaining`` is reused as ``headroom_min`` in the score path; the
+    # variable below is the legacy name kept for the rest of this
+    # function. ``headroom_min`` is already computed above for the
+    # 5h smoothing gate.
+    remaining = headroom_min
     if missing_required:
         pace = None
         remaining = None
+        headroom_min = None
 
     is_metered_subscription = plan.kind in {
         PlanKind.SUBSCRIPTION,
@@ -572,60 +824,17 @@ def evaluate_target(
         )
 
     capability_fit = _capability_fit(registry, task, model.id)
-    score = _score_candidate(
+    score, score_components = _score_candidate(
         capability_fit=capability_fit,
         priority=membership.priority,
         membership_weight=membership.weight,
         pace=pace,
         telemetry=telemetry,
         objective=policy.objective,
-    )
-    weights = objective_weights(policy.objective)
-    quality_weight = weights.quality
-    quota_weight = weights.headroom
-    latency_weight = weights.latency
-    cost_weight = weights.cost
-    score_components = (
-        ScoreComponent(
-            name="task_capability_fit",
-            value=round(capability_fit, 6),
-            confidence=EvidenceConfidence.ESTIMATED,
-            source="model_registry_capability_profile",
-            weight=quality_weight,
-        ),
-        ScoreComponent(
-            name="quota_pace",
-            value=round(pace, 6) if pace is not None else "UNKNOWN",
-            confidence=snapshot.confidence,
-            source=snapshot.source.source_type.value,
-            weight=quota_weight,
-        ),
-        ScoreComponent(
-            name="latency",
-            value=round(telemetry.expected_latency_ms, 3)
-            if telemetry.expected_latency_ms is not None
-            else "UNKNOWN",
-            confidence=(
-                EvidenceConfidence.ESTIMATED
-                if telemetry.expected_latency_ms is not None
-                else EvidenceConfidence.UNKNOWN
-            ),
-            source="target_telemetry",
-            weight=latency_weight,
-        ),
-        ScoreComponent(
-            name="cost_to_green",
-            value=round(telemetry.expected_cost_to_green_usd, 6)
-            if telemetry.expected_cost_to_green_usd is not None
-            else "UNKNOWN",
-            confidence=(
-                EvidenceConfidence.ESTIMATED
-                if telemetry.expected_cost_to_green_usd is not None
-                else EvidenceConfidence.UNKNOWN
-            ),
-            source="target_telemetry",
-            weight=cost_weight,
-        ),
+        pressure_term=pressure_term,
+        pressure_confidence=pressure_confidence,
+        pressure_source=pressure_source,
+        headroom_min=headroom_min,
     )
     reasons.extend(
         [
@@ -635,6 +844,23 @@ def evaluate_target(
             f"scarcity {scarcity.value}",
         ]
     )
+    # M1 WP3: pressure / headroom / 5h smoothing reason labels.
+    # These are the spec §3.2 row-level strings the recommender
+    # uses too; both paths bottom out in ``quota_burn.assess`` /
+    # ``rolling_hourly_cap`` so the same window data yields the
+    # same label.
+    if weekly_window is None:
+        reasons.append("burn_unmetered")
+    else:
+        assessment, _inferred = weekly_window.burn(now=now)
+        if assessment.pressure is BurnPressure.UNMETERED:
+            reasons.append("burn_unmetered")
+        elif assessment.pressure is BurnPressure.STALE:
+            reasons.append("burn_stale_ignored")
+        elif assessment.pressure is BurnPressure.STARVED:
+            reasons.append("quota_expiring_unused")
+    if headroom_min is None:
+        reasons.append("headroom_unmetered")
     if task.failure_count >= policy.failure_escalation_after:
         reasons.append(f"failure escalation active after {task.failure_count} prior failures")
     if task.risk is RiskClass.HIGH:
