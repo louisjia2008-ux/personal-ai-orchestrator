@@ -153,6 +153,32 @@ Acceptance evidence:
 - SIGINT / SIGTERM still exit cleanly (covered by the existing
   `test_sigint_shuts_daemon_down_cleanly_without_traceback`).
 
+### P0 M1 WP1 burn (PASS on `feat/m1-wp1-burn`)
+
+Acceptance evidence:
+
+- Refresh quota on a connected provider; every `QuotaPlanWindowView.windows[*]`
+  carries a `burn` sub-object with `pressure` populated to one of the
+  seven enum values (`UNMETERED` / `STALE` / `EXHAUSTED` / `STARVED` /
+  `AHEAD` / `BEHIND` / `ON_TRACK`).
+- The Quota page renders a pressure chip per plan window using the
+  seven `quota.pressure.*` labels. STARVED renders as "Expiring
+  unused" / "将过期未用" (never "Starved" / "快断流" — that label is
+  wrong on this verdict's semantics).
+- The provider card carries `source_pressure` matching the WEEKLY
+  window's `burn.pressure`. When the plan has no WEEKLY window,
+  `source_pressure` is `"UNMETERED"` and no chip renders. When the
+  plan has no observation at all, `source_pressure` is `null`.
+- A `DispatchRecommendationCandidate` for any target with a provider
+  that carries a WEEKLY window carries a `source_pressure` string
+  equal to the card-level field for that provider's plan. The
+  recommendation panel renders a chip from this string.
+- After a collector omits `window_started_at`, the matching plan
+  window's `burn.window_start_inferred` is `true`. The UI may render
+  this with a small "(estimated start)" affordance.
+- A pre-WP1 daemon decodes cleanly on a WP1 app: every new field is
+  `null` / absent; no blank page, no missing chip.
+
 ## 6. MiniMax real provider acceptance
 
 Use the already hardened local Stage C contract tracked by PR #17 with the target Mac's **existing
