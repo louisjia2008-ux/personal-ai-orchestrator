@@ -466,8 +466,52 @@ periodic work in one place.
   `tick_interval_seconds` parameter; nothing changes by default.
 
 WP0 deliberately ships exactly one step (`heartbeat`). WP1+ WP
-branches register their periodic work behind the same registry
-without touching `daemon.py` again.
+branches register their periodic work behind the same registry without
+touching `daemon.py` again.
+
+## M1 WP1 — burn curve (`feat/m1-wp1-burn`)
+
+WP1 puts a deterministic classification in front of every observed
+quota window: how fast am I burning this quota relative to the ideal
+line, and is there still time to change course before it resets. The
+seven-value truth table (`UNMETERED` / `STALE` / `EXHAUSTED` /
+`STARVED` / `AHEAD` / `BEHIND` / `ON_TRACK`) is the single source of
+truth shared by the dashboard card, the dispatch candidate chip, and
+the future WP3 scorer.
+
+- **`quota_burn.py`** (new). Pure functions, zero I/O. `assess(...)`
+  classifies one window at one `now`; `infer_window_started_at(...)`
+  reconstructs `reset_at - duration(kind)` for windows the collector
+  omitted; `rolling_hourly_cap(...)` is the sliding rule the 5h
+  admission path uses. **Only naive datetimes raise** — every other
+  ill-shaped input (used_fraction outside `[0, 1]`, total ≤ 0,
+  clock-skew `now < window_started_at`, `now >= reset_at`) is clamped
+  or coerced and the truth table proceeds. A quota handler that
+  crashes on a 3-second-stale reset snapshot would be worse than the
+  snapshot itself.
+- **`STARVED` semantics.** "Lots of remaining, reset imminent" — the
+  verdict means "let it expire and you wasted it", **not** "almost
+  empty". The UI label is "Expiring unused" / "将过期未用".
+- **`source_pressure` lives in `dispatch_recommender.source_pressure_for`**
+  so the card and the recommender can never disagree about which row
+  of the truth table fired. `PlanQuotaProjection.source_pressure()`
+  delegates to the same `assess` call.
+- **`/v1/quota` shape.** Every `QuotaPlanWindowView` now carries an
+  optional `burn` sub-object (8 fields; UNMETERED returns `null` for
+  every numerical field, STALE keeps real values). Every
+  `QuotaProviderCardView` carries an optional `source_pressure` string.
+  Every `DispatchRecommendationCandidate` carries the same string for
+  the recommendation panel chip. **All three are absent-tolerantly
+  decoded** — pre-WP1 daemons decode cleanly.
+- **Audit-only-on-failure stays in force**: `source_pressure` is
+  read-only projection, not a journal write.
+- **WP1 is pipeline-only**, scoring is WP3's job. `_score` and
+  `_score_candidate` are untouched. The `DispatchCandidateInput.windows`
+  field is in place for WP3 to consume.
+
+WP1 deliberately ships no new daemon-side periodic step. WP2–WP7
+register their work behind the same `DaemonSupervisor` registry WP0
+introduced without touching `daemon.py` again.
 
 ## P3.6 live provider and Shadow campaign
 
