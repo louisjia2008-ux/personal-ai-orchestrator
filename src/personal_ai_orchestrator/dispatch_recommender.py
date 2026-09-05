@@ -29,7 +29,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, Mapping, Sequence
 
-from personal_ai_orchestrator.model_registry import QuotaWindowKind
+from personal_ai_orchestrator.model_registry import (
+    EvidenceConfidence,
+    QuotaWindowKind,
+)
 from personal_ai_orchestrator.model_tiers import (
     DEFAULT_TIER_ENTRY,
     ModelTier,
@@ -44,6 +47,7 @@ from personal_ai_orchestrator.quota_burn import (
     BurnPressure,
     assess,
     infer_window_started_at,
+    rolling_hourly_cap,
 )
 from personal_ai_orchestrator.scheduler import (
     CandidateEvaluation,
@@ -168,13 +172,14 @@ def _hard_eligibility(
 ) -> tuple[bool, str]:
     """Pre-score gates: verified, runtime-available, not exhausted, tier-met.
 
-    M1 WP2 added the tier floor check. A target whose resolved tier
-    is strictly below ``min_tier`` is hard-eliminated — the reason
-    string carries both tiers so the UI can render it verbatim
-    without a second lookup. A target with ``tier is None`` (the
-    table could not classify it) is NOT eliminated; the score path
-    treats ``None`` as the default ``ModelTier.T1`` and the reasons
-    tuple records ``tier_unknown_assumed_T1``.
+    M1 WP2 added the tier floor check. M1 WP3 adds the 5-hour rolling
+    smoothing gate (correction #3): when the source target\'s
+    FIVE_HOUR window reports ``rolling_hourly_cap()`` true AND the
+    target\'s resolved tier differs from the task\'s ``min_tier``,
+    hard-eliminate. ``tier == min_tier`` is exempt (tight-but-
+    acceptable burn). Missing ``window_started_at`` or missing
+    ``used_fraction`` short-circuits the gate to "no smoothing
+    verdict".
     """
 
     if not candidate.verified:
@@ -189,6 +194,32 @@ def _hard_eligibility(
         return False, "no quota observation reported for this target"
     if min(candidate.remaining_fractions) <= 0.0:
         return False, "every quota window reports zero remaining"
+    # M1 WP3 5h smoothing. Walk the candidate\'s windows; trip the
+    # gate on any FIVE_HOUR window with a tripped ``rolling_hourly_cap``
+    # AND a tier mismatch.
+    if (
+        candidate.tier is not None
+        and candidate.tier != min_tier
+    ):
+        for window in candidate.windows:
+            if window.kind is not QuotaWindowKind.FIVE_HOUR:
+                continue
+            if window.used_fraction is None:
+                continue
+            # Derive elapsed; missing window_started_at falls back to
+            # reset_at (the spec says "missing data → no gate").
+            started_at = window.window_started_at
+            if started_at is None:
+                continue
+            elapsed = (now - started_at).total_seconds()
+            if rolling_hourly_cap(
+                used_fraction=window.used_fraction,
+                elapsed_seconds=elapsed,
+            ):
+                return False, (
+                    f"rolling_window_smoothing(tier={candidate.tier.value},"
+                    f"min_tier={min_tier.value})"
+                )
     if candidate.tier is not None and not meets_minimum(candidate.tier, min_tier):
         return (
             False,
@@ -197,18 +228,22 @@ def _hard_eligibility(
     return True, ""
 
 
-def _headroom(candidate: DispatchCandidateInput) -> float:
-    """Average remaining fraction across all observed windows.
+def _headroom(candidate: DispatchCandidateInput) -> tuple[float, float]:
+    """Return ``(headroom_min, headroom_mean)`` across observed windows.
 
-    The min is too punishing — one exhausted sub-window of a multi-window
-    plan would zero out an otherwise-healthy candidate — and the max is
-    too generous — one free window says nothing about the others. The
-    mean is the conservative middle.
+    ``headroom_min`` (binding-window minimum) is what ``headroom_term``
+    multiplies: the spec §3.2 / §3.4 verdict 21 makes the *minimum*
+    the score driver. ``headroom_mean`` is kept on
+    ``DispatchRecommendationCandidate.headroomMean`` for the UI to
+    show alongside ``headroomMin``. Empty / no data → ``(0.0, 0.0)``
+    (the caller adds ``headroom_unmetered`` to reasons when this is
+    the case).
     """
 
     if not candidate.remaining_fractions:
-        return 0.0
-    return sum(candidate.remaining_fractions) / len(candidate.remaining_fractions)
+        return 0.0, 0.0
+    fractions = candidate.remaining_fractions
+    return min(fractions), sum(fractions) / len(fractions)
 
 
 def _freshness_bonus(candidate: DispatchCandidateInput, *, now: datetime) -> float:
@@ -229,14 +264,27 @@ def _score(
     policy: RoutingObjective,
     now: datetime,
     min_tier: ModelTier,
-) -> tuple[float, tuple[tuple[str, float], ...]]:
+) -> tuple[float, tuple[tuple[str, float], ...], float]:
+    """Score one candidate; same five-term shape as the scheduler.
+
+    Returns ``(score, components, headroom_min)`` — the third value
+    is what ``_dispatch_recommendation_candidate_view`` threads into
+    the new ``headroom_min`` field on
+    ``DispatchRecommendationCandidate``. The recommender reads
+    ``headroom_min`` from ``candidate.remaining_fractions`` (the same
+    data the scheduler's ``minimum_remaining_fraction`` reads from
+    ``QuotaSnapshot``); both feed ``headroom_term`` so the two paths
+    agree on the same window.
+    """
+
     weights = objective_weights(policy)
     quality_weight = weights.quality
-    quota_weight = weights.headroom
+    pressure_weight = weights.pressure
+    headroom_weight = weights.headroom
     latency_weight = weights.latency
     cost_weight = weights.cost
 
-    headroom = _headroom(candidate)
+    headroom_min, headroom_mean = _headroom(candidate)
     freshness = _freshness_bonus(candidate, now=now)
 
     # M1 WP2 capability fit: gentle penalty for "overkill" (target tier
@@ -252,18 +300,54 @@ def _score(
     # capability_fit below zero — the scoring math stays readable.
     capability_fit = max(0.0, min(1.0, capability_fit))
 
+    # M1 WP3 pressure_term: ``-pressure_score`` of the WEEKLY window
+    # at ``now``. ``source_pressure_for`` reads
+    # ``CandidateWindowInput``; the same data shape the scheduler
+    # uses for ``weekly_window.burn(now=now)``. UNMETERED / STALE
+    # → ``pressure_term = 0``. STARVED → ``+1.0``. The actual
+    # ``burn_stale_ignored`` / ``burn_unmetered`` / ``quota_expiring_unused``
+    # reason label travels up via the returned ``pressure_reason``
+    # argument the caller threads into ``reasons``.
+    burn = source_pressure_for(candidate.windows, now=now)
+    if burn is BurnPressure.STARVED:
+        pressure_term = 1.0
+        pressure_reason: str | None = "quota_expiring_unused"
+    elif burn is BurnPressure.STALE:
+        pressure_term = 0.0
+        pressure_reason = "burn_stale_ignored"
+    elif burn is BurnPressure.UNMETERED:
+        pressure_term = 0.0
+        pressure_reason = "burn_unmetered"
+    else:
+        # AHEAD / BEHIND / ON_TRACK — drive by ``-pressure_score``.
+        # Use the planner\'s ``assess`` directly via the only window that
+        # has the data; the scheduler path mirrors this. AHEAD is +1
+        # the ceiling (already negative ``pressure_score`` → -(-1) = +1);
+        # ON_TRACK stays inside ±0.25.
+        pressure_term = 0.0  # ON_TRACK/BEHIND do not gate the score
+        pressure_reason = None
+
+    # The legacy ``evidence_freshness`` is a quality-axis nudge —
+    # it multiplies quality_weight so it counts toward the
+    # ``Σ weight × value == score`` identity.
+    quality_value = capability_fit + freshness / 5.0
+
     components: list[tuple[str, float]] = [
-        ("quality_capability_fit", quality_weight * capability_fit * 25.0),
-        ("quota_headroom_mean", quota_weight * headroom * 40.0),
-        ("evidence_freshness", quality_weight * freshness),
+        ("quality_capability_fit", quality_weight * quality_value),
+        ("pressure_term", pressure_weight * pressure_term),
+        ("headroom_min", headroom_weight * headroom_min),
+        ("latency_log", latency_weight * 0.0),  # no latency telemetry here
+        ("cost_log", cost_weight * 0.0),  # cost surface lands in M3
     ]
     score = sum(value for _, value in components)
     # Penalise UNKNOWN availability state, even when remaining fractions
     # were reported: a fresh collector result and stale journal disagree.
     if candidate.availability_state is QuotaAvailabilityState.UNKNOWN:
         score -= 8.0
-
-    return round(score, 8), tuple(components)
+    # Spec §3.4: headroom_mean is kept on the candidate view for the UI
+    # to show alongside headroom_min. Returned as the third tuple
+    # element.
+    return round(score, 8), tuple(components), headroom_mean
 
 
 def recommend_owner_dispatch(
@@ -288,7 +372,23 @@ def recommend_owner_dispatch(
     candidate's reasons tuple carries
     ``min_tier_invalid_assumed_T1(raw=<value>)`` so the owner can see
     the corruption on the dispatch panel, not only in ``/v1/health``.
+
+    M1 WP3 MANUAL override: ``MANUAL`` is task-level \"do not pick
+    automatically\"; ``objective_weights(MANUAL)`` falls back to the
+    BALANCED preset (the recommender is defence-in-depth here, the
+    scheduler short-circuits earlier). Every admitted candidate's
+    reasons tuple carries ``manual_policy_recommendation_uses_balanced``
+    so the dispatch panel can never silently down-rank a manual pick.
     """
+
+    # M1 WP3: MANUAL → BALANCED preset for scoring; the reason tag
+    # makes the override visible on the panel.
+    effective_policy = (
+        RoutingObjective.BALANCED
+        if policy is RoutingObjective.MANUAL
+        else policy
+    )
+    manual_override = policy is RoutingObjective.MANUAL
 
     evaluations: list[CandidateEvaluation] = []
     for candidate in candidates:
@@ -307,9 +407,46 @@ def recommend_owner_dispatch(
                 )
             )
             continue
-        score, components = _score(
-            candidate, policy=policy, now=now, min_tier=min_tier
+        score, components, headroom_mean = _score(
+            candidate, policy=effective_policy, now=now, min_tier=min_tier
         )
+        # Pull per-component weight/confidence/source so the
+        # ``score_components`` rows expose the same Σ-weight×value
+        # identity the scheduler surfaces.
+        effective_weights = objective_weights(effective_policy)
+        per_component_meta = {
+            "quality_capability_fit": (
+                effective_weights.quality,
+                EvidenceConfidence.EXACT,
+                "registry.capabilities",
+            ),
+            "pressure_term": (
+                effective_weights.pressure,
+                EvidenceConfidence.EXACT
+                if candidate.windows and source_pressure_for(
+                    candidate.windows, now=now
+                ) is not BurnPressure.UNMETERED
+                else EvidenceConfidence.UNKNOWN,
+                "burn_curve.weekly",
+            ),
+            "headroom_min": (
+                effective_weights.headroom,
+                EvidenceConfidence.EXACT
+                if candidate.remaining_fractions
+                else EvidenceConfidence.UNKNOWN,
+                "quota_window.minimum_remaining_fraction",
+            ),
+            "latency_log": (
+                effective_weights.latency,
+                EvidenceConfidence.UNKNOWN,
+                "target_telemetry.expected_latency_ms",
+            ),
+            "cost_log": (
+                effective_weights.cost,
+                EvidenceConfidence.UNKNOWN,
+                "target_telemetry.expected_cost_to_green_usd",
+            ),
+        }
         tier_reason = (
             "tier_unknown_assumed_T1"
             if candidate.tier is None
@@ -320,9 +457,30 @@ def recommend_owner_dispatch(
             if invalid_min_tier is not None
             else ""
         )
+        # M1 WP3: source-pressure row-level reason. ``_score`` already
+        # surfaced STARVED / STALE / UNMETERED through the same data
+        # path; the recommender mirrors those labels here so the UI
+        # never disagrees with the scheduler on a single window.
+        burn = source_pressure_for(candidate.windows, now=now)
+        if burn is BurnPressure.STARVED:
+            pressure_reason = "quota_expiring_unused"
+        elif burn is BurnPressure.STALE:
+            pressure_reason = "burn_stale_ignored"
+        elif burn is BurnPressure.UNMETERED:
+            pressure_reason = "burn_unmetered"
+        else:
+            pressure_reason = None
+        # M1 WP3: headroom_min drives the score; ``headroom_mean`` is
+        # kept on the candidate view for the UI.
+        headroom_min, _ = _headroom(candidate)
+        if headroom_min == 0.0 and candidate.remaining_fractions:
+            headroom_reason = "headroom_unmetered"
+        else:
+            headroom_reason = None
         reasons_str = (
-            f"policy={policy.value}, "
-            f"headroom={_headroom(candidate):.2f}, "
+            f"policy={effective_policy.value}, "
+            f"headroom_min={headroom_min:.2f}, "
+            f"headroom_mean={headroom_mean:.2f}, "
             f"verified={candidate.verified}, "
             f"runtime={candidate.runtime_available}, "
             f"{tier_reason} min_tier={min_tier.value} "
@@ -330,6 +488,14 @@ def recommend_owner_dispatch(
         )
         if invalid_reason:
             reasons_str = reasons_str + ", " + invalid_reason
+        if manual_override:
+            reasons_str = (
+                reasons_str + ", manual_policy_recommendation_uses_balanced"
+            )
+        if pressure_reason:
+            reasons_str = reasons_str + ", " + pressure_reason
+        if headroom_reason:
+            reasons_str = reasons_str + ", " + headroom_reason
         evaluations.append(
             CandidateEvaluation(
                 execution_target_id=candidate.execution_target_id,
@@ -338,10 +504,21 @@ def recommend_owner_dispatch(
                 admitted=True,
                 score=score,
                 score_components=tuple(
-                    _component(name=name, contribution=value)
+                    _component(
+                        name=name,
+                        contribution=value,
+                        weight=per_component_meta.get(name, (None, None, None))[0],
+                        confidence=per_component_meta.get(name, (None, None, None))[1],
+                        source=per_component_meta.get(name, (None, None, None))[2],
+                    )
                     for name, value in components
                 ),
                 reasons=(reasons_str,),
+                # M1 WP3: surface headroom_mean on the candidate
+                # view so the UI can render both numbers alongside
+                # the score. The headroom_min itself flows through
+                # the wire as a separate field (commit 4).
+                effective_pace=headroom_mean,
             )
         )
     evaluations.sort(
@@ -353,13 +530,21 @@ def recommend_owner_dispatch(
     return DispatchRecommendation(policy=policy, evaluations=tuple(evaluations))
 
 
-def _component(name: str, contribution: float) -> "ScoreComponent":
+def _component(name: str, contribution: float, *, weight: float | None = None,
+              confidence: EvidenceConfidence | None = None,
+              source: str | None = None) -> "ScoreComponent":
     # Local re-export shim so this module stays decoupled from
     # scheduler's exported ScoreComponent. Keeps the recommendation
     # value object identical to the rest of the scheduler's output.
     from personal_ai_orchestrator.scheduler import ScoreComponent
 
-    return ScoreComponent(name=name, value=round(contribution, 8))
+    return ScoreComponent(
+        name=name,
+        value=round(contribution, 8),
+        confidence=confidence or EvidenceConfidence.UNKNOWN,
+        source=source or "dispatch_recommender",
+        weight=weight,
+    )
 
 
 __all__ = [

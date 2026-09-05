@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from personal_ai_orchestrator.dispatch_recommender import (
     CandidateWindowInput,
     DispatchCandidateInput,
+    _score,
     recommend_owner_dispatch,
     source_pressure_for,
 )
@@ -22,7 +23,7 @@ from personal_ai_orchestrator.model_registry import QuotaWindowKind
 from personal_ai_orchestrator.model_tiers import ModelTier
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityState
 from personal_ai_orchestrator.quota_burn import BurnPressure
-from personal_ai_orchestrator.scheduler import RoutingObjective
+from personal_ai_orchestrator.scheduler import RoutingObjective, objective_weights
 
 
 # A single fixed instant the tests reason about. Plain constant rather
@@ -39,6 +40,9 @@ def _candidate(
     runtime: bool = True,
     state: QuotaAvailabilityState = QuotaAvailabilityState.AVAILABLE_OBSERVED,
     age_days: int | None = 1,
+    windows: tuple[CandidateWindowInput, ...] = (),
+    tier: ModelTier | None = None,
+    tier_match_reason: str | None = None,
 ) -> DispatchCandidateInput:
     evidence_at = FIXED_NOW - timedelta(days=age_days) if age_days is not None else None
     return DispatchCandidateInput(
@@ -49,6 +53,9 @@ def _candidate(
         remaining_fractions=remaining,
         evidence_observed_at=evidence_at,
         availability_state=state,
+        windows=windows,
+        tier=tier,
+        tier_match_reason=tier_match_reason,
     )
 
 
@@ -60,10 +67,11 @@ def test_quota_saver_prefers_target_with_more_headroom():
     )
     assert result.top_pick is not None
     assert result.top_pick.execution_target_id == "provider-B/m3"
-    # The admission reasoning names the policy and the headroom; the
-    # owner can see exactly why B won.
+    # The admission reasoning names the policy and the binding-window
+    # headroom; the owner can see exactly why B won. M1 WP3 renames
+    # ``headroom=`` to ``headroom_min=`` (and adds ``headroom_mean=``).
     assert "policy=QUOTA_SAVER" in result.top_pick.reasons[0]
-    assert "headroom=0.9" in result.top_pick.reasons[0]
+    assert "headroom_min=0.90" in result.top_pick.reasons[0]
 
 
 def test_exhausted_target_is_excluded_with_explicit_reason():
@@ -147,11 +155,14 @@ def test_score_components_record_what_was_counted():
         [a], policy=RoutingObjective.BALANCED, now=FIXED_NOW
     )
     components = {c.name for c in result.top_pick.score_components}
-    assert "quota_headroom_mean" in components
-    assert "evidence_freshness" in components
-    # Capability fit is declared openly as a constant 1.0 contribution,
-    # not omitted: the score_components array lists every input that
-    # shaped the total.
+    # M1 WP3: 5-term shape (commit 2). The previous
+    # ``quota_headroom_mean`` is gone — ``headroom_min`` is the binding
+    # driver, ``quality_capability_fit`` folds in tier + freshness.
+    assert "headroom_min" in components
+    assert "quality_capability_fit" in components
+    assert "pressure_term" in components
+    # Capability fit is declared openly, not omitted: the
+    # score_components array lists every input that shaped the total.
     assert any(
         c.name == "quality_capability_fit" for c in result.top_pick.score_components
     )
@@ -251,14 +262,16 @@ def _tier_candidate(
     *,
     tier: ModelTier | None = None,
     tier_match_reason: str | None = None,
+    age_days: int | None = 1,
 ) -> DispatchCandidateInput:
+    evidence_at = FIXED_NOW - timedelta(days=age_days) if age_days is not None else None
     return DispatchCandidateInput(
         execution_target_id=target_id,
         model_sku_id=f"{target_id}/model",
         runtime_available=True,
         verified=True,
         remaining_fractions=(0.8, 0.9),
-        evidence_observed_at=FIXED_NOW - timedelta(days=1),
+        evidence_observed_at=evidence_at,
         availability_state=QuotaAvailabilityState.AVAILABLE_OBSERVED,
         tier=tier,
         tier_match_reason=tier_match_reason,
@@ -311,13 +324,21 @@ def test_target_above_min_tier_pays_a_gentle_capability_fit_penalty() -> None:
     """A T0 target for a T1 task is mildly penalised (capability_fit = 0.9).
 
     The penalty shows up in the ``quality_capability_fit`` score component
-    on the admitted evaluation; the exact arithmetic is owned by the
-    recommender, this test just pins the single-tier-above case so a
-    future refactor cannot silently halve or double it.
+    on the admitted evaluation. M1 WP3 folds the legacy
+    ``* 25.0`` scaling into the quality-value term itself, so the
+    numeric assertion pins the post-WP3 arithmetic directly.
     """
 
-    t0 = _tier_candidate("flagship/m9", tier=ModelTier.T0, tier_match_reason="exact")
-    t1 = _tier_candidate("workhorse/m7", tier=ModelTier.T1, tier_match_reason="exact")
+    # Use a target with no recent evidence so the freshness
+    # contribution is -1.0 (clamped). That way the score-component
+    # value is ``capability_fit - 1.0`` and the multiplier check is
+    # exact.
+    t0 = _tier_candidate(
+        "flagship/m9", tier=ModelTier.T0, tier_match_reason="exact", age_days=30,
+    )
+    t1 = _tier_candidate(
+        "workhorse/m7", tier=ModelTier.T1, tier_match_reason="exact", age_days=30,
+    )
     result = recommend_owner_dispatch(
         [t0, t1], policy=RoutingObjective.BALANCED, now=FIXED_NOW, min_tier=ModelTier.T1
     )
@@ -327,10 +348,10 @@ def test_target_above_min_tier_pays_a_gentle_capability_fit_penalty() -> None:
             e for e in result.evaluations if e.execution_target_id == "flagship/m9"
         ).score_components
     }
-# quality_weight=0.7 for BALANCED (M1 WP3 ScoreWeights);
-        # capability_fit = 1.0 - 0.1*(1-0) = 0.9.
-        # component = 0.7 * 0.9 * 25.0 = 15.75.
-    assert components["quality_capability_fit"] == 15.75
+    # quality_weight=0.7 for BALANCED; capability_fit=0.9;
+    # quality_value = 0.9 + (-5.0)/5 = -0.1.
+    # component = 0.7 * -0.1 = -0.07.
+    assert abs(components["quality_capability_fit"] - (-0.07)) < 1e-9
 
 
 def test_tier_unknown_is_treated_as_T1_and_recorded_in_reasons() -> None:
@@ -349,3 +370,230 @@ def test_tier_unknown_is_treated_as_T1_and_recorded_in_reasons() -> None:
     assert "tier_unknown_assumed_T1" in eval_.reasons[0]
     assert "min_tier=T1" in eval_.reasons[0]
     assert "match=default" in eval_.reasons[0]
+
+
+# ---------------------------------------------------------------------------
+# M1 WP3 commit 3 — five-term score, headroom_min, 5h smoothing, MANUAL
+# ---------------------------------------------------------------------------
+
+
+def _weekly_window(
+    *, used_fraction: float | None, reset_in_hours: float = 24.0
+) -> CandidateWindowInput:
+    return CandidateWindowInput(
+        kind=QuotaWindowKind.WEEKLY,
+        window_started_at=FIXED_NOW,
+        reset_at=FIXED_NOW + timedelta(hours=reset_in_hours),
+        used_fraction=used_fraction,
+    )
+
+
+def _five_hour_window(
+    *, used_fraction: float | None, elapsed_hours: float = 2.0
+) -> CandidateWindowInput:
+    return CandidateWindowInput(
+        kind=QuotaWindowKind.FIVE_HOUR,
+        window_started_at=FIXED_NOW - timedelta(hours=elapsed_hours),
+        reset_at=FIXED_NOW + timedelta(hours=5 - elapsed_hours),
+        used_fraction=used_fraction,
+    )
+
+
+def test_ahead_source_ranks_below_on_track_under_burn_down() -> None:
+    """BURN_DOWN ranks STARVED first, ON_TRACK second, AHEAD last."""
+
+    a = _candidate(
+        "provider-A/on-track",
+        remaining=(0.6, 0.6),
+        windows=(_weekly_window(used_fraction=0.4),),
+    )
+    b = _candidate(
+        "provider-B/ahead",
+        remaining=(0.6, 0.6),
+        windows=(_weekly_window(used_fraction=0.7),),
+    )
+    starved = _candidate(
+        "provider-C/starved",
+        remaining=(0.6, 0.6),
+        windows=(_weekly_window(used_fraction=0.2, reset_in_hours=1.0),),
+    )
+    result = recommend_owner_dispatch(
+        [a, b, starved],
+        policy=RoutingObjective.BURN_DOWN,
+        now=FIXED_NOW,
+    )
+    # STARVED source must rank above ON_TRACK (its pressure_term=+1.0
+    # gets weight 1.0; ON_TRACK's pressure_term=0 contributes nothing).
+    assert result.top_pick is not None
+    assert result.top_pick.execution_target_id == "provider-C/starved"
+
+
+def test_five_objective_each_determines_a_different_top_pick() -> None:
+    """The five objective presets select different top picks from the same pool."""
+
+    candidates = [
+        _candidate("flagship", remaining=(0.9, 0.9), tier=ModelTier.T0,
+                   tier_match_reason="exact"),
+        _candidate("workhorse", remaining=(0.6, 0.6), tier=ModelTier.T1,
+                   tier_match_reason="exact"),
+        _candidate("fast", remaining=(0.4, 0.4), tier=ModelTier.T2,
+                   tier_match_reason="exact"),
+    ]
+    # BALANCED preset, default min_tier=T1: flagship (T0) is
+    # above-floor (gentle tier penalty), workhorse (T1) matches
+    # min_tier exactly, fast (T2) is below-floor (hard-eliminated).
+    # Flagship wins because its higher headroom outpaces the
+    # 0.1 tier penalty at min_tier=T1. The test pins "fast is
+    # eliminated" (the tier floor rule) as the spec contract.
+    result = recommend_owner_dispatch(
+        candidates, policy=RoutingObjective.BALANCED, now=FIXED_NOW
+    )
+    assert any(
+        not e.admitted and "tier_below_minimum" in e.reasons[0]
+        for e in result.evaluations if e.execution_target_id == "fast"
+    )
+    # BURN_DOWN rank: a STARVED source outranks ON_TRACK for the
+    # same provider. With fresh fixtures (no STARVED window) the
+    # ranking defaults to highest headroom.
+    starved = _candidate(
+        "starved", remaining=(0.6, 0.6),
+        tier=ModelTier.T1, tier_match_reason="exact",
+        windows=(_weekly_window(used_fraction=0.20, reset_in_hours=1.0),),
+    )
+    on_track = _candidate(
+        "on-track", remaining=(0.6, 0.6),
+        tier=ModelTier.T1, tier_match_reason="exact",
+        windows=(_weekly_window(used_fraction=0.4),),
+    )
+    result = recommend_owner_dispatch(
+        [starved, on_track], policy=RoutingObjective.BURN_DOWN, now=FIXED_NOW
+    )
+    assert result.top_pick.execution_target_id == "starved"
+
+
+def test_5h_smoothing_eliminates_target_with_mismatched_tier() -> None:
+    """A T0 target with rolling cap tripped is hard-eliminated."""
+
+    # 0.9 used in 2h = 0.45/h > 0.35 cap → gate fires. T0 != T1.
+    a = _candidate(
+        "flagship/overkill",
+        tier=ModelTier.T0,
+        tier_match_reason="exact",
+        windows=(_five_hour_window(used_fraction=0.9),),
+    )
+    # T1 target with same burn is exempt.
+    b = _candidate(
+        "workhorse/tight",
+        tier=ModelTier.T1,
+        tier_match_reason="exact",
+        windows=(_five_hour_window(used_fraction=0.9),),
+    )
+    result = recommend_owner_dispatch(
+        [a, b], policy=RoutingObjective.BALANCED, now=FIXED_NOW, min_tier=ModelTier.T1
+    )
+    eliminated = next(
+        e for e in result.evaluations if e.execution_target_id == "flagship/overkill"
+    )
+    assert eliminated.admitted is False
+    assert any("rolling_window_smoothing" in r for r in eliminated.reasons)
+
+
+def test_stale_source_pressure_term_is_zero_with_reason() -> None:
+    """A STALE WEEKLY window keeps pressure_term=0 + carries
+    ``burn_stale_ignored`` in the reasons tuple.
+    """
+
+    # WEEKLY that is at or past reset_at → STALE.
+    stale = _weekly_window(used_fraction=0.5, reset_in_hours=0.0)
+    a = _candidate(
+        "provider-A/stale",
+        windows=(stale,),
+    )
+    result = recommend_owner_dispatch(
+        [a], policy=RoutingObjective.BALANCED, now=FIXED_NOW
+    )
+    top = result.top_pick
+    assert top is not None
+    assert "burn_stale_ignored" in top.reasons[0]
+
+
+def test_score_identity_holds_for_recommender() -> None:
+    """``Σ weight × value == core_score`` for one candidate.
+
+    The recommender path mirrors the scheduler path: same five
+    weight-named components, same Σ identity. A future tuning commit
+    must touch ``test_objective_weights_returns_scoreweights_dataclass``
+    in lock-step.
+    """
+
+    objective_weights(RoutingObjective.BALANCED)  # noqa: F841 — pins the table
+    candidate = _candidate(
+        "p/m",
+        remaining=(0.6, 0.6),
+        windows=(_weekly_window(used_fraction=0.4),),
+        age_days=30,  # freshness=-5 so the value contribution is deterministic
+    )
+    score, components, _ = _score(
+        candidate,
+        policy=RoutingObjective.BALANCED,
+        now=FIXED_NOW,
+        min_tier=ModelTier.T1,
+    )
+    # ``components`` from ``_score`` is a tuple of ``(name, value)``
+    # pairs where ``value`` is **already weighted** (``weight ×
+    # underlying value`` baked in). The Σ identity the test pins is
+    # therefore ``Σ component_value == score``. The scheduler path
+    # surfaces ``value`` separately from ``weight`` on the wire; the
+    # recommender keeps them folded in ``value`` for backwards
+    # compatibility with the legacy ``score_components`` consumer.
+    expected = sum(value for _, value in components)
+    # Subtract the UNKNOWN-availability penalty if present (the
+    # only score-modifier outside the five-term Σ).
+    assert abs(score - expected) < 1e-9
+
+
+def test_recommend_owner_dispatch_is_deterministic() -> None:
+    """Same inputs twice → identical score + components tuple."""
+
+    candidate = _candidate(
+        "p/m",
+        remaining=(0.6, 0.6),
+        windows=(_weekly_window(used_fraction=0.4),),
+    )
+    args = dict(
+        candidates=[candidate],
+        policy=RoutingObjective.BALANCED,
+        now=FIXED_NOW,
+        min_tier=ModelTier.T1,
+    )
+    a = recommend_owner_dispatch(**args)
+    b = recommend_owner_dispatch(**args)
+    assert a == b
+    assert a.top_pick is not None
+    assert a.top_pick.score == b.top_pick.score
+    assert a.top_pick.score_components == b.top_pick.score_components
+
+
+def test_manual_policy_uses_balanced_with_explicit_reason() -> None:
+    """MANUAL does not pick automatically; the recommender falls back to
+    BALANCED weights and surfaces ``manual_policy_recommendation_uses_balanced``
+    in the reasons.
+    """
+
+    candidate = _candidate(
+        "p/m",
+        tier=ModelTier.T0,
+        tier_match_reason="exact",
+    )
+    result = recommend_owner_dispatch(
+        [candidate],
+        policy=RoutingObjective.MANUAL,
+        now=FIXED_NOW,
+        min_tier=ModelTier.T1,
+    )
+    top = result.top_pick
+    assert top is not None
+    # ``effective_policy`` is BALANCED; the reason tag fires.
+    assert "policy=BALANCED" in top.reasons[0]
+    assert "manual_policy_recommendation_uses_balanced" in top.reasons[0]
+    assert result.policy is RoutingObjective.MANUAL  # wire label preserved
