@@ -65,6 +65,29 @@ class QuotaWindowKind(StrEnum):
     CUSTOM = "CUSTOM"
     UNKNOWN = "UNKNOWN"
 
+    def duration_seconds(self) -> float | None:
+        """Return the canonical reset-cycle duration for this kind.
+
+        ``UNKNOWN`` and ``CUSTOM`` are intentionally absent — the daemon
+        treats them as "no inferable start instant" and surfaces the
+        window as ``UNMETERED`` rather than guessing one. ``infer_window_started_at``
+        consults this table; the control plane consults it before
+        calling that helper.
+        """
+
+        return _QUOTA_WINDOW_KIND_DURATION_SECONDS.get(self.value)
+
+
+# Module-level table because ``StrEnum`` rejects class-level mutable
+# attributes during member construction. ``UNKNOWN`` and ``CUSTOM`` are
+# intentionally absent.
+_QUOTA_WINDOW_KIND_DURATION_SECONDS: dict[str, float] = {
+    "FIVE_HOUR": 5 * 60 * 60.0,
+    "WEEKLY": 7 * 24 * 60 * 60.0,
+    "MONTHLY": 30 * 24 * 60 * 60.0,
+    "DAILY": 24 * 60 * 60.0,
+}
+
 
 class RegistryModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
