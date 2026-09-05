@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import threading
@@ -22,6 +23,11 @@ from personal_ai_orchestrator.dispatch_executor import (
 from personal_ai_orchestrator.execution_controller import reconcile_workspace_truth
 from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
 from personal_ai_orchestrator.local_api import serve
+from personal_ai_orchestrator.model_tiers import (
+    DEFAULT_TIER_TABLE_JSON,
+    TierTable,
+    parse_tier_table,
+)
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
 from personal_ai_orchestrator.policy_snapshot import PolicySnapshotJournal
 from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryManager
@@ -137,6 +143,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--model-tiers-path",
+        type=Path,
+        default=None,
+        help=(
+            "host-owned M1 WP2 tier table JSON (parsed at startup; "
+            "malformed files fall back to DEFAULT_TIER_TABLE_JSON and "
+            "emit a MODEL_TIERS_INVALID system event)"
+        ),
+    )
+    parser.add_argument(
         "--tick-interval-seconds",
         type=float,
         default=None,
@@ -156,6 +172,46 @@ def load_verifier_profile(path: Path | None):
     from personal_ai_orchestrator.verifier import VerifierProfile
 
     return VerifierProfile.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def load_model_tiers(
+    path: Path | None,
+    *,
+    audit: SafetyKernelStore | None = None,
+) -> tuple[TierTable, str]:
+    """Load the host-owned tier table at startup.
+
+    Returns ``(table, source)`` where ``source`` is one of
+    ``"owner_file"`` / ``"default_fallback"`` and surfaces on
+    ``/v1/health.model_tiers_source``. A malformed file does NOT abort
+    boot — the daemon falls back to the shipped defaults and records a
+    ``MODEL_TIERS_INVALID`` system event so the owner can fix the file
+    without restarting.
+
+    The table is loaded exactly once at startup; there is no hot
+    reload. A host that wants to change the table must restart the
+    daemon (this is intentional — the table is small, the recommender
+    is a hot path, and a mid-session table swap could silently change
+    every recommendation in flight).
+    """
+
+    if path is None:
+        return parse_tier_table(DEFAULT_TIER_TABLE_JSON), "default_fallback"
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return parse_tier_table(raw), "owner_file"
+    except (ValueError, OSError) as exc:
+        if audit is not None:
+            audit.record_system_event(
+                "MODEL_TIERS_INVALID",
+                {
+                    "path": str(path),
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
+            )
+        return parse_tier_table(DEFAULT_TIER_TABLE_JSON), "default_fallback"
 
 
 def default_quota_collectors() -> dict[str, object]:
@@ -191,6 +247,7 @@ def build_control_service(
     quota_collectors: dict[str, object] | None = None,
     verifier_profile=None,
     worker_permission_config: Path | None = None,
+    model_tiers_path: Path | None = None,
     supervisor: DaemonSupervisor | None = None,
 ) -> ControlPlaneService:
     """Build the control-plane facade over the same durable truth.
@@ -207,6 +264,14 @@ def build_control_service(
         provider_registry_manager.registry()
         if provider_registry_manager is not None
         else config.registry
+    )
+    # M1 WP2: load the tier table once at startup. Malformed files
+    # fall back to the shipped defaults; the system event
+    # MODEL_TIERS_INVALID and the /v1/health ``model_tiers_source``
+    # field are how the owner sees the fallback fired.
+    store = SafetyKernelStore(state_db)
+    tier_table, model_tiers_source = load_model_tiers(
+        model_tiers_path, audit=store
     )
     execution_evidence_journal = ExecutionEvidenceJournal(runtime_state_root)
     if provider_registry_manager is not None:
@@ -253,7 +318,7 @@ def build_control_service(
     )
     return ControlPlaneService(
         registry=registry,
-        store=SafetyKernelStore(state_db),
+        store=store,
         activation_gate=ActiveRoutingGate(),
         runtime_availability=dict(config.runtime_availability),
         verification_journal=VerificationEvidenceJournal(runtime_state_root),
@@ -269,6 +334,8 @@ def build_control_service(
         dispatch_executor=executor,
         quota_refresh_service=quota_refresh_service,
         supervisor=supervisor,
+        tier_table=tier_table,
+        model_tiers_source=model_tiers_source,
     )
 
 
@@ -337,6 +404,7 @@ def main(
             worktree_root=args.worktree_root,
             verifier_profile=load_verifier_profile(args.verifier_profile),
             worker_permission_config=args.worker_permission_config,
+            model_tiers_path=args.model_tiers_path,
             supervisor=supervisor,
         )
         control_server = ControlPlaneServer(control_service, args.control_socket)

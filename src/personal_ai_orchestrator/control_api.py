@@ -921,6 +921,13 @@ class HealthView(_ViewModel):
     last_tick_at: str | None = None
     tick_interval_seconds: float | None = None
     supervisor_steps: tuple[SupervisorStepView, ...] = ()
+    #: M1 WP2: which tier table the daemon is running. ``"owner_file"``
+    #: means a host-owned JSON was loaded; ``"default_fallback"`` means
+    #: the shipped defaults were used (either because no file was
+    #: provided or because the file failed to parse). ``None`` means
+    #: tier-table wiring is not active (e.g. an ad-hoc CLI that did
+    #: not inject one).
+    model_tiers_source: str | None = None
 
 
 class BuildView(_ViewModel):
@@ -1017,6 +1024,15 @@ class ControlPlaneService:
     #: per-step status. ``None`` is allowed — the bundled daemon always
     #: wires one in, but unit tests / ad-hoc CLIs do not have to.
     supervisor: DaemonSupervisor | None = None
+    #: M1 WP2 tier table. ``None`` is allowed so ad-hoc tests / CLIs
+    #: that don't care about tier gating still build a service. The
+    #: recommender treats ``None`` as "default to T1 with no caps".
+    tier_table: Any = None
+    #: Where the active ``tier_table`` came from — surfaces on
+    #: ``/v1/health.model_tiers_source`` so the owner can spot a
+    #: malformed host file that fell back to the shipped defaults.
+    #: ``None`` when ``tier_table`` is ``None``.
+    model_tiers_source: str | None = None
 
     @property
     def owner_initiated_execution_enabled(self) -> bool:
@@ -1041,6 +1057,8 @@ class ControlPlaneService:
             dispatch_executor=self.dispatch_executor,
             quota_refresh_service=self.quota_refresh_service,
             supervisor=self.supervisor,
+            tier_table=self.tier_table,
+            model_tiers_source=self.model_tiers_source,
         )
 
     @staticmethod
@@ -3109,6 +3127,7 @@ class ControlPlaneService:
             return HealthView(
                 status="ok",
                 api_version=CONTROL_API_VERSION,
+                model_tiers_source=self.model_tiers_source,
             )
         snapshot: DaemonSupervisorSnapshot = self.supervisor.snapshot()
         steps_view: tuple[SupervisorStepView, ...] = tuple(
@@ -3133,6 +3152,7 @@ class ControlPlaneService:
             ),
             tick_interval_seconds=snapshot.interval_seconds,
             supervisor_steps=steps_view,
+            model_tiers_source=self.model_tiers_source,
         )
 
     def build(self) -> BuildView:

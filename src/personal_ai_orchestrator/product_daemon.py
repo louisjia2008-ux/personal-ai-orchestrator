@@ -27,6 +27,7 @@ from pathlib import Path
 from personal_ai_orchestrator.daemon import main as daemon_main
 from personal_ai_orchestrator.legacy_migration import migrate_legacy_state
 from personal_ai_orchestrator.model_registry import ModelRegistry
+from personal_ai_orchestrator.model_tiers import DEFAULT_TIER_TABLE_JSON
 from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryManager
 from personal_ai_orchestrator.provider_registry_store import (
     EMPTY_BOOTSTRAP_SNAPSHOT_ID,
@@ -108,6 +109,7 @@ def build_daemon_argv(
     execution_repo: Path | None = None,
     verifier_profile: Path | None = None,
     worker_permission_config: Path | None = None,
+    model_tiers_path: Path | None = None,
     tick_interval_seconds: float | None = None,
 ) -> list[str]:
     argv = [
@@ -131,6 +133,8 @@ def build_daemon_argv(
         argv += ["--verifier-profile", str(verifier_profile)]
     if worker_permission_config is not None:
         argv += ["--worker-permission-config", str(worker_permission_config)]
+    if model_tiers_path is not None:
+        argv += ["--model-tiers-path", str(model_tiers_path)]
     if tick_interval_seconds is not None:
         argv += ["--tick-interval-seconds", str(tick_interval_seconds)]
     return argv
@@ -157,19 +161,29 @@ DEFAULT_WORKER_PERMISSION_CONFIG: dict[str, object] = {
 }
 
 
-def ensure_execution_policies(layout: ApplicationSupportLayout) -> tuple[Path, Path, Path] | None:
+def ensure_execution_policies(layout: ApplicationSupportLayout) -> tuple[Path, Path, Path, Path] | None:
     """Create the host-owned owner-dispatch policy artifacts, idempotently.
 
-    Returns ``(execution_repo, verifier_profile_path, worker_permissions)``,
-    or ``None`` when the host cannot support owner dispatch (no git,
-    unwritable state) — in that case the daemon still boots, exactly like
-    today, with dispatch reserved but never executed.
+    Returns ``(execution_repo, verifier_profile_path,
+    worker_permissions, model_tiers_path)``, or ``None`` when the host
+    cannot support owner dispatch (no git, unwritable state) — in that
+    case the daemon still boots, exactly like today, with dispatch
+    reserved but never executed.
+
+    The fourth artifact (``model-tiers.json``) is the M1 WP2 tier
+    table: the daemon loads it on startup, validates it via
+    :func:`personal_ai_orchestrator.model_tiers.parse_tier_table`,
+    and falls back to :data:`personal_ai_orchestrator.model_tiers.
+    DEFAULT_TIER_TABLE_JSON` if the file is malformed (the failure is
+    recorded via ``record_system_event(\"MODEL_TIERS_INVALID\")`` so the
+    owner can read ``/v1/health.model_tiers_source`` to see why).
     """
 
     policies = layout.runtime_state_root / "policies"
     execution_repo = policies / "execution-repo"
     verifier_profile = policies / "verifier-profile.json"
     worker_permissions = policies / "worker-opencode.json"
+    model_tiers = policies / "model-tiers.json"
     try:
         policies.mkdir(parents=True, exist_ok=True)
         if not (execution_repo / ".git").is_dir():
@@ -190,9 +204,14 @@ def ensure_execution_policies(layout: ApplicationSupportLayout) -> tuple[Path, P
                 json.dumps(DEFAULT_WORKER_PERMISSION_CONFIG, indent=2) + "\n",
                 encoding="utf-8",
             )
+        if not model_tiers.is_file():
+            model_tiers.write_text(
+                json.dumps(DEFAULT_TIER_TABLE_JSON, indent=2) + "\n",
+                encoding="utf-8",
+            )
     except Exception:
         return None
-    return execution_repo, verifier_profile, worker_permissions
+    return execution_repo, verifier_profile, worker_permissions, model_tiers
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -230,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
             execution_repo=policies[0] if policies else None,
             verifier_profile=policies[1] if policies else None,
             worker_permission_config=policies[2] if policies else None,
+            model_tiers_path=policies[3] if policies else None,
         ),
         provider_registry_manager=manager,
     )
