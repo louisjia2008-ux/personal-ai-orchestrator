@@ -329,7 +329,7 @@ Known limitation inherited by M1:
 
 ---
 
-## M1 — 额度压力驱动调度 (IN PROGRESS)
+## M1 — 额度压力驱动调度 (WP0 DELIVERED 2026-09-05 on `feat/m1-wp0-daemon-tick`)
 
 Goal: turn the existing scheduler into one that burns subscription quota
 before it expires, drops simple tasks to free / low-tier models, and adds

@@ -425,6 +425,50 @@ Known limitation inherited by M1 (carry into M1, fix in M2):
 - A5: `pytest-rerunfailures` added to the dev extras; the daemon SIGINT
   shutdown test is decorated with `@pytest.mark.flaky(reruns=3, reruns_delay=1)`.
 
+## M1 WP0 — daemon tick infrastructure (feat/m1-wp0-daemon-tick)
+
+The first WP of M1 puts a deterministic periodic step registry in
+front of the bundled daemon so every later WP (burn / tiers / pressure
+scoring / supervised auto / backlog / weekly report) registers its
+periodic work in one place.
+
+- **DaemonSupervisor** (`src/personal_ai_orchestrator/daemon_supervisor.py`).
+  One daemon thread drives registered callables on a fixed interval.
+  Each step is isolated (one exception does not skip siblings); three
+  consecutive failures enter backoff (fires once every 12 ticks until a
+  success); `clock` is injected so tests advance time deterministically.
+  Naive clocks are rejected with a warning instead of crashing.
+- **Audit contract**. Heartbeat is intentionally silent in
+  `audit_events`. Only `SUPERVISOR_STEP_FAILED`,
+  `SUPERVISOR_STEP_BACKOFF` and `SUPERVISOR_STEP_RECOVERED` are
+  written, and only via `SafetyKernelStore.record_system_event` —
+  the new public wrapper introduced for cross-module system audits.
+  Heartbeat must not pollute the audit log every 5 seconds.
+- **Daemon main loop** (`src/personal_ai_orchestrator/daemon.py`).
+  Replaced `while not stop.wait(3600): pass` with
+  `supervisor.run(stop)` so both `--control-only` and the routing path
+  run a heartbeat. New `--tick-interval-seconds` CLI flag falls back
+  to `PAO_TICK_INTERVAL_SECONDS` env var, then 5.0s default.
+- **/v1/health**. `HealthView` gains three optional fields:
+  `last_tick_at` (ISO string, `None` until the first tick),
+  `tick_interval_seconds` (float), `supervisor_steps` (tuple of
+  `SupervisorStepView` carrying per-step name / last_run_at /
+  last_duration_ms / consecutive_failures / in_backoff). All three
+  are absent-tolerant — pre-WP0 daemons decode cleanly, and old
+  clients that only read `status` / `api_version` are unaffected.
+- **Swift side**. `HealthView` and new `SupervisorStepView` decode
+  the new fields with `decodeIfPresent`. `lastTickDate` /
+  `lastRunDate` reuse `TaskTiming.parseTimestamp` for relative-time
+  formatting. Three new Swift decoder tests (forward + backward
+  compatible + minimal SupervisorStepView).
+- **Process daemon wiring** (`product_daemon.py`). The bundled
+  daemon's `build_daemon_argv` takes an optional
+  `tick_interval_seconds` parameter; nothing changes by default.
+
+WP0 deliberately ships exactly one step (`heartbeat`). WP1+ WP
+branches register their periodic work behind the same registry
+without touching `daemon.py` again.
+
 ## P3.6 live provider and Shadow campaign
 
 P3.6 provider-surface discovery on 2026-08-30 found no supported machine-readable remaining-quota
