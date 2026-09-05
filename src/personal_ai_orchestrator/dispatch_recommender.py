@@ -514,11 +514,20 @@ def recommend_owner_dispatch(
                     for name, value in components
                 ),
                 reasons=(reasons_str,),
-                # M1 WP3: surface headroom_mean on the candidate
-                # view so the UI can render both numbers alongside
-                # the score. The headroom_min itself flows through
-                # the wire as a separate field (commit 4).
-                effective_pace=headroom_mean,
+                # M1 WP3 fix (F1): headroom_mean rides on its own
+                # ``headroom_mean_fraction`` field. ``effective_pace``
+                # is reserved for the scheduler path's
+                # ``QuotaSnapshot.effective_pace`` value (a single
+                # ``float | None``); the recommender has no
+                # ``QuotaSnapshot`` and therefore leaves it ``None``
+                # — the prior commit smuggled ``headroom_mean`` in
+                # here, which broke the field's contract and made
+                # the JSON confusing (an "effective pace" that was
+                # actually a headroom mean). The headroom_min itself
+                # flows through the wire as ``headroom_min`` (commit
+                # 4); ``headroom_mean`` is kept alongside on the
+                # candidate view for the UI to render both.
+                headroom_mean_fraction=headroom_mean,
             )
         )
     evaluations.sort(
