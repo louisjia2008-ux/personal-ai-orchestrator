@@ -14,7 +14,7 @@ bypass the Safety Kernel / deterministic verifier.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from math import log1p
 
@@ -104,6 +104,15 @@ class TargetTelemetry(RegistryModel):
     context_window_tokens: int | None = Field(default=None, ge=1)
     supports_vision: bool | None = None
     supported_tools: tuple[str, ...] = ()
+    #: M1 WP3 fix (F2): when the target last passed a real worker
+    #: invocation. ``None`` means never observed (or stale beyond
+    #: the freshness cap). ``_score_candidate`` converts this into a
+    #: ``freshness`` ``ScoreComponent`` with a constant
+    #: ``FRESHNESS_WEIGHT`` — the weight is NOT in ``ScoreWeights``
+    #: because the freshness nudge does not vary with the
+    #: scheduling objective. Pre-F2 callers leave the field ``None``
+    #: and the freshness component reads as ``0.0``.
+    evidence_observed_at: datetime | None = None
 
 
 class RoutingPolicy(RegistryModel):
@@ -230,12 +239,51 @@ def objective_weights(objective: RoutingObjective) -> ScoreWeights:
         # rejects ``remaining == 0`` already so a tiny remainder is
         # still a useful signal.
         return ScoreWeights(quality=0.4, pressure=1.0, headroom=0.6, latency=0.4, cost=0.2)
-    # MANUAL + every other value fall back to BALANCED. Both
-    # ``evaluate_target`` and ``recommend_owner_dispatch`` consult this
-    # function; ``evaluate_target`` short-circuits MANUAL before
-    # calling it, and ``recommend_owner_dispatch`` adds the
-    # reason-tag.
     return ScoreWeights(quality=0.7, pressure=0.6, headroom=0.4, latency=1.0, cost=0.3)
+
+
+#: M1 WP3 fix (F2): evidence-freshness nudge weight. Constant across
+#: every :class:`RoutingObjective` because freshness is an
+#: objective-independent property of the target's evidence — a
+#: model seen 5 minutes ago is just as fresh under QUALITY_FIRST as
+#: it is under BURN_DOWN. The weight is NOT in :class:`ScoreWeights`
+#: so the per-objective preset stays free of evidence policy.
+#:
+#: Calibrated so a target seen ``_EVIDENCE_FRESH_DAYS=7`` days ago
+#: contributes ``0.2 * 7.0 = 1.4`` to the score — close to the
+#: pre-F2 ceiling of ``0.7 (BALANCED quality_weight) * 7.0/5.0 =
+#: 0.98`` and below the per-target headroom contribution (a 0.6
+#: headroom cap × 0.4 weight = 0.24 per provider, summed across
+#: tiers). The score identity ``Σ weight × value == core_score``
+#: holds over all six weight-named components; freshness is the
+#: sixth.
+FRESHNESS_WEIGHT: float = 0.2
+
+
+#: M1 WP3 fix (F2): a target seen more than this many days ago is
+#: treated as "stale evidence" and reads as ``-5.0`` from
+#: :func:`_freshness_value` (the recommender's pre-existing cap).
+#: Pre-F2 callers that did not pass ``evidence_observed_at`` get
+#: the same ``-5.0`` from the helper when ``observed_at is None``.
+#: The number is shared by both score paths.
+_EVIDENCE_FRESH_DAYS: float = 7.0
+
+
+def _freshness_value(*, observed_at: datetime | None, now: datetime) -> float:
+    """Raw freshness score for one target, used as the 6th component.
+
+    Returns a value in ``[-5.0, 7.0]``. ``None`` observed_at and
+    "older than the cap" both yield ``-5.0`` so a future tuning
+    commit can change the negative floor without touching the score
+    path. The weight is :data:`FRESHNESS_WEIGHT`.
+    """
+
+    if observed_at is None:
+        return -5.0
+    age_days = (now - observed_at).total_seconds() / 86_400.0
+    if age_days < 0 or age_days > _EVIDENCE_FRESH_DAYS:
+        return -5.0
+    return max(0.0, _EVIDENCE_FRESH_DAYS - age_days)
 
 
 def policy_from_name(
@@ -336,15 +384,26 @@ def _score_candidate(
     pressure_confidence: EvidenceConfidence = EvidenceConfidence.UNKNOWN,
     pressure_source: str = "burn_curve",
     headroom_min: float | None = None,
+    freshness_observed_at: datetime | None = None,
+    score_now: datetime | None = None,
 ) -> tuple[float, tuple[ScoreComponent, ...]]:
-    """Score one candidate; ``Σ weight × value == core_score`` (commit 2 pins it).
+    """Score one candidate; ``Σ weight × value == core_score`` (commit 2 + fix F2).
 
-    Returns ``(score, score_components)``. The five weight-named
-    components multiply to ``core_score`` (Σ weight × value identity);
-    the legacy pre-WP3 nudges (``priority``, ``membership_weight``,
-    ``success_prior``, ``pace``) are appended as their own
-    ``ScoreComponent`` rows with ``source="legacy_nudge"`` and
-    summed separately. The dispatcher exposes both halves to the UI.
+    Returns ``(score, score_components)``. M1 WP3 fix (F2) added
+    ``freshness`` as the sixth weight-named component. The Σ-identity
+    now holds over the six weight-named components (quality, pressure,
+    headroom, latency, cost, freshness); the legacy pre-WP3 nudges
+    (``priority``, ``membership_weight``, ``success_prior``, ``pace``)
+    are appended as their own ``ScoreComponent`` rows with
+    ``source="legacy_nudge"`` and summed separately. The dispatcher
+    exposes both halves to the UI.
+
+    The ``freshness_observed_at`` / ``score_now`` pair is optional:
+    pre-F2 callers leave both ``None`` and the freshness component
+    reads as ``-5.0`` (the helper's "never observed" floor). The
+    recommender always passes both because its
+    ``DispatchCandidateInput.evidence_observed_at`` is the same
+    surface the legacy ``_freshness_bonus`` used.
 
     ``pressure_term`` is the ``-pressure_score`` of the WEEKLY window's
     ``QuotaWindowSnapshot.burn()`` at the caller's ``now``; the
@@ -374,20 +433,41 @@ def _score_candidate(
         if telemetry.expected_cost_to_green_usd is not None
         else 0.0
     )
+    # M1 WP3 fix (F2): freshness is a per-target objective-independent
+    # nudge. ``score_now`` defaults to ``None`` (pre-F2 callers); the
+    # helper then returns the floor and the freshness contribution
+    # becomes ``FRESHNESS_WEIGHT * -5.0 = -1.0``. Pre-F2 callers that
+    # want the freshness nudge must pass ``freshness_observed_at`` and
+    # ``score_now``.
+    freshness_value = _freshness_value(
+        observed_at=freshness_observed_at,
+        now=score_now if score_now is not None else (
+            freshness_observed_at or datetime.now(UTC)
+        ),
+    )
 
-    # Five-term score; every weight is consumed even when the
+    # Six-term score; every weight is consumed even when the
     # corresponding value is 0 so ``Σ weight × value == core_score``.
     quality_contrib = quality_weight * quality_value
     pressure_contrib = pressure_weight * pressure_term
     headroom_contrib = headroom_weight * headroom_value
     latency_contrib = latency_weight * latency_value
     cost_contrib = cost_weight * cost_value
-    core_score = quality_contrib + pressure_contrib + headroom_contrib - latency_contrib - cost_contrib
+    freshness_contrib = FRESHNESS_WEIGHT * freshness_value
+    core_score = (
+        quality_contrib
+        + pressure_contrib
+        + headroom_contrib
+        + freshness_contrib
+        - latency_contrib
+        - cost_contrib
+    )
 
     # Legacy nudges kept for shadow-campaign compatibility. They are
-    # NOT in the Σ-identity (the test asserts only the five
-    # weight-named components sum to core_score) but they remain in
-    # the total rank so pre-WP3 shadow tests do not drift.
+    # NOT in the Σ-identity (the test iterates the six weight-named
+    # components and asserts ``Σ weight × value == core_score``) but
+    # they remain in the total rank so pre-WP3 shadow tests do not
+    # drift.
     auxiliary_terms: list[tuple[str, float, EvidenceConfidence, str]] = []
     auxiliary_terms.append(
         ("membership_weight_bonus", membership_weight * 2.0,
@@ -472,6 +552,30 @@ def _score_candidate(
             else EvidenceConfidence.UNKNOWN,
             source="target_telemetry.expected_cost_to_green_usd",
             weight=cost_weight,
+        )
+    )
+    # M1 WP3 fix (F2): evidence freshness is the 6th weight-named
+    # component. ``confidence`` is ``EXACT`` when the helper received
+    # a real ``observed_at`` within the cap, ``UNKNOWN`` when the
+    # observed timestamp is missing or past the cap (so the UI can
+    # render "freshness: unknown" the same way it labels any other
+    # UNKNOWN signal). ``source`` is fixed because the freshness
+    # signal comes from one place — the ExecutionEvidenceJournal.
+    freshness_confidence = (
+        EvidenceConfidence.EXACT
+        if freshness_observed_at is not None
+        and score_now is not None
+        and 0 <= (score_now - freshness_observed_at).total_seconds() / 86_400.0
+        <= _EVIDENCE_FRESH_DAYS
+        else EvidenceConfidence.UNKNOWN
+    )
+    score_components.append(
+        ScoreComponent(
+            name="freshness",
+            value=round(freshness_value, 8),
+            confidence=freshness_confidence,
+            source="execution_evidence.age",
+            weight=FRESHNESS_WEIGHT,
         )
     )
     for name, value, confidence, source in auxiliary_terms:
@@ -848,6 +952,13 @@ def evaluate_target(
         pressure_confidence=pressure_confidence,
         pressure_source=pressure_source,
         headroom_min=headroom_min,
+        # M1 WP3 fix (F2): thread the target's evidence-observed
+        # timestamp into the freshness component. ``None`` keeps the
+        # helper at its "never observed" floor; the F2 test passes
+        # the timestamp through ``TargetTelemetry`` so the 6th
+        # weight-named component reads a real value.
+        freshness_observed_at=telemetry.evidence_observed_at,
+        score_now=now,
     )
     reasons.extend(
         [

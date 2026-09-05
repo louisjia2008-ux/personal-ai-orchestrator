@@ -2048,24 +2048,42 @@ public struct OwnerExecutionSettingsUpdateRequest: Encodable, Equatable, Sendabl
 
 public struct DispatchRecommendationScoreComponent: Decodable, Equatable, Sendable {
     public let name: String
-    public let contribution: Double
-    /// M1 WP3: weight the recommender applied to the underlying
-    /// value. ``decodeIfPresent`` keeps pre-WP2 clients parsing;
-    /// missing → nil so the UI can render "weight unknown" rather
-    /// than guessing.
+    /// M1 WP3 fix (F4): the wire shape carries the **raw
+    /// unweighted** value the recommender computed (the
+    /// ``Σ weight × value == score`` identity is built from this
+    /// number). The UI multiplies by ``weight`` at display time so
+    /// a tuning commit that changes ``FRESHNESS_WEIGHT`` (or any
+    /// other weight in ``ScoreWeights``) does not have to push a
+    /// new ``contribution`` field — the panel just re-renders.
+    public let value: Double
+    /// M1 WP3: weight the recommender applied to ``value``.
+    /// ``decodeIfPresent`` keeps pre-WP2 clients parsing; missing
+    /// → nil so the UI can render "weight unknown" rather than
+    /// guessing. ``weight`` is also nil for the ``legacy_nudge``
+    /// rows the scheduler appends for shadow-campaign
+    /// compatibility (they do not enter the Σ identity).
     public let weight: Double?
 
     enum CodingKeys: String, CodingKey {
         case name
-        case contribution
+        case value
         case weight
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
-        contribution = try container.decode(Double.self, forKey: .contribution)
+        value = try container.decode(Double.self, forKey: .value)
         weight = try container.decodeIfPresent(Double.self, forKey: .weight)
+    }
+
+    /// M1 WP3 fix (F4): display-only contribution = ``weight ×
+    /// value`` (or 0 when ``weight`` is nil). The dispatch panel's
+    /// "Score components" disclosure multiplies on render so a
+    /// future weight change shows up automatically.
+    public var contribution: Double {
+        guard let weight else { return 0.0 }
+        return weight * value
     }
 }
 

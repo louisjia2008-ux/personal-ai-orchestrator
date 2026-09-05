@@ -50,8 +50,10 @@ from personal_ai_orchestrator.quota_burn import (
     rolling_hourly_cap,
 )
 from personal_ai_orchestrator.scheduler import (
+    FRESHNESS_WEIGHT,
     CandidateEvaluation,
     RoutingObjective,
+    _freshness_value,
     _score_candidate,
     objective_weights,
 )
@@ -246,18 +248,6 @@ def _headroom(candidate: DispatchCandidateInput) -> tuple[float, float]:
     return min(fractions), sum(fractions) / len(fractions)
 
 
-def _freshness_bonus(candidate: DispatchCandidateInput, *, now: datetime) -> float:
-    """Targets seen recently are more trustworthy than silent ones."""
-
-    observed_at = candidate.evidence_observed_at
-    if observed_at is None:
-        return -5.0
-    age_days = (now - observed_at).total_seconds() / 86400.0
-    if age_days < 0 or age_days > _EVIDENCE_FRESH_DAYS:
-        return -5.0
-    return max(0.0, _EVIDENCE_FRESH_DAYS - age_days) * 1.0
-
-
 def _score(
     candidate: DispatchCandidateInput,
     *,
@@ -265,7 +255,7 @@ def _score(
     now: datetime,
     min_tier: ModelTier,
 ) -> tuple[float, tuple[tuple[str, float], ...], float]:
-    """Score one candidate; same five-term shape as the scheduler.
+    """Score one candidate; six-term shape shared with the scheduler.
 
     Returns ``(score, components, headroom_min)`` — the third value
     is what ``_dispatch_recommendation_candidate_view`` threads into
@@ -275,6 +265,23 @@ def _score(
     data the scheduler's ``minimum_remaining_fraction`` reads from
     ``QuotaSnapshot``); both feed ``headroom_term`` so the two paths
     agree on the same window.
+
+    M1 WP3 fix (F2): ``quality_value`` is a pure tier function
+    (``capability_fit``); freshness is the **sixth** weight-named
+    component with constant ``FRESHNESS_WEIGHT``. The legacy
+    ``quality_value = capability_fit + freshness / 5.0`` folding is
+    gone — ``capability_fit`` once again means "tier fit", nothing
+    more, and the freshness nudge is auditable on its own row.
+
+    M1 WP3 fix (F4): each entry in ``components`` is the **raw
+    unweighted** value (``name → value``) — the same shape the
+    scheduler's path emits. The Σ identity
+    ``Σ weight × value == score`` holds over the six weight-named
+    rows. The control-plane view model multiplies by the per-row
+    weight at display time (the Swift UI does the same on render),
+    so a tuning commit that changes ``FRESHNESS_WEIGHT`` shows up
+    on every panel without re-deriving the contribution in two
+    places.
     """
 
     weights = objective_weights(policy)
@@ -285,13 +292,19 @@ def _score(
     cost_weight = weights.cost
 
     headroom_min, headroom_mean = _headroom(candidate)
-    freshness = _freshness_bonus(candidate, now=now)
+    freshness_value = _freshness_value(
+        observed_at=candidate.evidence_observed_at, now=now,
+    )
 
-    # M1 WP2 capability fit: gentle penalty for "overkill" (target tier
-    # higher than min_tier), zero penalty for "exact match", and the
-    # hard-eliminated "below floor" case is already filtered out by
-    # ``_hard_eligibility``. ``tier is None`` is treated as T1 so an
-    # unclassified target gets the same score a T1 target would.
+    # M1 WP2 capability fit: pure tier function. The penalty is
+    # gentle by design (a flagship T0 target for a T1 task is
+    # "overkill", not "wrong model"). The hard-eliminated "below
+    # floor" case is already filtered out by ``_hard_eligibility``.
+    # ``tier is None`` is treated as T1 so an unclassified target
+    # gets the same score a T1 target would. Pre-F2 this folded
+    # the legacy ``freshness / 5.0`` into ``quality_value`` so the
+    # QUALITY_FIRST weight amplified freshness by 1.4× and the
+    # BURN_DOWN weight crushed it to 0.4× — neither was intended.
     effective_tier = candidate.tier if candidate.tier is not None else ModelTier.T1
     capability_fit = 1.0 - 0.1 * (
         tier_index(min_tier) - tier_index(effective_tier)
@@ -299,6 +312,7 @@ def _score(
     # The penalty is clamped so a far-above-min tier cannot push
     # capability_fit below zero — the scoring math stays readable.
     capability_fit = max(0.0, min(1.0, capability_fit))
+    quality_value = capability_fit
 
     # M1 WP3 pressure_term: ``-pressure_score`` of the WEEKLY window
     # at ``now``. ``source_pressure_for`` reads
@@ -320,26 +334,37 @@ def _score(
         pressure_reason = "burn_unmetered"
     else:
         # AHEAD / BEHIND / ON_TRACK — drive by ``-pressure_score``.
-        # Use the planner\'s ``assess`` directly via the only window that
-        # has the data; the scheduler path mirrors this. AHEAD is +1
-        # the ceiling (already negative ``pressure_score`` → -(-1) = +1);
-        # ON_TRACK stays inside ±0.25.
+        # Use the planner's ``assess`` directly via the only window
+        # that has the data; the scheduler path mirrors this. AHEAD
+        # is +1 the ceiling (already negative ``pressure_score`` →
+        # -(-1) = +1); ON_TRACK stays inside ±0.25.
         pressure_term = 0.0  # ON_TRACK/BEHIND do not gate the score
         pressure_reason = None
 
-    # The legacy ``evidence_freshness`` is a quality-axis nudge —
-    # it multiplies quality_weight so it counts toward the
-    # ``Σ weight × value == score`` identity.
-    quality_value = capability_fit + freshness / 5.0
-
+    # M1 WP3 fix (F4): emit raw values, not weighted contributions.
+    # The order matches the scheduler so the wire shape is uniform
+    # (quality → pressure → headroom → latency → cost → freshness).
     components: list[tuple[str, float]] = [
-        ("quality_capability_fit", quality_weight * quality_value),
-        ("pressure_term", pressure_weight * pressure_term),
-        ("headroom_min", headroom_weight * headroom_min),
-        ("latency_log", latency_weight * 0.0),  # no latency telemetry here
-        ("cost_log", cost_weight * 0.0),  # cost surface lands in M3
+        ("quality_capability_fit", quality_value),
+        ("pressure_term", pressure_term),
+        ("headroom_min", headroom_min),
+        ("latency_log", 0.0),  # no latency telemetry on the recommender
+        ("cost_log", 0.0),  # cost surface lands in M3
+        ("freshness", freshness_value),
     ]
-    score = sum(value for _, value in components)
+    # Σ identity over the six weight-named components. The
+    # ``latency_term`` and ``cost_term`` subtract because a higher
+    # value is a worse signal; the recommender holds them at 0
+    # until M3 lands.
+    core_score = (
+        quality_weight * quality_value
+        + pressure_weight * pressure_term
+        + headroom_weight * headroom_min
+        + FRESHNESS_WEIGHT * freshness_value
+        - latency_weight * 0.0
+        - cost_weight * 0.0
+    )
+    score = core_score
     # Penalise UNKNOWN availability state, even when remaining fractions
     # were reported: a fresh collector result and stale journal disagree.
     if candidate.availability_state is QuotaAvailabilityState.UNKNOWN:
@@ -412,8 +437,23 @@ def recommend_owner_dispatch(
         )
         # Pull per-component weight/confidence/source so the
         # ``score_components`` rows expose the same Σ-weight×value
-        # identity the scheduler surfaces.
+        # identity the scheduler surfaces. M1 WP3 fix (F2) added
+        # ``freshness`` as the sixth weight-named component with a
+        # constant ``FRESHNESS_WEIGHT``; ``confidence`` is EXACT when
+        # the helper received a real ``observed_at`` within the cap,
+        # UNKNOWN otherwise.
         effective_weights = objective_weights(effective_policy)
+        _fresh_age_days = (
+            (now - candidate.evidence_observed_at).total_seconds() / 86_400.0
+            if candidate.evidence_observed_at is not None
+            else None
+        )
+        freshness_confidence = (
+            EvidenceConfidence.EXACT
+            if _fresh_age_days is not None
+            and 0 <= _fresh_age_days <= 7.0
+            else EvidenceConfidence.UNKNOWN
+        )
         per_component_meta = {
             "quality_capability_fit": (
                 effective_weights.quality,
@@ -445,6 +485,11 @@ def recommend_owner_dispatch(
                 effective_weights.cost,
                 EvidenceConfidence.UNKNOWN,
                 "target_telemetry.expected_cost_to_green_usd",
+            ),
+            "freshness": (
+                FRESHNESS_WEIGHT,
+                freshness_confidence,
+                "execution_evidence.age",
             ),
         }
         tier_reason = (
@@ -506,7 +551,13 @@ def recommend_owner_dispatch(
                 score_components=tuple(
                     _component(
                         name=name,
-                        contribution=value,
+                        # M1 WP3 fix (F4): ``components`` is the
+                        # raw (name, value) tuple the recommender
+                        # built in ``_score``. Pass the value
+                        # directly; ``weight`` rides alongside so
+                        # the wire shape carries the full
+                        # ``Σ weight × value`` shape.
+                        raw_value=value,
                         weight=per_component_meta.get(name, (None, None, None))[0],
                         confidence=per_component_meta.get(name, (None, None, None))[1],
                         source=per_component_meta.get(name, (None, None, None))[2],
@@ -539,17 +590,21 @@ def recommend_owner_dispatch(
     return DispatchRecommendation(policy=policy, evaluations=tuple(evaluations))
 
 
-def _component(name: str, contribution: float, *, weight: float | None = None,
+def _component(name: str, raw_value: float, *, weight: float | None = None,
               confidence: EvidenceConfidence | None = None,
               source: str | None = None) -> "ScoreComponent":
     # Local re-export shim so this module stays decoupled from
     # scheduler's exported ScoreComponent. Keeps the recommendation
     # value object identical to the rest of the scheduler's output.
+    # M1 WP3 fix (F4): ``raw_value`` is the unweighted term the
+    # ``Σ weight × value`` identity is built from; the wire shape
+    # carries it as ``ScoreComponent.value`` alongside ``weight``
+    # so the UI multiplies at display time.
     from personal_ai_orchestrator.scheduler import ScoreComponent
 
     return ScoreComponent(
         name=name,
-        value=round(contribution, 8),
+        value=round(raw_value, 8),
         confidence=confidence or EvidenceConfidence.UNKNOWN,
         source=source or "dispatch_recommender",
         weight=weight,

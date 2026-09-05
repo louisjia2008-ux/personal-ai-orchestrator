@@ -217,8 +217,27 @@ class DispatchRecommendationRequest(_ViewModel):
 
 
 class DispatchRecommendationScoreComponent(_ViewModel):
+    """One ``Σ weight × value`` row on the wire.
+
+    M1 WP3 fix (F4): the wire shape carries the **raw unweighted**
+    value (``value``) and the multiplier (``weight``) separately.
+    The UI multiplies them at display time so a future tuning
+    commit that changes ``FRESHNESS_WEIGHT`` (or any other weight
+    in :class:`scheduler.ScoreWeights`) does not have to push a
+    new ``contribution`` field — the panel just re-renders. The
+    ``Σ weight × value == score`` identity is now a property of
+    the raw rows, not of a pre-multiplied value the server wrote
+    on the wire.
+    """
+
     name: str
-    contribution: float
+    value: float
+    #: M1 WP3: weight the recommender applied to ``value``. ``None``
+    #: for the auxiliary ``legacy_nudge`` rows the scheduler and
+    #: recommender both append for shadow-campaign compatibility —
+    #: they do not enter the Σ identity and the UI should label
+    #: them as "weight: unknown" rather than guessing.
+    weight: float | None = None
 
 
 class DispatchRecommendationCandidate(_ViewModel):
@@ -1945,7 +1964,14 @@ class ControlPlaneService:
             score_components=tuple(
                 DispatchRecommendationScoreComponent(
                     name=component.name,
-                    contribution=float(component.value) if isinstance(component.value, (int, float)) else 0.0,
+                    # M1 WP3 fix (F4): wire shape carries the raw
+                    # unweighted ``value`` plus the per-row ``weight``.
+                    # The UI multiplies them at display time so the
+                    # ``Σ weight × value == score`` identity is
+                    # visible end-to-end (and a tuning commit does
+                    # not have to push a new ``contribution``).
+                    value=float(component.value) if isinstance(component.value, (int, float)) else 0.0,
+                    weight=component.weight,
                 )
                 for component in evaluation.score_components
             ),

@@ -852,29 +852,36 @@ final class ModelAndStatusTests: XCTestCase {
     }
 
     func testDispatchRecommendationScoreComponentDecodesWeightWhenPresent() throws {
+        // M1 WP3 fix (F4): wire shape carries the **raw value**
+        // and the per-row ``weight``; the UI multiplies them at
+        // display time (``contribution`` is a computed
+        // ``weight × value``).
         let json = """
-        {"name":"quality_capability_fit","contribution":1.4,"weight":0.7}
+        {"name":"quality_capability_fit","value":2.0,"weight":0.7}
         """
         let c = try JSONDecoder().decode(
             DispatchRecommendationScoreComponent.self, from: Data(json.utf8)
         )
         XCTAssertEqual(c.name, "quality_capability_fit")
-        XCTAssertEqual(c.contribution, 1.4)
+        XCTAssertEqual(c.value, 2.0)
         XCTAssertEqual(c.weight, 0.7)
+        XCTAssertEqual(c.contribution, 1.4, accuracy: 1e-9)
     }
 
     func testDispatchRecommendationScoreComponentDecodesWithoutWeight() throws {
         // Pre-WP2 daemons / fixtures omit ``weight``; the decoder
-        // must leave the field nil.
+        // must leave the field nil and the contribution reads
+        // as 0 (no multiplier to apply).
         let json = """
-        {"name":"quality_capability_fit","contribution":1.4}
+        {"name":"quality_capability_fit","value":2.0}
         """
         let c = try JSONDecoder().decode(
             DispatchRecommendationScoreComponent.self, from: Data(json.utf8)
         )
         XCTAssertEqual(c.name, "quality_capability_fit")
-        XCTAssertEqual(c.contribution, 1.4)
+        XCTAssertEqual(c.value, 2.0)
         XCTAssertNil(c.weight)
+        XCTAssertEqual(c.contribution, 0.0)
     }
 
     func testL10nBurnDownPolicyNameAndDetail() {
@@ -885,5 +892,24 @@ final class ModelAndStatusTests: XCTestCase {
             L10n.schedulingPolicyDetail("BURN_DOWN"), L10n.policyBurnDownDetail
         )
         XCTAssertNotEqual(L10n.policyBurnDown, L10n.policyBurnDownDetail)
+    }
+
+    // M1 WP3 fix (F2): ``freshness`` is the sixth weight-named
+    // score component. ``value`` carries the raw freshness
+    // reading (``-5.0`` for missing / stale evidence,
+    // ``_EVIDENCE_FRESH_DAYS - age_days`` otherwise) and ``weight``
+    // is the constant ``FRESHNESS_WEIGHT`` the daemon applies.
+    // The contribution is the computed ``weight × value``.
+    func testDispatchRecommendationScoreComponentDecodesFreshness() throws {
+        let json = """
+        {"name":"freshness","value":-5.0,"weight":0.2}
+        """
+        let c = try JSONDecoder().decode(
+            DispatchRecommendationScoreComponent.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(c.name, "freshness")
+        XCTAssertEqual(c.value, -5.0)
+        XCTAssertEqual(c.weight, 0.2)
+        XCTAssertEqual(c.contribution, -1.0, accuracy: 1e-9)
     }
 }
