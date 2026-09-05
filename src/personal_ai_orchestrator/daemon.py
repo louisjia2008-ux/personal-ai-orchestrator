@@ -6,10 +6,12 @@ import argparse
 import os
 import signal
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 
 from personal_ai_orchestrator.activation import ActiveRoutingGate
 from personal_ai_orchestrator.control_api import ControlPlaneServer, ControlPlaneService
+from personal_ai_orchestrator.daemon_supervisor import build_default_supervisor
 from personal_ai_orchestrator.dispatch_executor import (
     DispatchExecutorConfig,
     OwnerDispatchExecutor,
@@ -129,6 +131,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "host-owned opencode.json seeded into each task worktree "
             "(edit allow, bash/webfetch deny recommended)"
+        ),
+    )
+    parser.add_argument(
+        "--tick-interval-seconds",
+        type=float,
+        default=None,
+        help=(
+            "interval between DaemonSupervisor ticks (heartbeat cadence); "
+            "falls back to PAO_TICK_INTERVAL_SECONDS, then 5.0s"
         ),
     )
     return parser.parse_args(argv)
@@ -252,6 +263,24 @@ def build_control_service(
     )
 
 
+def _resolve_tick_interval_seconds(args: argparse.Namespace) -> float:
+    """CLI arg > PAO_TICK_INTERVAL_SECONDS env var > 5.0s default.
+
+    The env var follows the existing PAO_* convention used by PAO_BUILD_*
+    and PAO_CONTROL_SOCKET. Negative or non-positive values raise ValueError
+    so a misconfigured container cannot silently disable the heartbeat.
+    """
+    raw = args.tick_interval_seconds
+    if raw is None:
+        env_raw = os.environ.get("PAO_TICK_INTERVAL_SECONDS")
+        if env_raw is None:
+            return 5.0
+        raw = float(env_raw)
+    if raw <= 0:
+        raise ValueError("tick interval must be > 0 seconds")
+    return float(raw)
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -291,6 +320,18 @@ def main(
         )
         control_server = ControlPlaneServer(control_service, args.control_socket)
         control_server.start_background()
+    # WP0: heartbeat cadence — wired through both --control-only and the
+    # routing path so ``/v1/health`` always reports a live ``last_tick_at``.
+    tick_interval_seconds = _resolve_tick_interval_seconds(args)
+    supervisor = build_default_supervisor(
+        interval_seconds=tick_interval_seconds,
+        clock=lambda: datetime.now(UTC),
+        audit_store=(
+            control_service.store
+            if control_service is not None
+            else service.store
+        ),
+    )
     if args.control_only:
         if control_server is None:
             raise SystemExit("--control-only requires --control-socket")
@@ -301,6 +342,10 @@ def main(
             stop.set()
 
         signal.signal(signal.SIGTERM, _stop)
+        supervisor_thread = threading.Thread(
+            target=supervisor.run, args=(stop,), daemon=True
+        )
+        supervisor_thread.start()
         try:
             while not stop.wait(timeout=3600):
                 pass
@@ -308,19 +353,27 @@ def main(
             return 0
         finally:
             signal.signal(signal.SIGTERM, previous_term)
+            supervisor_thread.join(timeout=2.0)
             control_server.stop()
             if control_service is not None:
                 control_service.store.close()
             service.store.close()
         return 0
+    # Routing path: ``serve()`` blocks on its own select loop. The supervisor
+    # runs in a daemon thread so the heartbeat still updates while the
+    # loopback API is up; SIGINT/SIGTERM handled inside ``serve``.
+    supervisor_stop = threading.Event()
+    supervisor_thread = threading.Thread(
+        target=supervisor.run, args=(supervisor_stop,), daemon=True
+    )
+    supervisor_thread.start()
     try:
         serve(service, host=args.host, port=args.port)
     except KeyboardInterrupt:
-        # An intentional SIGINT/Ctrl-C is a planned shutdown: exit cleanly without a
-        # traceback. The finally block still stops the control plane and closes the
-        # durable store; unexpected exceptions keep propagating untouched.
         return 0
     finally:
+        supervisor_stop.set()
+        supervisor_thread.join(timeout=2.0)
         if control_server is not None:
             control_server.stop()
         if control_service is not None:

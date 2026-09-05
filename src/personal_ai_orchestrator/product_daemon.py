@@ -108,6 +108,7 @@ def build_daemon_argv(
     execution_repo: Path | None = None,
     verifier_profile: Path | None = None,
     worker_permission_config: Path | None = None,
+    tick_interval_seconds: float | None = None,
 ) -> list[str]:
     argv = [
         "--config",
@@ -130,6 +131,8 @@ def build_daemon_argv(
         argv += ["--verifier-profile", str(verifier_profile)]
     if worker_permission_config is not None:
         argv += ["--worker-permission-config", str(worker_permission_config)]
+    if tick_interval_seconds is not None:
+        argv += ["--tick-interval-seconds", str(tick_interval_seconds)]
     return argv
 
 

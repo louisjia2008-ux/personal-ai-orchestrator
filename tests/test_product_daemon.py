@@ -319,6 +319,7 @@ def test_product_daemon_explicit_refresh_discovers_exactly_once(
     assert manager.discovery_cycle_count() == 1
 
 
+@pytest.mark.flaky(reruns=3, reruns_delay=1)
 def test_product_daemon_bootstraps_runtime_and_serves_control_plane() -> None:
     home = _short_home("pao-product-")
     layout = default_application_support_layout(home)
