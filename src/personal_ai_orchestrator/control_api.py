@@ -235,6 +235,12 @@ class DispatchRecommendationCandidate(_ViewModel):
     #: is non-VERIFIED while an older VERIFIED row exists). Lets the
     #: recommendation panel surface the staleness alongside the score.
     execution_verified_stale: bool = False
+    # M1 WP3: binding-window headroom. Drives ``headroom_term`` on the
+    # score path; ``None`` when every window has missing data so the
+    # dashboard can render the row as "headroom unmetered" with the
+    # ``burn_unmetered`` chip. ``headroom_mean`` stays alongside as
+    # the average — the Swift UI shows the min as the headline number.
+    headroom_min: float | None = None
     quota_state: str | None = None
     #: M1 WP1 burn pressure for this candidate's WEEKLY window at the
     #: handler's ``now``. Mirrors the provider-card-level
@@ -1909,6 +1915,15 @@ class ControlPlaneService:
             score=evaluation.score,
             headroom_mean=(
                 sum(inputs.remaining_fractions) / len(inputs.remaining_fractions)
+                if inputs and inputs.remaining_fractions
+                else None
+            ),
+            # M1 WP3: binding-window minimum. Reuses the same data the
+            # scheduler's ``minimum_remaining_fraction`` reads from
+            # ``QuotaSnapshot``. ``None`` propagates the "missing
+            # data" signal end-to-end.
+            headroom_min=(
+                min(inputs.remaining_fractions)
                 if inputs and inputs.remaining_fractions
                 else None
             ),

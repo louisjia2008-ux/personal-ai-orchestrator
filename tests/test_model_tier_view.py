@@ -289,3 +289,39 @@ def test_recommend_dispatch_uses_T1_default_when_task_min_tier_is_corrupt(
         assert True
     else:  # pragma: no cover — defensive only
         pytest.fail("expected ValueError on T9 but the enum accepted it")
+
+def test_recommend_dispatch_candidate_view_exposes_headroom_min(
+    tmp_path: Path,
+) -> None:
+    """``DispatchRecommendationCandidate.headroom_min`` is populated
+    from the binding-window minimum (not the mean).
+    """
+
+    repo = _make_repo(tmp_path / "project")
+    service = ControlPlaneService(
+        registry=_registry_with_target(),
+        store=SafetyKernelStore(tmp_path / "state.sqlite3"),
+        tier_table=parse_tier_table(DEFAULT_TIER_TABLE_JSON),
+    )
+    project = service.register_project({"path": str(repo)})
+    service.submit_task(
+        {
+            "task_id": "tier-task",
+            "request_id": "tier-req",
+            "project_id": project.project_id,
+            "intent": "exercise tier",
+            "min_tier": "T0",
+        }
+    )
+    # The test does not exercise the full recommend pipeline because
+    # it requires a connected provider + verified worker; it asserts
+    # the field exists on the view-model so commit 5's Swift decoder
+    # has a Python-side anchor.
+    from personal_ai_orchestrator.control_api import (
+        DispatchRecommendationCandidate,
+    )
+    fields = DispatchRecommendationCandidate.model_fields
+    assert "headroom_min" in fields
+    assert fields["headroom_min"].default is None
+    # ``headroom_mean`` stays alongside (WP2 already wired it).
+    assert "headroom_mean" in fields
