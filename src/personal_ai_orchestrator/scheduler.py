@@ -13,6 +13,7 @@ bypass the Safety Kernel / deterministic verifier.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from math import log1p
@@ -47,6 +48,11 @@ class RoutingObjective(StrEnum):
     MAX_QUALITY = "MAX_QUALITY"
     SAVE_QUOTA = "SAVE_QUOTA"
     LOW_LATENCY = "LOW_LATENCY"
+    # M1 WP3: pressure-first objective. The recommender and the
+    # scheduler raise the weight on ``pressure_term`` and
+    # ``headroom_term`` so the verdict moves towards targets whose
+    # quota is about to reset unused (WP6 dispatches on this row).
+    BURN_DOWN = "BURN_DOWN"
 
 
 class RiskClass(StrEnum):
@@ -166,18 +172,56 @@ class SchedulerDecision(RegistryModel):
     decision_reason: str
 
 
-def _objective_weights(objective: RoutingObjective) -> tuple[float, float, float, float]:
-    """Return quality, quota, latency, cost weights after hard gates have passed."""
+@dataclass(frozen=True)
+class ScoreWeights:
+    """Per-objective weights shared by ``evaluate_target`` and the
+    dispatch recommender.
+
+    Five terms so every signal the orchestrator knows about has a
+    named slot, even when its weight is zero (M1 holds ``cost`` at 0
+    until the cost surface lands in M3). The total score is always
+    ``Σ weight × value`` — see ``_score_candidate`` for the scoring
+    contract and the regression test that asserts the identity.
+    """
+
+    quality: float
+    pressure: float
+    headroom: float
+    latency: float
+    cost: float
+
+
+def objective_weights(objective: RoutingObjective) -> ScoreWeights:
+    """Per-objective weights; ``MANUAL`` is the BALANCED preset by spec.
+
+    The owner-facing ``MANUAL`` is a "do not pick automatically" task-
+    level policy. The scheduler must not score ``MANUAL`` tasks
+    (``evaluate_target`` returns early with no auto-rank); when the
+    recommender is asked to recommend against a ``MANUAL`` policy
+    anyway (defence-in-depth), it uses BALANCED's preset and surfaces
+    ``manual_policy_recommendation_uses_balanced`` in the reasons so
+    the recommendation panel never silently downgrades a manual
+    pick to an automatic one.
+    """
 
     if objective in {RoutingObjective.QUALITY_FIRST, RoutingObjective.MAX_QUALITY}:
-        return (1.4, 0.5, 0.4, 0.4)
+        return ScoreWeights(quality=1.4, pressure=0.2, headroom=0.3, latency=0.4, cost=0.1)
     if objective in {RoutingObjective.QUOTA_SAVER, RoutingObjective.SAVE_QUOTA}:
-        return (0.9, 1.5, 0.5, 0.8)
+        return ScoreWeights(quality=0.5, pressure=0.4, headroom=0.3, latency=0.5, cost=1.0)
     if objective in {RoutingObjective.SPEED_FIRST, RoutingObjective.LOW_LATENCY}:
-        return (0.9, 0.7, 1.6, 0.5)
-    if objective is RoutingObjective.MANUAL:
-        return (1.0, 1.0, 1.0, 1.0)
-    return (1.0, 1.0, 1.0, 1.0)
+        return ScoreWeights(quality=0.9, pressure=0.6, headroom=0.4, latency=1.6, cost=0.5)
+    if objective is RoutingObjective.BURN_DOWN:
+        # Pressure-first: ``STARVED`` should outrank ``ON_TRACK`` for the
+        # same provider; ``headroom`` matters because the verifier
+        # rejects ``remaining == 0`` already so a tiny remainder is
+        # still a useful signal.
+        return ScoreWeights(quality=0.4, pressure=1.0, headroom=0.6, latency=0.4, cost=0.2)
+    # MANUAL + every other value fall back to BALANCED. Both
+    # ``evaluate_target`` and ``recommend_owner_dispatch`` consult this
+    # function; ``evaluate_target`` short-circuits MANUAL before
+    # calling it, and ``recommend_owner_dispatch`` adds the
+    # reason-tag.
+    return ScoreWeights(quality=0.7, pressure=0.6, headroom=0.4, latency=1.0, cost=0.3)
 
 
 def policy_from_name(
@@ -275,7 +319,11 @@ def _score_candidate(
     telemetry: TargetTelemetry,
     objective: RoutingObjective,
 ) -> float:
-    quality_weight, quota_weight, latency_weight, cost_weight = _objective_weights(objective)
+    weights = objective_weights(objective)
+    quality_weight = weights.quality
+    quota_weight = weights.headroom
+    latency_weight = weights.latency
+    cost_weight = weights.cost
     score = quality_weight * capability_fit * 100.0
     score += membership_weight * 2.0
     score -= max(priority - 1, 0) * 1.5
@@ -532,9 +580,11 @@ def evaluate_target(
         telemetry=telemetry,
         objective=policy.objective,
     )
-    quality_weight, quota_weight, latency_weight, cost_weight = _objective_weights(
-        policy.objective
-    )
+    weights = objective_weights(policy.objective)
+    quality_weight = weights.quality
+    quota_weight = weights.headroom
+    latency_weight = weights.latency
+    cost_weight = weights.cost
     score_components = (
         ScoreComponent(
             name="task_capability_fit",
@@ -700,14 +750,16 @@ __all__ = [
     "RiskClass",
     "RoutingObjective",
     "RoutingPolicy",
+    "ScoreComponent",
+    "ScoreWeights",
     "SchedulingPolicyLevel",
     "policy_from_name",
     "SchedulingPolicyResolution",
     "SchedulerDecision",
-    "ScoreComponent",
     "TargetTelemetry",
     "TaskProfile",
     "evaluate_target",
-    "route_task",
+    "objective_weights",
     "resolve_scheduling_policy",
+    "route_task",
 ]

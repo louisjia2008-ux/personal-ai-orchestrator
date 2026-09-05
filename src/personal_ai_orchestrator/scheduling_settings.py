@@ -23,11 +23,14 @@ DEFAULT_POLICY = "BALANCED"
 
 #: Policies the owner may pick as a *global default*. MANUAL is deliberately absent:
 #: a global "manual" default cannot name a target that is valid for every future task.
+#: BURN_DOWN is added in M1 WP3 — it is the pressure-first preset that
+#: makes ``STARVED`` targets rank above ``ON_TRACK`` for the same provider.
 SELECTABLE_GLOBAL_POLICIES = (
     "BALANCED",
     "QUALITY_FIRST",
     "QUOTA_SAVER",
     "SPEED_FIRST",
+    "BURN_DOWN",
 )
 
 
