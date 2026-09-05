@@ -145,6 +145,13 @@ class TaskSubmitRequest(_ViewModel):
     intent: str = Field(min_length=1, max_length=MAX_INTENT_LENGTH)
     scheduling_policy: str | None = Field(default=None, min_length=1, max_length=64)
     manual_execution_target_id: str | None = Field(default=None, min_length=1, max_length=128)
+    # M1 WP2: tier floor for the dispatch target. ``None`` is normalised
+    # to ``"T1"`` (workhorse) at storage time. Strings outside the four
+    # known tier values are rejected with a 400 by the submit handler
+    # so the storage layer never sees a typo. We do NOT add a
+    # ``max_length`` here — the dispatch handler owns the
+    # member-of-enum check and emits the user-friendly error code.
+    min_tier: str | None = Field(default=None)
 
 
 class CancelRequest(_ViewModel):
@@ -170,6 +177,10 @@ class TaskView(_ViewModel):
     updated_at: str
     scheduling_policy: str | None = None
     manual_execution_target_id: str | None = None
+    # M1 WP2: defaults to T1 in the view so the Swift dashboard can
+    # render the picker at the same default without a separate
+    # backwards-compat round-trip.
+    min_tier: str = "T1"
 
 
 class CancelView(_ViewModel):
@@ -997,6 +1008,7 @@ def _task_view(record) -> TaskView:
         updated_at=record.updated_at.isoformat(),
         scheduling_policy=record.scheduling_policy,
         manual_execution_target_id=record.manual_execution_target_id,
+        min_tier=record.min_tier,
     )
 
 
@@ -1405,6 +1417,20 @@ class ControlPlaneService:
             request.scheduling_policy,
             request.manual_execution_target_id,
         )
+        # M1 WP2: validate the tier floor here so a typo lands as a
+        # 400 instead of an opaque error from the storage layer.
+        # ``None`` is the UI-default; storage normalises to "T1".
+        # ``is None`` (not ``or "T1"``) so empty strings still hit the
+        # invalid-tier path below.
+        if request.min_tier is None:
+            min_tier = "T1"
+        else:
+            min_tier = request.min_tier
+        if min_tier not in {"T0", "T1", "T2", "T3"}:
+            raise ControlPlaneError(
+                400,
+                f"invalid_min_tier: must be one of T0/T1/T2/T3, got {min_tier!r}",
+            )
         try:
             record = self.store.submit_task(
                 task_id=request.task_id,
@@ -1415,6 +1441,7 @@ class ControlPlaneService:
                 working_subpath=project.working_subpath,
                 scheduling_policy=scheduling_policy,
                 manual_execution_target_id=manual_target,
+                min_tier=min_tier,
             )
         except ValueError:
             raise ControlPlaneError(400, "conflicting_request_id") from None

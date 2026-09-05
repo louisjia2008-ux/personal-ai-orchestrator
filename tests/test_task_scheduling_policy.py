@@ -119,6 +119,55 @@ def test_omitted_policy_stays_none_rather_than_guessing(service, project_id) -> 
 
 
 # --------------------------------------------------------------------------
+# M1 WP2: min_tier persists through the full path
+# --------------------------------------------------------------------------
+
+
+def test_task_min_tier_defaults_to_T1(service, project_id) -> None:
+    """A submit that does not name ``min_tier`` lands as ``T1`` everywhere."""
+
+    submitted = _submit(service, project_id)
+    assert submitted.min_tier == "T1"
+
+
+def test_task_min_tier_persists_through_the_api(service, project_id, tmp_path) -> None:
+    """``min_tier`` survives the SQLite round-trip — what \"durable\" must mean."""
+
+    submitted = _submit(service, project_id, min_tier="T0")
+    assert submitted.min_tier == "T0"
+
+    reopened = SafetyKernelStore(tmp_path / "state.db")
+    try:
+        record = reopened.get_task("task-1")
+    finally:
+        reopened.close()
+    assert record.min_tier == "T0"
+
+
+def test_task_min_tier_omitted_normalises_to_T1(service, project_id, tmp_path) -> None:
+    """``None`` and the absent-field default both land as ``T1``."""
+
+    submitted = _submit(service, project_id, min_tier=None)
+    assert submitted.min_tier == "T1"
+
+    reopened = SafetyKernelStore(tmp_path / "state.db")
+    try:
+        assert reopened.get_task("task-1").min_tier == "T1"
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize("bad_value", ["T9", "flagship", "0", "t1", ""])
+def test_task_min_tier_unknown_value_is_refused(service, project_id, bad_value) -> None:
+    """A typo must land as a 400, not an opaque storage error."""
+
+    with pytest.raises(ControlPlaneError) as error:
+        _submit(service, project_id, min_tier=bad_value)
+
+    assert error.value.code.startswith("invalid_min_tier")
+
+
+# --------------------------------------------------------------------------
 # MANUAL is never silently downgraded
 # --------------------------------------------------------------------------
 

@@ -66,6 +66,10 @@ class TaskRecord(FrozenModel):
     updated_at: datetime
     scheduling_policy: str | None = None
     manual_execution_target_id: str | None = None
+    # M1 WP2: minimum capability tier required for the dispatch target.
+    # Always a valid ModelTier string; the storage layer normalises
+    # None → "T1" on insert so old rows still type-check.
+    min_tier: str = "T1"
 
 
 class ProjectAvailability(StrEnum):
@@ -133,6 +137,15 @@ def _now() -> str:
 
 def _json(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+
+
+#: M1 WP2: the set of min_tier values the schema accepts. Mirrors
+#: :class:`personal_ai_orchestrator.model_tiers.ModelTier`; we
+#: deliberately inline the four strings here so this module does not
+#: import model_tiers (which is fine to import but not required at
+#: the storage layer — the recompute happens in
+#: dispatch_recommender).
+_VALID_TIER_VALUES = frozenset({"T0", "T1", "T2", "T3"})
 
 
 class SafetyKernelStore:
@@ -258,6 +271,12 @@ class SafetyKernelStore:
         self._ensure_column("tasks", "working_subpath", "TEXT")
         self._ensure_column("tasks", "scheduling_policy", "TEXT")
         self._ensure_column("tasks", "manual_execution_target_id", "TEXT")
+        # M1 WP2: tier floor for the dispatch target. Default "T1" so
+        # every existing row satisfies the new constraint without a
+        # migration script. New submits may pass any of T0/T1/T2/T3.
+        self._ensure_column(
+            "tasks", "min_tier", "TEXT NOT NULL DEFAULT 'T1'"
+        )
         self._ensure_column("projects", "scheduling_policy", "TEXT")
         self._ensure_column("projects", "manual_execution_target_id", "TEXT")
         self._ensure_column("workspaces", "project_id", "TEXT")
@@ -648,11 +667,20 @@ class SafetyKernelStore:
         working_subpath: str | None = None,
         scheduling_policy: str | None = None,
         manual_execution_target_id: str | None = None,
+        min_tier: str = "T1",
     ) -> TaskRecord:
         if project_id is not None:
             self.get_project(project_id)
             if base_sha is None:
                 raise ValueError("base_sha is required for registered project tasks")
+        # Storage-level validation: the schema allows any TEXT but
+        # the dispatch recommender expects one of the four known
+        # ModelTier values. Failing here is cheaper than failing
+        # later inside the recommender with a KeyError.
+        if min_tier not in _VALID_TIER_VALUES:
+            raise ValueError(
+                f"min_tier must be one of {sorted(_VALID_TIER_VALUES)}, got {min_tier!r}"
+            )
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             existing = self.connection.execute(
@@ -668,6 +696,7 @@ class SafetyKernelStore:
                     or record.working_subpath != working_subpath
                     or record.scheduling_policy != scheduling_policy
                     or record.manual_execution_target_id != manual_execution_target_id
+                    or record.min_tier != min_tier
                 ):
                     raise ValueError("request_id already belongs to a different task submission")
                 self.connection.execute("COMMIT")
@@ -679,8 +708,8 @@ class SafetyKernelStore:
                 INSERT INTO tasks(
                     task_id,request_id,intent,project_id,base_sha,working_subpath,
                     state,state_version,created_at,updated_at,
-                    scheduling_policy,manual_execution_target_id
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                    scheduling_policy,manual_execution_target_id,min_tier
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     task_id,
@@ -695,6 +724,7 @@ class SafetyKernelStore:
                     stamp,
                     scheduling_policy,
                     manual_execution_target_id,
+                    min_tier,
                 ),
             )
             self._audit(
@@ -724,6 +754,11 @@ class SafetyKernelStore:
 
     @staticmethod
     def _task_from_row(row: sqlite3.Row) -> TaskRecord:
+        # ``min_tier`` column was added in M1 WP2; older SQLite files
+        # may predate the schema bump. ``dict.get`` lets the loader
+        # fall back to "T1" on legacy stores; new stores have the
+        # column with the DEFAULT clause.
+        min_tier = row["min_tier"] if "min_tier" in row.keys() else "T1"
         return TaskRecord(
             task_id=row["task_id"],
             request_id=row["request_id"],
@@ -737,6 +772,7 @@ class SafetyKernelStore:
             updated_at=datetime.fromisoformat(row["updated_at"]),
             scheduling_policy=row["scheduling_policy"],
             manual_execution_target_id=row["manual_execution_target_id"],
+            min_tier=min_tier,
         )
 
     def transition_task(
