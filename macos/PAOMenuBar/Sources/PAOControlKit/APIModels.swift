@@ -307,6 +307,7 @@ public struct ObservedAvailabilityView: Codable, Equatable, Sendable {
     public let measurementSource: String
     public let confidence: String
     public let sanitizedReasonCode: String?
+    public let consecutiveFailures: Int?
 
     enum CodingKeys: String, CodingKey {
         case state
@@ -314,6 +315,7 @@ public struct ObservedAvailabilityView: Codable, Equatable, Sendable {
         case measurementSource = "measurement_source"
         case confidence
         case sanitizedReasonCode = "sanitized_reason_code"
+        case consecutiveFailures = "consecutive_failures"
     }
 }
 

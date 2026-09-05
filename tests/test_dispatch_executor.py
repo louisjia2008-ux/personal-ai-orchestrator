@@ -596,6 +596,137 @@ def test_quota_journal_exhausted_blocks_even_without_collector(tmp_path: Path) -
         _close(snapshot)
 
 
+def test_quota_uncertain_locked_blocks_after_three_consecutive_failures(
+    tmp_path: Path,
+) -> None:
+    """A target whose journal has UNCERTAIN_LOCKED must be rejected.
+
+    The lock fires after three consecutive failed quota collections
+    (no collector → unknown_availability with previous=previous), so this
+    test simulates that exact journal state and confirms admission rejects
+    with QUOTA_UNKNOWN regardless of `` ``require_quota_certainty``.
+    """
+
+    from personal_ai_orchestrator.quota_availability import (
+        QuotaAvailabilityState,
+        unknown_availability,
+    )
+
+    harness = ExecutorHarness(tmp_path)
+    journal = QuotaAvailabilityJournal(harness.runtime_root)
+    streak = None
+    for index in range(3):
+        streak = unknown_availability(
+            execution_target_id="zai-coding-plan-glm-5.3",
+            provider_id="zai-coding-plan",
+            quota_pool_id="zai-coding-plan",
+            observed_at=datetime.now(UTC) + timedelta(seconds=index + 1),
+            previous=streak,
+        )
+        journal.save(streak)
+    assert streak.state_at(now=datetime.now(UTC)) is (
+        QuotaAvailabilityState.UNCERTAIN_LOCKED
+    )
+
+    request_id = harness.reserve()
+    harness.run(request_id)
+
+    snapshot = harness.snapshot()
+    try:
+        assert snapshot["task"].state is TaskState.BLOCKED
+        assert snapshot["dispatch_failure_code"] == "QUOTA_UNKNOWN"
+    finally:
+        _close(snapshot)
+
+
+def test_quota_uncertain_locked_clears_after_successful_collector_run(
+    tmp_path: Path,
+) -> None:
+    """A single successful observation resets the streak and admits.
+
+    Once the collector produces an AVAILABLE outcome the lock should
+    release on the next dispatch, not stay sticky. The host must never
+    need an owner action to clear it.
+    """
+
+    from personal_ai_orchestrator.quota_availability import (
+        QuotaAvailabilityState,
+        unknown_availability,
+    )
+
+    harness = ExecutorHarness(tmp_path)
+    journal = QuotaAvailabilityJournal(harness.runtime_root)
+    streak = None
+    for index in range(3):
+        streak = unknown_availability(
+            execution_target_id="zai-coding-plan-glm-5.3",
+            provider_id="zai-coding-plan",
+            quota_pool_id="zai-coding-plan",
+            observed_at=datetime.now(UTC) + timedelta(seconds=index + 1),
+            previous=streak,
+        )
+        journal.save(streak)
+    # A successful collector produces observe_success() which writes a
+    # 0-streak AVAILABLE row and drops the lock.
+    harness.executor._quota_collectors["zai-coding-plan"] = FakeCollector(
+        available_result()
+    )
+    request_id = harness.reserve()
+    harness.run(request_id)
+
+    snapshot = harness.snapshot()
+    try:
+        assert snapshot["task"].state is TaskState.VERIFIED
+        assert snapshot["dispatch_failure_code"] is None
+    finally:
+        _close(snapshot)
+    evidence = journal.load("zai-coding-plan-glm-5.3")
+    assert evidence is not None
+    assert evidence.consecutive_failures == 0
+    assert evidence.state_at(now=datetime.now(UTC)) is (
+        QuotaAvailabilityState.AVAILABLE_OBSERVED
+    )
+
+
+def test_quota_two_failures_still_admits_below_threshold(tmp_path: Path) -> None:
+    """Two consecutive UNKNOWNs is still below the threshold.
+
+    Admission MUST allow the dispatch — the lock only fires after the third
+    consecutive failure, not on the second.
+    """
+
+    from personal_ai_orchestrator.quota_availability import (
+        QuotaAvailabilityState,
+        unknown_availability,
+    )
+
+    harness = ExecutorHarness(tmp_path)
+    journal = QuotaAvailabilityJournal(harness.runtime_root)
+    streak = None
+    for index in range(2):
+        streak = unknown_availability(
+            execution_target_id="zai-coding-plan-glm-5.3",
+            provider_id="zai-coding-plan",
+            quota_pool_id="zai-coding-plan",
+            observed_at=datetime.now(UTC) + timedelta(seconds=index + 1),
+            previous=streak,
+        )
+        journal.save(streak)
+    assert streak.state_at(now=datetime.now(UTC)) is QuotaAvailabilityState.UNKNOWN
+
+    harness.executor._quota_collectors["zai-coding-plan"] = FakeCollector(
+        available_result()
+    )
+    request_id = harness.reserve()
+    harness.run(request_id)
+
+    snapshot = harness.snapshot()
+    try:
+        assert snapshot["task"].state is TaskState.VERIFIED
+    finally:
+        _close(snapshot)
+
+
 def test_quota_available_collector_admits_and_is_journaled(tmp_path: Path) -> None:
     harness = ExecutorHarness(tmp_path)
     harness.executor._quota_collectors["zai-coding-plan"] = FakeCollector(
