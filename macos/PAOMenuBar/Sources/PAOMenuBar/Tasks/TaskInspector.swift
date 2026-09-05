@@ -124,7 +124,20 @@ struct TaskInspectorContent: View {
                     )
                     TaskFieldRow(
                         label: "PID",
-                        value: run.pid.map(String.init),
+                        value: run.pid.map { pid in
+                            // When the daemon confirms the OS no longer sees
+                            // the worker process, swap the stale "running
+                            // pid N" line for an honest "exited" so the
+                            // owner never wonders why a finished run shows
+                            // a live pid.
+                            if run.pidAlive == false {
+                                return L10n.runProcessExited
+                            }
+                            if run.pidAlive == true {
+                                return "\(pid) (\(L10n.runProcessAlive))"
+                            }
+                            return String(pid)
+                        },
                         monospaced: true,
                         absentText: L10n.valueNone
                     )

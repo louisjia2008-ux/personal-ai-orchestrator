@@ -151,6 +151,8 @@
 "taskCompletion.title" = "任务结束：%@";
 "taskCompletion.view" = "查看";
 "taskCompletion.dismiss" = "关闭";
+"run.processExited" = "已退出";
+"run.processAlive" = "运行中";
 "label.taskNotDispatchable" = "任务状态 %@ 不可派发。";
 "label.observedState" = "观察状态";
 "label.measurementSource" = "测量来源";
