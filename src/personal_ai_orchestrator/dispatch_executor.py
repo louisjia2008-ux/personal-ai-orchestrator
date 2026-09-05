@@ -37,6 +37,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import threading
 from collections.abc import Callable
@@ -711,14 +712,28 @@ class OwnerDispatchExecutor:
     ) -> None:
         """Last-resort fail-closed repair after RUNNING was granted.
 
-        Kills the exact supervised child, closes the run row, blocks the
-        task, releases the writer lock and blocks the dispatch. Every
-        step is best-effort so one broken step cannot skip the rest.
-        Synchronous by design so it also works during loop teardown.
+        Kills the exact supervised child, closes the run row with a
+        human-readable reason, blocks the task, releases the writer lock
+        and blocks the dispatch. Every step is best-effort so one broken
+        step cannot skip the rest. Synchronous by design so it also works
+        during loop teardown.
         """
+
+        from personal_ai_orchestrator.execution_controller import (
+            _failure_result_payload,
+            _human_reason_for_failure,
+        )
 
         self.execution_supervisor.unregister(dispatch.task_id)
         self._supervisor.emergency_kill(supervised)
+        # emergency_kill always sends SIGKILL to the process group. Tails
+        # are not drained (the supervisor does not buffer them in this
+        # path), so worker_result is None and only the signal is reported.
+        failure_payload = _failure_result_payload(
+            exit_code=None, signal=signal.SIGKILL, worker_result=None
+        )
+        failure_payload["emergency_repair"] = True
+        reason = _human_reason_for_failure(exit_code=None, signal=signal.SIGKILL)
         try:
             task = store.get_task(dispatch.task_id)
             if task.state is TaskState.RUNNING:
@@ -727,13 +742,13 @@ class OwnerDispatchExecutor:
                 ).fetchone()
                 if run is not None and run["status"] == "RUNNING":
                     store.finish_run(
-                        run_id, status="FAILED", result={"emergency_repair": True}
+                        run_id, status="FAILED", result=failure_payload
                     )
                 store.transition_task(
                     dispatch.task_id,
                     TaskState.BLOCKED,
                     expected_version=task.state_version,
-                    reason="executor emergency repair after internal error",
+                    reason=f"executor emergency repair: {reason}",
                 )
         except Exception:
             pass
@@ -746,7 +761,7 @@ class OwnerDispatchExecutor:
                 request_id,
                 failure_code="EXECUTOR_INTERNAL_ERROR",
                 failure_reason=(
-                    type(error).__name__ if error is not None else "CANCELLED"
+                    f"{type(error).__name__ if error is not None else 'CANCELLED'}; {reason}"
                 ),
             )
         except Exception:

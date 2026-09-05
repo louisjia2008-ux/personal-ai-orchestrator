@@ -840,6 +840,59 @@ def test_internal_executor_error_after_running_emergency_repairs_state(
     assert harness.main_unchanged()
 
 
+def test_emergency_repair_persists_signal_in_run_result_json(tmp_path: Path) -> None:
+    """SIGKILL emergency repair must produce a self-describing run result.
+
+    Previously the run row was finished with ``{"emergency_repair": True}``,
+    which gave the owner nothing actionable. The post-A3 path records the
+    signal that killed the worker (SIGKILL == 9) plus the emergency_repair
+    sentinel, so the UI can render a meaningful diagnosis.
+    """
+
+    harness = ExecutorHarness(
+        tmp_path,
+        worker_bin=write_worker_script(
+            tmp_path / "bin", name="signal-worker", sleep_seconds=30.0
+        ),
+    )
+    request_id = harness.reserve()
+
+    async def broken_wait(_supervised):
+        raise RuntimeError("injected post-running failure")
+
+    harness.executor._wait_for_worker = broken_wait  # type: ignore[method-assign]
+    harness.run(request_id)
+
+    store = SafetyKernelStore(harness.state_db)
+    try:
+        run = store.connection.execute(
+            "SELECT status, result_json FROM runs WHERE task_id='task-1'"
+        ).fetchone()
+        assert run is not None
+        assert run["status"] == "FAILED"
+        payload = json.loads(run["result_json"])
+        # Signal is SIGKILL (the supervisor always uses killpg(SIGKILL)).
+        assert payload["signal"] == 9
+        assert payload["emergency_repair"] is True
+        # Tails were never captured (supervisor does not drain in emergency),
+        # but the field names are guaranteed for cross-path consistency.
+        assert "stdout_tail" not in payload
+        assert "stderr_tail" not in payload
+
+        dispatch = store.connection.execute(
+            "SELECT failure_reason FROM owner_dispatches "
+            "WHERE task_id='task-1' ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+        assert dispatch is not None
+        # The owner-facing reason names the signal so the dashboard banner
+        # can show "executor emergency repair: worker exited unexpectedly
+        # (signal 9)" without reaching into the run row.
+        assert "signal 9" in dispatch["failure_reason"]
+        assert "RuntimeError" in dispatch["failure_reason"]
+    finally:
+        store.close()
+
+
 def test_dispatch_blocks_task_without_registered_project(tmp_path: Path) -> None:
     harness = ExecutorHarness(tmp_path)
     store = SafetyKernelStore(harness.state_db)
