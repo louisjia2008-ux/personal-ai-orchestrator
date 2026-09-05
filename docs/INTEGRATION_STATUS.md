@@ -694,6 +694,184 @@ falls back to its "unknown" label, `HealthView.modelTiersSource`
 reads `nil`. WP2 is pipeline-only; scoring weights are not touched
 (WP3's job).
 
+## M1 WP3 — pressure scoring (`feat/m1-wp3-pressure-scoring`)
+
+WP3 turns the dispatch recommender's flat `capability_fit = 1.0`
+into a tier-aware, pressure-aware function and threads the same
+shape through the scheduler's `evaluate_target` path. Both paths
+consume a single shared `ScoreWeights` dataclass — so a future
+tuning commit that wants to nudge weights touches the dataclass
+once and both score columns move together.
+
+### `ScoreWeights` (in `scheduler.py`)
+
+```python
+@dataclass(frozen=True)
+class ScoreWeights:
+    quality: float    # × capability_fit
+    pressure: float   # × (−pressure_score)
+    headroom: float   # × min(remaining_fractions)
+    latency: float    # existing latency term, value unchanged
+    cost: float       # × (−expected_cost), M1 holds at 0
+```
+
+`objective_weights(objective) -> ScoreWeights` (correction: no
+private prefix; previously private `_objective_weights` was
+cross-module-imported by `dispatch_recommender`):
+
+| objective | quality | pressure | headroom | latency | cost |
+|---|---|---|---|---|---|
+| QUALITY_FIRST | 1.4 | 0.2 | 0.3 | (existing) | 0.1 |
+| QUOTA_SAVER | 0.5 | 0.4 | 0.3 | (existing) | 1.0 |
+| SPEED_FIRST | 0.9 | 0.6 | 0.4 | (existing) | 0.5 |
+| **BURN_DOWN** | 0.4 | 1.0 | 0.6 | (existing) | 0.2 |
+| BALANCED / MANUAL fallback | 0.7 | 0.6 | 0.4 | (existing) | 0.3 |
+
+`RoutingObjective.BURN_DOWN = "BURN_DOWN"` joins the enum; the
+owner-facing picker exposes it via
+`scheduling_settings.SELECTABLE_GLOBAL_POLICIES`.
+
+### Score formula (both paths)
+
+```
+score = weights.quality  × capability_fit
+      + weights.pressure × pressure_term
+      + weights.headroom × headroom_term
+      − weights.latency  × latency_term
+      − weights.cost     × cost_term
+```
+
+- `capability_fit`: WP2 (tier penalty 0.1 per step, clamped 0–1).
+- `pressure_term`: `−pressure_score` of the WEEKLY window
+  (`QuotaWindowSnapshot.burn(now)`). UNMETERED / STALE → `0` +
+  reason `burn_unmetered` / `burn_stale_ignored`. STARVED → `+1.0` +
+  reason `quota_expiring_unused` (the verdict at the ceiling; no
+  extra `w_pressure` to avoid double-counting).
+- `headroom_term`: `min(remaining_fractions)` across the candidate's
+  observed windows. None → `0` + reason `headroom_unmetered`.
+- `latency_term`: existing `log1p(expected_latency_ms / 1000.0)`.
+- `cost_term`: `0` (M1 holds; the cost surface lands in M3).
+
+**`Σ weight × value == core_score`** is the scoring identity (the
+test pins both paths to it). Legacy pre-WP3 nudges
+(`membership_weight_bonus`, `priority_penalty`, `success_prior_bonus`,
+`scarcity_*`) are appended as their own `ScoreComponent` rows with
+`source="legacy_nudge"` so shadow-campaign ranking does not drift.
+
+### Hard constraints (both paths)
+
+- **5h rolling smoothing**: `rolling_hourly_cap(used_fraction,
+  elapsed_seconds)` returns true AND `tier(target) != min_tier` →
+  hard-eliminate, reason
+  `rolling_window_smoothing(tier=T0,min_tier=T1)`. `tier ==
+  min_tier` is exempt. Missing `window_started_at` or missing
+  `used_fraction` short-circuit to "no gate fires".
+- `EXHAUSTED` is not gated here — admission / `quota_state` cover
+  it. `pressure_term = −1.0` naturally ranks it last.
+
+### Scheduler path (`evaluate_target`)
+
+- Pulls the binding up so the 5h smoothing gate can read
+  `FIVE_HOUR` windows.
+- `headroom_min` reuses the existing
+  `snapshot.minimum_remaining_fraction(at=now)` (correction: don't
+  compute separately). None → `0` + reason `headroom_unmetered`.
+- Reads `weekly_window.burn(now)` for `pressure_term`. The
+  `STALE` or `window_start_inferred=True` paths downgrade the
+  component's `confidence` to `ESTIMATED` so the UI can label the
+  bar with "(estimated start)" — the same affordance the WP1
+  `burn.window_start_inferred` field already provided.
+- `score_components` rows now carry real `confidence` (EXACT /
+  ESTIMATED / UNKNOWN) and `source` strings
+  (`registry.capabilities`, `burn_curve.weekly`,
+  `burn_curve.inferred`, `quota_window.minimum_remaining_fraction`,
+  `target_telemetry.expected_latency_ms`,
+  `target_telemetry.expected_cost_to_green_usd`,
+  `legacy_nudge`). The previous "SCORE_WEIGHTS" catch-all is gone.
+- `evaluate_target` short-circuits `MANUAL` (correction #9): the
+  scheduler never produces an auto-rank for it. `score=None`,
+  `admitted=False`, reason "manual policy: orchestrator does not
+  auto-rank". The recommender (defence-in-depth) falls back to
+  `BALANCED` weights + tags every admitted candidate's reasons
+  with `manual_policy_recommendation_uses_balanced`.
+
+### Dispatch recommender (`recommend_owner_dispatch`)
+
+- `_headroom` returns `(headroom_min, headroom_mean)`. The minimum
+  drives the score (correction #4); the mean stays on the
+  candidate view for the UI.
+- `_score` uses the same five-term shape as the scheduler.
+- `_hard_eligibility` adds the 5h smoothing gate (correction: both
+  paths, not just the recommender).
+- `effective_policy = BALANCED` when asked to recommend against
+  `MANUAL`; `result.policy` on the wire still reads `"MANUAL"` so
+  the client does not see a label it did not ask for.
+
+### DAG (after WP3, no cycles)
+
+```
+quota_burn.py (pure stdlib)
+    ↑
+model_tiers.py (pure stdlib)
+    ↑
+quota_availability.py
+quota_observability.py
+    ↑
+model_registry.py
+    ↑
+scheduler.py           ← ScoreWeights / objective_weights
+    ↑ ↑
+dispatch_recommender.py
+control_api.py
+product_daemon.py  ────┘
+```
+
+Direction verified with `grep -rn "^from personal_ai_orchestrator"`.
+No reverse edge from `scheduler` → `dispatch_recommender`.
+
+### Storage + control API
+
+- `TaskRecord.min_tier: str = "T1"` (already WP2; WP3 reads it via
+  `recommend_dispatch`).
+- `DispatchRecommendationCandidate.headroom_min: float | None = None`
+  (WP3 commit 4). The view threads the binding-window minimum;
+  `None` propagates the "every window has missing data" signal.
+- `DispatchRecommendationScoreComponent.weight: float | None = None`
+  (commit 4's wire shape). The Swift decoder reads it as
+  `decodeIfPresent Double?`.
+- `recommend_dispatch` reads `task.min_tier` (defaults to T1) and
+  threads it into `recommend_owner_dispatch`. Corrupt values
+  raise `TASK_MIN_TIER_INVALID` (commit 4) and fall back to T1
+  with the `min_tier_invalid_assumed_T1(raw=…)` reason flag.
+
+### Swift surface
+
+- `DispatchRecommendationCandidate.headroomMin: Double?` — the
+  binding-window minimum drives the headline number alongside
+  `score`. `headroomMean` stays alongside.
+- `DispatchRecommendationScoreComponent.weight: Double?` — per-row
+  weight for the expanded score-components table.
+- `enum SelectablePolicyFallback.policies` — the single source of
+  truth for the owner-facing fallback list (correction #8).
+- `L10n.schedulingPolicyName("BURN_DOWN")` / `.detail("BURN_DOWN")`
+  with new `policy.burnDown` / `policy.burnDown.detail` strings
+  in both `en.lproj` and `zh-Hans.lproj`.
+- `ResourceQuotaSection` draws the ideal-pace tick (WP1 deferred →
+  WP3 ships): `QuotaMeter(idealPaceTick: binding.burn?.expectedUsedFraction)`
+  draws a 1.5pt vertical line at the ideal-pace position. `nil`
+  legacy fixtures render without the tick.
+
+### Backward compatibility
+
+Every new field on the wire is Optional / absent-tolerant. Pre-WP3
+daemons decode cleanly: `headroomMin` and `weight` are both
+`decodeIfPresent`; Swift's lenient `String?` decoder handles the
+new `"BURN_DOWN"` value (the test
+`testBurnDownPolicyStringDecodesAndRenders` pins the round-trip).
+The 9 frozen `ROUTING_ROLE_CONTRACT.md` fixtures are unchanged —
+the new BURN_DOWN coverage is an inline JSON test in
+`RoutingContractTests.swift` (no new fixture file).
+
 ## P3.6 live provider and Shadow campaign
 
 P3.6 provider-surface discovery on 2026-08-30 found no supported machine-readable remaining-quota
