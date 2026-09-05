@@ -66,6 +66,13 @@ class TaskProfile(RegistryModel):
     required_tools: tuple[str, ...] = ()
     failure_count: int = Field(default=0, ge=0)
     predicted_quota_fraction_p90: float | None = Field(default=None, ge=0.0, le=1.0)
+    # M1 WP2: capability tier floor. ``T1`` (workhorse) is the default
+    # so existing profiles that never thought about tier still
+    # recommend against the same targets they did before. The
+    # dispatch recommender reads this field directly — the string
+    # value is validated in the recommender against the live
+    # :class:`ModelTier` enum.
+    min_tier: str = "T1"
 
     @model_validator(mode="after")
     def validate_requirements(self) -> TaskProfile:
