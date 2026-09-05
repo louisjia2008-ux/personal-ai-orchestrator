@@ -213,11 +213,50 @@ Acceptance evidence:
   owner dispatch online; `model_tiers_source` reads
   `"default_fallback"` and the `MODEL_TIERS_INVALID` system event
   is recorded for the owner to read.
-- A pre-WP2 daemon decodes cleanly on a WP2 app: every new field
-  is `null` / absent; the picker defaults to T1; the chip selector
+- A pre-WP2 daemon decodes cleanly on a WP2 app: every new field is
+  `null` / absent; the picker defaults to T1; the chip selector
   falls back to "Unknown"; `model_tiers_source` reads `null`. The
   submit path emits no `min_tier` key when the picker is at its
   default so the daemon applies its own T1 default.
+
+### P0 M1 WP3 pressure scoring (PASS on `feat/m1-wp3-pressure-scoring`)
+
+Acceptance evidence:
+
+- The picker exposes 5 owner-facing objectives including
+  `BURN_DOWN` (label "Burn down quota" / "用尽额度", detail
+  "Prefer targets whose quota is expiring unused" / "优先使用
+  即将过期未用的额度"). A pre-WP3 daemon emits an unknown
+  objective string → the lenient `String?` decoder accepts it and
+  `schedulingPolicyName` falls back to the raw value (test
+  `testBurnDownPolicyStringDecodesAndRenders` pins this).
+- Submit a task with `min_tier="T0"` from a BURN_DOWN picker.
+  A `STARVED` source (WEEKLY window with `used_fraction=0.2`,
+  `reset_in=1h`) is selected as `top_pick`. A `cooldown` source
+  is rejected by the `quota_observed_state` gate as before.
+- The dispatch panel's score row expands into a `Score
+  components` disclosure showing 5 rows, each `<name>: weight
+  <0.70> × value <1.400>`. The `weight` column reads the new
+  `weight` field on `DispatchRecommendationScoreComponent`; a
+  pre-WP3 daemon emits no `weight` → nil → row renders as
+  "weight unknown".
+- The dispatch panel's headline number alongside `score` is
+  `headroomMin` (the binding-window minimum), not `headroomMean`.
+  When `headroomMin` is nil (every window has missing data) the
+  view falls back to `headroomMean` for legacy compatibility;
+  the row's reason tuple carries `headroom_unmetered`.
+- A T0 target with a tripped 5h rolling cap (e.g.
+  `used_fraction=0.9` over 2h = `0.45/h` > `0.35/h` cap) and
+  `min_tier="T1"` is hard-eliminated by the 5h smoothing gate.
+  The reason tuple carries
+  `rolling_window_smoothing(tier=T0,min_tier=T1)`. The same
+  target with `tier == min_tier` is exempt (tight-but-acceptable
+  burn).
+- A pre-WP3 daemon decodes cleanly on a WP3 app: every new
+  field is `null` / absent. The 9 frozen `ROUTING_ROLE_CONTRACT.md`
+  fixtures are unchanged; the new BURN_DOWN coverage is an
+  inline JSON test in `RoutingContractTests.swift` (no new
+  fixture file).
 
 ## 6. MiniMax real provider acceptance
 
