@@ -137,6 +137,22 @@ Static runtime configuration cannot authorize production ACTIVE.
 - A5: `pytest-rerunfailures` retries the daemon SIGINT shutdown test up
   to 3 times.
 
+### P0 M1 WP0 daemon tick (PASS on `feat/m1-wp0-daemon-tick`)
+
+Acceptance evidence:
+
+- Boot the bundled product daemon with
+  `--tick-interval-seconds 0.5` (or rely on the `PAO_TICK_INTERVAL_SECONDS`
+  env var, or the 5.0s default).
+- Two `/v1/health` polls spaced at least two supervisor intervals apart
+  must show `last_tick_at` monotonically advancing on each poll.
+- `supervisor_steps` must list exactly one entry named `heartbeat` with
+  `consecutive_failures == 0` and `in_backoff == false` for a healthy
+  daemon. New steps added by later WP branches will appear under the
+  same field without re-wiring `/v1/health`.
+- SIGINT / SIGTERM still exit cleanly (covered by the existing
+  `test_sigint_shuts_daemon_down_cleanly_without_traceback`).
+
 ## 6. MiniMax real provider acceptance
 
 Use the already hardened local Stage C contract tracked by PR #17 with the target Mac's **existing
