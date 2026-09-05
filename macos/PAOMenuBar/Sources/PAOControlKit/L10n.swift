@@ -85,6 +85,8 @@ public enum L10n {
         "taskCompletion.title",
         "taskCompletion.view",
         "taskCompletion.dismiss",
+        "run.processExited",
+        "run.processAlive",
         "label.taskNotDispatchable",
         "label.observedState", "label.measurementSource", "label.confidence",
         "label.observedAt", "label.reasonCode", "empty.availabilityUnknown",
@@ -1175,6 +1177,8 @@ public enum L10n {
     public static var detailRunId: String { tr("detail.runId") }
     public static var detailRunStatus: String { tr("detail.runStatus") }
     public static var detailQuotaEvidence: String { tr("detail.quotaEvidence") }
+    public static var runProcessExited: String { tr("run.processExited") }
+    public static var runProcessAlive: String { tr("run.processAlive") }
 
     // Task detail panels, lifecycle phases, and inline values (B1 l10n)
     public static var detailPanelSummary: String { tr("detail.panel.summary") }

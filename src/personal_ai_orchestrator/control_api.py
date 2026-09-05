@@ -234,6 +234,13 @@ class RunView(_ViewModel):
     task_id: str
     worker_id: str
     pid: int | None
+    #: True iff ``pid`` was just probed and the OS confirms the process is
+    #: still alive. ``None`` when ``pid`` is unknown (no probe ran) or when
+    #: the run is already in a terminal status (the process is by
+    #: definition gone). Lets the UI replace "running pid 40618" with
+    #: "exited" the moment the worker really is gone, even before the
+    #: database catches up.
+    pid_alive: bool | None = None
     status: str
     started_at: str
     finished_at: str | None
@@ -1373,11 +1380,29 @@ class ControlPlaneService:
         rendered = json.dumps(result, default=str) if result is not None else ""
         if len(rendered) > MAX_REQUEST_BYTES:
             result = {"truncated": True}
+        pid = row["pid"]
+        # pid_alive is None when there is no pid to probe or the run is
+        # already terminal (the worker can't still be running). When the
+        # run is still RUNNING we ask the OS — ProcessLookupError means
+        # gone, PermissionError means alive-but-ours (other entries
+        # returned by the same lookup would be different processes).
+        pid_alive: bool | None = None
+        if pid is not None and row["status"] == "RUNNING":
+            try:
+                os.kill(pid, 0)
+                pid_alive = True
+            except ProcessLookupError:
+                pid_alive = False
+            except PermissionError:
+                pid_alive = True
+            except OSError:
+                pid_alive = False
         return RunView(
             run_id=row["run_id"],
             task_id=row["task_id"],
             worker_id=row["worker_id"],
-            pid=row["pid"],
+            pid=pid,
+            pid_alive=pid_alive,
             status=row["status"],
             started_at=row["started_at"],
             finished_at=row["finished_at"],

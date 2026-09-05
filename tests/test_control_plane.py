@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import stat
 import subprocess
@@ -955,9 +956,100 @@ def test_runs_listing(harness):
     assert len(runs.runs) == 1
     assert runs.runs[0].worker_id == "glm"
     assert runs.runs[0].status == "RUNNING"
+    # No pid recorded → pid_alive stays None so the UI cannot pretend
+    # either way.
+    assert runs.runs[0].pid_alive is None
 
     single = harness.client.get_run("run-1")
     assert single.run_id == "run-1"
+
+
+def test_run_view_pid_alive_true_for_running_process(harness) -> None:
+    """A running RUNNING row with a real pid reports pid_alive=True."""
+    import os
+    import subprocess
+    import time
+
+    proc = subprocess.Popen(
+        ["python", "-c", "import time; time.sleep(60)"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        harness.store.submit_task(
+            task_id="task-pid-alive", request_id="req-pid-alive", intent="alive"
+        )
+        harness.store.start_run(
+            run_id="run-alive",
+            task_id="task-pid-alive",
+            worker_id="glm",
+            pid=proc.pid,
+        )
+        runs = harness.client.task_runs("task-pid-alive")
+        assert len(runs.runs) == 1
+        assert runs.runs[0].pid == proc.pid
+        assert runs.runs[0].pid_alive is True
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+            proc.wait(timeout=5)
+
+
+def test_run_view_pid_alive_false_when_process_is_gone(harness) -> None:
+    """A RUNNING row whose pid is no longer in the OS reports pid_alive=False."""
+    # Spawn a real child so we can obtain a pid, then kill it immediately
+    # so the OS lookup definitively fails before the harness query.
+    import subprocess
+
+    proc = subprocess.Popen(
+        ["python", "-c", "import sys; sys.exit(0)"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    proc.wait(timeout=10)
+    dead_pid = proc.pid
+
+    harness.store.submit_task(
+        task_id="task-pid-dead", request_id="req-pid-dead", intent="dead"
+    )
+    harness.store.start_run(
+        run_id="run-dead",
+        task_id="task-pid-dead",
+        worker_id="glm",
+        pid=dead_pid,
+    )
+    runs = harness.client.task_runs("task-pid-dead")
+    assert len(runs.runs) == 1
+    assert runs.runs[0].pid == dead_pid
+    assert runs.runs[0].pid_alive is False
+
+
+def test_run_view_pid_alive_none_for_terminal_runs(harness) -> None:
+    """A terminal run never probes the pid — pid_alive is None.
+
+    The OS state is irrelevant once the run row is FAILED/FINISHED/etc.;
+    the UI already knows the worker is gone from the status alone, and
+    probing would just add noise.
+    """
+
+    harness.store.submit_task(
+        task_id="task-pid-terminal", request_id="req-pid-terminal", intent="term"
+    )
+    harness.store.start_run(
+        run_id="run-term",
+        task_id="task-pid-terminal",
+        worker_id="glm",
+        pid=os.getpid(),  # any live pid, the test is about the status gate
+    )
+    harness.store.finish_run("run-term", status="FINISHED", result={"ok": True})
+    runs = harness.client.task_runs("task-pid-terminal")
+    assert len(runs.runs) == 1
+    assert runs.runs[0].pid == os.getpid()
+    assert runs.runs[0].status == "FINISHED"
+    assert runs.runs[0].pid_alive is None
 
 
 def test_provider_health_is_sanitized(harness):

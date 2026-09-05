@@ -151,6 +151,8 @@
 "taskCompletion.title" = "Task finished: %@";
 "taskCompletion.view" = "View";
 "taskCompletion.dismiss" = "Dismiss";
+"run.processExited" = "Exited";
+"run.processAlive" = "Running";
 "label.taskNotDispatchable" = "Task state %@ is not dispatchable.";
 "label.observedState" = "Observed state";
 "label.measurementSource" = "Measurement source";

@@ -494,4 +494,41 @@ final class ModelAndStatusTests: XCTestCase {
         XCTAssertNil(view.executionVerifiedStale)
         XCTAssertFalse(view.isExecutionVerifiedStale)
     }
+
+    func testRunViewDecodesPidAliveWhenPresent() throws {
+        let json = """
+        {
+          "run_id":"r-1",
+          "task_id":"t-1",
+          "worker_id":"glm",
+          "pid":40618,
+          "pid_alive":false,
+          "status":"RUNNING",
+          "started_at":"2026-09-04T00:00:00Z"
+        }
+        """
+        let view = try JSONDecoder().decode(RunView.self, from: Data(json.utf8))
+        XCTAssertEqual(view.pid, 40618)
+        XCTAssertEqual(view.pidAlive, false)
+        XCTAssertFalse(view.isProcessAlive)
+    }
+
+    func testRunViewDecodesWithoutPidAlive() throws {
+        // Older daemons do not emit pid_alive — the lenient decoder must
+        // leave it nil so the UI can fall back to "running pid N" until
+        // the new daemon reaches the dashboard.
+        let json = """
+        {
+          "run_id":"r-1",
+          "task_id":"t-1",
+          "worker_id":"glm",
+          "pid":40618,
+          "status":"RUNNING",
+          "started_at":"2026-09-04T00:00:00Z"
+        }
+        """
+        let view = try JSONDecoder().decode(RunView.self, from: Data(json.utf8))
+        XCTAssertNil(view.pidAlive)
+        XCTAssertFalse(view.isProcessAlive)
+    }
 }

@@ -207,6 +207,7 @@ public struct RunView: Decodable, Equatable, Identifiable, Sendable {
     public let taskId: String
     public let workerId: String
     public let pid: Int?
+    public let pidAlive: Bool?
     public let status: String
     public let startedAt: String
     public let finishedAt: String?
@@ -214,11 +215,18 @@ public struct RunView: Decodable, Equatable, Identifiable, Sendable {
 
     public var id: String { runId }
 
+    /// True iff the daemon just probed the pid and confirmed the OS still
+    /// sees it as alive. ``nil`` when no pid is recorded or the run is
+    /// already terminal. Use this to render "exited" instead of a stale
+    /// "running pid N" line.
+    public var isProcessAlive: Bool { pidAlive ?? false }
+
     enum CodingKeys: String, CodingKey {
         case runId = "run_id"
         case taskId = "task_id"
         case workerId = "worker_id"
         case pid
+        case pidAlive = "pid_alive"
         case status
         case startedAt = "started_at"
         case finishedAt = "finished_at"
