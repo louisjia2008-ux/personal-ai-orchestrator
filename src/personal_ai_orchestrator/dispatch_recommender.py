@@ -268,6 +268,7 @@ def recommend_owner_dispatch(
     policy: RoutingObjective,
     now: datetime,
     min_tier: ModelTier = ModelTier.T1,
+    invalid_min_tier: str | None = None,
 ) -> DispatchRecommendation:
     """Rank :class:`DispatchCandidateInput` by ``policy`` and admit gates.
 
@@ -275,6 +276,14 @@ def recommend_owner_dispatch(
     existing call site that did not think about tier keeps producing
     the same ranking — a flagship T0 target for a T1-default task is
     mildly penalised, a T2 target is hard-eliminated.
+
+    ``invalid_min_tier`` carries the raw string the caller observed
+    when the stored ``min_tier`` could not be parsed into
+    :class:`ModelTier`. The recommender still uses ``ModelTier.T1``
+    (the caller already recorded a system event), but every admitted
+    candidate's reasons tuple carries
+    ``min_tier_invalid_assumed_T1(raw=<value>)`` so the owner can see
+    the corruption on the dispatch panel, not only in ``/v1/health``.
     """
 
     evaluations: list[CandidateEvaluation] = []
@@ -302,6 +311,21 @@ def recommend_owner_dispatch(
             if candidate.tier is None
             else f"tier={candidate.tier.value}"
         )
+        invalid_reason = (
+            f"min_tier_invalid_assumed_T1(raw={invalid_min_tier!r})"
+            if invalid_min_tier is not None
+            else ""
+        )
+        reasons_str = (
+            f"policy={policy.value}, "
+            f"headroom={_headroom(candidate):.2f}, "
+            f"verified={candidate.verified}, "
+            f"runtime={candidate.runtime_available}, "
+            f"{tier_reason} min_tier={min_tier.value} "
+            f"match={candidate.tier_match_reason or 'default'}"
+        )
+        if invalid_reason:
+            reasons_str = reasons_str + ", " + invalid_reason
         evaluations.append(
             CandidateEvaluation(
                 execution_target_id=candidate.execution_target_id,
@@ -313,16 +337,7 @@ def recommend_owner_dispatch(
                     _component(name=name, contribution=value)
                     for name, value in components
                 ),
-                reasons=(
-                    (
-                        f"policy={policy.value}, "
-                        f"headroom={_headroom(candidate):.2f}, "
-                        f"verified={candidate.verified}, "
-                        f"runtime={candidate.runtime_available}, "
-                        f"{tier_reason} min_tier={min_tier.value} "
-                        f"match={candidate.tier_match_reason or 'default'}"
-                    ),
-                ),
+                reasons=(reasons_str,),
             )
         )
     evaluations.sort(
