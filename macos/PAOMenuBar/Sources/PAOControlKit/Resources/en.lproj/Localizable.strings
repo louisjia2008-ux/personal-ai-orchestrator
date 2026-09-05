@@ -748,6 +748,17 @@
 "quota.projection.noExhaustion" = "Not expected to run out before reset.";
 "quota.projection.footer" = "A projection, not a reading. It extends the measured burn rate straight to the reset and assumes nothing else changes.";
 
+// M1 WP1 burn pressure chips. STARVED's label is "Expiring unused" —
+// the verdict means a window with lots of remaining quota about to
+// reset, not "almost empty".
+"quota.pressure.unmetered" = "Unmetered";
+"quota.pressure.stale" = "Stale";
+"quota.pressure.exhausted" = "Exhausted";
+"quota.pressure.starved" = "Expiring unused";
+"quota.pressure.ahead" = "Using too fast";
+"quota.pressure.behind" = "Using too slow";
+"quota.pressure.onTrack" = "On track";
+
 "quota.projection.unavailable.NO_HISTORY" = "No usable quota observation has been recorded for this window.";
 "quota.projection.unavailable.INSUFFICIENT_OBSERVATIONS" = "Only one reading in this reset window. A rate needs two.";
 "quota.projection.unavailable.NO_ELAPSED_TIME" = "Every reading in this window carries the same timestamp, so no rate can be measured.";

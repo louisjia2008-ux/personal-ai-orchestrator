@@ -15,6 +15,36 @@ struct ResourceQuotaSection: View {
 
     private var bindings: [QuotaBindingSnapshot] { resource.quotaBindings }
 
+    /// M1 WP1 burn pressure → tone. STARVED uses the healthy tone (the
+    /// verdict means "lots of remaining quota about to reset" — not
+    /// "almost empty"). AHEAD uses caution (orchestrator should
+    /// throttle). UNMETERED / STALE use unknown (honest states, not
+    /// failures).
+    static func pressureTone(_ pressure: String) -> StatusTone {
+        switch pressure {
+        case "EXHAUSTED", "AHEAD": return .caution
+        case "STARVED", "BEHIND", "ON_TRACK": return .positive
+        case "UNMETERED", "STALE": return .unknown
+        default: return .unknown
+        }
+    }
+
+    /// M1 WP1 burn pressure → SF Symbol. UNMETERED / STALE get the
+    /// generic "questionmark" so the chip reads as "data shape, not a
+    /// defect".
+    static func pressureSymbol(_ pressure: String) -> String {
+        switch pressure {
+        case "EXHAUSTED": return "exclamationmark.octagon"
+        case "STARVED": return "hourglass"
+        case "AHEAD": return "speedometer"
+        case "BEHIND": return "tortoise"
+        case "ON_TRACK": return "checkmark.circle"
+        case "STALE": return "clock.badge.exclamationmark"
+        case "UNMETERED": return "questionmark.circle"
+        default: return "questionmark.circle"
+        }
+    }
+
     var body: some View {
         ResourceSection(L10n.resourceSectionQuota, symbol: "chart.pie") {
             if resource.kind != .connected && bindings.isEmpty {
@@ -108,6 +138,17 @@ struct QuotaBindingRow: View {
                     )
                 }
                 ResourceChip(text: binding.confidence, tone: confidence.tone)
+                if let pressure = binding.burn?.pressure {
+                    // M1 WP1 burn pressure chip. Shows ON_TRACK too so the
+                    // owner sees the band verdict rather than guessing
+                    // from the bar alone. UNMETERED/STALE use the unknown
+                    // tone — these are honest states, not failures.
+                    ResourceChip(
+                        text: L10n.quotaPressure(pressure),
+                        tone: ResourceQuotaSection.pressureTone(pressure),
+                        symbol: ResourceQuotaSection.pressureSymbol(pressure)
+                    )
+                }
                 Spacer(minLength: 0)
             }
 
@@ -218,6 +259,9 @@ struct QuotaBindingRow: View {
     private var accessibleSummary: String {
         var parts = [binding.windowKind, binding.state, binding.confidence]
         if binding.isLimiting { parts.append(L10n.resourceBindingLimiting) }
+        if let pressure = binding.burn?.pressure {
+            parts.append(L10n.quotaPressure(pressure))
+        }
         if let fraction = binding.remainingFraction, binding.isReadable {
             parts.append("\(L10n.quotaRemainingLabel) \(QuotaFormat.percent(fraction))")
         } else {

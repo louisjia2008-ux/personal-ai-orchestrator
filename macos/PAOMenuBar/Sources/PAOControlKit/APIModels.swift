@@ -537,6 +537,9 @@ public struct ProviderHealthListView: Codable, Equatable, Sendable {
 ///
 /// `remainingFraction` is populated only for EXACT/ESTIMATED windows, so the
 /// view layer cannot draw a bar for a figure the provider never gave us.
+/// `burn` is the M1 WP1 burn assessment for this window (expected vs
+/// actual used, deviation, pressure, score) and is absent-tolerantly
+/// decoded so pre-WP1 daemons still decode.
 public struct QuotaPlanWindowView: Codable, Equatable, Identifiable, Sendable {
     public let windowId: String
     public let windowKind: String
@@ -547,6 +550,7 @@ public struct QuotaPlanWindowView: Codable, Equatable, Identifiable, Sendable {
     public let totalUnits: Double?
     public let unit: String?
     public let resetAt: String?
+    public let burn: QuotaBurnView?
 
     public var id: String { windowId }
 
@@ -563,6 +567,7 @@ public struct QuotaPlanWindowView: Codable, Equatable, Identifiable, Sendable {
         case totalUnits = "total_units"
         case unit
         case resetAt = "reset_at"
+        case burn
     }
 
     public init(
@@ -574,7 +579,8 @@ public struct QuotaPlanWindowView: Codable, Equatable, Identifiable, Sendable {
         remainingUnits: Double? = nil,
         totalUnits: Double? = nil,
         unit: String? = nil,
-        resetAt: String? = nil
+        resetAt: String? = nil,
+        burn: QuotaBurnView? = nil
     ) {
         self.windowId = windowId
         self.windowKind = windowKind
@@ -585,6 +591,83 @@ public struct QuotaPlanWindowView: Codable, Equatable, Identifiable, Sendable {
         self.totalUnits = totalUnits
         self.unit = unit
         self.resetAt = resetAt
+        self.burn = burn
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        windowId = try container.decode(String.self, forKey: .windowId)
+        windowKind = try container.decode(String.self, forKey: .windowKind)
+        state = try container.decode(String.self, forKey: .state)
+        confidence = try container.decode(String.self, forKey: .confidence)
+        remainingFraction = try container.decodeIfPresent(Double.self, forKey: .remainingFraction)
+        remainingUnits = try container.decodeIfPresent(Double.self, forKey: .remainingUnits)
+        totalUnits = try container.decodeIfPresent(Double.self, forKey: .totalUnits)
+        unit = try container.decodeIfPresent(String.self, forKey: .unit)
+        resetAt = try container.decodeIfPresent(String.self, forKey: .resetAt)
+        burn = try container.decodeIfPresent(QuotaBurnView.self, forKey: .burn)
+    }
+}
+
+/// M1 WP1 burn assessment for one plan window.
+///
+/// `UNMETERED` returns nil for every numerical field (the window was
+/// never read); `STALE` keeps real values so the bar can still draw on
+/// cached data. `pressure` is always present so the UI can pick a chip
+/// without branching on Optional. `pressureScore` is signed: positive =
+/// orchestrator should consume less, negative = consume more; WP3 reads
+/// it through `pressureWeight * -pressureScore`.
+public struct QuotaBurnView: Codable, Equatable, Sendable {
+    public let expectedUsedFraction: Double?
+    public let actualUsedFraction: Double?
+    public let deviation: Double?
+    public let remainingFraction: Double?
+    public let secondsToReset: Double?
+    public let pressure: String
+    public let pressureScore: Double
+    public let windowStartInferred: Bool
+
+    public init(
+        expectedUsedFraction: Double? = nil,
+        actualUsedFraction: Double? = nil,
+        deviation: Double? = nil,
+        remainingFraction: Double? = nil,
+        secondsToReset: Double? = nil,
+        pressure: String = "UNMETERED",
+        pressureScore: Double = 0.0,
+        windowStartInferred: Bool = false
+    ) {
+        self.expectedUsedFraction = expectedUsedFraction
+        self.actualUsedFraction = actualUsedFraction
+        self.deviation = deviation
+        self.remainingFraction = remainingFraction
+        self.secondsToReset = secondsToReset
+        self.pressure = pressure
+        self.pressureScore = pressureScore
+        self.windowStartInferred = windowStartInferred
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedUsedFraction = "expected_used_fraction"
+        case actualUsedFraction = "actual_used_fraction"
+        case deviation
+        case remainingFraction = "remaining_fraction"
+        case secondsToReset = "seconds_to_reset"
+        case pressure
+        case pressureScore = "pressure_score"
+        case windowStartInferred = "window_start_inferred"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        expectedUsedFraction = try container.decodeIfPresent(Double.self, forKey: .expectedUsedFraction)
+        actualUsedFraction = try container.decodeIfPresent(Double.self, forKey: .actualUsedFraction)
+        deviation = try container.decodeIfPresent(Double.self, forKey: .deviation)
+        remainingFraction = try container.decodeIfPresent(Double.self, forKey: .remainingFraction)
+        secondsToReset = try container.decodeIfPresent(Double.self, forKey: .secondsToReset)
+        pressure = try container.decodeIfPresent(String.self, forKey: .pressure) ?? "UNMETERED"
+        pressureScore = try container.decodeIfPresent(Double.self, forKey: .pressureScore) ?? 0.0
+        windowStartInferred = try container.decodeIfPresent(Bool.self, forKey: .windowStartInferred) ?? false
     }
 }
 
@@ -971,6 +1054,11 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
     /// plan balance may be UNKNOWN while model consumption is known, and the
     /// card renders both rather than hiding the pair.
     public let plan: QuotaPlanView?
+    /// M1 WP1 burn pressure of the plan's WEEKLY window at the handler's
+    /// `now`. Mirrors what the dispatch recommender scores against. nil
+    /// when the plan carries no WEEKLY window or no observation. The
+    /// card renders a chip from this string only when it is non-nil.
+    public let sourcePressure: String?
 
     public var id: String { providerId }
 
@@ -995,6 +1083,7 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
         case credentialSource = "credential_source"
         case quotaPools = "quota_pools"
         case plan
+        case sourcePressure = "source_pressure"
     }
 
     public init(
@@ -1015,7 +1104,8 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
         failureReason: String? = nil,
         credentialSource: String = "NONE",
         quotaPools: [QuotaPoolHealthView] = [],
-        plan: QuotaPlanView? = nil
+        plan: QuotaPlanView? = nil,
+        sourcePressure: String? = nil
     ) {
         self.providerId = providerId
         self.displayName = displayName
@@ -1035,6 +1125,7 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
         self.credentialSource = credentialSource
         self.quotaPools = quotaPools
         self.plan = plan
+        self.sourcePressure = sourcePressure
     }
 
     /// Decodes leniently for the two keys added in P4.2.6.5.
@@ -1072,6 +1163,7 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
         quotaPools =
             try container.decodeIfPresent([QuotaPoolHealthView].self, forKey: .quotaPools) ?? []
         plan = try container.decodeIfPresent(QuotaPlanView.self, forKey: .plan)
+        sourcePressure = try container.decodeIfPresent(String.self, forKey: .sourcePressure)
     }
 }
 
@@ -1896,6 +1988,13 @@ public struct DispatchRecommendationCandidate: Decodable, Equatable, Identifiabl
     public let verified: Bool
     public let executionVerifiedStale: Bool?
     public let quotaState: String?
+    /// M1 WP1 burn pressure for this candidate's WEEKLY window at the
+    /// handler's `now`. Mirrors the provider-card-level `sourcePressure`
+    /// field. nil when the candidate carries no WEEKLY window or no
+    /// observation; the dashboard renders a chip from this string only
+    /// when it is non-nil. WP3 will combine this with `scoreComponents`
+    /// to compute a pressure-weighted score.
+    public let sourcePressure: String?
     public let scoreComponents: [DispatchRecommendationScoreComponent]
     public let reasons: [String]
 
@@ -1914,8 +2013,29 @@ public struct DispatchRecommendationCandidate: Decodable, Equatable, Identifiabl
         case verified
         case executionVerifiedStale = "execution_verified_stale"
         case quotaState = "quota_state"
+        case sourcePressure = "source_pressure"
         case scoreComponents = "score_components"
         case reasons
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        executionTargetId = try container.decode(String.self, forKey: .executionTargetId)
+        modelSkuId = try container.decode(String.self, forKey: .modelSkuId)
+        eligible = try container.decode(Bool.self, forKey: .eligible)
+        admitted = try container.decode(Bool.self, forKey: .admitted)
+        score = try container.decodeIfPresent(Double.self, forKey: .score)
+        headroomMean = try container.decodeIfPresent(Double.self, forKey: .headroomMean)
+        evidenceFresh = try container.decodeIfPresent(Bool.self, forKey: .evidenceFresh) ?? false
+        runtimeAvailable = try container.decodeIfPresent(Bool.self, forKey: .runtimeAvailable) ?? false
+        verified = try container.decodeIfPresent(Bool.self, forKey: .verified) ?? false
+        executionVerifiedStale = try container.decodeIfPresent(Bool.self, forKey: .executionVerifiedStale)
+        quotaState = try container.decodeIfPresent(String.self, forKey: .quotaState)
+        sourcePressure = try container.decodeIfPresent(String.self, forKey: .sourcePressure)
+        scoreComponents = try container.decodeIfPresent(
+            [DispatchRecommendationScoreComponent].self, forKey: .scoreComponents
+        ) ?? []
+        reasons = try container.decodeIfPresent([String].self, forKey: .reasons) ?? []
     }
 }
 

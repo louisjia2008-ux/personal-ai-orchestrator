@@ -272,6 +272,16 @@ public enum L10n {
         "quota.projection.title", "quota.projection.remainingAtReset",
         "quota.projection.exhaustionAt", "quota.projection.likelyUnused",
         "quota.projection.noExhaustion", "quota.projection.footer",
+        // M1 WP1 burn pressure chips (UNMETERED / STALE / EXHAUSTED /
+        // STARVED / AHEAD / BEHIND / ON_TRACK). STARVED's label is
+        // "Expiring unused" / "将过期未用" — the verdict means a window
+        // with lots of remaining quota about to reset, not "almost
+        // empty". AHEAD / BEHIND use "消耗偏快" / "消耗偏慢" rather than
+        // "快于/慢于计划" to avoid ambiguity between pace and direction.
+        "quota.pressure.unmetered", "quota.pressure.stale",
+        "quota.pressure.exhausted", "quota.pressure.starved",
+        "quota.pressure.ahead", "quota.pressure.behind",
+        "quota.pressure.onTrack",
         "quota.projection.unavailable.NO_HISTORY",
         "quota.projection.unavailable.INSUFFICIENT_OBSERVATIONS",
         "quota.projection.unavailable.NO_ELAPSED_TIME",
@@ -1523,6 +1533,44 @@ public enum L10n {
 
     public static func quotaBurnRateBasis(samples: Int, span: String) -> String {
         tr("quota.burnRate.basis", [samples, span])
+    }
+
+    // MARK: - M1 WP1 Burn pressure chips
+
+    /// UNMETERED — provider never reported a quota figure for this window.
+    public static var quotaPressureUnmetered: String { tr("quota.pressure.unmetered") }
+    /// STALE — cached reading older than ``reset_at``; the bar still draws
+    /// but pressure refuses to fire STARVED on expired data.
+    public static var quotaPressureStale: String { tr("quota.pressure.stale") }
+    /// EXHAUSTED — used_fraction reached or passed 100%.
+    public static var quotaPressureExhausted: String { tr("quota.pressure.exhausted") }
+    /// STARVED — lots of quota remaining but reset imminent; "expire
+    /// unused", not "almost empty".
+    public static var quotaPressureStarved: String { tr("quota.pressure.starved") }
+    /// AHEAD — used faster than the ideal line; orchestrator should
+    /// throttle. "消耗偏快" / "Using too fast".
+    public static var quotaPressureAhead: String { tr("quota.pressure.ahead") }
+    /// BEHIND — used slower than the ideal line; room to dispatch more.
+    /// "消耗偏慢" / "Using too slow".
+    public static var quotaPressureBehind: String { tr("quota.pressure.behind") }
+    /// ON_TRACK — within the band's tolerance of the ideal line.
+    public static var quotaPressureOnTrack: String { tr("quota.pressure.onTrack") }
+
+    /// Localize a burn-pressure enum value. Unknown values surface as
+    /// the raw enum string so a future pressure addition does not crash
+    /// pre-localization callers; the catalog check is what guarantees
+    /// every value reaches the client.
+    public static func quotaPressure(_ pressure: String) -> String {
+        switch pressure {
+        case "UNMETERED": return quotaPressureUnmetered
+        case "STALE": return quotaPressureStale
+        case "EXHAUSTED": return quotaPressureExhausted
+        case "STARVED": return quotaPressureStarved
+        case "AHEAD": return quotaPressureAhead
+        case "BEHIND": return quotaPressureBehind
+        case "ON_TRACK": return quotaPressureOnTrack
+        default: return pressure
+        }
     }
 
     public static var quotaProjectionTitle: String { tr("quota.projection.title") }
