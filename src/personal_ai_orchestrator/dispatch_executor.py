@@ -936,6 +936,10 @@ class OwnerDispatchExecutor:
         quota_pool_id = provider_id
 
         previous = self._quota_availability_journal.load(execution_target_id)
+        # Definitive exhaustions short-circuit before any observation: they
+        # are not expected to clear on their own within the dispatch window.
+        # UNCERTAIN_LOCKED is checked AFTER the new observation instead so a
+        # single successful collection can release the lock atomically.
         if previous is not None and previous.blocks_quota_billable_launch(now=now):
             return QuotaAdmission(
                 admitted=False,
@@ -952,9 +956,19 @@ class OwnerDispatchExecutor:
                 provider_id=provider_id,
                 quota_pool_id=quota_pool_id,
                 observed_at=now,
+                previous=previous,
             )
             # UNKNOWN must remain UNKNOWN — and must remain durable.
             self._quota_availability_journal.save(evidence)
+            # Re-projection: the save may have pushed us over the failure
+            # threshold. Reject before falling through to the admit path.
+            if evidence.state_at(now=now) is QuotaAvailabilityState.UNCERTAIN_LOCKED:
+                return QuotaAdmission(
+                    admitted=False,
+                    failure_code="QUOTA_UNKNOWN",
+                    evidence=evidence,
+                    collected=False,
+                )
             if self.config.require_quota_certainty:
                 return QuotaAdmission(
                     admitted=False,
@@ -983,6 +997,13 @@ class OwnerDispatchExecutor:
                     evidence=evidence,
                     collected=True,
                 )
+            if evidence.state_at(now=now) is QuotaAvailabilityState.UNCERTAIN_LOCKED:
+                return QuotaAdmission(
+                    admitted=False,
+                    failure_code="QUOTA_UNKNOWN",
+                    evidence=evidence,
+                    collected=True,
+                )
             if (
                 self.config.require_quota_certainty
                 and evidence.state is QuotaAvailabilityState.UNKNOWN
@@ -1003,6 +1024,7 @@ class OwnerDispatchExecutor:
                 "quota_state": evidence.state.value,
                 "quota_confidence": evidence.confidence.value,
                 "collected": collector is not None,
+                "consecutive_failures": evidence.consecutive_failures,
             },
         )
         return QuotaAdmission(
@@ -1050,11 +1072,14 @@ class OwnerDispatchExecutor:
                 observed_at=now,
                 sanitized_reason_code="LAST_KNOWN_GOOD_EXHAUSTED",
             )
+        # UNKNOWN outcome: bump the streak so the lock can fire after the
+        # configured number of consecutive failures.
         return unknown_availability(
             execution_target_id=execution_target_id,
             provider_id=provider_id,
             quota_pool_id=quota_pool_id,
             observed_at=now,
+            previous=previous,
         )
 
     def _provider_id(self, dispatch: OwnerDispatchRecord) -> str:

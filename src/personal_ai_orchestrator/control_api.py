@@ -484,6 +484,11 @@ class ObservedAvailabilityView(_ViewModel):
     measurement_source: str
     confidence: str
     sanitized_reason_code: str | None = None
+    #: Consecutive failed quota collections since the last successful
+    #: observation. ``None`` means the journal has no record (no streak).
+    #: The UI surfaces this as a "consecutive failures: N" badge so the
+    #: owner can spot a target the host has been unable to probe.
+    consecutive_failures: int | None = None
 
 
 class ExecutionTargetHealthView(_ViewModel):
@@ -2243,6 +2248,7 @@ class ControlPlaneService:
                     measurement_source=evidence.measurement_source.value,
                     confidence=evidence.confidence.value,
                     sanitized_reason_code=evidence.sanitized_reason_code,
+                    consecutive_failures=evidence.consecutive_failures,
                 )
         # Demote-fallback: journal wins over the static registry flag so a
         # transient UNKNOWN does not destroy a real verified history. The
