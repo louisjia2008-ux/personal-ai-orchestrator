@@ -329,7 +329,7 @@ Known limitation inherited by M1:
 
 ---
 
-## M1 — 额度压力驱动调度 (WP0 + WP1 + WP2 + WP3 DELIVERED 2026-09-05 on `feat/m1-wp0-daemon-tick` + `feat/m1-wp1-burn` + `feat/m1-wp2-tiers` + `feat/m1-wp3-pressure-scoring`)
+## M1 — 额度压力驱动调度 (WP0 + WP1 + WP2 + WP3 + WP4 DELIVERED 2026-09-07 on `feat/m1-wp0-daemon-tick` + `feat/m1-wp1-burn` + `feat/m1-wp2-tiers` + `feat/m1-wp3-pressure-scoring` + `feat/m1-wp4-unlimited-pool`)
 
 Goal: turn the existing scheduler into one that burns subscription quota
 before it expires, drops simple tasks to free / low-tier models, and adds
@@ -344,6 +344,7 @@ Working order (each WP ships as its own branch from `fix/m0-trust`):
 | WP1 | `feat/m1-wp1-burn` | DONE — `quota_burn.py` (pure functions) + `CandidateWindowInput` + per-window `burn` sub-object + provider-card / candidate `source_pressure` |
 | WP2 | `feat/m1-wp2-tiers` | DONE — `model_tiers.py` + `runtime-state/policies/model-tiers.json` + `TaskRecord.min_tier` (TEXT NOT NULL DEFAULT 'T1') + tier-aware `_hard_eligibility` / `_score` + Swift picker + tier chip on Resources + DispatchRecommendation |
 | WP3 | `feat/m1-wp3-pressure-scoring` | DONE — `ScoreWeights` dataclass + `BURN_DOWN` objective + five-term score (`quality / pressure / headroom / latency / cost`) shared by scheduler + recommender + 5h smoothing gate (both paths) + MANUAL short-circuit on scheduler + BALANCED fallback reason on recommender + `headroom_min` field + `score_components[].weight` + Swift picker / ideal-pace tick / explainable score rows |
+| WP4 | `feat/m1-wp4-unlimited-pool` | DONE — OpenCode Zen free-model family (auth=none, pool_kind=unmetered) + `QuotaWindowKind.UNMETERED` + `QuotaAvailabilityState.AVAILABLE_UNMETERED` + `observe_rate_limited` + local `UnmeteredQuotaCollector` + `worker_outcome_classifier` (conservative stderr markers, no bare "quota") + `ExecutionVerificationOutcome.QUOTA_BLOCKED` evidence with demote-fallback + `pool_kind` / `unmetered` read-time view + macOS Resources page "Free / unmetered" section + 6 L10n keys (en + zh-Hans) |
 | WP3 | `feat/m1-wp3-pressure-scoring` | `ScoreWeights` (scheduler + recommender share it); pressure + headroom weights; `RoutingObjective.BURN_DOWN` for the BURN_DOWN preset; smoothing / STARVED branches |
 | WP4 | `feat/m1-wp4-unlimited-pool` | `QuotaWindowKind.UNMETERED` + `UnlimitedPool`; opencode-free entry on `ProviderFamilySpec`; discovery reads real `opencode models` output (fixture-driven) |
 | WP5a | `feat/m1-wp5a-supervised-auto-core` | state machine additions (`AUTO_PLANNED`, `AUTO_GRACE`), `scheduling_settings.mode`, project-level three-field settings (`supervised_auto_allowed`, `unattended_allowed`, `grace_seconds`), `POST /v1/tasks/{id}/auto/{ack,veto,dispatch-now}`, scheduler-side tick `supervised_auto_step(now)` |
