@@ -872,6 +872,121 @@ The 9 frozen `ROUTING_ROLE_CONTRACT.md` fixtures are unchanged —
 the new BURN_DOWN coverage is an inline JSON test in
 `RoutingContractTests.swift` (no new fixture file).
 
+## M1 WP4 — unmetered pool (`feat/m1-wp4-unlimited-pool`)
+
+WP4 lands the OpenCode Zen free-model family on the dispatch
+side and the macOS Resources page. The new ``pool_kind`` /
+``auth_kind`` axis lets the daemon and the picker distinguish
+``"windowed"`` providers (which report quota windows) from
+``"unmetered"`` providers (which do not — only locally observed
+rate limits apply).
+
+### Discovery (commit 1)
+
+- ``ProviderFamilySpec``: new ``auth`` (``"env"`` | ``"oauth"`` |
+  ``"none"``), ``pool_kind`` (``"windowed"`` | ``"unmetered"``),
+  and ``free_model_skus`` (explicit SKU listing).
+- ``PROVIDER_FAMILIES`` adds the ``opencode`` family with
+  ``auth="none"``, ``pool_kind="unmetered"``, and the 7
+  fixtures (`big-pickle`, `ling-3.0-flash-fin-free`,
+  `mimo-v2.5-free`, `muse-spark-1.2-contributor-free`,
+  `muse-spark-1.3-contributor-free`, `nemotron-3-ultra-free`,
+  `nemotron-3.5-lightning-free`). Free-models-glob cross-check
+  emits ``FREE_MODEL_SUFFIX_UNLISTED{sku}`` (suffix-unlisted)
+  or ``OPENCODE_MODEL_UNCLASSIFIED{sku}`` (paid-looking); both
+  dedup per daemon lifetime.
+- ``ProviderDiscovery``: new ``auth_kind`` / ``pool_kind`` fields
+  mirror the spec.
+- ``model_tiers.DEFAULT_TIER_TABLE_JSON``: ``opencode-*-free``
+  glob already present from WP2 speculation; add the explicit
+  ``opencode-big-pickle`` override (T3) for the one free SKU
+  without the ``-free`` suffix.
+
+### Quota model (commit 2)
+
+- ``QuotaWindowKind.UNMETERED`` added; ``duration_seconds()``
+  returns ``None``.
+- ``QuotaAvailabilityState.AVAILABLE_UNMETERED`` added;
+  ``UNCERTAIN_LOCKED`` is unreachable for unmetered targets
+  because ``consecutive_failures`` is pinned to ``0``.
+- ``observe_rate_limited`` transition: 15-minute default
+  cooldown, never bumps ``consecutive_failures``.
+- ``previous_state_baseline`` field on
+  ``QuotaAvailabilityEvidence`` so ``state_at`` picks the right
+  expiry path (windowed → ``RECOVERY_PROBE_DUE``; unmetered →
+  ``AVAILABLE_UNMETERED`` directly).
+- ``UnmeteredQuotaCollector``: pure-local collector (no I/O).
+  Emits one ``UNMETERED`` window + a ``PlanQuotaProjection``
+  with the covered free SKUs as the pool. ``evidence()``
+  returns a fresh ``AVAILABLE_UNMETERED`` journal entry with
+  the unmetered baseline pinned.
+- ``daemon.default_quota_collectors()`` registers the opencode
+  collector (no conditional on credentials).
+
+### Worker outcome classification (commit 3)
+
+- ``worker_outcome_classifier.classify_worker_failure``:
+  conservative marker list (``"usage limit"``, ``"rate limit"``,
+  ``"too many requests"``, ``"quota exceeded"``,
+  ``"insufficient quota"``, ``"429"`` for QUOTA_OR_RATE_LIMIT;
+  ``"unauthorized"``, ``"401"``, ``"403"``, ``"not logged in"``
+  for AUTH). The bare token ``"quota"`` is **not** in the list
+  — it matches this project's own source code and was the
+  source of the regression risk the user flagged for shadow's
+  old list. ``stdout`` is ignored by design.
+- ``shadow_campaign_runner._worker_failure_classification``
+  delegates to the new helper (the legacy bare-``"quota"`` text
+  match is gone).
+- ``dispatch_executor._classify_and_record_worker_outcome``
+  runs the helper on the worker's ``stderr_tail``. On
+  ``QUOTA_OR_RATE_LIMIT``:
+  - windowed targets (``pool_kind="windowed"``) call
+    ``observe_exhaustion`` (1h cooldown, the legacy windowed
+    behaviour).
+  - unmetered targets (``pool_kind="unmetered"``) call
+    ``observe_rate_limited`` (15-minute cooldown).
+  - both write a ``QUOTA_BLOCKED`` evidence row; the existing
+    ``latest_verified_for_target`` demote-fallback covers
+    ``QUOTA_BLOCKED`` automatically (the §3.4 contract).
+- 4.4 scoring assertions: T3 task with unmetered top pick;
+  COOLDOWN unmetered target eliminated with ``recovers_at``
+  reason; 5h smoothing skips unmetered targets (no FIVE_HOUR
+  window exists).
+
+### Control plane views (commit 4)
+
+- ``ExecutionTargetHealthView``: ``auth_kind`` / ``pool_kind``.
+- ``QuotaProviderCardView``: ``pool_kind`` + ``unmetered`` block
+  (carrying ``rpm_observed``, ``error_rate_1h``,
+  ``cooldown_until``).
+- ``UnmeteredObservationView``: read-time view-model.
+- ``_build_unmetered_observation`` derives metrics from
+  existing stores (no new supervisor step): ``rpm_observed``
+  from the runs table count in the last 60s, ``error_rate_1h``
+  from the last hour of ``ExecutionEvidenceJournal`` rows,
+  ``cooldown_until`` from the earliest target-level cooldown.
+
+### macOS app (commit 5)
+
+- The Resources page splits populated resources into windowed
+  vs unmetered buckets. Unmetered cards render under a new
+  ``resource.group.unmetered`` header with a system-image-free
+  label so it reads as a category, not a status.
+- 6 new L10n keys in both ``en.lproj`` and ``zh-Hans.lproj``:
+  ``resource.group.unmetered``, ``quota.windowKind.unmetered``,
+  ``quota.unmetered.errorRate``, ``quota.unmetered.rpm``,
+  ``quota.unmetered.cooldownUntil``, ``quota.unmetered.noWindow``.
+- All six enter ``L10n.requiredKeys`` so ``LocalizationTests``
+  catches a missing translation.
+
+### Known limitations (commit 3.5)
+
+The worker-outcome classifier uses text match on ``stderr_tail``;
+OpenCode changing the error message format would silently miss
+the verdict. M2 migration to ``opencode serve`` typed errors
+will replace the helper with a structured field; the
+``dispatch_executor`` call site stays the same.
+
 ## P3.6 live provider and Shadow campaign
 
 P3.6 provider-surface discovery on 2026-08-30 found no supported machine-readable remaining-quota

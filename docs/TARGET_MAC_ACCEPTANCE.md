@@ -258,6 +258,37 @@ Acceptance evidence:
   inline JSON test in `RoutingContractTests.swift` (no new
   fixture file).
 
+### P0 M1 WP4 unmetered pool (PASS on `feat/m1-wp4-unlimited-pool`)
+
+Acceptance evidence (without an outbound `opencode run`
+round-trip — that was a §6.7 violation we are NOT repeating;
+the four successful calls earlier were属主-accepted per the
+in-thread ruling):
+
+- The Resources page renders an unmetered provider card in
+  its own "Free / unmetered" section header. The card has no
+  5h / weekly progress bars and shows the read-time
+  `rpm_observed`, `error_rate_1h`, and (when present)
+  `cooldown_until` countdown chip.
+- The picker exposes a T3 tier for `opencode-big-pickle`
+  (sufix-less) via the WP2 default table glob override.
+- A T3 task under BALANCED has an unmetered top-1 target
+  (the headroom-min heuristic returns 1.0 for UNMETERED
+  windows).
+- A COOLDOWN unmetered target is rejected with a
+  `recovers_at` reason.
+- A worker that hits "rate limit exceeded" or 429 on stderr
+  flips the journal to COOLDOWN with `observe_rate_limited`
+  (15-minute default) and writes a `QUOTA_BLOCKED` evidence
+  row; the dispatch panel keeps the target as
+  `execution_verified=True, execution_verified_stale=True`
+  (the §3.4 demote-fallback contract).
+- The conservative marker list does NOT trip on the bare
+  token "quota" (the regression test pins this); matching
+  stdout is forbidden by design.
+- A pre-WP4 daemon (no `pool_kind` or `unmetered` field) keeps
+  the legacy chrome (windowed pool, no separate section).
+
 ## 6. MiniMax real provider acceptance
 
 Use the already hardened local Stage C contract tracked by PR #17 with the target Mac's **existing
