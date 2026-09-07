@@ -130,6 +130,33 @@ public struct ResourceSnapshot: Equatable, Identifiable, Sendable {
 
     public var id: String { providerId }
 
+    /// M1 WP4: ``"windowed"`` (default — quota comes from upstream
+    /// windows) or ``"unmetered"`` (no upstream quota endpoint;
+    /// only locally observed rate limits). The Resources page
+    /// groups ``unmetered`` providers into a "Free / unmetered"
+    /// section. A nil value preserves the legacy behaviour for
+    /// pre-WP4 daemons. Read off the quota card or any execution
+    /// target — the family-level pool_kind is the same for every
+    /// target under one provider.
+    public var poolKind: String? {
+        if let pool = quota?.poolKind { return pool }
+        if let target = health?.executionTargets.first(where: { $0.poolKind != "windowed" })
+            ?? health?.executionTargets.first {
+            return target.poolKind
+        }
+        return nil
+    }
+
+    /// M1 WP4: ``"env"`` (default — API credential required) or
+    /// ``"none"`` (OpenCode Zen routes through its own proxy;
+    /// no credential needed). Surfaced for the row chrome.
+    public var authKind: String? {
+        if let target = health?.executionTargets.first {
+            return target.authKind
+        }
+        return quota != nil ? "env" : nil
+    }
+
     // MARK: Availability
 
     /// CONNECTED | NOT_CONNECTED | ERROR | ..., verbatim from whichever surface

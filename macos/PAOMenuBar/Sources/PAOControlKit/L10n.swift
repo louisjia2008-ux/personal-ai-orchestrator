@@ -129,6 +129,11 @@ public enum L10n {
         "policy.globalDefault", "policy.resolutionSource",
         "policy.source.task", "policy.source.project", "policy.source.global",
         "providers.tab.connected", "providers.tab.available",
+        // M1 WP4: free / unmetered resource group + per-card
+        // metrics (rpm, error rate, cooldown, no-window affordance).
+        "resource.group.unmetered", "quota.windowKind.unmetered",
+        "quota.unmetered.errorRate", "quota.unmetered.rpm",
+        "quota.unmetered.cooldownUntil", "quota.unmetered.noWindow",
         "providers.connectedEmpty.title", "providers.connectedEmpty.message",
         "providers.addProvider", "providers.importExisting", "providers.disconnect",
         "providers.importTitle", "providers.importFooter",
@@ -1637,6 +1642,48 @@ public enum L10n {
         tr("quota.projection.remainingAtReset")
     }
     public static var quotaProjectionExhaustionAt: String { tr("quota.projection.exhaustionAt") }
+
+    // MARK: M1 WP4 — free / unmetered resource group
+
+    /// ``resource.group.unmetered`` — header for the unmetered
+    /// section of the Resources page. OpenCode Zen free models and
+    /// any other auth="none" / pool_kind="unmetered" providers
+    /// render under this label.
+    public static var resourceGroupUnmetered: String {
+        tr("resource.group.unmetered")
+    }
+
+    /// ``quota.windowKind.unmetered`` — chip rendered on an
+    /// unmetered card in place of the 5h/weekly progress bar.
+    public static var quotaWindowKindUnmetered: String {
+        tr("quota.windowKind.unmetered")
+    }
+
+    /// ``quota.unmetered.errorRate`` — label for the 1-hour
+    /// non-VERIFIED ratio on the unmetered card.
+    public static var quotaUnmeteredErrorRate: String {
+        tr("quota.unmetered.errorRate")
+    }
+
+    /// ``quota.unmetered.rpm`` — label for the rolling 60s
+    /// runs-per-minute metric on the unmetered card.
+    public static var quotaUnmeteredRpm: String {
+        tr("quota.unmetered.rpm")
+    }
+
+    /// ``quota.unmetered.cooldownUntil`` — label for the cooldown
+    /// countdown chip on the unmetered card. The chip is hidden
+    /// when no target is currently in COOLDOWN.
+    public static var quotaUnmeteredCooldownUntil: String {
+        tr("quota.unmetered.cooldownUntil")
+    }
+
+    /// ``quota.unmetered.noWindow`` — no-window affordance on the
+    /// unmetered card (the "no quota window — usage is limited
+    /// only by rate" copy).
+    public static var quotaUnmeteredNoWindow: String {
+        tr("quota.unmetered.noWindow")
+    }
     public static var quotaProjectionLikelyUnused: String { tr("quota.projection.likelyUnused") }
     public static var quotaProjectionNoExhaustion: String {
         tr("quota.projection.noExhaustion")

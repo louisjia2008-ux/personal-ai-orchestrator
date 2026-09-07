@@ -607,6 +607,12 @@ class ProviderHealthView(_ViewModel):
     plan_surface: str | None = None
     region: str | None = None
     last_checked: str | None = None
+    #: M1 WP4: ``"windowed"`` (default) or ``"unmetered"``.
+    # Surfaced so the Resources page can group providers by
+    # ``pool_kind`` without inspecting every target. The
+    # family-level pool_kind is constant per provider so any
+    # target's pool_kind is authoritative.
+    pool_kind: str | None = None
 
 
 class ProviderHealthListView(_ViewModel):
@@ -2689,6 +2695,10 @@ class ControlPlaneService:
                         if evidence is not None and evidence.observed_at is not None
                         else None
                     ),
+                    # M1 WP4: carry the family pool_kind on the
+                    # provider-level view so the Resources page can
+                    # group by it without iterating targets.
+                    pool_kind=self._pool_kind_for_provider(provider_id),
                 )
             )
         return ProviderHealthListView(providers=tuple(views))

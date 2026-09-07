@@ -356,4 +356,65 @@ final class QuotaObservabilityTests: XCTestCase {
         let card = try XCTUnwrap(view.providers.first)
         XCTAssertEqual(card.collectionFailureStreak, 0)
     }
+
+    // M1 WP4: pool_kind and unmetered block round-trip on the
+    // provider card. Lenient decode keeps pre-WP4 daemons (which
+    // omit the field) on the legacy ``windowed`` default.
+    func testQuotaProviderCardDecodesPoolKindUnmetered() throws {
+        let body = """
+        {
+          "state": "CONNECTED_WITH_QUOTA_OBSERVATIONS",
+          "summary": {
+            "connected_provider_count": 1,
+            "quota_observable_provider_count": 1,
+            "quota_unknown_provider_count": 0,
+            "quota_warning_count": 0,
+            "quota_exhausted_count": 0
+          },
+          "providers": [
+            {
+              "provider_id": "opencode",
+              "display_name": "OpenCode Free",
+              "connection_state": "CONNECTED",
+              "auth_state": "AUTH_FROM_ENV_PRESENCE",
+              "quota_state": "OBSERVED",
+              "confidence": "ESTIMATED",
+              "readonly_source_available": true,
+              "collector_available": true,
+              "credential_source": "NONE",
+              "quota_pools": [],
+              "collection_failure_streak": 0,
+              "pool_kind": "unmetered",
+              "unmetered": {
+                "rpm_observed": 12,
+                "error_rate_1h": 0.05,
+                "cooldown_until": null
+              }
+            }
+          ],
+          "history": {"observations": [], "retention_limit": 0}
+        }
+        """
+        let view = try JSONDecoder().decode(
+            QuotaOverviewView.self, from: Data(body.utf8)
+        )
+        let card = try XCTUnwrap(view.providers.first)
+        XCTAssertEqual(card.poolKind, "unmetered")
+        let unmetered = try XCTUnwrap(card.unmetered)
+        XCTAssertEqual(unmetered.rpmObserved, 12)
+        XCTAssertEqual(unmetered.errorRate1h, 0.05)
+        XCTAssertNil(unmetered.cooldownUntil)
+    }
+
+    func testQuotaProviderCardDecodesWithoutPoolKindOrUnmetered() throws {
+        // Pre-WP4 daemons omit pool_kind and unmetered. The lenient
+        // defaults preserve the legacy chrome (windowed pool, no
+        // unmetered block).
+        let view = try JSONDecoder().decode(
+            QuotaOverviewView.self, from: Data(quotaUnknownBody.utf8)
+        )
+        let card = try XCTUnwrap(view.providers.first)
+        XCTAssertEqual(card.poolKind, "windowed")
+        XCTAssertNil(card.unmetered)
+    }
 }

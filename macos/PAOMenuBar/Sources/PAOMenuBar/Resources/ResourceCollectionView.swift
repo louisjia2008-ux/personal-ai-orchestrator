@@ -111,11 +111,40 @@ struct ResourceCollectionView: View {
             )
 
         case .populated(let resources):
-            List(resources, selection: $selectedResourceId) { resource in
-                ResourceCollectionRow(resource: resource, now: now)
+            // M1 WP4: group resources by ``pool_kind``. Windowed
+            // providers render in the default section; unmetered
+            // providers render under a separate "Free / unmetered"
+            // header so the owner can tell at a glance which
+            // targets need no credential. Resources with no
+            // ``poolKind`` (pre-WP4 daemons) fall into the windowed
+            // bucket by default.
+            let unmeteredResources = resources.filter { $0.poolKind == "unmetered" }
+            let windowedResources = resources.filter { $0.poolKind != "unmetered" }
+            VStack(spacing: 0) {
+                if !windowedResources.isEmpty {
+                    resourceList(windowedResources)
+                }
+                if !unmeteredResources.isEmpty {
+                    Text(L10n.resourceGroupUnmetered)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, Spacing.element)
+                        .padding(.top, Spacing.inner)
+                        .padding(.bottom, Spacing.tight)
+                        .accessibilityAddTraits(.isHeader)
+                    resourceList(unmeteredResources)
+                }
             }
-            .listStyle(.inset(alternatesRowBackgrounds: false))
         }
+    }
+
+    @ViewBuilder
+    private func resourceList(_ resources: [ResourceSnapshot]) -> some View {
+        List(resources, selection: $selectedResourceId) { resource in
+            ResourceCollectionRow(resource: resource, now: now)
+        }
+        .listStyle(.inset(alternatesRowBackgrounds: false))
     }
 }
 

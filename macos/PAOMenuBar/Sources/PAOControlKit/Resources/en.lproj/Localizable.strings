@@ -800,3 +800,9 @@
 // M1 WP3 — BURN_DOWN objective (pressure-first preset).
 "policy.burnDown" = "Burn down quota";
 "policy.burnDown.detail" = "Prefer targets whose quota is expiring unused";
+"resource.group.unmetered" = "Free / unmetered";
+"quota.windowKind.unmetered" = "Unmetered";
+"quota.unmetered.errorRate" = "1-hour error rate";
+"quota.unmetered.rpm" = "Runs in the last minute";
+"quota.unmetered.cooldownUntil" = "Cooldown until";
+"quota.unmetered.noWindow" = "No quota window — usage is limited only by rate";
