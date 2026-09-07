@@ -22,7 +22,7 @@ import subprocess
 import sys
 import threading
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -41,7 +41,11 @@ from personal_ai_orchestrator.daemon_supervisor import (
     SupervisorStepSnapshot,
 )
 from personal_ai_orchestrator.execution_controller import validate_execution_target_launch
-from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
+from personal_ai_orchestrator.execution_evidence import (
+    ExecutionEvidenceJournal,
+    ExecutionVerificationEvidence,
+    ExecutionVerificationOutcome,
+)
 from personal_ai_orchestrator.model_registry import EvidenceConfidence, ModelRegistry
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
 from personal_ai_orchestrator.provider_registry_manager import (
@@ -568,12 +572,24 @@ class ExecutionTargetHealthView(_ViewModel):
     execution_verified_stale: bool = False
     runtime_available: bool | None = None
     observed_availability: ObservedAvailabilityView | None = None
-    # M1 WP2: capability tier for this target. ``None`` means the
-    # host-owned tier table could not classify the target — the Swift
-    # dashboard falls back to its "unknown" label and the recommender
+# M1 WP2: capability tier for this target. ``None`` means the
+    # host-owned tier table could not classify the target — the
+    # Swift dashboard falls back to its "unknown" label and the recommender
     # assumes T1 in scoring.
     tier: str | None = None
     tier_match_reason: str | None = None
+    # M1 WP4: how this target's provider family authenticates.
+    # ``"env"`` means an API credential is required; ``"none"``
+    # means the OpenCode Zen family routes through its own
+    # proxy and the host needs no credential. Surfaced for the
+    # Resources page so the owner can tell at a glance which
+    # targets the daemon can dispatch to without setup.
+    auth_kind: str = "env"
+    # M1 WP4: ``"windowed"`` (the pre-WP4 default — the family
+    # reports quota windows) or ``"unmetered"`` (no quota window,
+    # only locally observed rate limits). The Resources page
+    # uses this to group "free / unmetered" targets separately.
+    pool_kind: str = "windowed"
 
 
 class ProviderHealthView(_ViewModel):
@@ -595,6 +611,28 @@ class ProviderHealthView(_ViewModel):
 
 class ProviderHealthListView(_ViewModel):
     providers: tuple[ProviderHealthView, ...]
+
+
+class UnmeteredObservationView(_ViewModel):
+    """M1 WP4: locally observed metrics for an unmetered provider.
+
+    The unmetered path has no upstream quota window to read. The
+    three metrics the Resources page shows are derived at read
+    time from existing stores (``runs``, ``ExecutionEvidenceJournal``,
+    ``QuotaAvailabilityJournal.cooldown_until``).
+    """
+
+    #: Number of run records for this provider's targets in the
+    #: last 60 seconds. ``None`` when the runs store has no
+    #: records for this provider.
+    rpm_observed: int
+    #: Ratio of non-VERIFIED execution-evidence rows to total rows
+    #: in the last hour. ``None`` when no evidence rows exist.
+    error_rate_1h: float
+    #: ISO timestamp at which the cooldown (set by the worker
+    #: outcome classifier) expires. ``None`` when no target is
+    #: currently in COOLDOWN.
+    cooldown_until: str | None = None
 
 
 class QuotaProviderCardView(_ViewModel):
@@ -650,6 +688,18 @@ class QuotaProviderCardView(_ViewModel):
     #: target under this provider — the absence of a value, not
     #: the absence of a problem.
     collection_failure_streak: int = 0
+    #: M1 WP4: ``"windowed"`` (default — collector reads quota windows)
+    # or ``"unmetered"`` (no upstream quota endpoint). The Resources
+    # page groups ``unmetered`` cards into a "Free / unmetered"
+    # section with a different visual chrome (no 5h / weekly
+    # progress bars, no ideal-pace tick).
+    pool_kind: str = "windowed"
+    #: M1 WP4: read-time metrics for unmetered providers. ``None``
+    #: for windowed providers (their quota page surfaces the
+    #: existing quota_pools + pool_p table metrics). The
+    # Resources page renders the metrics in the unmetered
+    # card.
+    unmetered: UnmeteredObservationView | None = None
 
 
 class QuotaBurnView(_ViewModel):
@@ -2562,6 +2612,14 @@ class ControlPlaneService:
             observed_availability=observed,
             tier=tier_value,
             tier_match_reason=tier_match_reason,
+            # M1 WP4: surface the family-level ``auth_kind`` and
+            # ``pool_kind`` so the Resources page can group targets
+            # by family without round-tripping through
+            # ``provider_discovery``. The defaults keep the
+            # pre-WP4 behaviour for ad-hoc CLI invocations
+            # (no registry → ``env`` + ``windowed``).
+            auth_kind=self._auth_kind_for_target(target),
+            pool_kind=self._pool_kind_for_target(target),
         )
 
     def providers(self) -> ProviderHealthListView:
@@ -3049,6 +3107,158 @@ class ControlPlaneService:
             if connection.scheduler_connected
         }
 
+    # M1 WP4: target → family ``auth_kind`` / ``pool_kind`` helpers.
+    # The default fallback (``"env"`` / ``"windowed"``) preserves
+    # the pre-WP4 behaviour for ad-hoc CLI invocations that do
+    # not run ``provider_discovery``. When the registry knows the
+    # target's provider family, the discovery-set fields win.
+    def _auth_kind_for_target(self, target) -> str:
+        if self.registry is None:
+            return "env"
+        model = self.registry.models.get(target.model_sku_id)
+        if model is None:
+            return "env"
+        from personal_ai_orchestrator.provider_discovery import (
+            PROVIDER_FAMILIES as _PF,
+        )
+        for spec in _PF:
+            if spec.provider_id == model.provider_id:
+                return spec.auth
+        return "env"
+
+    def _pool_kind_for_target(self, target) -> str:
+        if self.registry is None:
+            return "windowed"
+        model = self.registry.models.get(target.model_sku_id)
+        if model is None:
+            return "windowed"
+        from personal_ai_orchestrator.provider_discovery import (
+            PROVIDER_FAMILIES as _PF,
+        )
+        for spec in _PF:
+            if spec.provider_id == model.provider_id:
+                return spec.pool_kind
+        return "windowed"
+
+    def _pool_kind_for_provider(self, provider_id: str) -> str:
+        """Provider-level pool_kind lookup for the quota overview card.
+
+        The ``_pool_kind_for_target`` helper is target-scoped; the
+        card builder knows the ``provider_id`` directly. Symmetric
+        implementation — same family scan, same default.
+        """
+        from personal_ai_orchestrator.provider_discovery import (
+            PROVIDER_FAMILIES as _PF,
+        )
+        for spec in _PF:
+            if spec.provider_id == provider_id:
+                return spec.pool_kind
+        return "windowed"
+
+    def _build_unmetered_observation(
+        self,
+        connection,
+    ) -> UnmeteredObservationView | None:
+        """Read-time metrics for an unmetered provider.
+
+        No new supervisor step, no new tables. The fields are
+        derived at read time from existing stores so a future
+        migration to OpenCode typed errors cannot strand the
+        Resources page.
+        """
+
+        from personal_ai_orchestrator.provider_discovery import (
+            PROVIDER_FAMILIES as _PF,
+        )
+        family = next(
+            (spec for spec in _PF if spec.provider_id == connection.provider_id),
+            None,
+        )
+        if family is None or family.pool_kind != "unmetered":
+            return None
+        targets = (
+            [
+                target
+                for target in self.registry.execution_targets.values()
+                if self.registry.models.get(target.model_sku_id)
+                and self.registry.models[target.model_sku_id].provider_id
+                == connection.provider_id
+            ]
+            if self.registry is not None
+            else []
+        )
+        target_ids = {target.id for target in targets}
+
+        rpm_observed = 0
+        if self.store is not None:
+            now = datetime.now(UTC)
+            cutoff = now - timedelta(seconds=60)
+            try:
+                rows = self.store.connection.execute(
+                    "SELECT COUNT(*) FROM runs WHERE started_at >= ?",
+                    (cutoff,),
+                ).fetchone()
+                if rows is not None:
+                    rpm_observed = int(rows[0])
+            except Exception:
+                rpm_observed = 0
+
+        error_rate: float = 0.0
+        if self.execution_evidence_journal is not None:
+            cutoff = datetime.now(UTC) - timedelta(seconds=3600)
+            total = 0
+            non_verified = 0
+            try:
+                for path in sorted(
+                    self.execution_evidence_journal.directory.glob(
+                        "exec-verify-*.json"
+                    )
+                ):
+                    try:
+                        evidence = (
+                            ExecutionVerificationEvidence.model_validate_json(
+                                path.read_text(encoding="utf-8")
+                            )
+                        )
+                    except Exception:
+                        continue
+                    if evidence.execution_target_id not in target_ids:
+                        continue
+                    if evidence.observed_at < cutoff:
+                        continue
+                    total += 1
+                    if evidence.result is not ExecutionVerificationOutcome.VERIFIED:
+                        non_verified += 1
+            except Exception:
+                pass
+            if total > 0:
+                error_rate = non_verified / total
+
+        cooldown_until: str | None = None
+        if self.quota_availability_journal is not None:
+            earliest: datetime | None = None
+            for target in targets:
+                try:
+                    evidence = self.quota_availability_journal.load(target.id)
+                except Exception:
+                    continue
+                if evidence is None:
+                    continue
+                if (
+                    evidence.state is QuotaAvailabilityState.COOLDOWN
+                    and evidence.cooldown_until is not None
+                ):
+                    if earliest is None or evidence.cooldown_until < earliest:
+                        earliest = evidence.cooldown_until
+            if earliest is not None:
+                cooldown_until = earliest.isoformat()
+
+        return UnmeteredObservationView(
+            rpm_observed=rpm_observed,
+            error_rate_1h=error_rate,
+            cooldown_until=cooldown_until,
+        )
+
     def _quota_provider_card(
         self,
         connection,
@@ -3128,6 +3338,15 @@ class ControlPlaneService:
             plan=plan_view,
             source_pressure=source_pressure,
             collection_failure_streak=collection_failure_streak,
+            # M1 WP4: surface pool_kind + the unmetered observation
+            # object so the Resources page can render a
+            # separate "Free / unmetered" group without
+            # round-tripping through provider_discovery. The
+            # ``unmetered`` block is None for windowed
+            # providers — their quota surfaces are surfaced
+            # through ``quota_pools`` + ``plan``.
+            pool_kind=self._pool_kind_for_provider(connection.provider_id),
+            unmetered=self._build_unmetered_observation(connection),
         )
 
     def quota(self) -> QuotaOverviewView:
