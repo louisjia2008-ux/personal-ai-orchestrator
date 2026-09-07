@@ -438,4 +438,39 @@ final class QuotaObservabilityTests: XCTestCase {
         XCTAssertEqual(view.rpmObserved, 0)
         XCTAssertNil(view.cooldownUntil)
     }
+
+    func testStoreFetchesQuotaOverviewWithUnmeteredProvider() async throws {
+        // V5: ``TestDaemon`` registers an unmetered canned body
+        // for ``/v1/quota`` via ``registerStandardRoutes(quotaBody:)``
+        // so the Swift store round-trip exercises the
+        // ``pool_kind == "unmetered"`` branch with the same
+        // fidelity as a real daemon.
+        let daemon = TestDaemon()
+        registerStandardRoutes(daemon, quotaBody: quotaUnmeteredBody)
+        let path = temporarySocketPath("quota-unmetered")
+        try daemon.start(socketPath: path)
+        defer { daemon.stop() }
+
+        let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
+        await store.refreshNow()
+
+        let quota = try XCTUnwrap(store.quota)
+        XCTAssertEqual(quota.pageState, .connectedWithQuotaObservations)
+        let opencode = try XCTUnwrap(
+            quota.providers.first { $0.providerId == "opencode" }
+        )
+        XCTAssertEqual(opencode.poolKind, "unmetered")
+        let unmetered = try XCTUnwrap(opencode.unmetered)
+        XCTAssertEqual(unmetered.rpmObserved, 12)
+        XCTAssertEqual(unmetered.errorRate1h, 0.05)
+        XCTAssertNil(unmetered.cooldownUntil)
+
+        // The windowed provider in the same response still carries
+        // the legacy chrome.
+        let coding = try XCTUnwrap(
+            quota.providers.first { $0.providerId == "minimax-cn-coding-plan" }
+        )
+        XCTAssertEqual(coding.poolKind, "windowed")
+        XCTAssertNil(coding.unmetered)
+    }
 }
