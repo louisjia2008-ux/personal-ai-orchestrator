@@ -249,27 +249,45 @@ def _model_task_failure_classification() -> FailureClassification:
 
 
 def _worker_failure_classification(worker: WorkerExecutionResult) -> FailureClassification:
-    text = f"{worker.stdout_tail}\n{worker.stderr_tail}".lower()
+    # M1 WP4: reuse the canonical worker-outcome classifier instead of
+    # the legacy shadow list. The legacy list matched the bare
+    # ``"quota"`` substring which overlaps with this project's own
+    # source code and would have caused every shadow run to land in
+    # ``POLICY_BLOCK`` the moment a worker happened to log a quota
+    # message that was not actually a policy block. The new helper
+    # inspects ``stderr_tail`` only and uses phrased markers
+    # (``"usage limit"``, ``"rate limit"``, ``"too many requests"``,
+    # ``"quota exceeded"``, ``"insufficient quota"``, ``"429"``).
+    # ``stdout_tail`` is ignored by design.
+    failure_class = ShadowFailureClass.WORKER_PROCESS_FAILURE
+    failure_stage = ShadowFailureStage.EXECUTION
+    quality_outcome = ShadowQualityOutcome.OPERATIONAL_FAILED
     if worker.timed_out:
         failure_class = ShadowFailureClass.TIMEOUT
-        failure_stage = ShadowFailureStage.EXECUTION
-        quality_outcome = ShadowQualityOutcome.OPERATIONAL_FAILED
-    elif any(marker in text for marker in ("usage limit", "quota", "rate limit")):
-        failure_class = ShadowFailureClass.POLICY_BLOCK
-        failure_stage = ShadowFailureStage.INVOCATION
-        quality_outcome = ShadowQualityOutcome.POLICY_BLOCKED
-    elif any(marker in text for marker in ("login", "auth", "unauthorized", "401")):
-        failure_class = ShadowFailureClass.AUTH_FAILURE
-        failure_stage = ShadowFailureStage.AUTH
-        quality_outcome = ShadowQualityOutcome.OPERATIONAL_FAILED
-    elif any(marker in text for marker in ("not found", "not available", "no such file")):
-        failure_class = ShadowFailureClass.WORKER_INVOCATION_FAILURE
-        failure_stage = ShadowFailureStage.INVOCATION
-        quality_outcome = ShadowQualityOutcome.OPERATIONAL_FAILED
     else:
-        failure_class = ShadowFailureClass.WORKER_PROCESS_FAILURE
-        failure_stage = ShadowFailureStage.EXECUTION
-        quality_outcome = ShadowQualityOutcome.OPERATIONAL_FAILED
+        from personal_ai_orchestrator.worker_outcome_classifier import (
+            WorkerFailureClass as _WFC,
+            classify_worker_failure,
+        )
+        verdict = classify_worker_failure(
+            exit_code=1,
+            stderr_tail=worker.stderr_tail,
+        )
+        if verdict is _WFC.QUOTA_OR_RATE_LIMIT:
+            failure_class = ShadowFailureClass.POLICY_BLOCK
+            failure_stage = ShadowFailureStage.INVOCATION
+            quality_outcome = ShadowQualityOutcome.POLICY_BLOCKED
+        elif verdict is _WFC.AUTH:
+            failure_class = ShadowFailureClass.AUTH_FAILURE
+            failure_stage = ShadowFailureStage.AUTH
+            quality_outcome = ShadowQualityOutcome.OPERATIONAL_FAILED
+        elif any(
+            marker in worker.stderr_tail.lower()
+            for marker in ("not found", "not available", "no such file")
+        ):
+            failure_class = ShadowFailureClass.WORKER_INVOCATION_FAILURE
+            failure_stage = ShadowFailureStage.INVOCATION
+            quality_outcome = ShadowQualityOutcome.OPERATIONAL_FAILED
     return FailureClassification(
         execution_success=False,
         verification_success=False,

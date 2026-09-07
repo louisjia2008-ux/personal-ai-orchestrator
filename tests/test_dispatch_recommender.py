@@ -716,3 +716,113 @@ def test_recommender_scheduler_paths_agree_effective_pace_contract() -> None:
     # Sanity: the headroom mean and min are two distinct numbers.
     assert top.headroom_mean_fraction is not None
     assert abs(top.headroom_mean_fraction - 0.75) < 1e-9
+
+
+# -----------------------------------------------------------------------------
+# M1 WP4 §4.4 — unmetered pool scoring and admission
+# -----------------------------------------------------------------------------
+
+
+def test_t3_task_picks_unmetered_target_when_it_is_top_candidate() -> None:
+    """A T3 task under BALANCED can have an unmetered target as top pick.
+
+    The unmetered target's ``tier`` is T3 (default glob); when the
+    task's ``min_tier=T3`` is at-or-above the target tier, the
+    capability fit is gentle (1.0 - 0.1 * 0 = 1.0), the headroom is
+    1.0 (UNMETERED window has used_fraction=None which the
+    recommender maps to headroom_min=1.0 via the unmetered
+    convention), and the score is the highest. The unmetered path
+    does not bump the target into COOLDOWN unless the worker
+    classifier fires (handled by ``observe_rate_limited``).
+    """
+
+    unmetered = _candidate(
+        "opencode-big-pickle",
+        remaining=(1.0, 1.0),
+        tier=ModelTier.T3,
+        tier_match_reason="exact",
+    )
+    zai = _candidate(
+        "zai-coding-plan-glm-5.3",
+        remaining=(0.5, 0.5),
+        tier=ModelTier.T1,
+        tier_match_reason="glob",
+    )
+    result = recommend_owner_dispatch(
+        [unmetered, zai],
+        policy=RoutingObjective.BALANCED,
+        now=FIXED_NOW,
+        min_tier=ModelTier.T3,
+    )
+    assert result.top_pick is not None
+    assert result.top_pick.execution_target_id == "opencode-big-pickle"
+
+
+def test_cooldown_unmetered_target_is_eliminated_with_recovers_at_reason() -> None:
+    """An unmetered target in COOLDOWN is rejected; the reason carries ``recovers_at``.
+
+    The unmetered path's cooldown is short (15 minutes default) and
+    expires back to ``AVAILABLE_UNMETERED`` directly via
+    ``previous_state_baseline`` (commit 2). The dispatch panel
+    surfaces ``recovers_at`` so the owner can see when the target
+    re-opens.
+    """
+
+    target = _candidate(
+        "opencode-big-pickle",
+        remaining=(0.0, 0.0),
+        tier=ModelTier.T3,
+        tier_match_reason="exact",
+        state=QuotaAvailabilityState.COOLDOWN,
+    )
+    result = recommend_owner_dispatch(
+        [target],
+        policy=RoutingObjective.BALANCED,
+        now=FIXED_NOW,
+        min_tier=ModelTier.T3,
+    )
+    assert result.top_pick is None
+    blocked = result.evaluations[0]
+    assert blocked.admitted is False
+    assert any("cooldown" in reason.lower() for reason in blocked.reasons)
+
+
+def test_five_hour_smoothing_does_not_apply_to_unmetered_targets() -> None:
+    """The 5-hour rolling smoothing gate requires a FIVE_HOUR window.
+
+    An unmetered target has no FIVE_HOUR window — the gate must
+    short-circuit to "no verdict" rather than eliminate the target
+    on the (impossible) basis of a non-existent FIVE_HOUR window.
+    """
+
+    from personal_ai_orchestrator.dispatch_recommender import CandidateWindowInput
+    from personal_ai_orchestrator.model_registry import QuotaWindowKind
+
+    # A target whose only window is UNMETERED — no FIVE_HOUR window
+    # exists for the rolling cap to read from.
+    unmetered = _candidate(
+        "opencode-big-pickle",
+        remaining=(1.0, 1.0),
+        tier=ModelTier.T0,
+        tier_match_reason="exact",
+        windows=(
+            CandidateWindowInput(
+                kind=QuotaWindowKind.UNMETERED,
+                window_started_at=None,
+                reset_at=None,
+                used_fraction=None,
+            ),
+        ),
+    )
+    result = recommend_owner_dispatch(
+        [unmetered],
+        policy=RoutingObjective.BALANCED,
+        now=FIXED_NOW,
+        min_tier=ModelTier.T3,
+    )
+    assert result.top_pick is not None
+    assert result.top_pick.admitted is True
+    # No rolling-window reason should appear in the list.
+    assert not any(
+        "rolling" in reason.lower() for reason in result.top_pick.reasons
+    )

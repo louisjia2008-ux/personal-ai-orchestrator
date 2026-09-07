@@ -463,6 +463,23 @@ class OwnerDispatchExecutor:
             real_invocation_succeeded = (
                 exit_code == 0 and next_state is TaskState.WORKER_FINISHED
             )
+            # M1 WP4: classify the worker outcome and write the
+            # ``QUOTA_BLOCKED`` evidence + ``observe_*`` journal
+            # row when the classifier flags a rate-limit / quota
+            # hit. The classification runs **before** the dispatch
+            # writes its own evidence so the journal row points
+            # at the same instant as the worker exit. ``A2`` is
+            # explicitly off-limits: the helper never bumps
+            # ``consecutive_failures`` (the journal write below
+            # uses ``observe_exhaustion`` for windowed targets
+            # and ``observe_rate_limited`` for unmetered ones).
+            self._classify_and_record_worker_outcome(
+                store,
+                dispatch=dispatch,
+                execution_target_id=dispatch.execution_target_id,
+                exit_code=exit_code,
+                worker_result=result,
+            )
         except asyncio.CancelledError:
             # Loop shutdown/cancellation must never strand a live child,
             # a RUNNING task or the writer lock. Repair synchronously
@@ -941,6 +958,119 @@ class OwnerDispatchExecutor:
         if target.exists():
             return
         target.write_bytes(seed.read_bytes())
+
+    # -- M1 WP4: worker-outcome classification + journal write ------
+    def _classify_and_record_worker_outcome(
+        self,
+        store: SafetyKernelStore,
+        *,
+        dispatch: OwnerDispatchRecord,
+        execution_target_id: str,
+        exit_code: int,
+        worker_result: dict[str, object],
+    ) -> None:
+        """Inspect the worker's stderr and persist a quota-or-rate-limit cooldown.
+
+        M1 WP4 closes the gap where ``owner-dispatch`` had no
+        worker-side quota signal: every dispatch exited either
+        ``VERIFIED`` (zero exit) or ``UNKNOWN`` (any non-zero exit),
+        with no classifier to tell apart a rate-limit cooldown from
+        an unrelated failure. The classifier replaces the legacy
+        shadow text-match (which used the bare ``"quota"`` token
+        and matched this project's own source code) with the
+        conservative marker list in ``worker_outcome_classifier``.
+
+        Windowed targets: ``observe_exhaustion`` flips the journal
+        to COOLDOWN with a 1-hour window (the existing windowed
+        behaviour). The execution-evidence journal also records a
+        ``QUOTA_BLOCKED`` row so ``latest_verified_for_target``
+        falls back to the most recent VERIFIED row (the
+        post-WP3 §3.4 contract).
+        Unmetered targets: ``observe_rate_limited`` with the
+        15-minute default; the cooldown expires back to
+        ``AVAILABLE_UNMETERED`` directly (the unmetered baseline
+        tells ``state_at`` to skip the probe round-trip).
+        """
+
+        from personal_ai_orchestrator.provider_discovery import (
+            PROVIDER_FAMILIES as _PF,
+        )
+        from personal_ai_orchestrator.quota_availability import (
+            observe_exhaustion as _observe_exhaustion,
+            observe_rate_limited as _observe_rate_limited,
+        )
+        from personal_ai_orchestrator.worker_outcome_classifier import (
+            WorkerFailureClass as _WFC,
+            classify_worker_failure as _classify,
+        )
+        from personal_ai_orchestrator.execution_evidence import (
+            ExecutionVerificationOutcome as _EVO,
+            build_execution_evidence as _build_evidence,
+        )
+
+        stderr_tail = (
+            worker_result.get("stderr_tail")
+            if isinstance(worker_result.get("stderr_tail"), str)
+            else ""
+        )
+        verdict = _classify(exit_code=exit_code, stderr_tail=stderr_tail)
+        if verdict is _WFC.NONE:
+            return
+        if verdict is not _WFC.QUOTA_OR_RATE_LIMIT:
+            # Auth / unclassified failures do not advance the
+            # quota journal. A future commit will add an
+            # auth-evidence row; for now we keep the contract
+            # tight so a regression cannot silently disable it.
+            return
+
+        provider_id = self._provider_id(dispatch)
+        quota_pool_id = provider_id
+        previous = self._quota_availability_journal.load(execution_target_id)
+        family = next(
+            (spec for spec in _PF if spec.provider_id == provider_id),
+            None,
+        )
+        is_unmetered = bool(family and family.pool_kind == "unmetered")
+        observed_at = datetime.now(UTC)
+        try:
+            if is_unmetered:
+                self._quota_availability_journal.save(
+                    _observe_rate_limited(
+                        previous,
+                        execution_target_id=execution_target_id,
+                        provider_id=provider_id,
+                        quota_pool_id=quota_pool_id,
+                        observed_at=observed_at,
+                    )
+                )
+                reason_code = "WORKER_RATE_LIMIT"
+            else:
+                self._quota_availability_journal.save(
+                    _observe_exhaustion(
+                        previous,
+                        execution_target_id=execution_target_id,
+                        provider_id=provider_id,
+                        quota_pool_id=quota_pool_id,
+                        observed_at=observed_at,
+                        sanitized_reason_code="USAGE_LIMIT",
+                    )
+                )
+                reason_code = "WORKER_QUOTA_BLOCKED"
+        except Exception:
+            return
+
+        try:
+            evidence = _build_evidence(
+                provider_id=provider_id,
+                execution_target_id=execution_target_id,
+                model_sku_id=self._model_sku_id(dispatch),
+                observed_at=observed_at,
+                result=_EVO.QUOTA_BLOCKED,
+                reason_code=reason_code,
+            )
+            self._execution_evidence_journal.append(evidence)
+        except Exception:
+            pass
 
     def _admit_quota(
         self, store: SafetyKernelStore, dispatch: OwnerDispatchRecord
