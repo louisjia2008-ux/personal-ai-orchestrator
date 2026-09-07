@@ -130,6 +130,7 @@ class ProviderRegistryManager:
         *,
         runtime_state_root: Path,
         opencode_path: Path | None = None,
+        audit: Any | None = None,
     ) -> None:
         self._runtime_state_root = runtime_state_root
         self._opencode_path = opencode_path
@@ -137,6 +138,12 @@ class ProviderRegistryManager:
         self._refresh_in_flight = False
         self._discovery_cycle_count = 0
         self._connections = load_connections(runtime_state_root)
+        # M1 WP4: optional audit sink for the free-model classification
+        # events. ``None`` means the manager is silent — tests pass
+        # ``None`` explicitly when they want the raw
+        # :class:`ProviderDiscovery` rows without the audit
+        # side-effect.
+        self._audit = audit
         # Injected by the runtime once the execution-evidence journal exists. Kept
         # optional so discovery still works before any real execution has happened.
         self._verified_execution_lookup: Callable[[str], datetime | None] | None = None
@@ -408,7 +415,10 @@ class ProviderRegistryManager:
             self._discovery_cycle_count += 1
 
         try:
-            outcome: DiscoveryCycleOutcome = discover(opencode_path=self._opencode_path)
+            outcome: DiscoveryCycleOutcome = discover(
+                opencode_path=self._opencode_path,
+                audit=self._audit,
+            )
             with self._lock:
                 if outcome.result is not None and outcome.error_code is None:
                     registry = build_registry(outcome.result)

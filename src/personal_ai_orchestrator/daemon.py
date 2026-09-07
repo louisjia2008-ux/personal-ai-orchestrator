@@ -372,6 +372,13 @@ def main(
     # manager, fall back to building one here; the manager constructor
     # rehydrates from disk and does NOT run an implicit refresh.
     if provider_registry_manager is None:
+        # ``service.store`` is not built yet at this point. The audit
+        # sink is wired in after ``build_service`` returns — for now
+        # we let the manager run with ``audit=None``; the very first
+        # discovery cycle will not write M1 WP4 events. The
+        # supervisor step takes over for subsequent refreshes and
+        # the explicit ``discover`` call from the daemon boots the
+        # audit path. Tests inject an audit store directly.
         provider_registry_manager = ProviderRegistryManager(
             runtime_state_root=args.runtime_state_root,
         )
@@ -381,6 +388,12 @@ def main(
         runtime_state_root=args.runtime_state_root,
         provider_registry_manager=provider_registry_manager,
     )
+    # M1 WP4: wire the audit sink into the manager now that the
+    # SafetyKernelStore exists. Subsequent discovery cycles write
+    # ``FREE_MODEL_SUFFIX_UNLISTED`` / ``OPENCODE_MODEL_UNCLASSIFIED``
+    # events through ``service.store.record_system_event``.
+    if provider_registry_manager._audit is None:
+        provider_registry_manager._audit = service.store
     control_server: ControlPlaneServer | None = None
     control_service: ControlPlaneService | None = None
     # WP0: heartbeat cadence — wired through both --control-only and the

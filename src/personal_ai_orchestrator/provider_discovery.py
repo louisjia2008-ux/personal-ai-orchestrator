@@ -60,6 +60,32 @@ from personal_ai_orchestrator.provider_acceptance import (
     assert_sanitized,
 )
 
+
+def _emit_free_model_event(
+    *,
+    audit: Any | None,
+    event_type: str,
+    sku: str,
+    family_id: str,
+) -> None:
+    """Record a single M1 WP4 free-model-classification event.
+
+    The caller is responsible for the per-SKU dedup; this helper only
+    writes the audit row. ``audit is None`` is the test path — events
+    that would otherwise flood the log are simply dropped.
+    """
+
+    if audit is None:
+        return
+    payload = {"sku": sku, "provider_id": family_id}
+    try:
+        audit.record_system_event(event_type, payload)
+    except Exception:  # pragma: no cover — defensive
+        # The audit store must never break discovery. A bad payload
+        # or a torn connection lands in stderr rather than
+        # suppressing every free target.
+        return
+
 ## # ---------------------------------------------------------------------
 # Constants
 # -----------------------------------------------------------------------------
@@ -239,6 +265,34 @@ class ProviderFamilySpec:
         Optional credential-label tokens that distinguish a plan surface
         within a region. Region evidence alone must not authenticate both
         regular and coding-plan MiniMax surfaces.
+    auth:
+        M1 WP4: how the family authenticates. ``"env"`` means an API
+        credential is required (the pre-WP4 default). ``"none"``
+        means the family needs no host credential — OpenCode Zen
+        forwards free-model traffic through its own proxy. M3
+        will add ``"oauth"`` for browser-flow sign-in. Discovery
+        uses this to short-circuit the credential-scope checks
+        rather than emitting a misleading ``AUTH_REQUIRED``.
+    pool_kind:
+        M1 WP4: ``"windowed"`` (the pre-WP4 default — the family
+        reports quota windows the collector can read) or
+        ``"unmetered"`` (no quota windows — only locally observed
+        rate limits). Unmetered families produce one UNMETERED
+        window and use :class:`QuotaAvailabilityState.AVAILABLE_UNMETERED`.
+    free_model_skus:
+        M1 WP4: the explicit list of SKUs the family considers
+        unmetered. ``opencode models`` emits no cost / free
+        metadata, so the only authoritative signal is the
+        catalogue itself. The list takes precedence over the
+        ``"-free"`` suffix heuristic during discovery: a SKU in
+        this list with no suffix (``big-pickle``) is unmetered; a
+        SKU with the suffix but **not** in this list is logged
+        once per daemon lifetime as
+        ``FREE_MODEL_SUFFIX_UNLISTED{sku}`` and **excluded** from
+        the registry so the owner decides whether to update the
+        list. Any other SKU in the family is logged once as
+        ``OPENCODE_MODEL_UNCLASSIFIED{sku}`` (M3 will hook paid
+        models to ``paid_usage``).
     """
 
     provider_id: str
@@ -247,6 +301,9 @@ class ProviderFamilySpec:
     provider_label_keywords: tuple[str, ...]
     alternative_endpoints: tuple[str, ...] = ()
     plan_surface_keywords: tuple[str, ...] = ()
+    auth: str = "env"
+    pool_kind: str = "windowed"
+    free_model_skus: tuple[str, ...] = ()
 
 
 PROVIDER_FAMILIES: tuple[ProviderFamilySpec, ...] = (
@@ -291,6 +348,35 @@ PROVIDER_FAMILIES: tuple[ProviderFamilySpec, ...] = (
         provider_label_keywords=("minimax.io", "MiniMax International"),
         alternative_endpoints=("api.minimax.io",),
         plan_surface_keywords=("Coding Plan",),
+    ),
+    # M1 WP4: deliberate act #6 — the OpenCode Zen free-model family.
+    # OpenCode's local CLI proxies calls to ``opencode.ai`` so the
+    # host needs **no** credential of its own; the discovery module
+    # must therefore skip the credential-scope gate (``AUTH_REQUIRED``
+    # would otherwise suppress every free-model row). Execution
+    # verification still gates dispatch (per spec §17, the worker's
+    # real-worker invocation has to succeed before a target is
+    # marked ``execution_verified=True``). Free SKUs live in
+    # ``free_model_skus``; the suffix heuristic is a cross-check.
+    ProviderFamilySpec(
+        provider_id="opencode",
+        display_name="OpenCode Free",
+        env_variables=(),
+        # OpenCode's ``providers list`` does not name an "OpenCode"
+        # credential — the public proxy uses its own auth — so the
+        # keyword list intentionally stays empty.
+        provider_label_keywords=(),
+        auth="none",
+        pool_kind="unmetered",
+        free_model_skus=(
+            "big-pickle",
+            "ling-3.0-flash-fin-free",
+            "mimo-v2.5-free",
+            "muse-spark-1.2-contributor-free",
+            "muse-spark-1.3-contributor-free",
+            "nemotron-3-ultra-free",
+            "nemotron-3.5-lightning-free",
+        ),
     ),
 )
 
@@ -353,6 +439,18 @@ class ProviderDiscovery:
     credential_plan_surface_verified: bool = False
     credential_scope_verified: bool = False
     execution_verified: bool = False
+    provider_label_keywords: tuple[str, ...] = ()
+    #: M1 WP4: how this family authenticates (``"env"`` | ``"oauth"`` |
+    #: ``"none"``). Mirrors the source :class:`ProviderFamilySpec.auth`
+    # so the control-plane view can render a "no credential needed"
+    # affordance without round-tripping through the spec table.
+    auth_kind: str = "env"
+    #: M1 WP4: ``"windowed"`` (collector reads quota windows) or
+    #: ``"unmetered"`` (no quota windows — only locally observed
+    #: rate limits). The dispatch recommender reads this through
+    #: ``registry`` metadata so unmetered targets skip the 5h
+    #: smoothing gate (no FIVE_HOUR window to read from).
+    pool_kind: str = "windowed"
 
     def to_provider_surface_evidence(
         self,
@@ -1041,6 +1139,7 @@ def discover(
     opencode_path: Path | None = None,
     timeout_seconds: float = DISCOVERY_SUBPROCESS_TIMEOUT_SECONDS,
     clock: Callable[[], datetime] | None = None,
+    audit: Any | None = None,
 ) -> DiscoveryCycleOutcome:
     """Run a single credential-safe discovery cycle.
 
@@ -1057,6 +1156,13 @@ def discover(
         Wall-clock cap for each subprocess invocation.
     clock:
         Override for tests. Defaults to ``datetime.now(tz=UTC)``.
+    audit:
+        Optional ``SafetyKernelStore`` for the M1 WP4
+        ``FREE_MODEL_SUFFIX_UNLISTED`` /
+        ``OPENCODE_MODEL_UNCLASSIFIED`` system events. ``None``
+        means discovery is silent (used by tests that assert the
+        raw ``ProviderDiscovery`` rows without wanting the audit
+        side-effect).
 
     Returns
     -------
@@ -1124,8 +1230,52 @@ def discover(
         catalog_by_provider.update(parsed)
 
     discovered: list[ProviderDiscovery] = []
+    # M1 WP4: per-sku event dedup so a discovery refresh does not flood
+    # the audit log when the owner has not updated the SKU list. The
+    # two events are independent: a SKU can be a suffix-unlisted hit
+    # AND an unclassified hit depending on whether ``free_model_skus``
+    # is empty.
+    suffix_unlisted_emitted: set[str] = set()
+    unclassified_emitted: set[str] = set()
     for family in families:
-        model_skus = catalog_by_provider.get(family.provider_id, ())
+        raw_skus = catalog_by_provider.get(family.provider_id, ())
+        # M1 WP4: when a family declares ``free_model_skus``, discovery
+        # splits its raw SKUs into three buckets:
+        # - ``listed_skus``: in ``free_model_skus`` (regardless of suffix).
+        # - ``suffix_unlisted``: has ``-free`` suffix but not in the list.
+        # - ``unclassified``: anything else in this family.
+        # Only ``listed_skus`` enter the registry. The other two
+        # bucket members are dropped, but each unique SKU is logged
+        # exactly once per daemon lifetime so the owner can decide
+        # whether to update the list (M3 will route unclassified SKUs
+        # to ``paid_usage``).
+        if family.free_model_skus:
+            listed_skus: list[str] = []
+            for sku in raw_skus:
+                if sku in family.free_model_skus:
+                    listed_skus.append(sku)
+                    continue
+                if sku.endswith("-free"):
+                    if sku not in suffix_unlisted_emitted:
+                        suffix_unlisted_emitted.add(sku)
+                        _emit_free_model_event(
+                            audit=audit,
+                            event_type="FREE_MODEL_SUFFIX_UNLISTED",
+                            sku=sku,
+                            family_id=family.provider_id,
+                        )
+                    continue
+                if sku not in unclassified_emitted:
+                    unclassified_emitted.add(sku)
+                    _emit_free_model_event(
+                        audit=audit,
+                        event_type="OPENCODE_MODEL_UNCLASSIFIED",
+                        sku=sku,
+                        family_id=family.provider_id,
+                    )
+            model_skus = tuple(listed_skus)
+        else:
+            model_skus = raw_skus
         catalog_discovered = bool(model_skus)
         env_present = tuple(
             name for name in family.env_variables
@@ -1148,7 +1298,13 @@ def discover(
         credential_evidence_present = bool(
             env_present or credential_region_verified or in_env_section
         )
-        if catalog_discovered and credential_scope_verified:
+        # M1 WP4: ``auth="none"`` families need no credential of their
+        # own; ``AUTH_REQUIRED`` would otherwise suppress every free
+        # target on the dashboard. The credential-scope gates are
+        # irrelevant for these surfaces and the spec is authoritative.
+        if family.auth == "none":
+            auth_status = AuthStatus.AUTH_FROM_ENV_PRESENCE if catalog_discovered else AuthStatus.AUTH_REQUIRED
+        elif catalog_discovered and credential_scope_verified:
             auth_status = AuthStatus.AUTH_FROM_ENV_PRESENCE
         elif credential_evidence_present:
             auth_status = AuthStatus.AUTH_UNKNOWN
@@ -1169,6 +1325,7 @@ def discover(
             record = ProviderDiscovery(
                 provider_id=family.provider_id,
                 display_name=family.display_name,
+                provider_label_keywords=family.provider_label_keywords,
                 auth_status=auth_status,
                 execution_status=execution_status,
                 evidence_source=evidence_source,
@@ -1183,6 +1340,8 @@ def discover(
                 credential_scope_verified=credential_scope_verified,
                 execution_verified=False,
                 observed_at=observed_at,
+                auth_kind=family.auth,
+                pool_kind=family.pool_kind,
             )
             assert_sanitized(record.__dict__)
         except Exception as exc:  # pragma: no cover — defensive

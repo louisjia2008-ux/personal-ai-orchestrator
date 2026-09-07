@@ -276,10 +276,14 @@ def merge_tier_tables(default: TierTable, override: TierTable) -> TierTable:
 
 
 #: The default tier table the host-owned ``model-tiers.json`` is seeded
-#: from. Patterns use the ``execution_target_id`` format (single dash);
-#: ``opencode-*-free`` is a pre-installed glob for the WP4 free-tier
-#: targets that do not exist yet — keeping it speculatively ensures
-#: the first WP4 target is matched without a daemon restart.
+#: from. Patterns use the ``execution_target_id`` format (single dash).
+#: M1 WP4: ``opencode-*-free`` covers every free OpenCode Zen SKU with
+#: the ``-free`` suffix. ``opencode-big-pickle`` is the one explicit
+#: override — the SKU has no suffix but is in
+#: ``provider_discovery.PROVIDER_FAMILIES``'s ``free_model_skus`` list
+#: (deliberate act #6). ``parse_tier_table`` resolves the longest
+#    matching pattern first, so an existing owner-installed pattern
+#    that overrides the new entry wins without code change.
 DEFAULT_TIER_TABLE_JSON: dict[str, object] = {
     "version": 1,
     "tiers": {
@@ -288,6 +292,7 @@ DEFAULT_TIER_TABLE_JSON: dict[str, object] = {
         "minimax-coding-plan-*": {"tier": "T1", "caps": ["coding"]},
         "minimax-*": {"tier": "T1", "caps": []},
         "opencode-*-free": {"tier": "T3", "caps": []},
+        "opencode-big-pickle": {"tier": "T3", "caps": []},
     },
 }
 
