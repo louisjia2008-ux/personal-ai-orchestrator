@@ -33,6 +33,7 @@ from personal_ai_orchestrator.policy_snapshot import PolicySnapshotJournal
 from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryManager
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
 from personal_ai_orchestrator.quota_collectors.minimax import MiniMaxQuotaCollector
+from personal_ai_orchestrator.quota_collectors.unmetered import UnmeteredQuotaCollector
 from personal_ai_orchestrator.quota_collectors.zai import ZAIQuotaCollector
 from personal_ai_orchestrator.quota_refresh import QuotaRefreshService
 from personal_ai_orchestrator.routing_service import RoutingService
@@ -220,6 +221,11 @@ def default_quota_collectors() -> dict[str, object]:
     Tokens come ONLY from the operator environment. auth.json is never
     read; when a token is absent the collector reports AUTH_REQUIRED and
     quota admission fails closed or records UNKNOWN truthfully.
+
+    M1 WP4: the ``opencode`` family is unmetered — OpenCode Zen proxies
+    free-model traffic through ``opencode.ai`` and the host needs no
+    credential of its own. ``UnmeteredQuotaCollector`` is always
+    registered; it never opens a network socket.
     """
 
     collectors: dict[str, object] = {}
@@ -232,6 +238,26 @@ def default_quota_collectors() -> dict[str, object]:
         collectors["minimax-cn-coding-plan"] = MiniMaxQuotaCollector(
             bearer_token=minimax_token
         )
+    # M1 WP4: the opencode free-model family. The collector is keyed
+    # by ``provider_id``; the dispatch executor / scheduler look up
+    # the collector via ``provider_id``, not ``pool_id``. The
+    # ``covered_model_ids`` list is empty by default — discovery
+    # populates it from the ``provider_id-{sku}`` execution-target
+    # rows so each free SKU gets its own binding. Tests inject a
+    # tighter list.
+    collectors["opencode"] = UnmeteredQuotaCollector(
+        provider_id="opencode",
+        pool_id="opencode",
+        covered_model_ids=(
+            "big-pickle",
+            "ling-3.0-flash-fin-free",
+            "mimo-v2.5-free",
+            "muse-spark-1.2-contributor-free",
+            "muse-spark-1.3-contributor-free",
+            "nemotron-3-ultra-free",
+            "nemotron-3.5-lightning-free",
+        ),
+    )
     return collectors
 
 

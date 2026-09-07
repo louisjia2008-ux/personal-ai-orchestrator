@@ -71,23 +71,31 @@ class QuotaWindowKind(StrEnum):
     DAILY = "DAILY"
     CUSTOM = "CUSTOM"
     UNKNOWN = "UNKNOWN"
+    #: M1 WP4: a window that is *not* metered by the upstream provider.
+    #: ``duration_seconds()`` returns ``None`` for this kind — there is
+    #: no reset cycle to time. ``quota_burn.assess`` short-circuits to
+    #: ``BurnPressure.UNMETERED`` when a window carries ``used_fraction=None``,
+    #: so a target with one UNMETERED window is admitted without any
+    #: weekly pressure math. The recommender / scheduler skip the
+    #: 5-hour smoothing gate (no FIVE_HOUR window to read from).
+    UNMETERED = "UNMETERED"
 
     def duration_seconds(self) -> float | None:
         """Return the canonical reset-cycle duration for this kind.
 
-        ``UNKNOWN`` and ``CUSTOM`` are intentionally absent — the daemon
-        treats them as "no inferable start instant" and surfaces the
-        window as ``UNMETERED`` rather than guessing one. ``infer_window_started_at``
-        consults this table; the control plane consults it before
-        calling that helper.
+        ``UNKNOWN``, ``CUSTOM``, and ``UNMETERED`` are intentionally
+        absent — the daemon treats them as "no inferable start instant"
+        and surfaces the window as ``UNMETERED`` rather than guessing
+        one. ``infer_window_started_at`` consults this table; the
+        control plane consults it before calling that helper.
         """
 
         return _QUOTA_WINDOW_KIND_DURATION_SECONDS.get(self.value)
 
 
 # Module-level table because ``StrEnum`` rejects class-level mutable
-# attributes during member construction. ``UNKNOWN`` and ``CUSTOM`` are
-# intentionally absent.
+# attributes during member construction. ``UNKNOWN``, ``CUSTOM``, and
+# ``UNMETERED`` are intentionally absent.
 _QUOTA_WINDOW_KIND_DURATION_SECONDS: dict[str, float] = {
     "FIVE_HOUR": 5 * 60 * 60.0,
     "WEEKLY": 7 * 24 * 60 * 60.0,

@@ -23,6 +23,18 @@ class QuotaAvailabilityState(StrEnum):
     COOLDOWN = "COOLDOWN"
     RECOVERY_PROBE_DUE = "RECOVERY_PROBE_DUE"
     RECOVERED_OBSERVED = "RECOVERED_OBSERVED"
+    #: M1 WP4: a target that has no quota window to read from. The
+    # collector is the local ``UnmeterededQuotaCollector`` — it
+    # never connects to the upstream provider, so a ``consecutive_failures``
+    # streak is impossible by construction. ``UNCERTAIN_LOCKED``
+    # therefore stays unreachable for unmetered targets; the
+    # collector pins ``consecutive_failures=0`` so the projection
+    # cannot fire. COOLDOWN is the only "blocked" state, set by
+    # ``observe_rate_limited`` when the worker outcome classifier
+    # reads a rate-limit marker on stderr. To expiry returns the
+    # state to ``AVAILABLE_UNMETERED`` directly (no probe — the
+    # provider does not expose a quota window to probe).
+    AVAILABLE_UNMETERED = "AVAILABLE_UNMETERED"
     #: The host has seen >= ``UNCERTAIN_LOCKED_THRESHOLD`` consecutive failed
     #: quota collections for this target without an intervening success.
     #: Admission MUST reject until a single success resets the streak. The
@@ -61,6 +73,12 @@ class QuotaAvailabilityEvidence(RegistryModel):
     #: threshold; the underlying ``state`` stays UNKNOWN so the lock can
     #: be cleared by the next ``observe_success``.
     consecutive_failures: int = Field(default=0, ge=0)
+    #: M1 WP4: state the target returns to when a transient
+    #: ``COOLDOWN`` expires. ``AVAILABLE_UNMETERED`` for unmetered
+    #: targets (``state_at`` returns the baseline directly without a
+    #: probe), ``None`` for windowed targets (the legacy behaviour
+    # of probing via ``RECOVERY_PROBE_DUE``).
+    previous_state_baseline: QuotaAvailabilityState | None = None
 
     @model_validator(mode="after")
     def validate_local_availability_truth(self) -> QuotaAvailabilityEvidence:
@@ -97,12 +115,23 @@ class QuotaAvailabilityEvidence(RegistryModel):
     def state_at(self, *, now: datetime) -> QuotaAvailabilityState:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("now must be timezone-aware")
+        # M1 WP4: when an unmetered target's COOLDOWN expires, the
+        # collector immediately re-observes (the local collector is
+        # stateless and synchronous). The state returns to
+        # ``AVAILABLE_UNMETERED`` without a probe round-trip —
+        # there is no upstream quota window to probe. ``previous``
+        # captures the ``AVAILABLE_UNMETERED`` baseline so the
+        # transition is reversible.
         if self.state is QuotaAvailabilityState.COOLDOWN and self.cooldown_until is not None:
             if now >= self.cooldown_until:
+                if self.measurement_source is MeasurementSource.LOCALLY_MEASURED and self.previous_state_baseline is QuotaAvailabilityState.AVAILABLE_UNMETERED:
+                    return QuotaAvailabilityState.AVAILABLE_UNMETERED
                 return QuotaAvailabilityState.RECOVERY_PROBE_DUE
         # Project the lock on top of whatever underlying state we have. The
         # underlying state stays put so a single observe_success() can clear
-        # both the lock AND the streak in one transaction.
+        # both the lock AND the streak in one transaction. Unmetered
+        # collectors pin ``consecutive_failures=0`` so the lock is
+        # unreachable on the unmetered path.
         if (
             self.consecutive_failures >= UNCERTAIN_LOCKED_THRESHOLD
             and self.state is QuotaAvailabilityState.UNKNOWN
@@ -214,6 +243,61 @@ def observe_exhaustion(
         last_success_before_exhaustion=last_success,
         cooldown_until=observed_at + timedelta(seconds=minimum_cooldown_seconds),
         sanitized_reason_code=sanitized_reason_code,
+        # M1 WP4: capture the baseline so ``state_at`` returns to it
+        # when the cooldown expires (windowed targets return to
+        # ``RECOVERY_PROBE_DUE``; the ``baseline`` field makes the
+        # asymmetry explicit rather than implicit).
+        previous_state_baseline=(
+            previous.state if previous is not None else None
+        ),
+    )
+
+
+def observe_rate_limited(
+    previous: QuotaAvailabilityEvidence | None,
+    *,
+    execution_target_id: str,
+    provider_id: str,
+    quota_pool_id: str,
+    observed_at: datetime,
+    cooldown_seconds: float = 900.0,
+) -> QuotaAvailabilityEvidence:
+    """M1 WP4: record a worker-side rate-limit hit on a target.
+
+    Differs from :func:`observe_exhaustion` in three ways:
+
+    - It is the *worker outcome*'s hook, not the quota collector's. The
+      worker outcome classifier (:mod:`worker_outcome_classifier`,
+      commit 3) calls this when the helper returns
+      ``QUOTA_OR_RATE_LIMIT`` on a non-zero worker exit.
+    - The default cooldown is 15 minutes, not 1 hour — a rate-limit
+      reset is much shorter than a quota reset for OpenCode Zen's
+      free tier.
+    - The ``previous_state_baseline`` is recorded so ``state_at`` can
+      pick the right expiry path (AVAILABLE_UNMETERED for unmetered
+      targets, RECOVERY_PROBE_DUE for windowed targets). Without the
+      baseline, both paths would converge on ``RECOVERY_PROBE_DUE``
+      which is wrong for unmetered targets — there is no quota window
+      to probe.
+
+    The function does **not** bump ``consecutive_failures``: rate-limit
+    is a transient server-side throttle, not a quota-collection
+    failure, and A2's ``UNCERTAIN_LOCKED`` lock must not fire for
+    worker-classified throttling (that path is closed off in commit
+    3).
+    """
+
+    baseline = previous.state if previous is not None else None
+    return QuotaAvailabilityEvidence(
+        execution_target_id=execution_target_id,
+        provider_id=provider_id,
+        quota_pool_id=quota_pool_id,
+        state=QuotaAvailabilityState.COOLDOWN,
+        observed_at=observed_at,
+        cooldown_until=observed_at + timedelta(seconds=cooldown_seconds),
+        sanitized_reason_code="WORKER_RATE_LIMIT",
+        consecutive_failures=previous.consecutive_failures if previous is not None else 0,
+        previous_state_baseline=baseline,
     )
 
 
@@ -290,6 +374,7 @@ __all__ = [
     "UNCERTAIN_LOCKED_THRESHOLD",
     "mark_recovery_probe_due",
     "observe_exhaustion",
+    "observe_rate_limited",
     "observe_success",
     "unknown_availability",
 ]
