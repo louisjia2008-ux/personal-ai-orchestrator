@@ -417,4 +417,25 @@ final class QuotaObservabilityTests: XCTestCase {
         XCTAssertEqual(card.poolKind, "windowed")
         XCTAssertNil(card.unmetered)
     }
+
+    func testUnmeteredObservationViewErrorRateOneHourDecodesNull() throws {
+        // V3: ``error_rate_1h`` is ``Double?`` on Swift — the
+        // daemon emits ``null`` when no evidence rows exist in the
+        // window. The Swift decoder must accept the null sentinel
+        // and surface ``nil`` so the Resources page renders the
+        // "no data" hint instead of a fabricated 0% error rate.
+        let body = """
+        {
+          "rpm_observed": 0,
+          "error_rate_1h": null,
+          "cooldown_until": null
+        }
+        """
+        let view = try JSONDecoder().decode(
+            UnmeteredObservationView.self, from: Data(body.utf8)
+        )
+        XCTAssertNil(view.errorRate1h)
+        XCTAssertEqual(view.rpmObserved, 0)
+        XCTAssertNil(view.cooldownUntil)
+    }
 }
