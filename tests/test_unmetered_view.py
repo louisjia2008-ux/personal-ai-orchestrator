@@ -97,3 +97,29 @@ def test_unmetered_observation_view_round_trips_through_json() -> None:
     assert parsed["cooldown_until"] == "2026-09-07T12:15:00+00:00"
     decoded = UnmeteredObservationView.model_validate_json(rendered)
     assert decoded == observation
+
+
+def test_unmetered_observation_view_error_rate_none_means_no_data() -> None:
+    """V3: ``error_rate_1h=None`` is the "no data" sentinel.
+
+    A provider with no execution-evidence rows in the last hour
+    must NOT default ``error_rate_1h`` to ``0.0`` — that value
+    would be ambiguous (it means "ran and all-verified"). The
+    daemon must emit ``null`` so the Swift card can render the
+    "no data" hint instead of a fabricated 0% error rate.
+    """
+
+    # Construct via model_dump — same path the daemon takes.
+    observation = UnmeteredObservationView(
+        rpm_observed=0,
+        error_rate_1h=None,
+        cooldown_until=None,
+    )
+    rendered = observation.model_dump_json()
+    assert '"error_rate_1h":null' in rendered
+    parsed = json.loads(rendered)
+    assert parsed["error_rate_1h"] is None
+    # Round-trip preserves the None.
+    decoded = UnmeteredObservationView.model_validate_json(rendered)
+    assert decoded.error_rate_1h is None
+    assert decoded.rpm_observed == 0

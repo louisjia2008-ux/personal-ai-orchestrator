@@ -1123,7 +1123,11 @@ public struct QuotaPlanView: Codable, Equatable, Identifiable, Sendable {
 /// never carries a fabricated `remainingFraction`.
 public struct UnmeteredObservationView: Codable, Equatable, Sendable {
     public let rpmObserved: Int
-    public let errorRate1h: Double
+    /// Ratio of non-VERIFIED execution-evidence rows in the last
+    /// hour. ``nil`` when no evidence rows exist in the window
+    /// (``0.0`` is reserved for "ran and all-verified"; ``nil``
+    /// means "no data"). V3 acceptance.
+    public let errorRate1h: Double?
     public let cooldownUntil: String?
 
     enum CodingKeys: String, CodingKey {
@@ -1134,7 +1138,7 @@ public struct UnmeteredObservationView: Codable, Equatable, Sendable {
 
     public init(
         rpmObserved: Int,
-        errorRate1h: Double,
+        errorRate1h: Double? = nil,
         cooldownUntil: String? = nil
     ) {
         self.rpmObserved = rpmObserved

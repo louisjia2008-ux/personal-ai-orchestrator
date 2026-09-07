@@ -633,8 +633,10 @@ class UnmeteredObservationView(_ViewModel):
     #: records for this provider.
     rpm_observed: int
     #: Ratio of non-VERIFIED execution-evidence rows to total rows
-    #: in the last hour. ``None`` when no evidence rows exist.
-    error_rate_1h: float
+    #: in the last hour. ``None`` when no evidence rows exist in
+    #: the window (the value ``0.0`` is reserved for "ran and
+    #: all-verified"; ``None`` means "no data"). V3 acceptance.
+    error_rate_1h: float | None = None
     #: ISO timestamp at which the cooldown (set by the worker
     #: outcome classifier) expires. ``None`` when no target is
     #: currently in COOLDOWN.
@@ -3213,7 +3215,7 @@ class ControlPlaneService:
             except Exception:
                 rpm_observed = 0
 
-        error_rate: float = 0.0
+        error_rate: float | None = None
         if self.execution_evidence_journal is not None:
             cutoff = datetime.now(UTC) - timedelta(seconds=3600)
             total = 0
