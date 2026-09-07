@@ -331,6 +331,8 @@ Known limitation inherited by M1:
 
 ## M1 — 额度压力驱动调度 (WP0 + WP1 + WP2 + WP3 + WP4 DELIVERED 2026-09-07 on `feat/m1-wp0-daemon-tick` + `feat/m1-wp1-burn` + `feat/m1-wp2-tiers` + `feat/m1-wp3-pressure-scoring` + `feat/m1-wp4-unlimited-pool`)
 
+> **开工纪律**:WP5a / WP5b / WP6 / WP7 开工前必须先读对应 spec(`docs/M1_WP5_SPEC.md` / `docs/M1_WP6_SPEC.md` / `docs/M1_WP7_SPEC.md`)。WP 序列由裁决固定,禁止重排;PAID_USAGE 是 M3,不许在 M1 提。
+
 Goal: turn the existing scheduler into one that burns subscription quota
 before it expires, drops simple tasks to free / low-tier models, and adds
 a `SUPERVISED_AUTO` middle ground between manual dispatch and full
