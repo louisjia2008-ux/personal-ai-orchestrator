@@ -58,6 +58,7 @@ from personal_ai_orchestrator.execution_evidence import (
     ExecutionVerificationOutcome,
     build_execution_evidence,
 )
+from personal_ai_orchestrator.worker_outcome_classifier import WorkerFailureClass
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.process_supervisor import ProcessSupervisor, SupervisedProcess
 from personal_ai_orchestrator.quota_availability import (
@@ -990,6 +991,86 @@ class OwnerDispatchExecutor:
         15-minute default; the cooldown expires back to
         ``AVAILABLE_UNMETERED`` directly (the unmetered baseline
         tells ``state_at`` to skip the probe round-trip).
+
+        V4 refactor: the body is split into three helpers
+        (``_classify_worker_failure``,
+        ``_apply_pool_kind_cooldown``,
+        ``_record_quota_blocked_evidence``); this method is now a
+        thin orchestrator.
+        """
+
+        verdict = self._classify_worker_failure(
+            exit_code=exit_code,
+            worker_result=worker_result,
+        )
+        if verdict is WorkerFailureClass.NONE:
+            return
+        if verdict is not WorkerFailureClass.QUOTA_OR_RATE_LIMIT:
+            # Auth / unclassified failures do not advance the
+            # quota journal. A future commit will add an
+            # auth-evidence row; for now we keep the contract
+            # tight so a regression cannot silently disable it.
+            return
+
+        provider_id = self._provider_id(dispatch)
+        observed_at = datetime.now(UTC)
+        try:
+            reason_code = self._apply_pool_kind_cooldown(
+                dispatch=dispatch,
+                execution_target_id=execution_target_id,
+                provider_id=provider_id,
+                observed_at=observed_at,
+            )
+        except Exception:
+            return
+        if reason_code is None:
+            return
+        self._record_quota_blocked_evidence(
+            dispatch=dispatch,
+            execution_target_id=execution_target_id,
+            provider_id=provider_id,
+            observed_at=observed_at,
+            reason_code=reason_code,
+        )
+
+    def _classify_worker_failure(
+        self,
+        *,
+        exit_code: int,
+        worker_result: dict[str, object],
+    ) -> WorkerFailureClass:
+        """Run the worker's stderr through ``classify_worker_failure``.
+
+        Pulled out of ``_classify_and_record_worker_outcome`` (V4
+        refactor — zero behaviour change). Returning a frozen enum
+        keeps the orchestrator free of imports.
+        """
+
+        from personal_ai_orchestrator.worker_outcome_classifier import (
+            classify_worker_failure as _classify,
+        )
+
+        stderr_tail_obj = worker_result.get("stderr_tail")
+        stderr_tail = stderr_tail_obj if isinstance(stderr_tail_obj, str) else ""
+        return _classify(exit_code=exit_code, stderr_tail=stderr_tail)
+
+    def _apply_pool_kind_cooldown(
+        self,
+        *,
+        dispatch: OwnerDispatchRecord,
+        execution_target_id: str,
+        provider_id: str,
+        observed_at: datetime,
+    ) -> str | None:
+        """Apply the windowed-vs-unmetered cooldown to the quota journal.
+
+        Windowed targets hit ``observe_exhaustion`` (1-hour
+        cooldown, ``USAGE_LIMIT`` reason). Unmetered targets hit
+        ``observe_rate_limited`` (15-minute default, the unmetered
+        baseline tells ``state_at`` to skip the probe round-trip).
+        Returns the reason code for the execution-evidence row, or
+        ``None`` when the provider is not in the family registry
+        (a defensive no-op — pre-WP4 dispatch has no signal).
         """
 
         from personal_ai_orchestrator.provider_discovery import (
@@ -999,65 +1080,58 @@ class OwnerDispatchExecutor:
             observe_exhaustion as _observe_exhaustion,
             observe_rate_limited as _observe_rate_limited,
         )
-        from personal_ai_orchestrator.worker_outcome_classifier import (
-            WorkerFailureClass as _WFC,
-            classify_worker_failure as _classify,
-        )
-        from personal_ai_orchestrator.execution_evidence import (
-            ExecutionVerificationOutcome as _EVO,
-            build_execution_evidence as _build_evidence,
-        )
 
-        stderr_tail = (
-            worker_result.get("stderr_tail")
-            if isinstance(worker_result.get("stderr_tail"), str)
-            else ""
-        )
-        verdict = _classify(exit_code=exit_code, stderr_tail=stderr_tail)
-        if verdict is _WFC.NONE:
-            return
-        if verdict is not _WFC.QUOTA_OR_RATE_LIMIT:
-            # Auth / unclassified failures do not advance the
-            # quota journal. A future commit will add an
-            # auth-evidence row; for now we keep the contract
-            # tight so a regression cannot silently disable it.
-            return
-
-        provider_id = self._provider_id(dispatch)
-        quota_pool_id = provider_id
-        previous = self._quota_availability_journal.load(execution_target_id)
         family = next(
             (spec for spec in _PF if spec.provider_id == provider_id),
             None,
         )
         is_unmetered = bool(family and family.pool_kind == "unmetered")
-        observed_at = datetime.now(UTC)
-        try:
-            if is_unmetered:
-                self._quota_availability_journal.save(
-                    _observe_rate_limited(
-                        previous,
-                        execution_target_id=execution_target_id,
-                        provider_id=provider_id,
-                        quota_pool_id=quota_pool_id,
-                        observed_at=observed_at,
-                    )
+        previous = self._quota_availability_journal.load(execution_target_id)
+        quota_pool_id = provider_id
+        if is_unmetered:
+            self._quota_availability_journal.save(
+                _observe_rate_limited(
+                    previous,
+                    execution_target_id=execution_target_id,
+                    provider_id=provider_id,
+                    quota_pool_id=quota_pool_id,
+                    observed_at=observed_at,
                 )
-                reason_code = "WORKER_RATE_LIMIT"
-            else:
-                self._quota_availability_journal.save(
-                    _observe_exhaustion(
-                        previous,
-                        execution_target_id=execution_target_id,
-                        provider_id=provider_id,
-                        quota_pool_id=quota_pool_id,
-                        observed_at=observed_at,
-                        sanitized_reason_code="USAGE_LIMIT",
-                    )
-                )
-                reason_code = "WORKER_QUOTA_BLOCKED"
-        except Exception:
-            return
+            )
+            return "WORKER_RATE_LIMIT"
+        self._quota_availability_journal.save(
+            _observe_exhaustion(
+                previous,
+                execution_target_id=execution_target_id,
+                provider_id=provider_id,
+                quota_pool_id=quota_pool_id,
+                observed_at=observed_at,
+                sanitized_reason_code="USAGE_LIMIT",
+            )
+        )
+        return "WORKER_QUOTA_BLOCKED"
+
+    def _record_quota_blocked_evidence(
+        self,
+        *,
+        dispatch: OwnerDispatchRecord,
+        execution_target_id: str,
+        provider_id: str,
+        observed_at: datetime,
+        reason_code: str,
+    ) -> None:
+        """Append a ``QUOTA_BLOCKED`` row to the execution-evidence journal.
+
+        The ``latest_verified_for_target`` helper already demote-
+        falls back from any non-VERIFIED outcome to the most recent
+        VERIFIED row, so this single row keeps the dispatcher honest
+        even when the cooldown is the only signal we have.
+        """
+
+        from personal_ai_orchestrator.execution_evidence import (
+            ExecutionVerificationOutcome as _EVO,
+            build_execution_evidence as _build_evidence,
+        )
 
         try:
             evidence = _build_evidence(
