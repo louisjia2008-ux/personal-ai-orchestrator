@@ -30,6 +30,7 @@ from personal_ai_orchestrator.model_registry import (
 )
 from personal_ai_orchestrator.model_tiers import (
     DEFAULT_TIER_TABLE_JSON,
+    ModelTier,
     parse_tier_table,
 )
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore
@@ -325,3 +326,59 @@ def test_recommend_dispatch_candidate_view_exposes_headroom_min(
     assert fields["headroom_min"].default is None
     # ``headroom_mean`` stays alongside (WP2 already wired it).
     assert "headroom_mean" in fields
+
+
+# -----------------------------------------------------------------------------
+# M1 WP4 — default tier table covers OpenCode Zen free SKUs
+# -----------------------------------------------------------------------------
+
+
+def test_default_tier_table_classifies_opencode_free_skus_as_t3() -> None:
+    """``opencode-*-free`` glob + the ``opencode-big-pickle`` override hit T3.
+
+    M1 WP2 reserved ``opencode-*-free`` speculatively; WP4 makes it
+    real. The override ``opencode-big-pickle`` covers the one free
+    SKU without a ``-free`` suffix (deliberate act #6).
+    """
+
+    table = parse_tier_table(DEFAULT_TIER_TABLE_JSON)
+    # Suffix-glob covers all six ``-free`` OpenCode SKUs.
+    for sku in (
+        "ling-3.0-flash-fin-free",
+        "mimo-v2.5-free",
+        "muse-spark-1.2-contributor-free",
+        "muse-spark-1.3-contributor-free",
+        "nemotron-3-ultra-free",
+        "nemotron-3.5-lightning-free",
+    ):
+        entry, reason = table.lookup(f"opencode-{sku}")
+        assert entry.tier == ModelTier.T3, (sku, entry)
+        assert reason == "glob", (sku, reason)
+    # Override covers the suffix-less SKU.
+    entry, reason = table.lookup("opencode-big-pickle")
+    assert entry.tier == ModelTier.T3
+    assert reason == "exact"
+
+
+def test_default_tier_table_opencode_glob_exact_override_wins_on_prefix_collisions() -> None:
+    """A pattern override beats the broad ``opencode-*-free`` glob.
+
+    The longest matching pattern wins per ``TierTable.lookup``. A
+    future host that writes ``opencode-big-pickle`` to T0 (flagship
+    placement) is honoured without editing the default table.
+    """
+
+    table = parse_tier_table(
+        {
+            "version": 1,
+            "tiers": {
+                **DEFAULT_TIER_TABLE_JSON["tiers"],
+                "opencode-big-pickle": {"tier": "T0", "caps": ["flagship"]},
+            },
+        }
+    )
+    entry, _ = table.lookup("opencode-big-pickle")
+    assert entry.tier == ModelTier.T0
+    # The glob still covers the other six.
+    entry, _ = table.lookup("opencode-mimo-v2.5-free")
+    assert entry.tier == ModelTier.T3

@@ -72,16 +72,20 @@ def test_meets_minimum_full_matrix(
 
 def test_parse_tier_table_accepts_default_table() -> None:
     table = parse_tier_table(DEFAULT_TIER_TABLE_JSON)
+    # M1 WP4: the default table now lists ``opencode-big-pickle``
+    # explicitly because that SKU has no ``-free`` suffix.
     assert set(table.entries) == {
         "zai-coding-plan-*",
         "minimax-cn-coding-plan-*",
         "minimax-coding-plan-*",
         "minimax-*",
         "opencode-*-free",
+        "opencode-big-pickle",
     }
     # Every entry round-trips as a TierEntry with the right tier.
     assert table.entries["zai-coding-plan-*"].tier is ModelTier.T1
     assert table.entries["opencode-*-free"].tier is ModelTier.T3
+    assert table.entries["opencode-big-pickle"].tier is ModelTier.T3
 
 
 def test_parse_tier_table_rejects_non_dict() -> None:

@@ -116,8 +116,18 @@ def test_default_families_have_required_keys() -> None:
     for spec in PROVIDER_FAMILIES:
         assert spec.provider_id
         assert spec.display_name
-        assert spec.env_variables
-        assert spec.provider_label_keywords
+        # M1 WP4: ``auth="none"`` families (OpenCode Zen) declare no
+        # environment variables — the host needs no credential. The
+        # spec's invariants are: every family has a provider_id and
+        # a display name; credential-bearing families additionally
+        # have ``env_variables``.
+        if spec.auth != "none":
+            assert spec.env_variables, (
+            f"{spec.provider_id} is auth={spec.auth} but has no env_variables"
+            )
+            assert spec.provider_label_keywords, (
+            f"{spec.provider_id} is auth={spec.auth} but has no provider_label_keywords"
+            )
 
 
 def test_default_families_are_unique() -> None:
@@ -1321,3 +1331,245 @@ def test_explicit_refresh_runs_exactly_one_cycle(
     mgr.refresh()
     assert discovery_calls[0] == 2
     assert mgr.discovery_cycle_count() == 2
+
+
+# -----------------------------------------------------------------------------
+# M1 WP4 — opencode family classification + free_model_skus cross-check
+# -----------------------------------------------------------------------------
+
+
+@pytest.fixture
+def opencode_family() -> ProviderFamilySpec:
+    return ProviderFamilySpec(
+        provider_id="opencode",
+        display_name="OpenCode Free",
+        env_variables=(),
+        provider_label_keywords=(),
+        auth="none",
+        pool_kind="unmetered",
+        free_model_skus=(
+            "big-pickle",
+            "ling-3.0-flash-fin-free",
+            "mimo-v2.5-free",
+            "muse-spark-1.2-contributor-free",
+            "muse-spark-1.3-contributor-free",
+            "nemotron-3-ultra-free",
+            "nemotron-3.5-lightning-free",
+        ),
+    )
+
+
+def _make_opencode_discover(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    raw_models_text: str,
+    audit_events: list[tuple[str, dict[str, object]]],
+) -> None:
+    """Wire monkeypatched `_resolve_opencode` / `_run_opencode` for one call.
+
+    The audit sink records every ``record_system_event`` call. Tests
+    that do not care about the audit pass an empty list and ignore it.
+    """
+
+    executable = tmp_path / "opencode"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    def _resolve(_explicit):
+        return executable
+
+    def _run(argv, **_kwargs):
+        if argv == ("--version",):
+            return SubprocessResult(
+                (str(executable), *argv), 0, "fixture\n", "", False
+            )
+        if argv == ("providers", "list"):
+            return SubprocessResult(
+                (str(executable), *argv), 0, "┌  Credentials\n└  0\n", "", False
+            )
+        if argv == ("models", "opencode"):
+            return SubprocessResult(
+                (str(executable), *argv), 0, raw_models_text, "", False
+            )
+        return SubprocessResult(
+            (str(executable), *argv), 1, "No models found", "", False
+        )
+
+    mod = __import__(
+        "personal_ai_orchestrator.provider_discovery", fromlist=["mod"]
+    )
+    monkeypatch.setattr(mod, "_resolve_opencode", _resolve)
+    monkeypatch.setattr(mod, "_run_opencode", _run)
+
+
+class _FakeAudit:
+    """Test-only audit sink that records ``record_system_event`` calls."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, object]]] = []
+
+    def record_system_event(
+        self, event_type: str, payload: dict[str, object]
+    ) -> None:
+        self.events.append((event_type, payload))
+
+
+def test_opencode_family_lists_seven_skus_with_none_auth(
+    opencode_family: ProviderFamilySpec,
+) -> None:
+    """PROVIDER_FAMILIES advertises 7 free SKUs and the auth=None marker."""
+
+    found = next(
+        spec for spec in PROVIDER_FAMILIES if spec.provider_id == "opencode"
+    )
+    assert found.auth == "none"
+    assert found.pool_kind == "unmetered"
+    assert len(found.free_model_skus) == 7
+    assert "big-pickle" in found.free_model_skus  # no -free suffix
+    assert "nemotron-3.5-lightning-free" in found.free_model_skus
+
+
+def test_discover_classifies_only_free_model_skus_into_opencode_registry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    opencode_family: ProviderFamilySpec,
+) -> None:
+    """Listed SKUs enter the registry; suffix-unlisted + unclassified SKUs do not.
+
+    The fixture mixes three buckets: 2 listed SKUs, 1 suffix-unlisted
+    SKU (hypothetical new OpenCode free model), 1 paid-looking SKU
+    (hypothetical future gpt-5). The audit log captures the
+    classification events once per SKU.
+    """
+
+    fixture_text = (
+        "opencode/big-pickle\n"                                   # listed, no suffix
+        "opencode/ling-3.0-flash-fin-free\n"                       # listed
+        "opencode/mimo-v2.5-free\n"                                # listed
+        "opencode/futuristic-new-model-free\n"                     # suffix unlisted
+        "opencode/gpt-5\n"                                         # unclassified
+    )
+    audit = _FakeAudit()
+    _make_opencode_discover(monkeypatch, tmp_path, fixture_text, audit.events)
+    import personal_ai_orchestrator.provider_discovery as mod
+    monkeypatch.setattr(mod, "discover", None)  # placeholder; module imported by callers
+
+    outcome = discover(families=(opencode_family,), audit=audit)
+
+    assert outcome.error_code is None
+    assert outcome.result is not None
+    providers = outcome.result.providers
+    assert len(providers) == 1
+    opencode_record = providers[0]
+    assert opencode_record.pool_kind == "unmetered"
+    assert opencode_record.auth_kind == "none"
+    # Three SKUs enter the registry: the three listed ones.
+    assert sorted(opencode_record.model_skus) == sorted(
+        ["big-pickle", "ling-3.0-flash-fin-free", "mimo-v2.5-free"]
+    )
+
+    # Audit log captures each non-listed SKU once.
+    suffix_unlisted = [
+        payload for event, payload in audit.events
+        if event == "FREE_MODEL_SUFFIX_UNLISTED"
+    ]
+    unclassified = [
+        payload for event, payload in audit.events
+        if event == "OPENCODE_MODEL_UNCLASSIFIED"
+    ]
+    assert len(suffix_unlisted) == 1
+    assert suffix_unlisted[0]["sku"] == "futuristic-new-model-free"
+    assert suffix_unlisted[0]["provider_id"] == "opencode"
+    assert len(unclassified) == 1
+    assert unclassified[0]["sku"] == "gpt-5"
+    assert unclassified[0]["provider_id"] == "opencode"
+
+
+def test_discover_dedups_free_model_events_within_one_call(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    opencode_family: ProviderFamilySpec,
+) -> None:
+    """A SKU repeated in ``opencode models`` output is logged once per call.
+
+    The dedup is in-process (call-site ``suffix_unlisted_emitted``
+    and ``unclassified_emitted`` sets). A future refresh that hits
+    the same SKU again still logs once because the dedup set is
+    fresh per discovery cycle — the daemon lifetime is the unit of
+    ``recurrence``, not the daemon process. The audit table itself
+    dedups by ``(event_type, payload_json)`` (the safety_kernel
+    schema). Either way the owner sees one event, not many.
+    """
+
+    fixture_text = (
+        "opencode/big-pickle\n"
+        "opencode/big-pickle\n"             # duplicate listed SKU
+        "opencode/futuristic-new-model-free\n"
+        "opencode/futuristic-new-model-free\n"   # duplicate suffix-unlisted
+    )
+    audit = _FakeAudit()
+    _make_opencode_discover(monkeypatch, tmp_path, fixture_text, audit.events)
+
+    outcome = discover(families=(opencode_family,), audit=audit)
+
+    assert outcome.error_code is None
+    suffix_unlisted = [
+        p for e, p in audit.events if e == "FREE_MODEL_SUFFIX_UNLISTED"
+    ]
+    # Listed SKU dedup happens upstream (``tuple(...)`` over a list); the
+    # important assertion is that ``big-pickle`` survives one entry, not
+    # two. The suffix-unlisted dedup is per-cycle set membership.
+    assert len(suffix_unlisted) == 1
+    assert opencode_family.provider_id == "opencode"
+    opencode_record = next(
+        p for p in outcome.result.providers if p.provider_id == "opencode"
+    )
+    # Listed SKU appears once even though the raw output had two lines.
+    assert opencode_record.model_skus.count("big-pickle") == 1
+
+
+def test_discover_with_no_audit_sink_stays_silent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    opencode_family: ProviderFamilySpec,
+) -> None:
+    """``audit=None`` is the documented "silent discovery" path used by tests.
+
+    The function must not crash and the free-model rows still enter
+    the registry — only the audit side-effect is suppressed.
+    """
+
+    fixture_text = (
+        "opencode/big-pickle\n"
+        "opencode/futuristic-new-model-free\n"
+        "opencode/gpt-5\n"
+    )
+    _make_opencode_discover(monkeypatch, tmp_path, fixture_text, [])
+
+    outcome = discover(families=(opencode_family,), audit=None)
+    assert outcome.error_code is None
+    assert outcome.result is not None
+    assert any(
+        "big-pickle" in p.model_skus for p in outcome.result.providers
+    )
+
+
+def test_provider_discovery_carries_pool_kind_and_auth_kind(
+    opencode_family: ProviderFamilySpec,
+) -> None:
+    """``ProviderDiscovery`` surfaces the spec's ``pool_kind`` / ``auth_kind``."""
+
+    record = ProviderDiscovery(
+        provider_id=opencode_family.provider_id,
+        display_name=opencode_family.display_name,
+        provider_label_keywords=opencode_family.provider_label_keywords,
+        auth_status=AuthStatus.AUTH_FROM_ENV_PRESENCE,
+        execution_status=ExecutionStatus.AVAILABLE_FOR_CATALOG,
+        evidence_source="DISCOVERED_FROM_CATALOG",
+        model_skus=("big-pickle",),
+        env_variables_present=(),
+        observed_at=datetime(2026, 9, 7, tzinfo=UTC),
+        auth_kind=opencode_family.auth,
+        pool_kind=opencode_family.pool_kind,
+    )
+    assert record.auth_kind == "none"
+    assert record.pool_kind == "unmetered"
