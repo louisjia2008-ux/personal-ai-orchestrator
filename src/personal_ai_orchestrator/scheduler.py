@@ -249,41 +249,45 @@ def objective_weights(objective: RoutingObjective) -> ScoreWeights:
 #: it is under BURN_DOWN. The weight is NOT in :class:`ScoreWeights`
 #: so the per-objective preset stays free of evidence policy.
 #:
-#: Calibrated so a target seen ``_EVIDENCE_FRESH_DAYS=7`` days ago
-#: contributes ``0.2 * 7.0 = 1.4`` to the score — close to the
-#: pre-F2 ceiling of ``0.7 (BALANCED quality_weight) * 7.0/5.0 =
-#: 0.98`` and below the per-target headroom contribution (a 0.6
-#: headroom cap × 0.4 weight = 0.24 per provider, summed across
-#: tiers). The score identity ``Σ weight × value == core_score``
-#: holds over all six weight-named components; freshness is the
+#: Calibrated so the freshness contribution stays in
+#: ``[0.0, 0.2]`` — strictly below the smallest quality weight
+#: (``0.4`` under BURN_DOWN) so freshness cannot dominate ranking
+#: (V2; pre-V2 contributed up to ``1.4`` which exceeded every
+#: per-objective quality cap). ``_freshness_value`` returns
+#: ``[0.0, 1.0]`` so the maximum is ``FRESHNESS_WEIGHT * 1.0``.
+#: The score identity ``Σ weight × value == core_score`` holds
+#: over all six weight-named components; freshness is the
 #: sixth.
 FRESHNESS_WEIGHT: float = 0.2
 
 
-#: M1 WP3 fix (F2): a target seen more than this many days ago is
-#: treated as "stale evidence" and reads as ``-5.0`` from
-#: :func:`_freshness_value` (the recommender's pre-existing cap).
-#: Pre-F2 callers that did not pass ``evidence_observed_at`` get
-#: the same ``-5.0`` from the helper when ``observed_at is None``.
-#: The number is shared by both score paths.
+#: M1 WP3 fix (F2) + V2: a target seen more than this many days ago is
+#: treated as "stale evidence" and reads as ``0.0`` from
+#: :func:`_freshness_value` (no nudge at all). Pre-V2 callers that did
+#: not pass ``evidence_observed_at`` get the same ``0.0`` from the helper
+#: when ``observed_at is None``. The number is shared by both score
+#: paths.
 _EVIDENCE_FRESH_DAYS: float = 7.0
 
 
 def _freshness_value(*, observed_at: datetime | None, now: datetime) -> float:
     """Raw freshness score for one target, used as the 6th component.
 
-    Returns a value in ``[-5.0, 7.0]``. ``None`` observed_at and
-    "older than the cap" both yield ``-5.0`` so a future tuning
-    commit can change the negative floor without touching the score
-    path. The weight is :data:`FRESHNESS_WEIGHT`.
+    Returns a value in ``[0.0, 1.0]``. ``None`` observed_at and
+    "older than the cap" both yield ``0.0`` so a future tuning
+    commit can change the floor without touching the score
+    path. The weight is :data:`FRESHNESS_WEIGHT`; the maximum
+    contribution is therefore ``0.2``, which is below the
+    smallest quality weight (``0.4`` under BURN_DOWN) so freshness
+    cannot dominate ranking (V2).
     """
 
     if observed_at is None:
-        return -5.0
+        return 0.0
     age_days = (now - observed_at).total_seconds() / 86_400.0
     if age_days < 0 or age_days > _EVIDENCE_FRESH_DAYS:
-        return -5.0
-    return max(0.0, _EVIDENCE_FRESH_DAYS - age_days)
+        return 0.0
+    return max(0.0, 1.0 - age_days / _EVIDENCE_FRESH_DAYS)
 
 
 def policy_from_name(
@@ -433,12 +437,14 @@ def _score_candidate(
         if telemetry.expected_cost_to_green_usd is not None
         else 0.0
     )
-    # M1 WP3 fix (F2): freshness is a per-target objective-independent
-    # nudge. ``score_now`` defaults to ``None`` (pre-F2 callers); the
-    # helper then returns the floor and the freshness contribution
-    # becomes ``FRESHNESS_WEIGHT * -5.0 = -1.0``. Pre-F2 callers that
-    # want the freshness nudge must pass ``freshness_observed_at`` and
-    # ``score_now``.
+    # M1 WP3 fix (F2) + V2: freshness is a per-target objective-independent
+    # nudge in ``[0.0, 1.0]``. The contribution ``FRESHNESS_WEIGHT *
+    # freshness_value`` therefore stays in ``[0.0, 0.2]`` so freshness
+    # cannot dominate ranking below the smallest quality weight
+    # (BURN_DOWN quality = 0.4). ``score_now`` defaults to ``None`` (pre-F2
+    # callers); the helper then returns the floor ``0.0``. Pre-V2 callers
+    # that want the freshness nudge must pass ``freshness_observed_at``
+    # and ``score_now``.
     freshness_value = _freshness_value(
         observed_at=freshness_observed_at,
         now=score_now if score_now is not None else (
