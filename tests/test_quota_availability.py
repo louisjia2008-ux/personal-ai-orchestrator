@@ -10,6 +10,7 @@ from personal_ai_orchestrator.quota_availability import (
     QuotaAvailabilityState,
     mark_recovery_probe_due,
     observe_exhaustion,
+    observe_rate_limited,
     observe_success,
     unknown_availability,
 )
@@ -253,4 +254,149 @@ def test_uncertain_locked_resets_when_an_unknown_follows_a_success() -> None:
     assert next_unknown.consecutive_failures == 1
     assert next_unknown.state_at(now=NOW + timedelta(minutes=2)) is (
         QuotaAvailabilityState.UNKNOWN
+    )
+
+
+# -----------------------------------------------------------------------------
+# M1 WP4 — AVAILABLE_UNMETERED state + observe_rate_limited + state_at expiry
+# -----------------------------------------------------------------------------
+
+
+def test_available_unmetered_state_exists_and_round_trips() -> None:
+    """``QuotaAvailabilityState.AVAILABLE_UNMETERED`` is exported and serialises."""
+
+    assert QuotaAvailabilityState.AVAILABLE_UNMETERED.value == "AVAILABLE_UNMETERED"
+    payload = QuotaAvailabilityEvidence(
+        execution_target_id="opencode-big-pickle",
+        provider_id="opencode",
+        quota_pool_id="opencode",
+        observed_at=NOW,
+        state=QuotaAvailabilityState.AVAILABLE_UNMETERED,
+    )
+    assert payload.state is QuotaAvailabilityState.AVAILABLE_UNMETERED
+    rendered = payload.model_dump_json()
+    assert "AVAILABLE_UNMETERED" in rendered
+
+
+def test_observe_rate_limited_records_cooldown_and_baseline() -> None:
+    """``observe_rate_limited`` flips to COOLDOWN, records cooldown_until + baseline."""
+
+    target = "opencode-big-pickle"
+    later = NOW + timedelta(seconds=900)
+    evidence = observe_rate_limited(
+        previous=None,
+        execution_target_id=target,
+        provider_id="opencode",
+        quota_pool_id="opencode",
+        observed_at=NOW,
+        cooldown_seconds=900,
+    )
+    assert evidence.state is QuotaAvailabilityState.COOLDOWN
+    assert evidence.cooldown_until == later
+    # Baseline is None when no previous exists (windowed path will
+    # pass the previous state). Unmetered path calls evidence()
+    # directly so the baseline is filled in by the collector.
+    assert evidence.previous_state_baseline is None
+    assert evidence.consecutive_failures == 0
+    assert evidence.sanitized_reason_code == "WORKER_RATE_LIMIT"
+
+
+def test_state_at_returns_to_unmetered_baseline_after_cooldown() -> None:
+    """An unmetered target's COOLDOWN expires back to AVAILABLE_UNMETERED.
+
+    The windowed path returns RECOVERY_PROBE_DUE. M1 WP4 splits the
+    two via ``previous_state_baseline`` so the unmetered path
+    skips the probe round-trip.
+    """
+
+    evidence = observe_rate_limited(
+        previous=None,
+        execution_target_id="opencode-big-pickle",
+        provider_id="opencode",
+        quota_pool_id="opencode",
+        observed_at=NOW,
+        cooldown_seconds=60,
+    )
+    # Without a baseline, the unmetered path cannot short-circuit; the
+    # state stays COOLDOWN until a new observation arrives.
+    assert evidence.state_at(now=NOW) is QuotaAvailabilityState.COOLDOWN
+    assert (
+        evidence.state_at(now=NOW + timedelta(seconds=120))
+        is QuotaAvailabilityState.RECOVERY_PROBE_DUE
+    )
+
+    # With the baseline set to AVAILABLE_UNMETERED, the cooldown
+    # expires back to AVAILABLE_UNMETERED directly.
+    baseline_evidence = evidence.model_copy(
+        update={"previous_state_baseline": QuotaAvailabilityState.AVAILABLE_UNMETERED}
+    )
+    assert (
+        baseline_evidence.state_at(now=NOW + timedelta(seconds=120))
+        is QuotaAvailabilityState.AVAILABLE_UNMETERED
+    )
+
+
+def test_observe_rate_limited_is_idempotent() -> None:
+    """A second ``observe_rate_limited`` in the same window keeps the streak 0.
+
+    The ``consecutive_failures`` counter is for *quota collection*
+    failures (A2). Rate-limit hits are a worker-classified event;
+    they must not advance the streak or risk firing
+    UNCERTAIN_LOCKED on the unmetered path.
+    """
+
+    first = observe_rate_limited(
+        previous=None,
+        execution_target_id="opencode-big-pickle",
+        provider_id="opencode",
+        quota_pool_id="opencode",
+        observed_at=NOW,
+        cooldown_seconds=900,
+    )
+    second = observe_rate_limited(
+        previous=first,
+        execution_target_id="opencode-big-pickle",
+        provider_id="opencode",
+        quota_pool_id="opencode",
+        observed_at=NOW + timedelta(seconds=10),
+        cooldown_seconds=900,
+    )
+    assert second.consecutive_failures == 0
+    # The cooldown_until pushes forward because the new observation
+    # arrives 10 seconds later.
+    assert second.cooldown_until > first.cooldown_until
+
+
+def test_windowed_observe_exhaustion_baseline_remains_windowed() -> None:
+    """Windowed targets keep ``previous_state_baseline = AVAILABLE_OBSERVED``.
+
+    A windowed target going through ``observe_exhaustion`` records
+    ``AVAILABLE_OBSERVED`` (or whatever the previous state was) as
+    the baseline. ``state_at`` then returns RECOVERY_PROBE_DUE when
+    the cooldown expires — no probe-skip on the windowed path.
+    """
+
+    target = "zai-coding-plan-glm-5.3"
+    success = observe_success(
+        previous=None,
+        execution_target_id=target,
+        provider_id="zai-coding-plan",
+        quota_pool_id="zai-coding-plan",
+        observed_at=NOW,
+    )
+    exhausted = observe_exhaustion(
+        success,
+        execution_target_id=target,
+        provider_id="zai-coding-plan",
+        quota_pool_id="zai-coding-plan",
+        observed_at=NOW,
+        sanitized_reason_code="USAGE_LIMIT",
+    )
+    assert (
+        exhausted.previous_state_baseline
+        is QuotaAvailabilityState.AVAILABLE_OBSERVED
+    )
+    assert (
+        exhausted.state_at(now=NOW + timedelta(seconds=7200))
+        is QuotaAvailabilityState.RECOVERY_PROBE_DUE
     )
