@@ -1128,6 +1128,14 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
     /// when the plan carries no WEEKLY window or no observation. The
     /// card renders a chip from this string only when it is non-nil.
     public let sourcePressure: String?
+    /// M1 WP3 fix (F5): the maximum ``consecutive_failures`` streak
+    /// across this provider's targets — the per-target streak
+    /// already lives on :class:`ObservedAvailabilityView`. The
+    /// owner can spot a host that has been unable to probe this
+    /// provider without drilling into the target row. ``0`` is
+    /// the "no journal entry" default; the Swift UI renders a
+    /// "no data" affordance rather than a badge in that case.
+    public let collectionFailureStreak: Int
 
     public var id: String { providerId }
 
@@ -1153,6 +1161,7 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
         case quotaPools = "quota_pools"
         case plan
         case sourcePressure = "source_pressure"
+        case collectionFailureStreak = "collection_failure_streak"
     }
 
     public init(
@@ -1174,7 +1183,8 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
         credentialSource: String = "NONE",
         quotaPools: [QuotaPoolHealthView] = [],
         plan: QuotaPlanView? = nil,
-        sourcePressure: String? = nil
+        sourcePressure: String? = nil,
+        collectionFailureStreak: Int = 0
     ) {
         self.providerId = providerId
         self.displayName = displayName
@@ -1195,6 +1205,7 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
         self.quotaPools = quotaPools
         self.plan = plan
         self.sourcePressure = sourcePressure
+        self.collectionFailureStreak = collectionFailureStreak
     }
 
     /// Decodes leniently for the two keys added in P4.2.6.5.
@@ -1233,6 +1244,13 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
             try container.decodeIfPresent([QuotaPoolHealthView].self, forKey: .quotaPools) ?? []
         plan = try container.decodeIfPresent(QuotaPlanView.self, forKey: .plan)
         sourcePressure = try container.decodeIfPresent(String.self, forKey: .sourcePressure)
+        // M1 WP3 fix (F5): lenient decode keeps pre-F5 daemons
+        // (those that did not surface the streak) parsing; the
+        // field reads as 0 in that case. F5 daemons write the
+        // maximum per-target ``consecutive_failures`` across this
+        // provider's targets, or 0 when no journal entry exists.
+        collectionFailureStreak =
+            try container.decodeIfPresent(Int.self, forKey: .collectionFailureStreak) ?? 0
     }
 }
 
@@ -2105,12 +2123,11 @@ public struct DispatchRecommendationCandidate: Decodable, Equatable, Identifiabl
     public let verified: Bool
     public let executionVerifiedStale: Bool?
     public let quotaState: String?
-    /// M1 WP1 burn pressure for this candidate's WEEKLY window at the
-    /// handler's `now`. Mirrors the provider-card-level `sourcePressure`
-    /// field. nil when the candidate carries no WEEKLY window or no
-    /// observation; the dashboard renders a chip from this string only
-    /// when it is non-nil. WP3 will combine this with `scoreComponents`
-    /// to compute a pressure-weighted score.
+    /// M1 WP1 burn pressure for this card's WEEKLY window at the
+    /// handler's `now`. Mirrors what the dispatch recommender
+    /// scores against. nil when the plan carries no WEEKLY window
+    /// or no observation; the dashboard renders a chip from this
+    /// string only when it is non-nil.
     public let sourcePressure: String?
     public let scoreComponents: [DispatchRecommendationScoreComponent]
     public let reasons: [String]

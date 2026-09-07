@@ -639,6 +639,17 @@ class QuotaProviderCardView(_ViewModel):
     #: inventing one. Mirrors what the recommender will eventually score
     #: against; both paths read the same ``assess`` primitive.
     source_pressure: str | None = None
+    #: M1 WP3 fix (F5): the maximum ``consecutive_failures`` streak
+    #: across this provider's targets. The per-target streak already
+    #: lives on :class:`ObservedAvailabilityView`; this card-level
+    #: rollup lets the quota page surface a single "we have not
+    #: been able to read this provider for N attempts" badge even
+    #: when only one of the provider's targets is in the journal
+    #: (or when the owner looks at the page before drilling into a
+    #: target row). ``0`` when no journal entry exists for any
+    #: target under this provider — the absence of a value, not
+    #: the absence of a problem.
+    collection_failure_streak: int = 0
 
 
 class QuotaBurnView(_ViewModel):
@@ -3060,6 +3071,24 @@ class ControlPlaneService:
         source_pressure: str | None = None
         if observation is not None and observation.projection is not None:
             source_pressure = observation.projection.source_pressure(now=now).value
+        # M1 WP3 fix (F5): card-level collection failure streak.
+        # Walk every target under this provider (model_sku_id ->
+        # model.provider_id == connection.provider_id) and pick
+        # the maximum ``consecutive_failures`` from the per-target
+        # journal. ``0`` when no journal entry exists.
+        collection_failure_streak = 0
+        if self.quota_availability_journal is not None and self.registry is not None:
+            for target in self.registry.execution_targets.values():
+                target_model = self.registry.models.get(target.model_sku_id)
+                if target_model is None:
+                    continue
+                if target_model.provider_id != connection.provider_id:
+                    continue
+                evidence = self.quota_availability_journal.load(target.id)
+                if evidence is None:
+                    continue
+                if evidence.consecutive_failures > collection_failure_streak:
+                    collection_failure_streak = evidence.consecutive_failures
         return QuotaProviderCardView(
             provider_id=connection.provider_id,
             display_name=connection.display_name,
@@ -3098,6 +3127,7 @@ class ControlPlaneService:
             quota_pools=pools,
             plan=plan_view,
             source_pressure=source_pressure,
+            collection_failure_streak=collection_failure_streak,
         )
 
     def quota(self) -> QuotaOverviewView:
