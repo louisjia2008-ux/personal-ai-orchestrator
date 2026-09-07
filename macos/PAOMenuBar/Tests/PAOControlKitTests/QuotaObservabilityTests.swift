@@ -305,4 +305,55 @@ final class QuotaObservabilityTests: XCTestCase {
         let card = try XCTUnwrap(view.providers.first)
         XCTAssertNil(card.sourcePressure)
     }
+
+    // M1 WP3 fix (F5): the per-provider ``collection_failure_streak``
+    // rides on the card view so the owner can spot a host that has
+    // been unable to probe the provider without drilling into a
+    // target row. Pre-F5 daemons omit the field — decode must
+    // succeed with ``collectionFailureStreak == 0``.
+    func testQuotaProviderCardDecodesCollectionFailureStreak() throws {
+        let body = """
+        {
+          "state": "CONNECTED_WITH_QUOTA_OBSERVATIONS",
+          "summary": {
+            "connected_provider_count": 1,
+            "quota_observable_provider_count": 1,
+            "quota_unknown_provider_count": 0,
+            "quota_warning_count": 0,
+            "quota_exhausted_count": 0
+          },
+          "providers": [
+            {
+              "provider_id": "minimax-cn-coding-plan",
+              "display_name": "MiniMax CN Coding Plan",
+              "connection_state": "CONNECTED",
+              "auth_state": "AUTH_FROM_ENV_PRESENCE",
+              "quota_state": "OBSERVED",
+              "confidence": "ESTIMATED",
+              "readonly_source_available": true,
+              "collector_available": true,
+              "credential_source": "ENV",
+              "quota_pools": [],
+              "collection_failure_streak": 2
+            }
+          ],
+          "history": {"observations": [], "retention_limit": 0}
+        }
+        """
+        let view = try JSONDecoder().decode(
+            QuotaOverviewView.self, from: Data(body.utf8)
+        )
+        let card = try XCTUnwrap(view.providers.first)
+        XCTAssertEqual(card.collectionFailureStreak, 2)
+    }
+
+    func testQuotaProviderCardDecodesWithoutCollectionFailureStreak() throws {
+        // Pre-F5 daemons do not surface the streak; ``decodeIfPresent``
+        // must leave the field at its default 0.
+        let view = try JSONDecoder().decode(
+            QuotaOverviewView.self, from: Data(quotaUnknownBody.utf8)
+        )
+        let card = try XCTUnwrap(view.providers.first)
+        XCTAssertEqual(card.collectionFailureStreak, 0)
+    }
 }
