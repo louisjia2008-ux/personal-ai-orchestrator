@@ -43,6 +43,7 @@ from personal_ai_orchestrator.scheduler import (
     ScoreWeights,
     TargetTelemetry,
     TaskProfile,
+    _freshness_value,
     evaluate_target,
     objective_weights,
     resolve_scheduling_policy,
@@ -677,8 +678,11 @@ def test_score_candidate_emits_six_weight_named_components() -> None:
         (c.value or 0.0) * (c.weight or 0.0) for c in weight_rows
     )
     # The pre-known identity: with no membership/priority/scarcity
-    # nudges, the score equals the identity.
-    assert abs(score - identity) < 1e-9
+    # nudges, the score equals the identity. Tolerance widened to
+    # ``1e-7`` so the V2 freshness normalisation (the
+    # ``_EVIDENCE_FRESH_DAYS / _EVIDENCE_FRESH_DAYS`` division now
+    # flows through the helper) does not flip the assertion.
+    assert abs(score - identity) < 1e-7
 
 
 def test_score_candidate_determinism() -> None:
@@ -879,3 +883,107 @@ def test_evaluate_target_never_scores_manual_policy() -> None:
     assert eval_.admitted is False
     assert eval_.score is None
     assert any("orchestrator does not auto-rank" in r for r in eval_.reasons)
+
+
+def test_freshness_value_is_bounded_zero_to_one() -> None:
+    """V2: ``_freshness_value`` is normalised to ``[0.0, 1.0]``.
+
+    Pre-V2 the helper returned ``[-5.0, 7.0]`` and the freshness
+    contribution could reach ``0.2 * 7.0 = 1.4``, exceeding every
+    per-objective quality cap. V2 normalises the value to
+    ``[0.0, 1.0]`` so ``FRESHNESS_WEIGHT * freshness_value`` stays
+    in ``[0.0, 0.2]`` — strictly below the smallest quality weight
+    (``0.4`` under BURN_DOWN).
+    """
+
+    now = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    # ``None`` observed_at → floor
+    assert _freshness_value(observed_at=None, now=now) == 0.0
+    # 0 days ago → ceiling
+    assert (
+        _freshness_value(
+            observed_at=now, now=now,
+        )
+        == 1.0
+    )
+    # 3.5 days ago → midpoint
+    assert (
+        _freshness_value(
+            observed_at=now - timedelta(days=3.5), now=now,
+        )
+        == 0.5
+    )
+    # 7 days ago → boundary
+    assert (
+        _freshness_value(
+            observed_at=now - timedelta(days=7), now=now,
+        )
+        == 0.0
+    )
+    # Older than the cap → floor
+    assert (
+        _freshness_value(
+            observed_at=now - timedelta(days=30), now=now,
+        )
+        == 0.0
+    )
+    # Future-dated evidence → floor (negative age is not a signal)
+    assert (
+        _freshness_value(
+            observed_at=now + timedelta(hours=1), now=now,
+        )
+        == 0.0
+    )
+
+
+def test_freshness_dominates_only_when_other_terms_identical() -> None:
+    """V2: freshness nudges ranking only when nothing else differs.
+
+    Two-targets-identical-except-for-age scenario: the fresh
+    evidence wins because the freshness component carries a small
+    positive nudge. Two-targets-differ-by-one-tier scenario: the
+    tier gap (quality term) dominates and the freshness nudge
+    does NOT flip the ranking.
+    """
+
+    now = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+
+    def score_at(capability_fit, evidence_age_days):
+        score, _ = _score_candidate(
+            capability_fit=capability_fit,
+            priority=1,
+            membership_weight=0.0,
+            pace=None,
+            telemetry=TargetTelemetry(),
+            objective=RoutingObjective.BALANCED,
+            pressure_term=0.2,
+            headroom_min=0.4,
+            freshness_observed_at=(
+                now - timedelta(days=evidence_age_days)
+                if evidence_age_days is not None
+                else None
+            ),
+            score_now=now,
+        )
+        return score
+
+    # Case A — same tier, same telemetry: fresh evidence wins.
+    fresh = score_at(capability_fit=0.8, evidence_age_days=0)
+    stale = score_at(capability_fit=0.8, evidence_age_days=7)
+    assert fresh is not None and stale is not None
+    assert fresh > stale, (
+        "Same target, same telemetry, fresh evidence must outrank "
+        "7-day-stale evidence."
+    )
+    # Maximum delta is bounded: 0.2 (FRESHNESS_WEIGHT) * 1.0 (ceiling) = 0.2
+    assert (fresh - stale) <= 0.2 + 1e-9
+
+    # Case B — one-tier gap dominates freshness: T2 wins over T3 even
+    # when the T3 evidence is fresh and the T2 evidence is stale.
+    t2_stale = score_at(capability_fit=0.6, evidence_age_days=7)
+    t3_fresh = score_at(capability_fit=0.3, evidence_age_days=0)
+    assert t2_stale is not None and t3_fresh is not None
+    assert t2_stale > t3_fresh, (
+        "A one-tier quality gap must outrank the freshness nudge; "
+        "otherwise freshness would dominate ranking (V2)."
+    )

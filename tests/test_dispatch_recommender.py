@@ -335,8 +335,10 @@ def test_target_above_min_tier_pays_a_gentle_capability_fit_penalty() -> None:
 
     # Pre-F2 used ``age_days=30`` to make freshness deterministic
     # (clamped at -5.0). Post-F2 freshness rides on its own row
-    # but the helper still returns -5.0 for missing or stale
-    # evidence; the assertion below targets only the
+    # but the helper still returns 0.0 for missing or stale
+    # evidence (V2 normalisation — see
+    # ``scheduler._freshness_value``); the assertion below
+    # targets only the
     # ``quality_capability_fit`` row so the freshness value is
     # irrelevant.
     t0 = _tier_candidate(
@@ -587,10 +589,11 @@ def test_score_identity_holds_for_recommender() -> None:
     # ``AVAILABLE_OBSERVED`` so the penalty does not fire.
     assert abs((top.score or 0.0) - expected) < 1e-9
     # Sanity: the freshness row carries ``FRESHNESS_WEIGHT`` and
-    # the freshness value is the helper's -5.0 for stale evidence.
+    # the freshness value is the helper's 0.0 for stale evidence
+    # (V2 normalisation — see scheduler._freshness_value).
     freshness_row = next(c for c in core_rows if c.name == "freshness")
     assert freshness_row.weight == FRESHNESS_WEIGHT
-    assert freshness_row.value == -5.0
+    assert freshness_row.value == 0.0
 
 
 def test_recommend_owner_dispatch_is_deterministic() -> None:
