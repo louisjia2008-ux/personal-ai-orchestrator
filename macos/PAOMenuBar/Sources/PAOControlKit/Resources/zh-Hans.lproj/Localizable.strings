@@ -799,3 +799,9 @@
 // M1 WP3 — BURN_DOWN objective (pressure-first preset).
 "policy.burnDown" = "用尽额度";
 "policy.burnDown.detail" = "优先使用即将过期未用的额度";
+"resource.group.unmetered" = "免费 / 未计量";
+"quota.windowKind.unmetered" = "未计量";
+"quota.unmetered.errorRate" = "过去一小时的错误率";
+"quota.unmetered.rpm" = "过去一分钟运行数";
+"quota.unmetered.cooldownUntil" = "冷却至";
+"quota.unmetered.noWindow" = "无配额窗口——仅受速率限制";

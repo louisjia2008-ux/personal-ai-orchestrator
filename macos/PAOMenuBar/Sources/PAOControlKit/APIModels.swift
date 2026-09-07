@@ -419,6 +419,17 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
     /// One of ``"exact"`` / ``"glob"`` / ``"default"`` — lets the UI
     /// label a pattern match as such.
     public let tierMatchReason: String?
+    /// M1 WP4: how this target's provider family authenticates.
+    /// ``"env"`` means an API credential is required;
+    /// ``"none"`` means OpenCode Zen routes through its own proxy
+    /// and the host needs no credential. Lenient decode keeps
+    /// pre-WP4 daemons (which omit the field) on the legacy
+    /// ``"env"`` default.
+    public let authKind: String
+    /// M1 WP4: ``"windowed"`` (default) or ``"unmetered"``
+    /// (no upstream quota endpoint; only locally observed
+    /// rate limits). Lenient decode default ``"windowed"``.
+    public let poolKind: String
 
     public var id: String { executionTargetId }
     public var isExecutionVerified: Bool { executionVerified ?? false }
@@ -435,6 +446,8 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
         case observedAvailability = "observed_availability"
         case tier
         case tierMatchReason = "tier_match_reason"
+        case authKind = "auth_kind"
+        case poolKind = "pool_kind"
     }
 
     public init(
@@ -447,7 +460,9 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
         runtimeAvailable: Bool? = nil,
         observedAvailability: ObservedAvailabilityView? = nil,
         tier: String? = nil,
-        tierMatchReason: String? = nil
+        tierMatchReason: String? = nil,
+        authKind: String = "env",
+        poolKind: String = "windowed"
     ) {
         self.executionTargetId = executionTargetId
         self.modelSkuId = modelSkuId
@@ -459,6 +474,8 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
         self.observedAvailability = observedAvailability
         self.tier = tier
         self.tierMatchReason = tierMatchReason
+        self.authKind = authKind
+        self.poolKind = poolKind
     }
 
     public init(from decoder: Decoder) throws {
@@ -479,6 +496,8 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
         tierMatchReason = try container.decodeIfPresent(
             String.self, forKey: .tierMatchReason
         )
+        authKind = try container.decodeIfPresent(String.self, forKey: .authKind) ?? "env"
+        poolKind = try container.decodeIfPresent(String.self, forKey: .poolKind) ?? "windowed"
     }
 }
 
@@ -539,6 +558,10 @@ public struct ProviderHealthView: Codable, Equatable, Identifiable, Sendable {
     public let planSurface: String?
     public let region: String?
     public let lastChecked: String?
+    /// M1 WP4: ``"windowed"`` (default) or ``"unmetered"``.
+    /// Lenient decode so pre-WP4 daemons (which omit the field)
+    /// fall back to ``nil`` and the row chrome renders as before.
+    public let poolKind: String?
 
     public var id: String { providerId }
 
@@ -557,6 +580,7 @@ public struct ProviderHealthView: Codable, Equatable, Identifiable, Sendable {
         case planSurface = "plan_surface"
         case region
         case lastChecked = "last_checked"
+        case poolKind = "pool_kind"
     }
 
     public init(
@@ -573,7 +597,8 @@ public struct ProviderHealthView: Codable, Equatable, Identifiable, Sendable {
         runtimeState: String? = nil,
         planSurface: String? = nil,
         region: String? = nil,
-        lastChecked: String? = nil
+        lastChecked: String? = nil,
+        poolKind: String? = nil
     ) {
         self.providerId = providerId
         self.displayName = displayName
@@ -589,6 +614,7 @@ public struct ProviderHealthView: Codable, Equatable, Identifiable, Sendable {
         self.planSurface = planSurface
         self.region = region
         self.lastChecked = lastChecked
+        self.poolKind = poolKind
     }
 }
 
@@ -1095,6 +1121,28 @@ public struct QuotaPlanView: Codable, Equatable, Identifiable, Sendable {
 /// A connected provider always renders, even with zero quota evidence:
 /// `quotaState == "UNKNOWN"` is a truthful state, not an absence. UNKNOWN
 /// never carries a fabricated `remainingFraction`.
+public struct UnmeteredObservationView: Codable, Equatable, Sendable {
+    public let rpmObserved: Int
+    public let errorRate1h: Double
+    public let cooldownUntil: String?
+
+    enum CodingKeys: String, CodingKey {
+        case rpmObserved = "rpm_observed"
+        case errorRate1h = "error_rate_1h"
+        case cooldownUntil = "cooldown_until"
+    }
+
+    public init(
+        rpmObserved: Int,
+        errorRate1h: Double,
+        cooldownUntil: String? = nil
+    ) {
+        self.rpmObserved = rpmObserved
+        self.errorRate1h = errorRate1h
+        self.cooldownUntil = cooldownUntil
+    }
+}
+
 public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable {
     public let providerId: String
     public let displayName: String
@@ -1136,6 +1184,14 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
     /// the "no journal entry" default; the Swift UI renders a
     /// "no data" affordance rather than a badge in that case.
     public let collectionFailureStreak: Int
+    /// M1 WP4: ``"windowed"`` (default) or ``"unmetered"``.
+    /// Lenient decode so pre-WP4 daemons (which omit the field)
+    /// fall back to ``"windowed"`` and the legacy chrome renders.
+    public let poolKind: String
+    /// M1 WP4: read-time metrics for unmetered providers.
+    /// ``nil`` for windowed providers (their quota surfaces
+    /// stay on quota_pools + plan).
+    public let unmetered: UnmeteredObservationView?
 
     public var id: String { providerId }
 
@@ -1162,6 +1218,8 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
         case plan
         case sourcePressure = "source_pressure"
         case collectionFailureStreak = "collection_failure_streak"
+        case poolKind = "pool_kind"
+        case unmetered
     }
 
     public init(
@@ -1184,7 +1242,9 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
         quotaPools: [QuotaPoolHealthView] = [],
         plan: QuotaPlanView? = nil,
         sourcePressure: String? = nil,
-        collectionFailureStreak: Int = 0
+        collectionFailureStreak: Int = 0,
+        poolKind: String = "windowed",
+        unmetered: UnmeteredObservationView? = nil
     ) {
         self.providerId = providerId
         self.displayName = displayName
@@ -1206,6 +1266,8 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
         self.plan = plan
         self.sourcePressure = sourcePressure
         self.collectionFailureStreak = collectionFailureStreak
+        self.poolKind = poolKind
+        self.unmetered = unmetered
     }
 
     /// Decodes leniently for the two keys added in P4.2.6.5.
@@ -1251,6 +1313,11 @@ public struct QuotaProviderCardView: Codable, Equatable, Identifiable, Sendable 
         // provider's targets, or 0 when no journal entry exists.
         collectionFailureStreak =
             try container.decodeIfPresent(Int.self, forKey: .collectionFailureStreak) ?? 0
+        poolKind =
+            try container.decodeIfPresent(String.self, forKey: .poolKind) ?? "windowed"
+        unmetered = try container.decodeIfPresent(
+            UnmeteredObservationView.self, forKey: .unmetered
+        )
     }
 }
 

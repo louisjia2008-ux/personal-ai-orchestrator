@@ -624,4 +624,36 @@ final class ResourceWorkspaceTests: XCTestCase {
             }
         }
     }
+
+    // M1 WP4: a resource's ``poolKind`` flows through to the
+    // ``ResourceSnapshot`` for the Resources page grouping.
+    func testResourceSnapshotCarriesPoolKindFromQuotaCard() {
+        let card = QuotaProviderCardView(
+            providerId: "opencode",
+            displayName: "OpenCode Free",
+            connectionState: "CONNECTED",
+            authState: "AUTH_FROM_ENV_PRESENCE",
+            quotaState: "OBSERVED",
+            confidence: "ESTIMATED",
+            poolKind: "unmetered"
+        )
+        let snapshot = ResourceSnapshot(
+            providerId: "opencode",
+            displayName: "OpenCode Free",
+            kind: .connected,
+            quota: card
+        )
+        XCTAssertEqual(snapshot.poolKind, "unmetered")
+        XCTAssertEqual(snapshot.authKind, "env")
+    }
+
+    func testResourceSnapshotDefaultsPoolKindToNilWithoutCard() {
+        let snapshot = ResourceSnapshot(
+            providerId: "free-provider",
+            displayName: "Free Provider",
+            kind: .available
+        )
+        XCTAssertNil(snapshot.poolKind)
+        XCTAssertNil(snapshot.authKind)
+    }
 }
