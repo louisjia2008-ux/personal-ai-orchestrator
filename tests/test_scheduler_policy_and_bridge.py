@@ -679,9 +679,13 @@ def test_score_candidate_emits_six_weight_named_components() -> None:
     )
     # The pre-known identity: with no membership/priority/scarcity
     # nudges, the score equals the identity. Tolerance widened to
-    # ``1e-7`` so the V2 freshness normalisation (the
-    # ``_EVIDENCE_FRESH_DAYS / _EVIDENCE_FRESH_DAYS`` division now
-    # flows through the helper) does not flip the assertion.
+    # ``1e-7`` because the V2 freshness normalisation
+    # (``max(0, 1 - age / _EVIDENCE_FRESH_DAYS)``) introduces a
+    # float division into one of the six summands; the cumulative
+    # FP error across the six ``weight × value`` products is on
+    # the order of ``6 * 1e-9 ≈ 6e-9`` so the assertion still
+    # proves the identity holds, just with a slightly looser
+    # comparator than ``1e-9``.
     assert abs(score - identity) < 1e-7
 
 
