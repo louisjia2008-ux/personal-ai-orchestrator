@@ -19,7 +19,6 @@ import re
 import shutil
 import socket
 import subprocess
-import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -38,9 +37,17 @@ from personal_ai_orchestrator.build_identity import resolve_build_identity
 from personal_ai_orchestrator.daemon_supervisor import (
     DaemonSupervisor,
     DaemonSupervisorSnapshot,
-    SupervisorStepSnapshot,
 )
-from personal_ai_orchestrator.execution_controller import validate_execution_target_launch
+from personal_ai_orchestrator.dispatch_initiator import (
+    initiate_owner_dispatch,
+)
+from personal_ai_orchestrator.dispatch_recommendation_service import (
+    DispatchRecommendationService,
+)
+from personal_ai_orchestrator.dispatch_recommender import (
+    DispatchCandidateInput,
+    source_pressure_for,
+)
 from personal_ai_orchestrator.execution_evidence import (
     ExecutionEvidenceJournal,
     ExecutionVerificationEvidence,
@@ -51,15 +58,10 @@ from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
 from personal_ai_orchestrator.provider_registry_manager import (
     ProviderRegistryManager,
 )
-from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal, QuotaAvailabilityState
-from personal_ai_orchestrator.scheduler import RoutingObjective
-from personal_ai_orchestrator.dispatch_recommender import (
-    CandidateWindowInput,
-    DispatchCandidateInput,
-    recommend_owner_dispatch,
-    source_pressure_for,
+from personal_ai_orchestrator.quota_availability import (
+    QuotaAvailabilityJournal,
+    QuotaAvailabilityState,
 )
-from personal_ai_orchestrator.model_tiers import ModelTier
 from personal_ai_orchestrator.quota_equivalent_capacity import (
     EquivalentCapacityEstimate,
     estimate_equivalent_capacity,
@@ -79,6 +81,7 @@ from personal_ai_orchestrator.safety_kernel import (
     SafetyKernelStore,
     TaskState,
 )
+from personal_ai_orchestrator.scheduler import RoutingObjective
 from personal_ai_orchestrator.scheduling_settings import (
     SELECTABLE_GLOBAL_POLICIES,
     SchedulingSettings,
@@ -1207,6 +1210,27 @@ class ControlPlaneService:
             return False
         return _opencode_binary_available()
 
+    def _recommendation_service(self) -> DispatchRecommendationService:
+        """Build the host recommendation service on demand.
+
+        WP5a-1 commit 1 — pure refactor. The service is stateless and
+        cheap to build; constructing it on every call avoids threading
+        cache invalidation concerns across ``open_request`` service
+        instances. The constructor takes the same references the inline
+        ``_collect_dispatch_candidates`` method used, byte-equivalent.
+        """
+
+        return DispatchRecommendationService(
+            self.store,
+            registry_provider=self._effective_registry,
+            quota_refresh_service=self.quota_refresh_service,
+            execution_evidence_journal=self.execution_evidence_journal,
+            quota_availability_journal=self.quota_availability_journal,
+            tier_table=self.tier_table,
+            runtime_availability=self.runtime_availability,
+            runtime_availability_fallback=self._runtime_available,
+        )
+
     @staticmethod
     def _project_id_for(git_root: str, working_subpath: str | None) -> str:
         payload = f"{git_root}\0{working_subpath or ''}".encode()
@@ -1678,107 +1702,34 @@ class ControlPlaneService:
             task = self.store.get_task(task_id)
         except KeyError:
             raise ControlPlaneError(404, "task_not_found") from None
-        dispatch_id = f"owner-dispatch-{request.request_id}"
+        # All validation guards → delegate the irreversible
+        # reservation + validation + transition + thread-spawn
+        # sequence to the extracted service helper (WP5a-1
+        # commit 1 — pure refactor). ``initiate_owner_dispatch``
+        # returns ``created=False`` when a previous dispatch with
+        # the same ``request_id`` already exists (idempotent retry),
+        # in which case we short-circuit straight to the view —
+        # matching the pre-refactor behavior. ``ValueError`` from
+        # ``reserve_owner_dispatch`` propagates and the handler maps
+        # it to 409 ``conflicting_dispatch_request_id`` (same as the
+        # pre-refactor handler).
         try:
-            dispatch, created = self.store.reserve_owner_dispatch(
-                dispatch_id=dispatch_id,
+            dispatch, _created, _transitioned = initiate_owner_dispatch(
+                self.store,
+                self.dispatch_executor,
+                task=task,
                 request_id=request.request_id,
-                task_id=task_id,
                 task_state_version=request.task_state_version,
                 execution_target_id=request.execution_target_id,
                 authority=DispatchAuthority.OWNER_INITIATED_EXECUTION.value,
+                project_provider=self.get_project,
+                registry_provider=self._effective_registry,
+                provider_registry_manager=self.provider_registry_manager,
+                runtime_available_provider=self._runtime_available,
+                execution_evidence_journal=self.execution_evidence_journal,
             )
         except ValueError:
             raise ControlPlaneError(409, "conflicting_dispatch_request_id") from None
-        if not created:
-            return self._dispatch_view(dispatch)
-        if task.state_version != request.task_state_version:
-            self.store.mark_owner_dispatch_blocked(
-                request.request_id,
-                failure_code="STALE_TASK_STATE_VERSION",
-                failure_reason="dispatch task_state_version did not match authoritative task",
-            )
-            raise ControlPlaneError(409, "stale_task_state_version")
-        if task.state not in {TaskState.SUBMITTED, TaskState.READY}:
-            self.store.mark_owner_dispatch_blocked(
-                request.request_id,
-                failure_code="TASK_STATE_NOT_DISPATCHABLE",
-                failure_reason=f"task state {task.state.value} is not dispatchable",
-            )
-            raise ControlPlaneError(409, "task_state_not_dispatchable")
-        if task.project_id is None:
-            self.store.mark_owner_dispatch_blocked(
-                request.request_id,
-                failure_code="MISSING_PROJECT_ID",
-                failure_reason="coding tasks require an explicit registered project",
-            )
-            raise ControlPlaneError(409, "missing_project_id")
-        if task.base_sha is None:
-            self.store.mark_owner_dispatch_blocked(
-                request.request_id,
-                failure_code="PROJECT_BASE_SHA_MISSING",
-                failure_reason="coding tasks require a durable base_sha",
-            )
-            raise ControlPlaneError(409, "project_base_sha_missing")
-        project_view = self.get_project(task.project_id)
-        if project_view.storage_availability != ProjectAvailability.ONLINE.value:
-            self.store.mark_owner_dispatch_blocked(
-                request.request_id,
-                failure_code=f"PROJECT_{project_view.storage_availability}",
-                failure_reason="registered project is not currently available",
-            )
-            raise ControlPlaneError(409, "project_not_available")
-
-        effective_registry = (
-            self.provider_registry_manager.registry()
-            if self.provider_registry_manager is not None
-            else self.registry
-        )
-        if self.provider_registry_manager is not None:
-            target = effective_registry.execution_targets.get(request.execution_target_id)
-            model = (
-                effective_registry.models.get(target.model_sku_id)
-                if target is not None
-                else None
-            )
-            connected_provider_ids = self.provider_registry_manager.connected_provider_ids()
-            if model is None or model.provider_id not in connected_provider_ids:
-                self.store.mark_owner_dispatch_blocked(
-                    request.request_id,
-                    failure_code="PROVIDER_NOT_CONNECTED",
-                    failure_reason="execution target provider is not connected by owner",
-                )
-                raise ControlPlaneError(409, "provider_not_connected") from None
-        try:
-            validate_execution_target_launch(
-                effective_registry,
-                execution_target_id=request.execution_target_id,
-                runtime_available=self._runtime_available(request.execution_target_id),
-                execution_evidence_journal=self.execution_evidence_journal,
-            )
-        except RuntimeError as error:
-            self.store.mark_owner_dispatch_blocked(
-                request.request_id,
-                failure_code="EXECUTION_TARGET_NOT_LAUNCHABLE",
-                failure_reason=str(error),
-            )
-            raise ControlPlaneError(409, "execution_target_not_launchable") from None
-
-        if task.state is TaskState.SUBMITTED:
-            task = self.store.transition_task(
-                task_id,
-                TaskState.READY,
-                expected_version=task.state_version,
-                reason="owner initiated execution dispatch reserved",
-            )
-        if self.dispatch_executor is not None:
-            thread = threading.Thread(
-                target=self.dispatch_executor.execute,
-                args=(request.request_id,),
-                name=f"owner-dispatch-{request.request_id}",
-                daemon=True,
-            )
-            thread.start()
         return self._dispatch_view(dispatch)
 
     def recommend_dispatch(
@@ -1795,7 +1746,7 @@ class ControlPlaneService:
         self._validate_identifier("task_id", task_id)
         try:
             self.store.get_task(task_id)
-        except KeyError as error:
+        except KeyError:
             raise ControlPlaneError(404, "task_not_found") from None
 
         try:
@@ -1813,32 +1764,19 @@ class ControlPlaneService:
                 400, f"unknown_scheduling_policy:{policy_name}"
             ) from error
 
-        candidates = self._collect_dispatch_candidates()
         # One ``now`` shared by the score path and the per-candidate
         # source_pressure projection, so the score and the chip agree on
         # the same instant even if the request takes ~1 ms to render.
         now = datetime.now(UTC)
-        # M1 WP2: pull the task's tier floor. ``min_tier`` was added in
-        # WP2 commit 3 and defaults to ``"T1"`` so existing tasks read
-        # cleanly. An unknown string here means the row is corrupt
-        # (the submit handler validates ``TaskSubmitRequest.min_tier``
-        # so the daemon never writes a bad value), but the recommender
-        # still must not 500 on it. We degrade to T1, surface a reason
-        # on every admitted candidate, and record a system event so
-        # the owner can see the corruption rather than guess.
-        invalid_min_tier: str | None = None
-        try:
-            min_tier_value = ModelTier(task.min_tier)
-        except ValueError:
-            invalid_min_tier = task.min_tier
-            min_tier_value = ModelTier.T1
-            self.store.record_system_event(
-                "TASK_MIN_TIER_INVALID",
-                {"task_id": task_id, "raw": task.min_tier},
+        # Delegate the candidate-gathering + ranking to the host
+        # application/service layer (WP5a-1 commit 1 — pure refactor).
+        # The service owns the ``min_tier`` validation gate and the
+        # ``TASK_MIN_TIER_INVALID`` system event so the handler stays
+        # focused on view-model construction.
+        recommendation, candidates, invalid_min_tier = (
+            self._recommendation_service().recommend_for_task(
+                task, policy=policy, now=now,
             )
-        recommendation = recommend_owner_dispatch(
-            candidates, policy=policy, now=now, min_tier=min_tier_value,
-            invalid_min_tier=invalid_min_tier,
         )
 
         candidate_views = tuple(
@@ -1858,131 +1796,6 @@ class ControlPlaneService:
             top_pick=top.execution_target_id if top is not None else None,
             decision_reason=decision_reason,
         )
-
-    def _collect_dispatch_candidates(self) -> list[DispatchCandidateInput]:
-        """Gather one DispatchCandidateInput per execution target.
-
-        The provider view is the single source of truth for runtime
-        availability, verification, and quota window observations; the
-        quota-availability journal supplies the dispatch-relevant state.
-        """
-
-        registry = (
-            self.provider_registry_manager.registry()
-            if self.provider_registry_manager is not None
-            else self.registry
-        )
-
-        provider_by_target: dict[str, str] = {
-            target_id: registry.models[target.model_sku_id].provider_id
-            for target_id, target in registry.execution_targets.items()
-            if target.model_sku_id in registry.models
-        }
-
-        # Mirror the providers() view's plan → provider resolution so the
-        # recommendation sees the same windows the UI does. Pool windows
-        # are pool-scoped; every target of one provider inherits the
-        # windows of every pool that belongs to that provider's plans.
-        remaining_by_provider: dict[str, list[float]] = {}
-        # M1 WP1: per-window snapshots keyed by provider_id. ``source_pressure``
-        # needs the kind + reset_at + used_fraction, not just the remaining
-        # fraction. Empty for providers the quota refresh service has not
-        # read yet (e.g. before the first ``refresh_quota`` call).
-        windows_by_provider: dict[str, list[CandidateWindowInput]] = {}
-        # Quota window fractions do NOT live on the static registry. They
-        # are populated by the live quota refresh service and cached on
-        # disk; the providers() and quota() views both read from there.
-        # The recommender mirrors that: headroom belongs to whatever
-        # provider_id the connection layer reports, not to a registry
-        # plan_id that may not exist on a freshly-bootstrapped install.
-        if self.quota_refresh_service is not None:
-            for observation in self.quota_refresh_service.observations():
-                snapshot = observation.snapshot
-                if snapshot is None:
-                    continue
-                for window in snapshot.windows:
-                    if window.reset_at is None:
-                        # ``source_pressure`` short-circuits on missing
-                        # reset_at anyway; don't bother carrying it through.
-                        continue
-                    windows_by_provider.setdefault(
-                        observation.provider_id, []
-                    ).append(
-                        CandidateWindowInput(
-                            kind=window.window_kind,
-                            window_started_at=window.window_started_at,
-                            reset_at=window.reset_at,
-                            used_fraction=window.used_fraction,
-                        )
-                    )
-                    fraction = window.remaining_fraction
-                    if fraction is None:
-                        continue
-                    remaining_by_provider.setdefault(
-                        observation.provider_id, []
-                    ).append(fraction)
-
-        candidates: list[DispatchCandidateInput] = []
-        now = datetime.now(UTC)
-        for target_id, target in sorted(registry.execution_targets.items()):
-            provider_id = provider_by_target.get(target_id, "")
-            remaining = tuple(remaining_by_provider.get(provider_id, ()))
-
-            runtime_available = (
-                self.runtime_availability.get(target_id)
-                if target_id in self.runtime_availability
-                else self._runtime_available(target_id)
-            )
-            # Demote-fallback: prefer the journal's historical VERIFIED over the
-            # static registry flag so transient UNKNOWN evidence does not hide
-            # a real verified history. ``verified_stale`` reflects whether the
-            # fallback fired (latest non-VERIFIED, older VERIFIED exists).
-            verified = False
-            verified_stale = False
-            evidence_observed_at: datetime | None = None
-            if self.execution_evidence_journal is not None:
-                try:
-                    verified_evidence, stale_since = (
-                        self.execution_evidence_journal.latest_verified_for_target(target_id)
-                    )
-                except Exception:
-                    verified_evidence, stale_since = None, None
-                if verified_evidence is not None:
-                    verified = True
-                    evidence_observed_at = verified_evidence.observed_at
-                    verified_stale = stale_since is not None
-
-            availability_state = QuotaAvailabilityState.UNKNOWN
-            if self.quota_availability_journal is not None:
-                evidence = self.quota_availability_journal.load(target_id)
-                if evidence is not None:
-                    availability_state = evidence.state_at(now=now)
-
-            # M1 WP2: classify the target against the host-owned tier
-            # table. ``None`` here flows all the way through to the
-            # candidate view-model and the chip renders as "unknown".
-            tier_value = None
-            tier_match_reason = None
-            if self.tier_table is not None:
-                entry, tier_match_reason = self.tier_table.lookup(target_id)
-                tier_value = entry.tier
-
-            candidates.append(
-                DispatchCandidateInput(
-                    execution_target_id=target_id,
-                    model_sku_id=target.model_sku_id,
-                    runtime_available=bool(runtime_available),
-                    verified=bool(verified),
-                    verified_stale=verified_stale,
-                    remaining_fractions=remaining,
-                    windows=tuple(windows_by_provider.get(provider_id, ())),
-                    evidence_observed_at=evidence_observed_at,
-                    availability_state=availability_state,
-                    tier=tier_value,
-                    tier_match_reason=tier_match_reason,
-                )
-            )
-        return candidates
 
     @staticmethod
     def _dispatch_recommendation_candidate_view(
@@ -2039,7 +1852,11 @@ class ControlPlaneService:
                     # ``Σ weight × value == score`` identity is
                     # visible end-to-end (and a tuning commit does
                     # not have to push a new ``contribution``).
-                    value=float(component.value) if isinstance(component.value, (int, float)) else 0.0,
+                    value=(
+                        float(component.value)
+                        if isinstance(component.value, (int, float))
+                        else 0.0
+                    ),
                     weight=component.weight,
                 )
                 for component in evaluation.score_components
@@ -3806,7 +3623,12 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                         return
                     self._view(200, request_service.dispatch_task(task_id, payload))
                     return
-                if count == 4 and rest[2] == "dispatch" and rest[3] == "recommendation" and method == "POST":
+                if (
+                    count == 4
+                    and rest[2] == "dispatch"
+                    and rest[3] == "recommendation"
+                    and method == "POST"
+                ):
                     payload = self._read_json() or {}
                     self._view(200, request_service.recommend_dispatch(task_id, payload))
                     return
