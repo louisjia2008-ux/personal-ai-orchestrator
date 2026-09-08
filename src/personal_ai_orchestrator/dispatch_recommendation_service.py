@@ -1,0 +1,251 @@
+"""M1 WP5a-1 commit 1 — host application/service layer for dispatch recommendations.
+
+This module wraps the deterministic scoring core
+(``dispatch_recommender.recommend_owner_dispatch``) with the
+host-specific data gathering needed to build the candidate inputs
+the recommender consumes.
+
+Scope split (kept strict for WP5a-1 commit 1):
+- ``dispatch_recommender.py`` owns the **scoring algorithm** —
+  candidate admission, ranking, score decomposition. Pure
+  functions, deterministic, no I/O.
+- ``dispatch_recommendation_service.py`` (this module) owns the
+  **host application/service layer** — gathering
+  ``DispatchCandidateInput`` rows from the model registry, the
+  live quota refresh service, the execution evidence journal, and
+  the host-owned tier table. This is the layer that knows about
+  ``ControlPlaneService`` runtime state.
+
+Pure extraction from ``control_api.ControlPlaneService`` —
+``_collect_dispatch_candidates`` and the candidate-gathering
+portion of ``recommend_dispatch`` moved here. Behavior is
+byte-equivalent.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from datetime import UTC, datetime
+
+from personal_ai_orchestrator.dispatch_recommender import (
+    CandidateWindowInput,
+    DispatchCandidateInput,
+    DispatchRecommendation,
+    recommend_owner_dispatch,
+)
+from personal_ai_orchestrator.model_tiers import ModelTier
+from personal_ai_orchestrator.quota_availability import QuotaAvailabilityState
+from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskRecord
+from personal_ai_orchestrator.scheduler import RoutingObjective
+
+
+class DispatchRecommendationService:
+    """Host application/service layer for owner-dispatch recommendations.
+
+    Holds the references the data-gathering phase needs (registry,
+    quota refresh service, execution evidence journal, quota
+    availability journal, tier table, runtime availability map) and
+    exposes two methods:
+
+    - :meth:`collect_candidates` produces ``DispatchCandidateInput``
+      rows for every execution target — this is what the owner-dispatch
+      "recommendation" view feeds into the deterministic
+      ``recommend_owner_dispatch`` core.
+    - :meth:`recommend_for_task` runs the deterministic ranking on
+      those candidates, applying the ``min_tier`` validation gate and
+      recording a system event when the stored ``min_tier`` cannot
+      be parsed into a known tier.
+
+    The view-model layer (``DispatchRecommendationCandidate``,
+    ``DispatchRecommendationScoreComponent``, etc.) stays in
+    ``control_api.py`` — view construction is a wire-shape concern
+    this service does not own.
+    """
+
+    def __init__(
+        self,
+        store: SafetyKernelStore,
+        *,
+        registry_provider: Callable[[], object],
+        quota_refresh_service: object | None,
+        execution_evidence_journal: object | None,
+        quota_availability_journal: object | None,
+        tier_table: object | None,
+        runtime_availability: dict[str, bool] | None,
+        runtime_availability_fallback: Callable[[str], bool],
+    ) -> None:
+        self._store = store
+        self._registry_provider = registry_provider
+        self._quota_refresh_service = quota_refresh_service
+        self._execution_evidence_journal = execution_evidence_journal
+        self._quota_availability_journal = quota_availability_journal
+        self._tier_table = tier_table
+        self._runtime_availability = runtime_availability
+        self._runtime_availability_fallback = runtime_availability_fallback
+
+    def collect_candidates(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> list[DispatchCandidateInput]:
+        """Gather one ``DispatchCandidateInput`` per execution target.
+
+        Pure extraction of the previous ``_collect_dispatch_candidates``
+        method on ``ControlPlaneService``. Reads the same sources in
+        the same order and produces the same candidate list.
+        """
+
+        if now is None:
+            now = datetime.now(UTC)
+
+        registry = self._registry_provider()
+
+        provider_by_target: dict[str, str] = {
+            target_id: registry.models[target.model_sku_id].provider_id
+            for target_id, target in registry.execution_targets.items()
+            if target.model_sku_id in registry.models
+        }
+
+        remaining_by_provider: dict[str, list[float]] = {}
+        # M1 WP1: per-window snapshots keyed by provider_id.
+        # ``source_pressure`` needs kind + reset_at + used_fraction, not
+        # just remaining. Empty for providers the quota refresh service
+        # has not read yet.
+        windows_by_provider: dict[str, list[CandidateWindowInput]] = {}
+
+        if self._quota_refresh_service is not None:
+            for observation in self._quota_refresh_service.observations():
+                snapshot = observation.snapshot
+                if snapshot is None:
+                    continue
+                for window in snapshot.windows:
+                    if window.reset_at is None:
+                        # ``source_pressure`` short-circuits on missing
+                        # reset_at; don't carry it through.
+                        continue
+                    windows_by_provider.setdefault(
+                        observation.provider_id, []
+                    ).append(
+                        CandidateWindowInput(
+                            kind=window.window_kind,
+                            window_started_at=window.window_started_at,
+                            reset_at=window.reset_at,
+                            used_fraction=window.used_fraction,
+                        )
+                    )
+                    fraction = window.remaining_fraction
+                    if fraction is None:
+                        continue
+                    remaining_by_provider.setdefault(
+                        observation.provider_id, []
+                    ).append(fraction)
+
+        candidates: list[DispatchCandidateInput] = []
+        for target_id, target in sorted(registry.execution_targets.items()):
+            provider_id = provider_by_target.get(target_id, "")
+            remaining = tuple(remaining_by_provider.get(provider_id, ()))
+
+            if self._runtime_availability is not None and target_id in self._runtime_availability:
+                runtime_available = self._runtime_availability.get(target_id)
+            else:
+                runtime_available = self._runtime_availability_fallback(target_id)
+
+            # Demote-fallback: prefer the journal's historical VERIFIED
+            # over the static registry flag so transient UNKNOWN evidence
+            # does not hide a real verified history.
+            verified = False
+            verified_stale = False
+            evidence_observed_at: datetime | None = None
+            if self._execution_evidence_journal is not None:
+                try:
+                    verified_evidence, stale_since = (
+                        self._execution_evidence_journal.latest_verified_for_target(target_id)
+                    )
+                except Exception:
+                    verified_evidence, stale_since = None, None
+                if verified_evidence is not None:
+                    verified = True
+                    evidence_observed_at = verified_evidence.observed_at
+                    verified_stale = stale_since is not None
+
+            availability_state = QuotaAvailabilityState.UNKNOWN
+            if self._quota_availability_journal is not None:
+                evidence = self._quota_availability_journal.load(target_id)
+                if evidence is not None:
+                    availability_state = evidence.state_at(now=now)
+
+            tier_value = None
+            tier_match_reason = None
+            if self._tier_table is not None:
+                entry, tier_match_reason = self._tier_table.lookup(target_id)
+                tier_value = entry.tier
+
+            candidates.append(
+                DispatchCandidateInput(
+                    execution_target_id=target_id,
+                    model_sku_id=target.model_sku_id,
+                    runtime_available=bool(runtime_available),
+                    verified=bool(verified),
+                    verified_stale=verified_stale,
+                    remaining_fractions=remaining,
+                    windows=tuple(windows_by_provider.get(provider_id, ())),
+                    evidence_observed_at=evidence_observed_at,
+                    availability_state=availability_state,
+                    tier=tier_value,
+                    tier_match_reason=tier_match_reason,
+                )
+            )
+        return candidates
+
+    def recommend_for_task(
+        self,
+        task: TaskRecord,
+        *,
+        policy: RoutingObjective,
+        now: datetime | None = None,
+    ) -> tuple[DispatchRecommendation, list[DispatchCandidateInput], str | None]:
+        """Collect candidates and run the deterministic ranking for one task.
+
+        Returns:
+            - ``recommendation``: the ``DispatchRecommendation`` produced
+              by the deterministic core (top-1 + per-candidate
+              evaluation rows).
+            - ``candidates``: the gathered ``DispatchCandidateInput``
+              list (caller needs it for view-model construction).
+            - ``invalid_min_tier``: the raw ``task.min_tier`` string when
+              it could not be parsed into a ``ModelTier`` (the caller
+              may want to surface this; the recommender already records
+              a ``TASK_MIN_TIER_INVALID`` system event).
+
+        Pure extraction of the candidate-gathering + ranking portion
+        of the previous ``recommend_dispatch`` method. Behavior is
+        byte-equivalent.
+        """
+
+        if now is None:
+            now = datetime.now(UTC)
+
+        candidates = self.collect_candidates(now=now)
+
+        invalid_min_tier: str | None = None
+        try:
+            min_tier_value = ModelTier(task.min_tier)
+        except ValueError:
+            invalid_min_tier = task.min_tier
+            min_tier_value = ModelTier.T1
+            self._store.record_system_event(
+                "TASK_MIN_TIER_INVALID",
+                {"task_id": task.task_id, "raw": task.min_tier},
+            )
+
+        recommendation = recommend_owner_dispatch(
+            candidates,
+            policy=policy,
+            now=now,
+            min_tier=min_tier_value,
+            invalid_min_tier=invalid_min_tier,
+        )
+        return recommendation, candidates, invalid_min_tier
+
+
+__all__ = ["DispatchRecommendationService"]
