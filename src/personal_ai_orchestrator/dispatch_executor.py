@@ -58,7 +58,6 @@ from personal_ai_orchestrator.execution_evidence import (
     ExecutionVerificationOutcome,
     build_execution_evidence,
 )
-from personal_ai_orchestrator.worker_outcome_classifier import WorkerFailureClass
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.process_supervisor import ProcessSupervisor, SupervisedProcess
 from personal_ai_orchestrator.quota_availability import (
@@ -84,6 +83,7 @@ from personal_ai_orchestrator.verifier import (
     DeterministicVerifier,
     VerifierProfile,
 )
+from personal_ai_orchestrator.worker_outcome_classifier import WorkerFailureClass
 from personal_ai_orchestrator.worktree_manager import ManagedWorktree, WorktreeManager
 
 MAX_WORKER_STDOUT_BYTES = 256 * 1024
@@ -1078,6 +1078,8 @@ class OwnerDispatchExecutor:
         )
         from personal_ai_orchestrator.quota_availability import (
             observe_exhaustion as _observe_exhaustion,
+        )
+        from personal_ai_orchestrator.quota_availability import (
             observe_rate_limited as _observe_rate_limited,
         )
 
@@ -1130,6 +1132,8 @@ class OwnerDispatchExecutor:
 
         from personal_ai_orchestrator.execution_evidence import (
             ExecutionVerificationOutcome as _EVO,
+        )
+        from personal_ai_orchestrator.execution_evidence import (
             build_execution_evidence as _build_evidence,
         )
 

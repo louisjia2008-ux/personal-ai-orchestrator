@@ -20,7 +20,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from personal_ai_orchestrator.quota_burn import (
     BurnAssessment,
     BurnPressure,
+)
+from personal_ai_orchestrator.quota_burn import (
     assess as _assess,
+)
+from personal_ai_orchestrator.quota_burn import (
     infer_window_started_at as _infer_window_started_at,
 )
 

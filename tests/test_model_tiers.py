@@ -9,7 +9,7 @@ covers the override-wins / union-of-patterns semantics;
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 import pytest
 
@@ -24,7 +24,6 @@ from personal_ai_orchestrator.model_tiers import (
     parse_tier_table,
     tier_index,
 )
-
 
 # --------------------------------------------------------------------- #
 # tier_index / meets_minimum

@@ -24,6 +24,8 @@ from personal_ai_orchestrator.model_registry import (
     QuotaWindowKind,
     QuotaWindowSnapshot,
 )
+from personal_ai_orchestrator.opencode_contract import RoutingMode, RoutingRequest
+from personal_ai_orchestrator.quota_availability import observe_exhaustion, observe_success
 from personal_ai_orchestrator.quota_plan import (
     ConsumptionUnitKind,
     PlanQuota,
@@ -32,8 +34,6 @@ from personal_ai_orchestrator.quota_plan import (
     QuotaResourceKind,
     SharedQuotaPool,
 )
-from personal_ai_orchestrator.opencode_contract import RoutingMode, RoutingRequest
-from personal_ai_orchestrator.quota_availability import observe_exhaustion, observe_success
 from personal_ai_orchestrator.routing_bridge import build_routing_decision
 from personal_ai_orchestrator.scheduler import (
     RiskClass,
@@ -44,11 +44,11 @@ from personal_ai_orchestrator.scheduler import (
     TargetTelemetry,
     TaskProfile,
     _freshness_value,
+    _score_candidate,
     evaluate_target,
     objective_weights,
     resolve_scheduling_policy,
     route_task,
-    _score_candidate,
 )
 
 NOW = datetime(2026, 8, 30, tzinfo=UTC)
@@ -698,7 +698,7 @@ def test_score_candidate_determinism() -> None:
     one-liner.
     """
 
-    weights = objective_weights(RoutingObjective.BALANCED)
+    objective_weights(RoutingObjective.BALANCED)
     args = dict(
         capability_fit=0.7,
         priority=2,
@@ -727,7 +727,7 @@ def test_pressure_term_stale_sets_reason_burn_stale_ignored() -> None:
     The recommender agrees on every row (next test).
     """
 
-    from personal_ai_orchestrator.quota_burn import BurnPressure, BurnAssessment
+    from personal_ai_orchestrator.quota_burn import BurnAssessment, BurnPressure
 
     stale = BurnAssessment(
         expected_used_fraction=0.5, actual_used_fraction=0.4,
@@ -754,12 +754,6 @@ def test_pressure_term_scheduler_and_recommender_agree_on_same_window() -> None:
     must match exactly.
     """
 
-    from personal_ai_orchestrator.model_registry import (
-        ModelSKU,
-        Provider,
-        Account,
-    )
-    from personal_ai_orchestrator.quota_burn import assess
 
     source = EvidenceSource(
         source_type=EvidenceSourceType.PROVIDER_API,
@@ -787,7 +781,7 @@ def test_pressure_term_scheduler_and_recommender_agree_on_same_window() -> None:
         source=source,
         confidence=EvidenceConfidence.EXACT,
     )
-    snapshot = QuotaSnapshot(
+    QuotaSnapshot(
         schema_version=1,
         quota_pool_id="pool",
         provider_id="p",

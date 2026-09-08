@@ -20,7 +20,8 @@ what OpenCode Zen's worker actually emits, what ``429`` HTTP
 transports commonly log, and what rate-limit-aware providers
 expose as a server message. ``"usage limit"`` and
 ``"rate limit"`` are the two phrases the upstream docs call out
-explicitly; ``"429````,``too many requests````,````insufficient quota``/``exceeded`` round out the canonical set.
+explicitly; ``"429"``, ``"too many requests"``, ``"insufficient quota"`` /
+``"exceeded"`` round out the canonical set.
 
 A future M2 migration to typed errors from ``opencode serve``
 will replace this module's text match with a structured field

@@ -12,20 +12,18 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from personal_ai_orchestrator.control_api import DispatchRecommendationCandidate
 from personal_ai_orchestrator.dispatch_recommender import (
     CandidateWindowInput,
     DispatchCandidateInput,
-    _score,
     recommend_owner_dispatch,
     source_pressure_for,
 )
-from personal_ai_orchestrator.control_api import DispatchRecommendationCandidate
 from personal_ai_orchestrator.model_registry import QuotaWindowKind
 from personal_ai_orchestrator.model_tiers import ModelTier
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityState
 from personal_ai_orchestrator.quota_burn import BurnPressure
-from personal_ai_orchestrator.scheduler import RoutingObjective, objective_weights
-
+from personal_ai_orchestrator.scheduler import RoutingObjective
 
 # A single fixed instant the tests reason about. Plain constant rather
 # than a pytest fixture: pytest-asyncio's strict mode treats any fixture

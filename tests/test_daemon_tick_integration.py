@@ -19,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 import pytest

@@ -23,7 +23,6 @@ from personal_ai_orchestrator.quota_availability import (
     unknown_availability,
 )
 
-
 FIXED_NOW = datetime(2026, 9, 7, 12, 0, tzinfo=UTC)
 
 
