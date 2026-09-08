@@ -224,7 +224,7 @@ def test_legal_transition_ready_to_auto_planned(tmp_path) -> None:
             default_branch="main",
             last_known_head="abc",
         )
-        task = store.submit_task(
+        store.submit_task(
             task_id="t1",
             request_id="r1",
             project_id="p1",
@@ -259,7 +259,7 @@ def test_legal_transition_auto_planned_to_auto_grace(tmp_path) -> None:
             default_branch="main",
             last_known_head="abc",
         )
-        task = store.submit_task(
+        store.submit_task(
             task_id="t1",
             request_id="r1",
             project_id="p1",
@@ -299,7 +299,7 @@ def test_illegal_transition_auto_planned_to_running_fails(tmp_path) -> None:
             default_branch="main",
             last_known_head="abc",
         )
-        task = store.submit_task(
+        store.submit_task(
             task_id="t1",
             request_id="r1",
             project_id="p1",
@@ -338,7 +338,7 @@ def test_illegal_transition_auto_grace_to_running_fails(tmp_path) -> None:
             default_branch="main",
             last_known_head="abc",
         )
-        task = store.submit_task(
+        store.submit_task(
             task_id="t1",
             request_id="r1",
             project_id="p1",
@@ -380,7 +380,7 @@ def test_terminal_states_do_not_enter_auto(tmp_path) -> None:
             default_branch="main",
             last_known_head="abc",
         )
-        task = store.submit_task(
+        store.submit_task(
             task_id="t1",
             request_id="r1",
             project_id="p1",
@@ -458,7 +458,7 @@ def test_transaction_rollback_preserves_state_and_version(tmp_path) -> None:
             default_branch="main",
             last_known_head="abc",
         )
-        task = store.submit_task(
+        store.submit_task(
             task_id="t1",
             request_id="r1",
             project_id="p1",
@@ -508,7 +508,7 @@ def test_restart_persistence_of_auto_state(tmp_path) -> None:
             default_branch="main",
             last_known_head="abc",
         )
-        task = store.submit_task(
+        store.submit_task(
             task_id="t1",
             request_id="r1",
             project_id="p1",
@@ -522,7 +522,7 @@ def test_restart_persistence_of_auto_state(tmp_path) -> None:
             auto_decision_id="auto-dec-1",
             auto_reason="AUTO_PLANNED{target=m3-sub}",
         )
-        grace = store.transition_task(
+        _grace = store.transition_task(
             "t1", TaskState.AUTO_GRACE,
             expected_version=planned.state_version,
             auto_grace_deadline_at="2026-09-07T00:02:00+00:00",
@@ -560,7 +560,7 @@ def test_auto_planned_veto_back_to_ready(tmp_path) -> None:
             default_branch="main",
             last_known_head="abc",
         )
-        task = store.submit_task(
+        store.submit_task(
             task_id="t1",
             request_id="r1",
             project_id="p1",
