@@ -49,7 +49,6 @@ from personal_ai_orchestrator.quota_plan import (
     SharedQuotaPool,
 )
 
-
 # M1 WP4: the availability-side types live in ``quota_availability``
 # which ``shadow_evidence`` transitively imports. Importing the
 # availability types here at module load time would close a
@@ -61,7 +60,6 @@ from personal_ai_orchestrator.quota_plan import (
 if TYPE_CHECKING:
     from personal_ai_orchestrator.quota_availability import (
         QuotaAvailabilityEvidence,
-        QuotaAvailabilityState,
     )
 
 

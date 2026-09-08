@@ -36,8 +36,8 @@ from personal_ai_orchestrator.model_registry import (
 )
 from personal_ai_orchestrator.quota_burn import BurnPressure
 from personal_ai_orchestrator.quota_plan import (
-    ConsumptionUnitKind,
     BindingWindow,
+    ConsumptionUnitKind,
     PlanQuota,
     PlanQuotaProjection,
     PlanQuotaSemantics,

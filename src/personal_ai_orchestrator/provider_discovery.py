@@ -45,6 +45,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 from personal_ai_orchestrator.model_registry import (
     EvidenceConfidence,
@@ -1303,7 +1304,11 @@ def discover(
         # target on the dashboard. The credential-scope gates are
         # irrelevant for these surfaces and the spec is authoritative.
         if family.auth == "none":
-            auth_status = AuthStatus.AUTH_FROM_ENV_PRESENCE if catalog_discovered else AuthStatus.AUTH_REQUIRED
+            auth_status = (
+                AuthStatus.AUTH_FROM_ENV_PRESENCE
+                if catalog_discovered
+                else AuthStatus.AUTH_REQUIRED
+            )
         elif catalog_discovered and credential_scope_verified:
             auth_status = AuthStatus.AUTH_FROM_ENV_PRESENCE
         elif credential_evidence_present:

@@ -124,7 +124,11 @@ class QuotaAvailabilityEvidence(RegistryModel):
         # transition is reversible.
         if self.state is QuotaAvailabilityState.COOLDOWN and self.cooldown_until is not None:
             if now >= self.cooldown_until:
-                if self.measurement_source is MeasurementSource.LOCALLY_MEASURED and self.previous_state_baseline is QuotaAvailabilityState.AVAILABLE_UNMETERED:
+                if (
+                    self.measurement_source is MeasurementSource.LOCALLY_MEASURED
+                    and self.previous_state_baseline
+                    is QuotaAvailabilityState.AVAILABLE_UNMETERED
+                ):
                     return QuotaAvailabilityState.AVAILABLE_UNMETERED
                 return QuotaAvailabilityState.RECOVERY_PROBE_DUE
         # Project the lock on top of whatever underlying state we have. The
