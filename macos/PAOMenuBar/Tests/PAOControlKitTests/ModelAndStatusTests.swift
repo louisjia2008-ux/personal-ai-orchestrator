@@ -1027,4 +1027,61 @@ final class ModelAndStatusTests: XCTestCase {
         XCTAssertEqual(settings.mode, "MANUAL")
         XCTAssertEqual(settings.selectableModes, ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"])
     }
+
+    // MARK: - M1 WP5a-1 commit 3 — AUTO_PLANNED / AUTO_GRACE bookkeeping
+
+    // ``TaskView`` surfaces the four new AUTO_* fields when the
+    // daemon sends them.
+    func testTaskViewDecodesAutoFields() throws {
+        let json = """
+        {
+          "task_id": "t-1",
+          "request_id": "r-1",
+          "intent": "fix bug",
+          "project_id": "p1",
+          "base_sha": "abc",
+          "state": "AUTO_GRACE",
+          "state_version": 4,
+          "created_at": "2026-09-07T00:00:00Z",
+          "updated_at": "2026-09-07T00:00:05Z",
+          "auto_decision_id": "auto-dec-1",
+          "auto_grace_deadline_at": "2026-09-07T00:02:05Z",
+          "auto_acked_at": "2026-09-07T00:00:05Z",
+          "auto_reason": "AUTO_PLANNED{target=m3-sub}"
+        }
+        """
+        let view = try JSONDecoder().decode(
+            TaskView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.state, "AUTO_GRACE")
+        XCTAssertEqual(view.autoDecisionId, "auto-dec-1")
+        XCTAssertEqual(view.autoGraceDeadlineAt, "2026-09-07T00:02:05Z")
+        XCTAssertEqual(view.autoAckedAt, "2026-09-07T00:00:05Z")
+        XCTAssertEqual(view.autoReason, "AUTO_PLANNED{target=m3-sub}")
+    }
+
+    // A pre-WP5a-1 daemon omits the new fields. The lenient
+    // decoder surfaces ``nil`` for every AUTO_* field so the picker
+    // renders the same MANUAL-only chrome.
+    func testTaskViewLenientDecodePreWP5a1Payload() throws {
+        let json = """
+        {
+          "task_id": "t-1",
+          "request_id": "r-1",
+          "intent": "fix bug",
+          "state": "READY",
+          "state_version": 0,
+          "created_at": "2026-09-07T00:00:00Z",
+          "updated_at": "2026-09-07T00:00:00Z"
+        }
+        """
+        let view = try JSONDecoder().decode(
+            TaskView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.state, "READY")
+        XCTAssertNil(view.autoDecisionId)
+        XCTAssertNil(view.autoGraceDeadlineAt)
+        XCTAssertNil(view.autoAckedAt)
+        XCTAssertNil(view.autoReason)
+    }
 }

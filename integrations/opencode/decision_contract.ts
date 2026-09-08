@@ -1,4 +1,8 @@
-export type RoutingMode = "BYPASS" | "SHADOW" | "ACTIVE"
+export type RoutingMode =
+  | "BYPASS"
+  | "SHADOW"
+  | "ACTIVE"
+  | "SUPERVISED_AUTO"
 
 export type ModelRef = {
   provider_id: string
@@ -26,7 +30,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isRoutingMode(value: unknown): value is RoutingMode {
-  return value === "ACTIVE" || value === "BYPASS" || value === "SHADOW"
+  return (
+    value === "ACTIVE" ||
+    value === "BYPASS" ||
+    value === "SHADOW" ||
+    // M1 WP5a-1: SUPERVISED_AUTO is a host-owned planning mode. The
+    // plugin never initiates it; the daemon may produce it as a
+    // frozen RoutingDecision the dispatch panel reads. The validator
+    // accepts it here so a SUPERVISED_AUTO decision can be parsed
+    // by owner-facing consumers (audit / routing views), but the
+    // plugin never sends ``request.mode === "SUPERVISED_AUTO"``
+    // itself so the side-effect gate (``mode !== "ACTIVE"``) remains
+    // intact and the plugin cannot switch the OpenCode session.
+    value === "SUPERVISED_AUTO"
+  )
 }
 
 function parseModelRef(value: unknown): ModelRef | null | undefined {

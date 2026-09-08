@@ -143,6 +143,22 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
     /// backwards-compat round-trip.
     public let minTier: String?
 
+    /// M1 WP5a-1: frozen ``RoutingDecision.decision_id`` written by the
+    /// host-owned planning tick. ``nil`` for pre-WP5a-1 tasks or for
+    /// MANUAL tasks that never entered the AUTO path.
+    public let autoDecisionId: String?
+    /// M1 WP5a-1: ISO timestamp at which the grace window expires.
+    /// Set on entry to ``AUTO_GRACE`` for projects with
+    /// ``unattended_allowed=true``; otherwise set on owner ack
+    /// via ``POST /v1/tasks/{id}/auto/ack``.
+    public let autoGraceDeadlineAt: String?
+    /// M1 WP5a-1: ISO timestamp the owner acknowledged the planning
+    /// decision. ``nil`` for unattended projects or until ack.
+    public let autoAckedAt: String?
+    /// M1 WP5a-1: short audit summary text (``AUTO_SKIPPED{reason}``
+    /// / ``AUTO_PLANNED{decision_id,target}``).
+    public let autoReason: String?
+
     public var id: String { taskId }
 
     enum CodingKeys: String, CodingKey {
@@ -159,6 +175,10 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
         case schedulingPolicy = "scheduling_policy"
         case manualExecutionTargetId = "manual_execution_target_id"
         case minTier = "min_tier"
+        case autoDecisionId = "auto_decision_id"
+        case autoGraceDeadlineAt = "auto_grace_deadline_at"
+        case autoAckedAt = "auto_acked_at"
+        case autoReason = "auto_reason"
     }
 
     public init(
@@ -174,7 +194,11 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
         updatedAt: String,
         schedulingPolicy: String? = nil,
         manualExecutionTargetId: String? = nil,
-        minTier: String? = nil
+        minTier: String? = nil,
+        autoDecisionId: String? = nil,
+        autoGraceDeadlineAt: String? = nil,
+        autoAckedAt: String? = nil,
+        autoReason: String? = nil
     ) {
         self.taskId = taskId
         self.requestId = requestId
@@ -189,6 +213,10 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
         self.schedulingPolicy = schedulingPolicy
         self.manualExecutionTargetId = manualExecutionTargetId
         self.minTier = minTier
+        self.autoDecisionId = autoDecisionId
+        self.autoGraceDeadlineAt = autoGraceDeadlineAt
+        self.autoAckedAt = autoAckedAt
+        self.autoReason = autoReason
     }
 
     public init(from decoder: Decoder) throws {
@@ -208,6 +236,13 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
             String.self, forKey: .manualExecutionTargetId
         )
         minTier = try container.decodeIfPresent(String.self, forKey: .minTier)
+        // Lenient defaults: a pre-WP5a-1 daemon omits these fields.
+        autoDecisionId = try container.decodeIfPresent(String.self, forKey: .autoDecisionId)
+        autoGraceDeadlineAt = try container.decodeIfPresent(
+            String.self, forKey: .autoGraceDeadlineAt
+        )
+        autoAckedAt = try container.decodeIfPresent(String.self, forKey: .autoAckedAt)
+        autoReason = try container.decodeIfPresent(String.self, forKey: .autoReason)
     }
 }
 

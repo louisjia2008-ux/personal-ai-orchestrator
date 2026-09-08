@@ -27,11 +27,33 @@ class TaskState(StrEnum):
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
     COMPLETED = "COMPLETED"
+    #: M1 WP5a-1: host-owned planning tick wrote a frozen
+    #: ``RoutingDecision`` for this task. The task is now sitting in
+    #: ``AUTO_GRACE`` (or — for ``unattended_allowed`` projects —
+    #: holding an explicit ``auto_grace_deadline_at``).
+    AUTO_PLANNED = "AUTO_PLANNED"
+    #: M1 WP5a-1: grace window. Owner can veto (→ READY), explicit
+    #: ack (``POST /v1/tasks/{id}/auto/ack``) starts the countdown,
+    #: or expiry dispatches (WP5a-2). No autonomous
+    #: ``AUTO_GRACE → RUNNING`` transition in WP5a-1 — the tick
+    #: lands in WP5a-2.
+    AUTO_GRACE = "AUTO_GRACE"
 
 
 _ALLOWED_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
     TaskState.SUBMITTED: frozenset({TaskState.READY, TaskState.BLOCKED, TaskState.CANCELLED}),
-    TaskState.READY: frozenset({TaskState.RUNNING, TaskState.BLOCKED, TaskState.CANCELLED}),
+    TaskState.READY: frozenset(
+        {
+            TaskState.RUNNING,
+            TaskState.BLOCKED,
+            TaskState.CANCELLED,
+            # M1 WP5a-1: the host-owned tick can promote READY →
+            # AUTO_PLANNED when the project's supervised-auto toggle
+            # is on and the recommendations pass the six hard
+            # gates (frozen in docs/M1_WP5_SPEC.md).
+            TaskState.AUTO_PLANNED,
+        }
+    ),
     TaskState.RUNNING: frozenset(
         {TaskState.WORKER_FINISHED, TaskState.BLOCKED, TaskState.FAILED, TaskState.CANCELLED}
     ),
@@ -46,6 +68,19 @@ _ALLOWED_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
     TaskState.FAILED: frozenset(),
     TaskState.CANCELLED: frozenset(),
     TaskState.COMPLETED: frozenset(),
+    # M1 WP5a-1: AUTO_PLANNED is the planning-tick's terminal state
+    # until the task is vetoed back to READY or promoted into
+    # AUTO_GRACE. AUTO_GRACE is the supervised-grace terminal state
+    # — the autonomous dispatch path that promotes AUTO_GRACE →
+    # RUNNING lands in WP5a-2 (deliberately NOT in this map;
+    # AUTO_GRACE's transition set below lists only the
+    # owner-controlled paths).
+    TaskState.AUTO_PLANNED: frozenset(
+        {TaskState.AUTO_GRACE, TaskState.READY, TaskState.BLOCKED, TaskState.CANCELLED}
+    ),
+    TaskState.AUTO_GRACE: frozenset(
+        {TaskState.READY, TaskState.BLOCKED, TaskState.CANCELLED}
+    ),
 }
 
 
@@ -70,6 +105,23 @@ class TaskRecord(FrozenModel):
     # Always a valid ModelTier string; the storage layer normalises
     # None → "T1" on insert so old rows still type-check.
     min_tier: str = "T1"
+    # M1 WP5a-1: AUTO_PLANNED / AUTO_GRACE bookkeeping. All four
+    # fields default to ``None`` so a pre-WP5a-1 task reads cleanly.
+    # ``auto_decision_id`` is the frozen ``RoutingDecision.decision_id``
+    # written by the tick (one per task, never recreated across
+    # ticks — same decision, same request_id, idempotent on replay).
+    # ``auto_grace_deadline_at`` is the ISO timestamp at which the
+    # grace window expires (set on entry to AUTO_GRACE for
+    # ``unattended_allowed`` projects, or on owner ack otherwise).
+    # ``auto_acked_at`` is the ISO timestamp the owner acknowledged
+    # the planning decision (the deadline is then
+    # ``acked_at + grace_seconds``). ``auto_reason`` is the
+    # ``AUTO_SKIPPED{reason}`` / ``AUTO_PLANNED{decision_id,target}``
+    # audit summary text exposed back to the panel.
+    auto_decision_id: str | None = None
+    auto_grace_deadline_at: str | None = None
+    auto_acked_at: str | None = None
+    auto_reason: str | None = None
 
 
 class ProjectAvailability(StrEnum):
@@ -293,6 +345,15 @@ class SafetyKernelStore:
         self._ensure_column(
             "tasks", "min_tier", "TEXT NOT NULL DEFAULT 'T1'"
         )
+        # M1 WP5a-1: AUTO_PLANNED / AUTO_GRACE bookkeeping. All four
+        # columns default to NULL so a pre-WP5a-1 task row reads
+        # cleanly and ``AUTO_*`` state machines never trip on legacy
+        # data. WP5a-1 commit 3 does NOT add an ``AUTO_* → RUNNING``
+        # transition — that lives in WP5a-2's tick.
+        self._ensure_column("tasks", "auto_decision_id", "TEXT")
+        self._ensure_column("tasks", "auto_grace_deadline_at", "TEXT")
+        self._ensure_column("tasks", "auto_acked_at", "TEXT")
+        self._ensure_column("tasks", "auto_reason", "TEXT")
         self._ensure_column("projects", "scheduling_policy", "TEXT")
         self._ensure_column("projects", "manual_execution_target_id", "TEXT")
         # M1 WP5a-1: project-level supervised-auto settings. The
@@ -855,6 +916,10 @@ class SafetyKernelStore:
         # fall back to "T1" on legacy stores; new stores have the
         # column with the DEFAULT clause.
         min_tier = row["min_tier"] if "min_tier" in row.keys() else "T1"
+        # M1 WP5a-1: AUTO_PLANNED / AUTO_GRACE columns are nullable
+        # so a pre-WP5a-1 task row reads cleanly. ``row[]`` returns
+        # ``None`` for missing keys on SQLite's default cursor (no
+        # ``row.keys()`` gate needed once ``_ensure_column`` has run).
         return TaskRecord(
             task_id=row["task_id"],
             request_id=row["request_id"],
@@ -869,6 +934,10 @@ class SafetyKernelStore:
             scheduling_policy=row["scheduling_policy"],
             manual_execution_target_id=row["manual_execution_target_id"],
             min_tier=min_tier,
+            auto_decision_id=row["auto_decision_id"],
+            auto_grace_deadline_at=row["auto_grace_deadline_at"],
+            auto_acked_at=row["auto_acked_at"],
+            auto_reason=row["auto_reason"],
         )
 
     def transition_task(
@@ -878,6 +947,19 @@ class SafetyKernelStore:
         *,
         expected_version: int | None = None,
         reason: str | None = None,
+        # M1 WP5a-1: AUTO_PLANNED / AUTO_GRACE bookkeeping fields.
+        # All four are optional so the pre-WP5a-1 call sites (which
+        # do not pass them) keep working unchanged. The fields are
+        # written only when the call site supplies them, so a
+        # AUTO_PLANNED transition that does not pass
+        # ``auto_decision_id`` still reads ``None`` on the row
+        # (the WP5a-1 contract pins that the tick writes a real
+        # ``auto_decision_id``; this default-to-None behaviour is
+        # the safety net).
+        auto_decision_id: str | None = None,
+        auto_grace_deadline_at: str | None = None,
+        auto_acked_at: str | None = None,
+        auto_reason: str | None = None,
     ) -> TaskRecord:
         self.connection.execute("BEGIN IMMEDIATE")
         try:
@@ -888,24 +970,55 @@ class SafetyKernelStore:
                 raise ValueError(f"invalid task transition {current.state} -> {new_state}")
             stamp = _now()
             next_version = current.state_version + 1
+            # Build the UPDATE column list dynamically so a pre-WP5a-1
+            # call that does not pass the new fields stays byte-equivalent
+            # (the SQL only touches the columns the call site touched).
+            update_columns = (
+                "state=?, state_version=?, updated_at=?"
+            )
+            update_values: list[object] = [
+                new_state.value, next_version, stamp,
+            ]
+            if auto_decision_id is not None:
+                update_columns += ", auto_decision_id=?"
+                update_values.append(auto_decision_id)
+            if auto_grace_deadline_at is not None:
+                update_columns += ", auto_grace_deadline_at=?"
+                update_values.append(auto_grace_deadline_at)
+            if auto_acked_at is not None:
+                update_columns += ", auto_acked_at=?"
+                update_values.append(auto_acked_at)
+            if auto_reason is not None:
+                update_columns += ", auto_reason=?"
+                update_values.append(auto_reason)
+            update_values.extend([task_id, current.state_version])
             updated = self.connection.execute(
-                """
-                UPDATE tasks SET state=?, state_version=?, updated_at=?
+                f"""
+                UPDATE tasks SET {update_columns}
                 WHERE task_id=? AND state_version=?
                 """,
-                (new_state.value, next_version, stamp, task_id, current.state_version),
+                update_values,
             )
             if updated.rowcount != 1:
                 raise RuntimeError("task transition lost optimistic concurrency race")
+            audit_payload: dict[str, object] = {
+                "from": current.state.value,
+                "to": new_state.value,
+                "state_version": next_version,
+                "reason": reason,
+            }
+            if auto_decision_id is not None:
+                audit_payload["auto_decision_id"] = auto_decision_id
+            if auto_grace_deadline_at is not None:
+                audit_payload["auto_grace_deadline_at"] = auto_grace_deadline_at
+            if auto_acked_at is not None:
+                audit_payload["auto_acked_at"] = auto_acked_at
+            if auto_reason is not None:
+                audit_payload["auto_reason"] = auto_reason
             self._audit(
                 task_id,
                 "TASK_STATE_CHANGED",
-                {
-                    "from": current.state.value,
-                    "to": new_state.value,
-                    "state_version": next_version,
-                    "reason": reason,
-                },
+                audit_payload,
             )
             self.connection.execute("COMMIT")
         except Exception:
