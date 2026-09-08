@@ -143,6 +143,22 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
     /// backwards-compat round-trip.
     public let minTier: String?
 
+    /// M1 WP5a-1: frozen ``RoutingDecision.decision_id`` written by the
+    /// host-owned planning tick. ``nil`` for pre-WP5a-1 tasks or for
+    /// MANUAL tasks that never entered the AUTO path.
+    public let autoDecisionId: String?
+    /// M1 WP5a-1: ISO timestamp at which the grace window expires.
+    /// Set on entry to ``AUTO_GRACE`` for projects with
+    /// ``unattended_allowed=true``; otherwise set on owner ack
+    /// via ``POST /v1/tasks/{id}/auto/ack``.
+    public let autoGraceDeadlineAt: String?
+    /// M1 WP5a-1: ISO timestamp the owner acknowledged the planning
+    /// decision. ``nil`` for unattended projects or until ack.
+    public let autoAckedAt: String?
+    /// M1 WP5a-1: short audit summary text (``AUTO_SKIPPED{reason}``
+    /// / ``AUTO_PLANNED{decision_id,target}``).
+    public let autoReason: String?
+
     public var id: String { taskId }
 
     enum CodingKeys: String, CodingKey {
@@ -159,6 +175,10 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
         case schedulingPolicy = "scheduling_policy"
         case manualExecutionTargetId = "manual_execution_target_id"
         case minTier = "min_tier"
+        case autoDecisionId = "auto_decision_id"
+        case autoGraceDeadlineAt = "auto_grace_deadline_at"
+        case autoAckedAt = "auto_acked_at"
+        case autoReason = "auto_reason"
     }
 
     public init(
@@ -174,7 +194,11 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
         updatedAt: String,
         schedulingPolicy: String? = nil,
         manualExecutionTargetId: String? = nil,
-        minTier: String? = nil
+        minTier: String? = nil,
+        autoDecisionId: String? = nil,
+        autoGraceDeadlineAt: String? = nil,
+        autoAckedAt: String? = nil,
+        autoReason: String? = nil
     ) {
         self.taskId = taskId
         self.requestId = requestId
@@ -189,6 +213,10 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
         self.schedulingPolicy = schedulingPolicy
         self.manualExecutionTargetId = manualExecutionTargetId
         self.minTier = minTier
+        self.autoDecisionId = autoDecisionId
+        self.autoGraceDeadlineAt = autoGraceDeadlineAt
+        self.autoAckedAt = autoAckedAt
+        self.autoReason = autoReason
     }
 
     public init(from decoder: Decoder) throws {
@@ -208,6 +236,13 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
             String.self, forKey: .manualExecutionTargetId
         )
         minTier = try container.decodeIfPresent(String.self, forKey: .minTier)
+        // Lenient defaults: a pre-WP5a-1 daemon omits these fields.
+        autoDecisionId = try container.decodeIfPresent(String.self, forKey: .autoDecisionId)
+        autoGraceDeadlineAt = try container.decodeIfPresent(
+            String.self, forKey: .autoGraceDeadlineAt
+        )
+        autoAckedAt = try container.decodeIfPresent(String.self, forKey: .autoAckedAt)
+        autoReason = try container.decodeIfPresent(String.self, forKey: .autoReason)
     }
 }
 
@@ -232,6 +267,20 @@ public struct ProjectView: Decodable, Equatable, Identifiable, Sendable {
     public let recentTaskCount: Int
     public let currentBranch: String?
 
+    /// M1 WP5a-1: project-level supervised-auto toggle. When ``true``
+    /// the host-owned ``SUPERVISED_AUTO`` tick path is allowed to
+    /// plan tasks in this project. Defaults to ``false`` so a
+    /// pre-WP5a-1 daemon reads as opt-out.
+    public let supervisedAutoAllowed: Bool
+    /// M1 WP5a-1: project-level unattended toggle. When ``true`` the
+    /// ``AUTO_GRACE`` countdown starts immediately on planning.
+    /// Defaults to ``false``.
+    public let unattendedAllowed: Bool
+    /// M1 WP5a-1: project-level grace window in seconds. Defaults to
+    /// ``120`` so a pre-WP5a-1 daemon reads as the safety kernel
+    /// default.
+    public let graceSeconds: Int
+
     public var id: String { projectId }
     public var isOnline: Bool { storageAvailability == "ONLINE" }
 
@@ -250,6 +299,71 @@ public struct ProjectView: Decodable, Equatable, Identifiable, Sendable {
         case storageAvailability = "storage_availability"
         case recentTaskCount = "recent_task_count"
         case currentBranch = "current_branch"
+        case supervisedAutoAllowed = "supervised_auto_allowed"
+        case unattendedAllowed = "unattended_allowed"
+        case graceSeconds = "grace_seconds"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        projectId = try container.decode(String.self, forKey: .projectId)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        canonicalRepoRoot = try container.decode(String.self, forKey: .canonicalRepoRoot)
+        gitRoot = try container.decode(String.self, forKey: .gitRoot)
+        defaultBranch = try container.decode(String.self, forKey: .defaultBranch)
+        lastKnownHead = try container.decode(String.self, forKey: .lastKnownHead)
+        createdAt = try container.decode(String.self, forKey: .createdAt)
+        updatedAt = try container.decode(String.self, forKey: .updatedAt)
+        workingSubpath = try container.decodeIfPresent(String.self, forKey: .workingSubpath)
+        remoteUrl = try container.decodeIfPresent(String.self, forKey: .remoteUrl)
+        lastOpenedAt = try container.decodeIfPresent(String.self, forKey: .lastOpenedAt)
+        storageAvailability = try container.decode(String.self, forKey: .storageAvailability)
+        recentTaskCount = try container.decode(Int.self, forKey: .recentTaskCount)
+        currentBranch = try container.decodeIfPresent(String.self, forKey: .currentBranch)
+        // Lenient decode: a pre-WP5a-1 daemon omits these three
+        // fields; default to the dataclass defaults so the picker
+        // renders the same opt-out chip.
+        supervisedAutoAllowed = (try container.decodeIfPresent(Bool.self, forKey: .supervisedAutoAllowed)) ?? false
+        unattendedAllowed = (try container.decodeIfPresent(Bool.self, forKey: .unattendedAllowed)) ?? false
+        graceSeconds = (try container.decodeIfPresent(Int.self, forKey: .graceSeconds)) ?? 120
+    }
+
+    public init(
+        projectId: String,
+        displayName: String,
+        canonicalRepoRoot: String,
+        gitRoot: String,
+        defaultBranch: String,
+        lastKnownHead: String,
+        createdAt: String,
+        updatedAt: String,
+        workingSubpath: String? = nil,
+        remoteUrl: String? = nil,
+        lastOpenedAt: String? = nil,
+        storageAvailability: String,
+        recentTaskCount: Int = 0,
+        currentBranch: String? = nil,
+        supervisedAutoAllowed: Bool = false,
+        unattendedAllowed: Bool = false,
+        graceSeconds: Int = 120
+    ) {
+        self.projectId = projectId
+        self.displayName = displayName
+        self.canonicalRepoRoot = canonicalRepoRoot
+        self.gitRoot = gitRoot
+        self.defaultBranch = defaultBranch
+        self.lastKnownHead = lastKnownHead
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.workingSubpath = workingSubpath
+        self.remoteUrl = remoteUrl
+        self.lastOpenedAt = lastOpenedAt
+        self.storageAvailability = storageAvailability
+        self.recentTaskCount = recentTaskCount
+        self.currentBranch = currentBranch
+        self.supervisedAutoAllowed = supervisedAutoAllowed
+        self.unattendedAllowed = unattendedAllowed
+        self.graceSeconds = graceSeconds
     }
 }
 
@@ -1542,9 +1656,51 @@ public struct SchedulingSettingsView: Codable, Equatable, Sendable {
     public let defaultSchedulingPolicy: String
     public let selectablePolicies: [String]
 
+    /// M1 WP5a-1: orchestrator scheduling mode. ``"MANUAL"`` is the
+    /// pre-WP5a-1 default — the owner explicitly dispatches each
+    /// task. ``"SUPERVISED_AUTO"`` opts the daemon into the
+    /// host-owned planning tick. ``"ACTIVE"`` is wire-reachable but
+    /// requires production activation authority; the facade returns
+    /// 409 ``production_active_not_authorized`` otherwise.
+    public let mode: String
+    /// M1 WP5a-1: selectable modes for the picker (always includes
+    /// ``"MANUAL"``, ``"SUPERVISED_AUTO"``, ``"ACTIVE"`` so the
+    /// picker can render the full set even when ``mode`` is fixed).
+    public let selectableModes: [String]
+
     enum CodingKeys: String, CodingKey {
         case defaultSchedulingPolicy = "default_scheduling_policy"
         case selectablePolicies = "selectable_policies"
+        case mode
+        case selectableModes = "selectable_modes"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        defaultSchedulingPolicy = try container.decode(
+            String.self, forKey: .defaultSchedulingPolicy
+        )
+        selectablePolicies = try container.decode(
+            [String].self, forKey: .selectablePolicies
+        )
+        // Lenient defaults: a pre-WP5a-1 daemon omits these fields;
+        // the picker renders the MANUAL option as the default.
+        mode = (try container.decodeIfPresent(String.self, forKey: .mode)) ?? "MANUAL"
+        selectableModes = (try container.decodeIfPresent(
+            [String].self, forKey: .selectableModes
+        )) ?? ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"]
+    }
+
+    public init(
+        defaultSchedulingPolicy: String,
+        selectablePolicies: [String],
+        mode: String = "MANUAL",
+        selectableModes: [String] = ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"]
+    ) {
+        self.defaultSchedulingPolicy = defaultSchedulingPolicy
+        self.selectablePolicies = selectablePolicies
+        self.mode = mode
+        self.selectableModes = selectableModes
     }
 }
 

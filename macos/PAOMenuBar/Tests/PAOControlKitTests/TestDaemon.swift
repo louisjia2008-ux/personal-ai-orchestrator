@@ -276,6 +276,15 @@ let quotaUnmeteredBody = """
 }
 """
 
+let schedulingSettingsBody = """
+{
+  "default_scheduling_policy": "BALANCED",
+  "selectable_policies": ["BALANCED", "QUALITY_FIRST", "QUOTA_SAVER", "SPEED_FIRST", "BURN_DOWN"],
+  "mode": "MANUAL",
+  "selectable_modes": ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"]
+}
+"""
+
 /// M1 WP1 — observed quota body that carries the burn sub-object on the
 /// 5h window and a ``source_pressure`` on the provider card. Used by
 /// the new decoder tests and any UI smoke that needs a populated chip.
@@ -333,7 +342,11 @@ let quotaObservedWithBurnBody = """
 }
 """
 
-func registerStandardRoutes(_ daemon: TestDaemon, quotaBody: String = quotaUnknownBody) {
+func registerStandardRoutes(
+    _ daemon: TestDaemon,
+    quotaBody: String = quotaUnknownBody,
+    schedulingBody: String = schedulingSettingsBody
+) {
     daemon.route("GET", "/v1/health", body: healthBody)
     daemon.route("GET", "/v1/dashboard", body: dashboardBody)
     daemon.route("GET", "/v1/tasks?limit=20", body: tasksBody)
@@ -350,5 +363,10 @@ func registerStandardRoutes(_ daemon: TestDaemon, quotaBody: String = quotaUnkno
     daemon.route("POST", "/v1/providers/refresh", body: providerDiscoveryStatusBody)
     daemon.route("GET", "/v1/quota", body: quotaBody)
     daemon.route("POST", "/v1/quota/refresh", body: quotaRefreshBody)
+    // M1 WP5a-1: scheduling settings wire body. Tests can pass an
+    // alternative body via the ``schedulingBody`` parameter; the
+    // default surfaces ``mode`` + ``selectable_modes`` for the
+    // picker.
+    daemon.route("GET", "/v1/settings/scheduling", body: schedulingBody)
     daemon.route("GET", "/v1/active-status", body: activeStatusBody)
 }
