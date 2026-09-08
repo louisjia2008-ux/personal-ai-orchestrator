@@ -267,6 +267,8 @@ def _worker_failure_classification(worker: WorkerExecutionResult) -> FailureClas
     else:
         from personal_ai_orchestrator.worker_outcome_classifier import (
             WorkerFailureClass as _WFC,
+        )
+        from personal_ai_orchestrator.worker_outcome_classifier import (
             classify_worker_failure,
         )
         verdict = classify_worker_failure(

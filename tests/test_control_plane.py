@@ -966,9 +966,7 @@ def test_runs_listing(harness):
 
 def test_run_view_pid_alive_true_for_running_process(harness) -> None:
     """A running RUNNING row with a real pid reports pid_alive=True."""
-    import os
     import subprocess
-    import time
 
     proc = subprocess.Popen(
         ["python", "-c", "import time; time.sleep(60)"],
@@ -1258,7 +1256,9 @@ def test_daemon_control_service_wiring(tmp_path):
         shutil.rmtree(socket_dir, ignore_errors=True)
 
 
-def test_opencode_runtime_resolves_the_canonical_install_when_path_is_minimal(tmp_path, monkeypatch):
+def test_opencode_runtime_resolves_the_canonical_install_when_path_is_minimal(
+    tmp_path, monkeypatch
+):
     """A GUI-launched daemon sees only /usr/bin:/bin — the binary found by
     discovery at ~/.opencode/bin/opencode must still count as available."""
 

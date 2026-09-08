@@ -14,7 +14,12 @@ from personal_ai_orchestrator.quota_burn import (
 )
 
 
-def _window(*, reset_in_seconds: float, total_seconds: float, now_offset: float) -> dict[str, datetime]:
+def _window(
+    *,
+    reset_in_seconds: float,
+    total_seconds: float,
+    now_offset: float,
+) -> dict[str, datetime]:
     """Build a window whose reset is ``reset_in_seconds`` away from ``now``."""
 
     now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC)

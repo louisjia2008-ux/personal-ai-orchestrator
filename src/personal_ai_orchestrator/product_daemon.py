@@ -161,7 +161,9 @@ DEFAULT_WORKER_PERMISSION_CONFIG: dict[str, object] = {
 }
 
 
-def ensure_execution_policies(layout: ApplicationSupportLayout) -> tuple[Path, Path, Path, Path] | None:
+def ensure_execution_policies(
+    layout: ApplicationSupportLayout,
+) -> tuple[Path, Path, Path, Path] | None:
     """Create the host-owned owner-dispatch policy artifacts, idempotently.
 
     Returns ``(execution_repo, verifier_profile_path,
