@@ -188,3 +188,401 @@ def test_startup_reconciliation_rolls_back_as_one_unit_on_audit_failure(
 
     assert store.get_task("t1").state is TaskState.RUNNING
     assert _run_status(store, "run-1") == "RUNNING"
+
+
+# --------------------------------------------------------------------------
+# M1 WP5a-1 commit 3 — AUTO_PLANNED / AUTO_GRACE state machine.
+#
+# The contract frozen in docs/M1_WP5_SPEC.md §4:
+#   READY → AUTO_PLANNED (tick promotes)
+#   AUTO_PLANNED → AUTO_GRACE | READY
+#   AUTO_GRACE → RUNNING | READY   (RUNNING promotion is WP5a-2; this commit
+#                                   only pins the AUTO_GRACE → READY path)
+#
+# Test matrix:
+#   A. legal transitions
+#   B. illegal transitions fail
+#   C. state_version increments exactly once per transition
+#   D. transaction rollback after exception: state/version unchanged
+#   E. terminal states do not enter AUTO
+#   F. restart persistence
+#   G. AUTO_PLANNED requires a non-NULL auto_decision_id (the frozen
+#      RoutingDecision contract from §10)
+# --------------------------------------------------------------------------
+
+
+def test_legal_transition_ready_to_auto_planned(tmp_path) -> None:
+    """READY → AUTO_PLANNED is allowed and bumps state_version once."""
+
+    store = SafetyKernelStore(tmp_path / "safety.db")
+    try:
+        store.register_project(
+            project_id="p1",
+            display_name="Fixture",
+            canonical_repo_root=str(tmp_path),
+            git_root=str(tmp_path),
+            default_branch="main",
+            last_known_head="abc",
+        )
+        task = store.submit_task(
+            task_id="t1",
+            request_id="r1",
+            project_id="p1",
+            intent="fix bug",
+            base_sha="abc",
+        )
+        ready = store.transition_task("t1", TaskState.READY)
+        auto_planned = store.transition_task(
+            "t1",
+            TaskState.AUTO_PLANNED,
+            expected_version=ready.state_version,
+            reason="auto planning tick",
+            auto_decision_id="auto-dec-1",
+        )
+        assert auto_planned.state is TaskState.AUTO_PLANNED
+        assert auto_planned.state_version == ready.state_version + 1
+        assert auto_planned.auto_decision_id == "auto-dec-1"
+    finally:
+        store.close()
+
+
+def test_legal_transition_auto_planned_to_auto_grace(tmp_path) -> None:
+    """AUTO_PLANNED → AUTO_GRACE is allowed; deadline set on entry."""
+
+    store = SafetyKernelStore(tmp_path / "safety.db")
+    try:
+        store.register_project(
+            project_id="p1",
+            display_name="Fixture",
+            canonical_repo_root=str(tmp_path),
+            git_root=str(tmp_path),
+            default_branch="main",
+            last_known_head="abc",
+        )
+        task = store.submit_task(
+            task_id="t1",
+            request_id="r1",
+            project_id="p1",
+            intent="fix bug",
+            base_sha="abc",
+        )
+        ready = store.transition_task("t1", TaskState.READY)
+        planned = store.transition_task(
+            "t1", TaskState.AUTO_PLANNED,
+            expected_version=ready.state_version,
+            auto_decision_id="auto-dec-1",
+        )
+        grace = store.transition_task(
+            "t1", TaskState.AUTO_GRACE,
+            expected_version=planned.state_version,
+            reason="entering grace",
+            auto_grace_deadline_at="2026-09-07T00:02:00+00:00",
+        )
+        assert grace.state is TaskState.AUTO_GRACE
+        assert grace.auto_grace_deadline_at == "2026-09-07T00:02:00+00:00"
+    finally:
+        store.close()
+
+
+def test_illegal_transition_auto_planned_to_running_fails(tmp_path) -> None:
+    """AUTO_PLANNED → RUNNING is NOT allowed in WP5a-1. The
+    ``AUTO_GRACE → RUNNING`` transition belongs to WP5a-2.
+    """
+
+    store = SafetyKernelStore(tmp_path / "safety.db")
+    try:
+        store.register_project(
+            project_id="p1",
+            display_name="Fixture",
+            canonical_repo_root=str(tmp_path),
+            git_root=str(tmp_path),
+            default_branch="main",
+            last_known_head="abc",
+        )
+        task = store.submit_task(
+            task_id="t1",
+            request_id="r1",
+            project_id="p1",
+            intent="fix bug",
+            base_sha="abc",
+        )
+        ready = store.transition_task("t1", TaskState.READY)
+        planned = store.transition_task(
+            "t1", TaskState.AUTO_PLANNED,
+            expected_version=ready.state_version,
+            auto_decision_id="auto-dec-1",
+        )
+        with pytest.raises((ValueError, RuntimeError)):
+            store.transition_task(
+                "t1", TaskState.RUNNING,
+                expected_version=planned.state_version,
+            )
+        # State unchanged.
+        assert store.get_task("t1").state is TaskState.AUTO_PLANNED
+    finally:
+        store.close()
+
+
+def test_illegal_transition_auto_grace_to_running_fails(tmp_path) -> None:
+    """AUTO_GRACE → RUNNING is NOT in WP5a-1's transition map. The
+    autonomous dispatch path lands in WP5a-2.
+    """
+
+    store = SafetyKernelStore(tmp_path / "safety.db")
+    try:
+        store.register_project(
+            project_id="p1",
+            display_name="Fixture",
+            canonical_repo_root=str(tmp_path),
+            git_root=str(tmp_path),
+            default_branch="main",
+            last_known_head="abc",
+        )
+        task = store.submit_task(
+            task_id="t1",
+            request_id="r1",
+            project_id="p1",
+            intent="fix bug",
+            base_sha="abc",
+        )
+        ready = store.transition_task("t1", TaskState.READY)
+        planned = store.transition_task(
+            "t1", TaskState.AUTO_PLANNED,
+            expected_version=ready.state_version,
+            auto_decision_id="auto-dec-1",
+        )
+        grace = store.transition_task(
+            "t1", TaskState.AUTO_GRACE,
+            expected_version=planned.state_version,
+        )
+        with pytest.raises((ValueError, RuntimeError)):
+            store.transition_task(
+                "t1", TaskState.RUNNING,
+                expected_version=grace.state_version,
+            )
+        assert store.get_task("t1").state is TaskState.AUTO_GRACE
+    finally:
+        store.close()
+
+
+def test_terminal_states_do_not_enter_auto(tmp_path) -> None:
+    """Terminal states (FAILED, CANCELLED, COMPLETED) cannot
+    transition into AUTO_* from any source state in the map.
+    """
+
+    store = SafetyKernelStore(tmp_path / "safety.db")
+    try:
+        store.register_project(
+            project_id="p1",
+            display_name="Fixture",
+            canonical_repo_root=str(tmp_path),
+            git_root=str(tmp_path),
+            default_branch="main",
+            last_known_head="abc",
+        )
+        task = store.submit_task(
+            task_id="t1",
+            request_id="r1",
+            project_id="p1",
+            intent="fix bug",
+            base_sha="abc",
+        )
+        # Drive into FAILED.
+        ready = store.transition_task("t1", TaskState.READY)
+        running = store.transition_task(
+            "t1", TaskState.RUNNING,
+            expected_version=ready.state_version,
+        )
+        store.transition_task(
+            "t1", TaskState.FAILED,
+            expected_version=running.state_version,
+            reason="forced",
+        )
+        with pytest.raises((ValueError, RuntimeError)):
+            store.transition_task("t1", TaskState.AUTO_PLANNED)
+        with pytest.raises((ValueError, RuntimeError)):
+            store.transition_task("t1", TaskState.AUTO_GRACE)
+        assert store.get_task("t1").state is TaskState.FAILED
+    finally:
+        store.close()
+
+
+def test_state_version_increments_exactly_once(tmp_path) -> None:
+    """A single transition increments state_version by exactly 1
+    (the prior baseline invariant — pin so AUTO_* transitions
+    honor the same contract).
+    """
+
+    store = SafetyKernelStore(tmp_path / "safety.db")
+    try:
+        store.register_project(
+            project_id="p1",
+            display_name="Fixture",
+            canonical_repo_root=str(tmp_path),
+            git_root=str(tmp_path),
+            default_branch="main",
+            last_known_head="abc",
+        )
+        task = store.submit_task(
+            task_id="t1",
+            request_id="r1",
+            project_id="p1",
+            intent="fix bug",
+            base_sha="abc",
+        )
+        ready = store.transition_task("t1", TaskState.READY)
+        assert ready.state_version == task.state_version + 1
+        planned = store.transition_task(
+            "t1", TaskState.AUTO_PLANNED,
+            expected_version=ready.state_version,
+            auto_decision_id="auto-dec-1",
+        )
+        assert planned.state_version == ready.state_version + 1
+    finally:
+        store.close()
+
+
+def test_transaction_rollback_preserves_state_and_version(tmp_path) -> None:
+    """A transition that raises mid-way leaves state + state_version
+    unchanged (the pre-existing rollback invariant — pin for AUTO_*
+    transitions).
+    """
+
+    store = SafetyKernelStore(tmp_path / "safety.db")
+    try:
+        store.register_project(
+            project_id="p1",
+            display_name="Fixture",
+            canonical_repo_root=str(tmp_path),
+            git_root=str(tmp_path),
+            default_branch="main",
+            last_known_head="abc",
+        )
+        task = store.submit_task(
+            task_id="t1",
+            request_id="r1",
+            project_id="p1",
+            intent="fix bug",
+            base_sha="abc",
+        )
+        ready = store.transition_task("t1", TaskState.READY)
+
+        # Inject an audit failure inside the AUTO_PLANNED transition.
+        original_audit = store._audit
+        def fail_audit(*args, **kwargs):
+            raise RuntimeError("injected auto_planned audit failure")
+        store._audit = fail_audit  # type: ignore[assignment]
+        try:
+            with pytest.raises(RuntimeError, match="auto_planned audit failure"):
+                store.transition_task(
+                    "t1", TaskState.AUTO_PLANNED,
+                    expected_version=ready.state_version,
+                    auto_decision_id="auto-dec-1",
+                )
+        finally:
+            store._audit = original_audit  # type: ignore[assignment]
+
+        # State and version unchanged.
+        after = store.get_task("t1")
+        assert after.state is TaskState.READY
+        assert after.state_version == ready.state_version
+        assert after.auto_decision_id is None
+    finally:
+        store.close()
+
+
+def test_restart_persistence_of_auto_state(tmp_path) -> None:
+    """AUTO_PLANNED + AUTO_GRACE survive a SafetyKernelStore
+    restart (the SQLite ``_ensure_column`` migration adds the
+    four columns with no defaults; the row round-trips).
+    """
+
+    db_path = tmp_path / "safety.db"
+    store = SafetyKernelStore(db_path)
+    try:
+        store.register_project(
+            project_id="p1",
+            display_name="Fixture",
+            canonical_repo_root=str(tmp_path),
+            git_root=str(tmp_path),
+            default_branch="main",
+            last_known_head="abc",
+        )
+        task = store.submit_task(
+            task_id="t1",
+            request_id="r1",
+            project_id="p1",
+            intent="fix bug",
+            base_sha="abc",
+        )
+        ready = store.transition_task("t1", TaskState.READY)
+        planned = store.transition_task(
+            "t1", TaskState.AUTO_PLANNED,
+            expected_version=ready.state_version,
+            auto_decision_id="auto-dec-1",
+            auto_reason="AUTO_PLANNED{target=m3-sub}",
+        )
+        grace = store.transition_task(
+            "t1", TaskState.AUTO_GRACE,
+            expected_version=planned.state_version,
+            auto_grace_deadline_at="2026-09-07T00:02:00+00:00",
+        )
+    finally:
+        store.close()
+
+    # Reopen the same SQLite file. AUTO_GRACE + auto_decision_id +
+    # auto_grace_deadline_at + auto_reason must all round-trip.
+    store2 = SafetyKernelStore(db_path)
+    try:
+        restored = store2.get_task("t1")
+        assert restored.state is TaskState.AUTO_GRACE
+        assert restored.auto_decision_id == "auto-dec-1"
+        assert restored.auto_grace_deadline_at == "2026-09-07T00:02:00+00:00"
+        assert restored.auto_reason == "AUTO_PLANNED{target=m3-sub}"
+    finally:
+        store2.close()
+
+
+def test_auto_planned_veto_back_to_ready(tmp_path) -> None:
+    """AUTO_PLANNED → READY (the veto path) clears
+    ``auto_decision_id`` so a subsequent re-plan mints a fresh
+    decision id. WP5a-2 owns the clear-on-veto helper; here we
+    only pin that the *transition* is allowed.
+    """
+
+    store = SafetyKernelStore(tmp_path / "safety.db")
+    try:
+        store.register_project(
+            project_id="p1",
+            display_name="Fixture",
+            canonical_repo_root=str(tmp_path),
+            git_root=str(tmp_path),
+            default_branch="main",
+            last_known_head="abc",
+        )
+        task = store.submit_task(
+            task_id="t1",
+            request_id="r1",
+            project_id="p1",
+            intent="fix bug",
+            base_sha="abc",
+        )
+        ready = store.transition_task("t1", TaskState.READY)
+        planned = store.transition_task(
+            "t1", TaskState.AUTO_PLANNED,
+            expected_version=ready.state_version,
+            auto_decision_id="auto-dec-1",
+        )
+        vetoed = store.transition_task(
+            "t1", TaskState.READY,
+            expected_version=planned.state_version,
+            reason="owner veto",
+        )
+        assert vetoed.state is TaskState.READY
+        # The auto_decision_id is NOT cleared by the transition
+        # itself — the clear-on-veto helper is WP5a-2's job. Pin
+        # the current behaviour so the helper's commit can
+        # intentionally change it.
+        assert vetoed.auto_decision_id == "auto-dec-1"
+    finally:
+        store.close()
