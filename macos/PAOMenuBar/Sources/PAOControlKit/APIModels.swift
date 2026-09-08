@@ -232,6 +232,20 @@ public struct ProjectView: Decodable, Equatable, Identifiable, Sendable {
     public let recentTaskCount: Int
     public let currentBranch: String?
 
+    /// M1 WP5a-1: project-level supervised-auto toggle. When ``true``
+    /// the host-owned ``SUPERVISED_AUTO`` tick path is allowed to
+    /// plan tasks in this project. Defaults to ``false`` so a
+    /// pre-WP5a-1 daemon reads as opt-out.
+    public let supervisedAutoAllowed: Bool
+    /// M1 WP5a-1: project-level unattended toggle. When ``true`` the
+    /// ``AUTO_GRACE`` countdown starts immediately on planning.
+    /// Defaults to ``false``.
+    public let unattendedAllowed: Bool
+    /// M1 WP5a-1: project-level grace window in seconds. Defaults to
+    /// ``120`` so a pre-WP5a-1 daemon reads as the safety kernel
+    /// default.
+    public let graceSeconds: Int
+
     public var id: String { projectId }
     public var isOnline: Bool { storageAvailability == "ONLINE" }
 
@@ -250,6 +264,71 @@ public struct ProjectView: Decodable, Equatable, Identifiable, Sendable {
         case storageAvailability = "storage_availability"
         case recentTaskCount = "recent_task_count"
         case currentBranch = "current_branch"
+        case supervisedAutoAllowed = "supervised_auto_allowed"
+        case unattendedAllowed = "unattended_allowed"
+        case graceSeconds = "grace_seconds"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        projectId = try container.decode(String.self, forKey: .projectId)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        canonicalRepoRoot = try container.decode(String.self, forKey: .canonicalRepoRoot)
+        gitRoot = try container.decode(String.self, forKey: .gitRoot)
+        defaultBranch = try container.decode(String.self, forKey: .defaultBranch)
+        lastKnownHead = try container.decode(String.self, forKey: .lastKnownHead)
+        createdAt = try container.decode(String.self, forKey: .createdAt)
+        updatedAt = try container.decode(String.self, forKey: .updatedAt)
+        workingSubpath = try container.decodeIfPresent(String.self, forKey: .workingSubpath)
+        remoteUrl = try container.decodeIfPresent(String.self, forKey: .remoteUrl)
+        lastOpenedAt = try container.decodeIfPresent(String.self, forKey: .lastOpenedAt)
+        storageAvailability = try container.decode(String.self, forKey: .storageAvailability)
+        recentTaskCount = try container.decode(Int.self, forKey: .recentTaskCount)
+        currentBranch = try container.decodeIfPresent(String.self, forKey: .currentBranch)
+        // Lenient decode: a pre-WP5a-1 daemon omits these three
+        // fields; default to the dataclass defaults so the picker
+        // renders the same opt-out chip.
+        supervisedAutoAllowed = (try container.decodeIfPresent(Bool.self, forKey: .supervisedAutoAllowed)) ?? false
+        unattendedAllowed = (try container.decodeIfPresent(Bool.self, forKey: .unattendedAllowed)) ?? false
+        graceSeconds = (try container.decodeIfPresent(Int.self, forKey: .graceSeconds)) ?? 120
+    }
+
+    public init(
+        projectId: String,
+        displayName: String,
+        canonicalRepoRoot: String,
+        gitRoot: String,
+        defaultBranch: String,
+        lastKnownHead: String,
+        createdAt: String,
+        updatedAt: String,
+        workingSubpath: String? = nil,
+        remoteUrl: String? = nil,
+        lastOpenedAt: String? = nil,
+        storageAvailability: String,
+        recentTaskCount: Int = 0,
+        currentBranch: String? = nil,
+        supervisedAutoAllowed: Bool = false,
+        unattendedAllowed: Bool = false,
+        graceSeconds: Int = 120
+    ) {
+        self.projectId = projectId
+        self.displayName = displayName
+        self.canonicalRepoRoot = canonicalRepoRoot
+        self.gitRoot = gitRoot
+        self.defaultBranch = defaultBranch
+        self.lastKnownHead = lastKnownHead
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.workingSubpath = workingSubpath
+        self.remoteUrl = remoteUrl
+        self.lastOpenedAt = lastOpenedAt
+        self.storageAvailability = storageAvailability
+        self.recentTaskCount = recentTaskCount
+        self.currentBranch = currentBranch
+        self.supervisedAutoAllowed = supervisedAutoAllowed
+        self.unattendedAllowed = unattendedAllowed
+        self.graceSeconds = graceSeconds
     }
 }
 
@@ -1542,9 +1621,51 @@ public struct SchedulingSettingsView: Codable, Equatable, Sendable {
     public let defaultSchedulingPolicy: String
     public let selectablePolicies: [String]
 
+    /// M1 WP5a-1: orchestrator scheduling mode. ``"MANUAL"`` is the
+    /// pre-WP5a-1 default — the owner explicitly dispatches each
+    /// task. ``"SUPERVISED_AUTO"`` opts the daemon into the
+    /// host-owned planning tick. ``"ACTIVE"`` is wire-reachable but
+    /// requires production activation authority; the facade returns
+    /// 409 ``production_active_not_authorized`` otherwise.
+    public let mode: String
+    /// M1 WP5a-1: selectable modes for the picker (always includes
+    /// ``"MANUAL"``, ``"SUPERVISED_AUTO"``, ``"ACTIVE"`` so the
+    /// picker can render the full set even when ``mode`` is fixed).
+    public let selectableModes: [String]
+
     enum CodingKeys: String, CodingKey {
         case defaultSchedulingPolicy = "default_scheduling_policy"
         case selectablePolicies = "selectable_policies"
+        case mode
+        case selectableModes = "selectable_modes"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        defaultSchedulingPolicy = try container.decode(
+            String.self, forKey: .defaultSchedulingPolicy
+        )
+        selectablePolicies = try container.decode(
+            [String].self, forKey: .selectablePolicies
+        )
+        // Lenient defaults: a pre-WP5a-1 daemon omits these fields;
+        // the picker renders the MANUAL option as the default.
+        mode = (try container.decodeIfPresent(String.self, forKey: .mode)) ?? "MANUAL"
+        selectableModes = (try container.decodeIfPresent(
+            [String].self, forKey: .selectableModes
+        )) ?? ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"]
+    }
+
+    public init(
+        defaultSchedulingPolicy: String,
+        selectablePolicies: [String],
+        mode: String = "MANUAL",
+        selectableModes: [String] = ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"]
+    ) {
+        self.defaultSchedulingPolicy = defaultSchedulingPolicy
+        self.selectablePolicies = selectablePolicies
+        self.mode = mode
+        self.selectableModes = selectableModes
     }
 }
 

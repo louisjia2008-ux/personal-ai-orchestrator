@@ -84,6 +84,7 @@ from personal_ai_orchestrator.safety_kernel import (
 from personal_ai_orchestrator.scheduler import RoutingObjective
 from personal_ai_orchestrator.scheduling_settings import (
     SELECTABLE_GLOBAL_POLICIES,
+    SELECTABLE_MODES,
     SchedulingSettings,
 )
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
@@ -974,10 +975,41 @@ class ImportConnectionsView(_ViewModel):
 class SchedulingSettingsView(_ViewModel):
     default_scheduling_policy: str
     selectable_policies: tuple[str, ...]
+    #: M1 WP5a-1: orchestrator scheduling mode. ``"MANUAL"`` is the
+    #: pre-WP5a-1 default — owner explicitly dispatches each task.
+    #: ``"SUPERVISED_AUTO"`` opts the daemon into host-owned planning
+    #: with a per-task grace window the owner can veto. ``"ACTIVE"``
+    #: remains production-disabled; ``PUT /v1/settings/scheduling``
+    #: rejects ``mode="ACTIVE"`` with 409 when activation authority
+    #: is not authorised (fail-closed).
+    mode: str = "MANUAL"
+    selectable_modes: tuple[str, ...] = (
+        "MANUAL",
+        "SUPERVISED_AUTO",
+        "ACTIVE",
+    )
 
 
 class SchedulingSettingsUpdateRequest(_ViewModel):
     default_scheduling_policy: str = Field(min_length=1, max_length=64)
+    #: M1 WP5a-1: optional mode field on the update request. ``None``
+    #: (legacy callers) leaves the mode unchanged.
+    mode: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class SchedulingMode(StrEnum):
+    """M1 WP5a-1: orchestrator scheduling mode values.
+
+    ``MANUAL`` is the only mode that exercises the full dispatch
+    path today. ``SUPERVISED_AUTO`` is the host-owned planning mode
+    this WP enables the foundation for (the tick step itself lands
+    in WP5a-2). ``ACTIVE`` remains production-disabled; selecting
+    it without activation authority returns 409.
+    """
+
+    MANUAL = "MANUAL"
+    SUPERVISED_AUTO = "SUPERVISED_AUTO"
+    ACTIVE = "ACTIVE"
 
 
 class ProjectSchedulingPolicyRequest(_ViewModel):
@@ -985,6 +1017,22 @@ class ProjectSchedulingPolicyRequest(_ViewModel):
 
     scheduling_policy: str | None = Field(default=None, min_length=1, max_length=64)
     manual_execution_target_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class ProjectSupervisedAutoSettingsRequest(_ViewModel):
+    """M1 WP5a-1: project-level supervised-auto settings.
+
+    All three fields are required on a PUT — there is no
+    field-by-field partial update. The store validates ``grace_seconds``
+    range (1..86_400); the Pydantic constraint is intentionally loose
+    so the store's ``ValueError`` is the single source of truth for
+    the range error and the facade can map it to 400
+    ``invalid_grace_seconds`` rather than catching pydantic errors.
+    """
+
+    supervised_auto_allowed: bool
+    unattended_allowed: bool
+    grace_seconds: int
 
 
 class DisconnectProviderRequest(_ViewModel):
@@ -1099,6 +1147,12 @@ class ProjectView(_ViewModel):
     current_branch: str | None = None
     scheduling_policy: str | None = None
     manual_execution_target_id: str | None = None
+    #: M1 WP5a-1: project-level supervised-auto settings. See
+    #: ``SafetyKernelStore.set_project_settings`` and
+    #: ``ProjectRecord`` for the contract.
+    supervised_auto_allowed: bool = False
+    unattended_allowed: bool = False
+    grace_seconds: int = 120
 
 
 class ProjectListView(_ViewModel):
@@ -1351,6 +1405,9 @@ class ControlPlaneService:
             current_branch=current_branch,
             scheduling_policy=project.scheduling_policy,
             manual_execution_target_id=project.manual_execution_target_id,
+            supervised_auto_allowed=project.supervised_auto_allowed,
+            unattended_allowed=project.unattended_allowed,
+            grace_seconds=project.grace_seconds,
         )
 
     def resolve_project(self, payload: dict[str, Any]) -> ProjectView:
@@ -1466,6 +1523,8 @@ class ControlPlaneService:
         return SchedulingSettingsView(
             default_scheduling_policy=self.scheduling_settings.default_policy,
             selectable_policies=SELECTABLE_GLOBAL_POLICIES,
+            mode=self.scheduling_settings.mode,
+            selectable_modes=SELECTABLE_MODES,
         )
 
     def update_scheduling_settings(self, payload: dict[str, Any]) -> SchedulingSettingsView:
@@ -1474,6 +1533,26 @@ class ControlPlaneService:
             self.scheduling_settings.set_default_policy(request.default_scheduling_policy)
         except ValueError:
             raise ControlPlaneError(400, "unsupported_global_scheduling_policy") from None
+        if request.mode is not None:
+            try:
+                SchedulingMode(request.mode)
+            except ValueError as error:
+                raise ControlPlaneError(400, "unsupported_scheduling_mode") from error
+            # Production ACTIVE is reachable on the wire only when
+            # activation authority is authorised. ``SUPERVISED_AUTO``
+            # and ``MANUAL`` always succeed.
+            if request.mode == SchedulingMode.ACTIVE and (
+                self.activation_gate is None
+                or not self.activation_gate.authorized
+            ):
+                raise ControlPlaneError(
+                    409,
+                    "production_active_not_authorized",
+                )
+            try:
+                self.scheduling_settings.set_mode(request.mode)
+            except ValueError:
+                raise ControlPlaneError(400, "unsupported_scheduling_mode") from None
         return self.scheduling_settings_view()
 
     def set_project_scheduling_policy(
@@ -1495,6 +1574,34 @@ class ControlPlaneService:
             )
         except KeyError:
             raise ControlPlaneError(404, "project_not_found") from None
+        return self._project_view(project)
+
+    def set_project_supervised_auto_settings(
+        self,
+        project_id: str,
+        payload: dict[str, Any],
+    ) -> ProjectView:
+        """M1 WP5a-1: persist the project-level supervised-auto settings.
+
+        The store validates ``grace_seconds`` (1..86_400) and raises
+        ``ValueError`` on out-of-range input — mapped to 400 here.
+        ``KeyError`` from the underlying ``get_project`` propagates
+        as 404 ``project_not_found``.
+        """
+
+        self._validate_identifier("project_id", project_id)
+        request = ProjectSupervisedAutoSettingsRequest.model_validate(payload)
+        try:
+            project = self.store.set_project_settings(
+                project_id,
+                supervised_auto_allowed=request.supervised_auto_allowed,
+                unattended_allowed=request.unattended_allowed,
+                grace_seconds=request.grace_seconds,
+            )
+        except KeyError:
+            raise ControlPlaneError(404, "project_not_found") from None
+        except ValueError as error:
+            raise ControlPlaneError(400, "invalid_grace_seconds") from error
         return self._project_view(project)
 
     def import_provider_connections(self, payload: dict[str, Any]) -> ImportConnectionsView:
@@ -3588,6 +3695,20 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                     self._view(
                         200,
                         request_service.set_project_scheduling_policy(project_id, payload),
+                    )
+                    return
+                if count == 3 and sub == "settings" and method == "PUT":
+                    # M1 WP5a-1: PUT /v1/projects/{id}/settings persists
+                    # the project-level supervised-auto toggle,
+                    # unattended toggle, and grace window.
+                    payload = self._read_json()
+                    if payload is None:
+                        return
+                    self._view(
+                        200,
+                        request_service.set_project_supervised_auto_settings(
+                            project_id, payload,
+                        ),
                     )
                     return
                 self._json(404, {"error": "not_found"})

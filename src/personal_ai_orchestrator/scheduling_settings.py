@@ -20,6 +20,18 @@ from pathlib import Path
 
 SCHEMA = "scheduling-settings-v1"
 DEFAULT_POLICY = "BALANCED"
+#: M1 WP5a-1: orchestrator scheduling mode default. ``MANUAL`` keeps
+#: the pre-WP5a-1 owner-explicit-dispatch behavior.
+DEFAULT_MODE = "MANUAL"
+#: M1 WP5a-1: orchestrator modes selectable on ``PUT
+#: /v1/settings/scheduling``. ``ACTIVE`` is reachable on the wire
+#: but the facade rejects it with 409 when activation authority is
+#: not authorised — it stays production-disabled.
+SELECTABLE_MODES = (
+    "MANUAL",
+    "SUPERVISED_AUTO",
+    "ACTIVE",
+)
 
 #: Policies the owner may pick as a *global default*. MANUAL is deliberately absent:
 #: a global "manual" default cannot name a target that is valid for every future task.
@@ -35,12 +47,19 @@ SELECTABLE_GLOBAL_POLICIES = (
 
 
 class SchedulingSettings:
-    """Thread-safe, atomically persisted global default scheduling policy."""
+    """Thread-safe, atomically persisted global default scheduling policy.
+
+    M1 WP5a-1 adds ``mode`` — the orchestrator scheduling mode that
+    gates whether the host-owned ``SUPERVISED_AUTO`` tick path is
+    enabled. ``mode`` is persisted alongside ``default_scheduling_policy``
+    on the same JSON file so an upgrade is a single atomic write.
+    """
 
     def __init__(self, path: Path | None = None) -> None:
         self._path = path
         self._lock = threading.Lock()
         self._policy = DEFAULT_POLICY
+        self._mode = DEFAULT_MODE
         self._load_from_disk()
 
     @property
@@ -52,14 +71,37 @@ class SchedulingSettings:
         with self._lock:
             return self._policy
 
+    @property
+    def mode(self) -> str:
+        with self._lock:
+            return self._mode
+
     def set_default_policy(self, value: str) -> str:
         if value not in SELECTABLE_GLOBAL_POLICIES:
             raise ValueError("unsupported_global_scheduling_policy")
         with self._lock:
             self._policy = value
             if self._path is not None:
-                self._persist(self._policy)
+                self._persist()
             return self._policy
+
+    def set_mode(self, value: str) -> str:
+        """M1 WP5a-1: persist the orchestrator scheduling mode.
+
+        Validates the value against ``SELECTABLE_MODES``. Activation
+        gate enforcement (``mode == "ACTIVE"`` requires authorised
+        activation authority) lives in the control-plane facade
+        rather than here, so the persisted store stays free of any
+        policy-side-effect logic.
+        """
+
+        if value not in SELECTABLE_MODES:
+            raise ValueError("unsupported_scheduling_mode")
+        with self._lock:
+            self._mode = value
+            if self._path is not None:
+                self._persist()
+            return self._mode
 
     def _load_from_disk(self) -> str | None:
         if self._path is None or not self._path.exists():
@@ -74,14 +116,22 @@ class SchedulingSettings:
         if policy not in SELECTABLE_GLOBAL_POLICIES:
             return None
         self._policy = policy
+        # M1 WP5a-1: mode field is optional in the persisted payload
+        # so pre-WP5a-1 settings files load cleanly. Absent mode falls
+        # back to ``DEFAULT_MODE`` — the pre-WP5a-1 manual-only behavior.
+        mode = payload.get("mode", DEFAULT_MODE)
+        if mode not in SELECTABLE_MODES:
+            mode = DEFAULT_MODE
+        self._mode = mode
         return policy
 
-    def _persist(self, policy: str) -> None:
+    def _persist(self) -> None:
         from datetime import UTC, datetime
 
         payload = {
             "schema": SCHEMA,
-            "default_scheduling_policy": policy,
+            "default_scheduling_policy": self._policy,
+            "mode": self._mode,
             "updated_at": datetime.now(UTC).isoformat(),
         }
         rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -102,4 +152,11 @@ class SchedulingSettings:
             raise
 
 
-__all__ = ["SCHEMA", "DEFAULT_POLICY", "SELECTABLE_GLOBAL_POLICIES", "SchedulingSettings"]
+__all__ = [
+    "DEFAULT_MODE",
+    "DEFAULT_POLICY",
+    "SCHEMA",
+    "SELECTABLE_GLOBAL_POLICIES",
+    "SELECTABLE_MODES",
+    "SchedulingSettings",
+]
