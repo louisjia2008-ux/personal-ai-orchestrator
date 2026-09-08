@@ -117,3 +117,97 @@ test("rejects malformed execution target reference", () => {
     undefined,
   )
 })
+
+// M1 WP5a-1 — SUPERVISED_AUTO closed-union contract.
+//
+// 1. The validator accepts a SUPERVISED_AUTO decision when the
+//    expected mode matches (e.g. the dispatch panel reads a
+//    frozen RoutingDecision via the routing endpoint).
+test("accepts a matching SUPERVISED_AUTO decision", () => {
+  const parsed = parseRoutingDecision(
+    validDecision({ mode: "SUPERVISED_AUTO", switch_requested: false }),
+    { requestID: "req-1", mode: "SUPERVISED_AUTO" },
+  )
+  assert.equal(parsed?.mode, "SUPERVISED_AUTO")
+  assert.equal(parsed?.switch_requested, false)
+})
+
+// 2. SUPERVISED_AUTO + switch_requested=true must be rejected — the
+//    plugin never initiates a session switch for SUPERVISED_AUTO
+//    decisions (the side-effect gate at decision_contract.ts:59
+//    `if (value.mode !== "ACTIVE" && value.switch_requested)` keeps
+//    this invariant).
+test("rejects SUPERVISED_AUTO + switch_requested=true", () => {
+  assert.equal(
+    parseRoutingDecision(
+      validDecision({ mode: "SUPERVISED_AUTO", switch_requested: true }),
+      { requestID: "req-1", mode: "SUPERVISED_AUTO" },
+    ),
+    undefined,
+  )
+})
+
+// 3. Mode mismatch still fails closed: a daemon returning
+//    SUPERVISED_AUTO while the plugin expected ACTIVE must NOT be
+//    accepted (this is the same guard as any other mode mismatch
+//    — the new value gets no special treatment).
+test("rejects SUPERVISED_AUTO decision when expected mode is ACTIVE", () => {
+  assert.equal(
+    parseRoutingDecision(
+      validDecision({ mode: "SUPERVISED_AUTO", switch_requested: false }),
+      { requestID: "req-1", mode: "ACTIVE" },
+    ),
+    undefined,
+  )
+})
+
+// 4. The closed-union type still rejects arbitrary strings — this
+//    pins the closed union (not `string`) and protects against a
+//    future drift to a plain string type.
+test("isRoutingMode rejects unknown strings", () => {
+  // The validator lives at module scope; we exercise it indirectly
+  // through parseRoutingDecision with a malformed mode string.
+  // The parse function reads the JSON ``mode`` field, checks it
+  // against the closed union, and returns undefined on miss.
+  assert.equal(
+    parseRoutingDecision(
+      { ...validDecision(), mode: "AUTOPILOT" },
+      { requestID: "req-1", mode: "ACTIVE" },
+    ),
+    undefined,
+  )
+})
+
+// 5. Legacy regression: BYPASS, SHADOW, ACTIVE old behaviour
+//    unchanged. The new SUPERVISED_AUTO branch must NOT affect
+//    pre-WP5a-1 mode semantics.
+test("legacy ACTIVE decision still requires matching mode", () => {
+  const parsed = parseRoutingDecision(
+    validDecision({ mode: "ACTIVE", switch_requested: true }),
+    { requestID: "req-1", mode: "ACTIVE" },
+  )
+  assert.equal(parsed?.mode, "ACTIVE")
+  assert.equal(parsed?.switch_requested, true)
+})
+
+test("legacy SHADOW decision still records only", () => {
+  const parsed = parseRoutingDecision(
+    validDecision({ mode: "SHADOW", switch_requested: false }),
+    { requestID: "req-1", mode: "SHADOW" },
+  )
+  assert.equal(parsed?.mode, "SHADOW")
+  assert.equal(parsed?.switch_requested, false)
+})
+
+test("legacy BYPASS decision still matches", () => {
+  const parsed = parseRoutingDecision(
+    validDecision({
+      mode: "BYPASS",
+      switch_requested: false,
+      selected_model: null,
+      selected_execution_target_id: null,
+    }),
+    { requestID: "req-1", mode: "BYPASS" },
+  )
+  assert.equal(parsed?.mode, "BYPASS")
+})

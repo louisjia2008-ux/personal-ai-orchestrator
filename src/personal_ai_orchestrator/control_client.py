@@ -239,6 +239,25 @@ class ControlPlaneClient:
         )
         return SchedulingSettingsView.model_validate(rendered)
 
+    def update_scheduling_settings(
+        self,
+        *,
+        default_scheduling_policy: str,
+        mode: str,
+    ) -> SchedulingSettingsView:
+        """M1 WP5a-1: PUT ``mode`` and ``default_scheduling_policy``
+        together so the wire payload always carries the full state."""
+
+        rendered = self._request(
+            "PUT",
+            "/v1/settings/scheduling",
+            payload={
+                "default_scheduling_policy": default_scheduling_policy,
+                "mode": mode,
+            },
+        )
+        return SchedulingSettingsView.model_validate(rendered)
+
     def set_project_scheduling_policy(
         self,
         project_id: str,
@@ -252,6 +271,29 @@ class ControlPlaneClient:
             payload={
                 "scheduling_policy": scheduling_policy,
                 "manual_execution_target_id": manual_execution_target_id,
+            },
+        )
+        return ProjectView.model_validate(rendered)
+
+    def set_project_settings(
+        self,
+        project_id: str,
+        *,
+        supervised_auto_allowed: bool,
+        unattended_allowed: bool,
+        grace_seconds: int,
+    ) -> ProjectView:
+        """M1 WP5a-1: PUT ``/v1/projects/{id}/settings`` — persist the
+        project-level supervised-auto settings.
+        """
+
+        rendered = self._request(
+            "PUT",
+            f"/v1/projects/{project_id}/settings",
+            payload={
+                "supervised_auto_allowed": supervised_auto_allowed,
+                "unattended_allowed": unattended_allowed,
+                "grace_seconds": grace_seconds,
             },
         )
         return ProjectView.model_validate(rendered)

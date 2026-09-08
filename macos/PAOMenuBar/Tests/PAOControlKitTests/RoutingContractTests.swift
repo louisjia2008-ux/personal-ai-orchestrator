@@ -349,4 +349,41 @@ final class RoutingContractTests: XCTestCase {
         XCTAssertFalse(summary.isLegacySynthesized)
         XCTAssertEqual(summary.roles.map(\.role), [.primary, .reviewer])
     }
+
+    // M1 WP5a-1: SUPERVISED_AUTO round-trip on the routing view.
+    // The Swift decoder accepts the new mode value (a frozen
+    // RoutingDecision with ``mode = "SUPERVISED_AUTO"`` is the
+    // host-side artefact WP5a-2 will write; the dispatch panel
+    // needs to render it). The plugin never sends SUPERVISED_AUTO
+    // itself — see integrations/opencode/decision_contract.ts.
+    func testSupervisorAutoPolicyStringDecodesAndRenders() throws {
+        // Per spec correction: an inline JSON body proves
+        // SUPERVISED_AUTO does not crash the Swift decoder. The
+        // dispatch panel renders the frozen ``mode`` field on the
+        // routing view; the new value flows through to the UI
+        // without a separate migration.
+        let json = """
+        {
+          "task_id": "t-auto-1",
+          "decision_id": "auto-dec-1",
+          "request_id": "supervised-auto-auto-dec-1",
+          "created_at": "2026-09-07T00:00:00Z",
+          "decision": {
+            "decision_id": "auto-dec-1",
+            "request_id": "supervised-auto-auto-dec-1",
+            "mode": "SUPERVISED_AUTO",
+            "selected_execution_target_id": "m3-sub",
+            "switch_requested": false,
+            "task_state_version": 0
+          }
+        }
+        """
+        let view = try JSONDecoder().decode(
+            RoutingDecisionView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.decisionId, "auto-dec-1")
+        let mode = view.decision["mode"]?.value
+        XCTAssertEqual(mode, "SUPERVISED_AUTO")
+        XCTAssertEqual(view.decision["switch_requested"]?.boolValue, false)
+    }
 }

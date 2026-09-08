@@ -381,3 +381,62 @@ FINAL_STATUS: GO | PARTIAL | NO_GO
 
 Until that record is evidence-backed, the correct status is `PARTIAL` and production ACTIVE remains
 disabled.
+
+
+### P0 M1 WP5a-1 SUPERVISED_AUTO foundations (PASS on `feat/m1-wp5a1-auto-foundations`)
+
+This acceptance section covers the **technical foundation only**.
+Autonomous execution is NOT yet implemented — the host-owned
+planning tick, the grace countdown, the auto endpoints, and the
+mode-change abort behaviour all belong to WP5a-2
+(`feat/m1-wp5a2-auto-tick`) and must not start until this WP is
+merged and reviewed.
+
+#### What WP5a-1 enables
+
+- The orchestrator scheduling mode (``MANUAL`` /
+  ``SUPERVISED_AUTO`` / ``ACTIVE``) is now a first-class
+  persisted setting. ``PUT /v1/settings/scheduling`` accepts
+  ``mode`` alongside ``default_scheduling_policy``.
+- ``mode = "ACTIVE"`` without activation authority → 409
+  ``production_active_not_authorized``. Production ACTIVE
+  remains unchanged.
+- Project-level supervised-auto toggle, unattended toggle,
+  and grace window are persisted. ``PUT
+  /v1/projects/{id}/settings`` round-trips. ``grace_seconds``
+  validation is bounded ``[1, 86400]`` (1 second .. 24 hours).
+- The task state machine gains ``AUTO_PLANNED`` and
+  ``AUTO_GRACE`` with the minimal transition map (§15 of the
+  spec). WP5a-1 commit 3 explicitly does NOT add
+  ``AUTO_GRACE → RUNNING``; that path is WP5a-2's responsibility.
+- The ``RoutingMode.SUPERVISED_AUTO`` closed union is in
+  place on the Python contract, the TypeScript validator
+  (``decision_contract.ts``), the Python adapter outcome
+  resolver, and the Swift decoder.
+- The OpenCode plugin's ``optionMode`` guard still only accepts
+  ``BYPASS`` / ``SHADOW`` / ``ACTIVE``. The plugin's
+  ``ctx.session.switchModel`` side-effect gate
+  (``mode !== "ACTIVE"``) is unchanged. WP5a-1 did NOT modify
+  ``integrations/opencode/plugin.ts``.
+
+#### What WP5a-1 does NOT enable (out of scope for this WP)
+
+- No daemon tick / no supervised_auto_step.
+- No grace countdown execution.
+- No autonomous dispatch path through dispatch_executor.
+- No ``POST /v1/tasks/{id}/auto/{ack,veto,dispatch-now}``
+  endpoints.
+- No mode-change abort behaviour on a running AUTO_* task.
+- No pending-shadow autonomous lifecycle (finalise / veto /
+  abort).
+- No 24h unacked timeout for ``AUTO_GRACE``.
+
+#### Acceptance evidence
+
+- 845 Python tests pass; 441 Swift tests pass; 17/17
+  TypeScript ``node --test`` cases pass; ruff clean;
+  ``swift build`` clean; ``git diff --check`` clean.
+- The pre-existing ``test_product_daemon_bootstraps_runtime_and_serves_control_plane``
+  is occasionally flaky on the baseline (1/5 fail rate observed
+  before any WP5a-1 change); it remains flaky after WP5a-1 in
+  the same proportion — unrelated to this WP.
