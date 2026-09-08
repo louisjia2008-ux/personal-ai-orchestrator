@@ -34,7 +34,12 @@ def _render_result(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
 
 
-def _failure_result_payload(*, exit_code: int | None, signal: int | None, worker_result: Any) -> dict[str, Any]:
+def _failure_result_payload(
+    *,
+    exit_code: int | None,
+    signal: int | None,
+    worker_result: Any,
+) -> dict[str, Any]:
     """Build a fail-closed run-result payload from the worker's sanitized narration.
 
     Used by both the normal failure path (non-zero exit code) and the

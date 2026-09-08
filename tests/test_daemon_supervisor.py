@@ -9,10 +9,10 @@ boot + ``/v1/health`` round-trip.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import threading
 import time
-from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -346,7 +346,7 @@ def test_snapshot_is_immutable_and_exposes_required_view() -> None:
     snapshot = supervisor.snapshot()
     assert isinstance(snapshot.steps[0], SupervisorStepSnapshot)
     # Frozen dataclass raises on assignment.
-    with pytest.raises(Exception):
+    with pytest.raises((dataclasses.FrozenInstanceError, AttributeError)):
         snapshot.steps[0].consecutive_failures = 99  # type: ignore[misc]
 
 
@@ -366,7 +366,7 @@ def test_real_audit_store_accepts_record_system_event(tmp_path: Path) -> None:
     store = SafetyKernelStore(db)
     try:
         store.record_system_event("SUPERVISOR_TEST", {"answer": 42})
-        events = store.audit_events(task_id="__missing__")
+        store.audit_events(task_id="__missing__")
     finally:
         store.close()
     # ``audit_events(task_id)`` scopes by task_id and the system event

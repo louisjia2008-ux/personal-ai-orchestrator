@@ -19,7 +19,6 @@ import re
 import shutil
 import socket
 import subprocess
-import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -38,7 +37,12 @@ from personal_ai_orchestrator.build_identity import resolve_build_identity
 from personal_ai_orchestrator.daemon_supervisor import (
     DaemonSupervisor,
     DaemonSupervisorSnapshot,
-    SupervisorStepSnapshot,
+)
+from personal_ai_orchestrator.dispatch_recommender import (
+    CandidateWindowInput,
+    DispatchCandidateInput,
+    recommend_owner_dispatch,
+    source_pressure_for,
 )
 from personal_ai_orchestrator.execution_controller import validate_execution_target_launch
 from personal_ai_orchestrator.execution_evidence import (
@@ -47,19 +51,15 @@ from personal_ai_orchestrator.execution_evidence import (
     ExecutionVerificationOutcome,
 )
 from personal_ai_orchestrator.model_registry import EvidenceConfidence, ModelRegistry
+from personal_ai_orchestrator.model_tiers import ModelTier
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
 from personal_ai_orchestrator.provider_registry_manager import (
     ProviderRegistryManager,
 )
-from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal, QuotaAvailabilityState
-from personal_ai_orchestrator.scheduler import RoutingObjective
-from personal_ai_orchestrator.dispatch_recommender import (
-    CandidateWindowInput,
-    DispatchCandidateInput,
-    recommend_owner_dispatch,
-    source_pressure_for,
+from personal_ai_orchestrator.quota_availability import (
+    QuotaAvailabilityJournal,
+    QuotaAvailabilityState,
 )
-from personal_ai_orchestrator.model_tiers import ModelTier
 from personal_ai_orchestrator.quota_equivalent_capacity import (
     EquivalentCapacityEstimate,
     estimate_equivalent_capacity,
@@ -79,6 +79,7 @@ from personal_ai_orchestrator.safety_kernel import (
     SafetyKernelStore,
     TaskState,
 )
+from personal_ai_orchestrator.scheduler import RoutingObjective
 from personal_ai_orchestrator.scheduling_settings import (
     SELECTABLE_GLOBAL_POLICIES,
     SchedulingSettings,
@@ -1795,7 +1796,7 @@ class ControlPlaneService:
         self._validate_identifier("task_id", task_id)
         try:
             self.store.get_task(task_id)
-        except KeyError as error:
+        except KeyError:
             raise ControlPlaneError(404, "task_not_found") from None
 
         try:
@@ -2039,7 +2040,11 @@ class ControlPlaneService:
                     # ``Σ weight × value == score`` identity is
                     # visible end-to-end (and a tuning commit does
                     # not have to push a new ``contribution``).
-                    value=float(component.value) if isinstance(component.value, (int, float)) else 0.0,
+                    value=(
+                        float(component.value)
+                        if isinstance(component.value, (int, float))
+                        else 0.0
+                    ),
                     weight=component.weight,
                 )
                 for component in evaluation.score_components
@@ -3806,7 +3811,12 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                         return
                     self._view(200, request_service.dispatch_task(task_id, payload))
                     return
-                if count == 4 and rest[2] == "dispatch" and rest[3] == "recommendation" and method == "POST":
+                if (
+                    count == 4
+                    and rest[2] == "dispatch"
+                    and rest[3] == "recommendation"
+                    and method == "POST"
+                ):
                     payload = self._read_json() or {}
                     self._view(200, request_service.recommend_dispatch(task_id, payload))
                     return

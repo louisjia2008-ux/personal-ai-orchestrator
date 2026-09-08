@@ -18,7 +18,6 @@ from personal_ai_orchestrator.quota_collectors.unmetered import (
     UnmeteredQuotaCollector,
 )
 
-
 FIXED = datetime(2026, 9, 7, 12, 0, tzinfo=UTC)
 
 

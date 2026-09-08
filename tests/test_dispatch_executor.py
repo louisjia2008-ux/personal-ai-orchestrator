@@ -27,9 +27,9 @@ from personal_ai_orchestrator.control_api import (
 )
 from personal_ai_orchestrator.control_client import ControlPlaneClient
 from personal_ai_orchestrator.dispatch_executor import (
+    WORKER_TRANSCRIPT_TAIL_BYTES,
     DispatchExecutorConfig,
     OwnerDispatchExecutor,
-    WORKER_TRANSCRIPT_TAIL_BYTES,
     build_worker_env,
 )
 from personal_ai_orchestrator.execution_evidence import (
@@ -735,7 +735,7 @@ def test_quota_unknown_collector_growth_stays_locked_without_relaxation(
 
     # The third call's evidence must be UNCERTAIN_LOCKED and the task
     # must be BLOCKED, not silently admitted.
-    final = harness.snapshot(task_id=f"task-no-collector-2")
+    final = harness.snapshot(task_id="task-no-collector-2")
     try:
         assert final["task"].state is TaskState.BLOCKED
         assert final["dispatch_failure_code"] == "QUOTA_UNKNOWN"
@@ -1306,7 +1306,7 @@ def test_host_result_envelope_carries_sanitized_transcript_tails() -> None:
         "\x1b[93m\x1b[1m! \x1b[0mpermission requested: edit (README.md)"
         "；auto-rejecting\n→ Read README.md\n✗ Edit README.md failed\n"
         "Error: rejected\x00\x07\n"
-    ).encode("utf-8")
+    ).encode()
     big = b"x" * (WORKER_TRANSCRIPT_TAIL_BYTES + 4096) + b"|TAIL-MARK|"
 
     envelope = executor._host_result_envelope(

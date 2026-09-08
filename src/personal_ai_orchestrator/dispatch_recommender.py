@@ -25,18 +25,16 @@ recommender and the dashboard will read; it sits here rather than in
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable, Mapping, Sequence
 
 from personal_ai_orchestrator.model_registry import (
     EvidenceConfidence,
     QuotaWindowKind,
 )
 from personal_ai_orchestrator.model_tiers import (
-    DEFAULT_TIER_ENTRY,
     ModelTier,
-    TierTable,
     meets_minimum,
     tier_index,
 )
@@ -53,8 +51,8 @@ from personal_ai_orchestrator.scheduler import (
     FRESHNESS_WEIGHT,
     CandidateEvaluation,
     RoutingObjective,
+    ScoreComponent,
     _freshness_value,
-    _score_candidate,
     objective_weights,
 )
 
@@ -325,13 +323,10 @@ def _score(
     burn = source_pressure_for(candidate.windows, now=now)
     if burn is BurnPressure.STARVED:
         pressure_term = 1.0
-        pressure_reason: str | None = "quota_expiring_unused"
     elif burn is BurnPressure.STALE:
         pressure_term = 0.0
-        pressure_reason = "burn_stale_ignored"
     elif burn is BurnPressure.UNMETERED:
         pressure_term = 0.0
-        pressure_reason = "burn_unmetered"
     else:
         # AHEAD / BEHIND / ON_TRACK — drive by ``-pressure_score``.
         # Use the planner's ``assess`` directly via the only window
@@ -339,7 +334,6 @@ def _score(
         # is +1 the ceiling (already negative ``pressure_score`` →
         # -(-1) = +1); ON_TRACK stays inside ±0.25.
         pressure_term = 0.0  # ON_TRACK/BEHIND do not gate the score
-        pressure_reason = None
 
     # M1 WP3 fix (F4): emit raw values, not weighted contributions.
     # The order matches the scheduler so the wire shape is uniform
@@ -592,7 +586,7 @@ def recommend_owner_dispatch(
 
 def _component(name: str, raw_value: float, *, weight: float | None = None,
               confidence: EvidenceConfidence | None = None,
-              source: str | None = None) -> "ScoreComponent":
+              source: str | None = None) -> ScoreComponent:
     # Local re-export shim so this module stays decoupled from
     # scheduler's exported ScoreComponent. Keeps the recommendation
     # value object identical to the rest of the scheduler's output.
@@ -600,8 +594,6 @@ def _component(name: str, raw_value: float, *, weight: float | None = None,
     # ``Σ weight × value`` identity is built from; the wire shape
     # carries it as ``ScoreComponent.value`` alongside ``weight``
     # so the UI multiplies at display time.
-    from personal_ai_orchestrator.scheduler import ScoreComponent
-
     return ScoreComponent(
         name=name,
         value=round(raw_value, 8),
