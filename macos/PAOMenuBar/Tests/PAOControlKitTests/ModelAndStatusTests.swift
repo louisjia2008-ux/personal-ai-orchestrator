@@ -4,6 +4,7 @@ import XCTest
 
 @testable import PAOControlKit
 
+@MainActor
 final class ModelAndStatusTests: XCTestCase {
     func testTaskListDecoding() throws {
         let view = try JSONDecoder().decode(TaskListView.self, from: Data(tasksBody.utf8))
@@ -911,5 +912,119 @@ final class ModelAndStatusTests: XCTestCase {
         XCTAssertEqual(c.value, -5.0)
         XCTAssertEqual(c.weight, 0.2)
         XCTAssertEqual(c.contribution, -1.0, accuracy: 1e-9)
+    }
+
+    // MARK: - M1 WP5a-1 commit 2 — scheduling settings + project view
+
+    // The new ``mode`` and ``selectable_modes`` fields on
+    // ``SchedulingSettingsView`` decode correctly from the
+    // WP5a-1 daemon's wire shape. Lenient defaults preserve the
+    // pre-WP5a-1 behaviour for older daemons.
+    func testSchedulingSettingsViewDecodesModeAndSelectableModes() throws {
+        let json = """
+        {
+          "default_scheduling_policy": "BALANCED",
+          "selectable_policies": ["BALANCED", "QUALITY_FIRST", "BURN_DOWN"],
+          "mode": "SUPERVISED_AUTO",
+          "selectable_modes": ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            SchedulingSettingsView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.defaultSchedulingPolicy, "BALANCED")
+        XCTAssertEqual(view.mode, "SUPERVISED_AUTO")
+        XCTAssertEqual(view.selectableModes, ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"])
+    }
+
+    // A pre-WP5a-1 daemon omits the new fields. The lenient
+    // decoder surfaces MANUAL / the full selectable set so the
+    // picker renders the same UI without a hard refresh.
+    func testSchedulingSettingsViewLenientDecodePreWP5a1Payload() throws {
+        let json = """
+        {
+          "default_scheduling_policy": "BALANCED",
+          "selectable_policies": ["BALANCED", "QUALITY_FIRST"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            SchedulingSettingsView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.mode, "MANUAL")
+        XCTAssertEqual(view.selectableModes, ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"])
+    }
+
+    // The new project-level supervised-auto fields decode
+    // correctly when present.
+    func testProjectViewDecodesSupervisedAutoFields() throws {
+        let json = """
+        {
+          "project_id": "p1",
+          "display_name": "Fixture",
+          "canonical_repo_root": "/tmp/p1",
+          "git_root": "/tmp/p1",
+          "default_branch": "main",
+          "last_known_head": "abc",
+          "created_at": "2026-09-07T00:00:00Z",
+          "updated_at": "2026-09-07T00:00:00Z",
+          "storage_availability": "ONLINE",
+          "recent_task_count": 0,
+          "current_branch": "main",
+          "supervised_auto_allowed": true,
+          "unattended_allowed": false,
+          "grace_seconds": 600
+        }
+        """
+        let view = try JSONDecoder().decode(
+            ProjectView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.supervisedAutoAllowed, true)
+        XCTAssertEqual(view.unattendedAllowed, false)
+        XCTAssertEqual(view.graceSeconds, 600)
+    }
+
+    // A pre-WP5a-1 daemon omits the new fields. The lenient
+    // decoder surfaces the dataclass defaults (False / False /
+    // 120) so the picker renders the same opt-out chip.
+    func testProjectViewLenientDecodePreWP5a1Payload() throws {
+        let json = """
+        {
+          "project_id": "p1",
+          "display_name": "Fixture",
+          "canonical_repo_root": "/tmp/p1",
+          "git_root": "/tmp/p1",
+          "default_branch": "main",
+          "last_known_head": "abc",
+          "created_at": "2026-09-07T00:00:00Z",
+          "updated_at": "2026-09-07T00:00:00Z",
+          "storage_availability": "ONLINE",
+          "recent_task_count": 0,
+          "current_branch": "main"
+        }
+        """
+        let view = try JSONDecoder().decode(
+            ProjectView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.supervisedAutoAllowed, false)
+        XCTAssertEqual(view.unattendedAllowed, false)
+        XCTAssertEqual(view.graceSeconds, 120)
+    }
+
+    // End-to-end store round-trip: ``OrchestratorStore`` reads the
+    // canned ``schedulingSettingsBody`` and surfaces the
+    // ``mode`` / ``selectableModes`` on the new view-model.
+    func testStoreFetchesSchedulingSettingsViewWithMode() async throws {
+        let daemon = TestDaemon()
+        registerStandardRoutes(daemon)
+        let path = temporarySocketPath("scheduling-mode")
+        try daemon.start(socketPath: path)
+        defer { daemon.stop() }
+
+        let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
+        await store.refreshNow()
+
+        let settings = try XCTUnwrap(store.schedulingSettings)
+        XCTAssertEqual(settings.mode, "MANUAL")
+        XCTAssertEqual(settings.selectableModes, ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"])
     }
 }

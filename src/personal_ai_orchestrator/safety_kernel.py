@@ -95,6 +95,22 @@ class ProjectRecord(FrozenModel):
     security_bookmark_b64: str | None = None
     scheduling_policy: str | None = None
     manual_execution_target_id: str | None = None
+    #: M1 WP5a-1: project-level supervised-auto toggle. When ``True``,
+    #: tasks in this project are eligible for ``SUPERVISED_AUTO``
+    #: planning (host-owned tick path). Owned by the project so the
+    #: owner can opt-in per project; default ``False`` keeps the
+    #: pre-WP5a-1 manual-only behavior.
+    supervised_auto_allowed: bool = False
+    #: M1 WP5a-1: project-level unattended toggle. When ``True``, the
+    #: ``AUTO_GRACE`` countdown starts immediately on planning.
+    #: ``False`` means the grace countdown waits for an explicit
+    #: owner ack via ``POST /v1/tasks/{id}/auto/ack``.
+    unattended_allowed: bool = False
+    #: M1 WP5a-1: project-level grace window in seconds (default 120).
+    #: Bounds how long ``AUTO_GRACE`` may sit before ``AUTO_DISPATCHED``
+    #: or ``AUTO_ABORTED`` fires. Owner can lower it per project but
+    #: never raise it past the safety kernel default.
+    grace_seconds: int = 120
 
 
 class OwnerDispatchStatus(StrEnum):
@@ -279,6 +295,25 @@ class SafetyKernelStore:
         )
         self._ensure_column("projects", "scheduling_policy", "TEXT")
         self._ensure_column("projects", "manual_execution_target_id", "TEXT")
+        # M1 WP5a-1: project-level supervised-auto settings. The
+        # defaults mirror the dataclass defaults (False / False / 120)
+        # so an existing project keeps the pre-WP5a-1 manual-only
+        # behavior. Old DBs migrate silently via the column defaults.
+        self._ensure_column(
+            "projects",
+            "supervised_auto_allowed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        self._ensure_column(
+            "projects",
+            "unattended_allowed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        self._ensure_column(
+            "projects",
+            "grace_seconds",
+            "INTEGER NOT NULL DEFAULT 120",
+        )
         self._ensure_column("workspaces", "project_id", "TEXT")
         self._ensure_column("workspaces", "working_subpath", "TEXT")
 
@@ -470,6 +505,63 @@ class SafetyKernelStore:
             raise
         return self.get_project(project_id)
 
+    def set_project_settings(
+        self,
+        project_id: str,
+        *,
+        supervised_auto_allowed: bool,
+        unattended_allowed: bool,
+        grace_seconds: int,
+    ) -> ProjectRecord:
+        """M1 WP5a-1: persist the project-level supervised-auto settings.
+
+        Validates ``grace_seconds`` (1 ≤ grace_seconds ≤ 86_400, i.e.
+        between 1 second and 24 hours) so a malformed payload fails
+        closed with ``ValueError`` — the caller (the control-plane
+        facade) maps it to 400.
+
+        Returns the updated ``ProjectRecord``.
+        """
+
+        if not isinstance(grace_seconds, int) or grace_seconds < 1 or grace_seconds > 86_400:
+            raise ValueError(
+                "grace_seconds must be an integer between 1 and 86400 (24h)"
+            )
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            self.get_project(project_id)
+            stamp = _now()
+            self.connection.execute(
+                """
+                UPDATE projects
+                SET supervised_auto_allowed=?, unattended_allowed=?,
+                    grace_seconds=?, updated_at=?
+                WHERE project_id=?
+                """,
+                (
+                    1 if supervised_auto_allowed else 0,
+                    1 if unattended_allowed else 0,
+                    int(grace_seconds),
+                    stamp,
+                    project_id,
+                ),
+            )
+            self._audit(
+                None,
+                "PROJECT_SUPERVISED_AUTO_SETTINGS_SET",
+                {
+                    "project_id": project_id,
+                    "supervised_auto_allowed": supervised_auto_allowed,
+                    "unattended_allowed": unattended_allowed,
+                    "grace_seconds": int(grace_seconds),
+                },
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_project(project_id)
+
     def update_project_availability(
         self,
         project_id: str,
@@ -564,6 +656,10 @@ class SafetyKernelStore:
             security_bookmark_b64=row["security_bookmark_b64"],
             scheduling_policy=row["scheduling_policy"],
             manual_execution_target_id=row["manual_execution_target_id"],
+            # SQLite stores booleans as integers; ``bool(int)`` round-trips.
+            supervised_auto_allowed=bool(row["supervised_auto_allowed"]),
+            unattended_allowed=bool(row["unattended_allowed"]),
+            grace_seconds=int(row["grace_seconds"]),
         )
 
     def task_count_for_project(self, project_id: str) -> int:
