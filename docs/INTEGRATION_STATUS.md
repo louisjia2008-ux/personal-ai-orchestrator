@@ -1008,3 +1008,156 @@ See also
 [`acceptance/P37_AUTHORITATIVE_SHADOW_ACCEPTANCE_2026-08-30.md`](acceptance/P37_AUTHORITATIVE_SHADOW_ACCEPTANCE_2026-08-30.md).
 See also
 [`acceptance/P38_FIRST_REAL_SHADOW_OBSERVATION_2026-08-30.md`](acceptance/P38_FIRST_REAL_SHADOW_OBSERVATION_2026-08-30.md).
+
+
+## M1 WP5a-1 — SUPERVISED_AUTO foundations (`feat/m1-wp5a1-auto-foundations`)
+
+This section documents the technical foundation only. **Autonomous
+execution is NOT yet implemented.** The host-owned planning tick,
+the grace countdown execution, the auto endpoints, the mode-change
+abort, and the pending-shadow autonomous lifecycle all belong to
+`feat/m1-wp5a2-auto-tick` (WP5a-2) and must not start until this WP
+is merged and reviewed.
+
+### Status
+
+- **TECHNICAL FOUNDATION COMPLETE**: settings, persisted policy
+  fields, task states, routing contract mode, data model, API /
+  client decoding, and documentation all landed.
+- **AUTONOMOUS EXECUTION NOT YET IMPLEMENTED**: no tick, no
+  countdown, no auto endpoints, no autonomous dispatch.
+- **PRODUCTION ACTIVE UNCHANGED**: ``mode == "ACTIVE"`` still
+  requires authorised activation authority; the facade returns
+  409 ``production_active_not_authorized`` when not authorised.
+
+### Settings (commit 2)
+
+- ``SchedulingSettings.mode`` —
+  ``MANUAL`` (pre-WP5a-1 default) / ``SUPERVISED_AUTO`` /
+  ``ACTIVE``. ``SET DEFAULT_MODE = "MANUAL"`` so a pre-WP5a-1
+  settings file loads cleanly.
+- ``SchedulingSettings.set_mode`` validates the value against
+  ``SELECTABLE_MODES``; the facade rejects
+  ``mode = "ACTIVE"`` without activation authority with 409
+  ``production_active_not_authorized``.
+- The persisted JSON payload gains a ``mode`` key alongside
+  ``default_scheduling_policy`` so a single atomic write covers
+  both fields.
+- ``SchedulingSettingsView`` exposes ``mode`` + ``selectableModes``.
+
+### Project-level policy (commit 2)
+
+- ``projects`` table gains three columns:
+  ``supervised_auto_allowed`` / ``unattended_allowed`` /
+  ``grace_seconds`` (defaults ``False`` / ``False`` / ``120``).
+- ``SafetyKernelStore.set_project_settings`` validates
+  ``grace_seconds`` in ``[1, 86_400]``; ``ValueError`` is
+  mapped to 400 ``invalid_grace_seconds`` by the facade.
+- ``PUT /v1/projects/{id}/settings`` persists the three fields
+  with an audit event
+  ``PROJECT_SUPERVISED_AUTO_SETTINGS_SET``.
+
+### Task state machine (commit 3)
+
+- ``TaskState.AUTO_PLANNED`` and ``TaskState.AUTO_GRACE`` are the
+  two new values.
+- The transition map is **minimal**:
+  - ``READY → AUTO_PLANNED`` (tick promotion — WP5a-2 lands)
+  - ``AUTO_PLANNED → {AUTO_GRACE, READY, BLOCKED, CANCELLED}``
+  - ``AUTO_GRACE → {READY, BLOCKED, CANCELLED}`` (no autonomous
+    ``AUTO_GRACE → RUNNING`` in WP5a-1)
+- Four new tasks-table columns:
+  ``auto_decision_id`` / ``auto_grace_deadline_at`` /
+  ``auto_acked_at`` / ``auto_reason``. All ``NULL`` by default.
+
+### Routing contract (commit 3)
+
+- ``RoutingMode.SUPERVISED_AUTO = "SUPERVISED_AUTO"`` is a
+  closed-union value. The Python validator already rejects
+  ``switch_requested = True`` for any non-ACTIVE mode; this
+  contract survives unchanged.
+- ``resolve_adapter_outcome`` adds an explicit
+  ``SUPERVISED_AUTO`` branch that returns ``RECORD_ONLY`` with
+  reason ``"supervised-auto decision is host-executed and
+  cannot switch the current session"``. The adapter never
+  initiates this mode — the side-effect gate at
+  ``decision_contract.ts:59`` (``mode !== "ACTIVE"``) remains
+  intact, and the plugin's ``optionMode`` guard still only accepts
+  ``BYPASS`` / ``SHADOW`` / ``ACTIVE``.
+
+### Frozen WP5a-2 contracts (commit 3 — recorded for WP5a-2 to honor)
+
+The following contracts are frozen in code comments + this section
+so WP5a-2's tick implementation cannot accidentally weaken them:
+
+#### Active lease check
+
+``SwitchLeaseAuthority.has_active_lease(task_id)`` (to be added in
+WP5a-2) must satisfy **all** of:
+
+- ``task_id`` matches
+- ``status == "AUTHORIZED"``
+- ``expires_at > now``
+
+Expired leases must NOT permanently block the auto tick. A
+subsequent ``authorize`` call on the same decision must produce
+a fresh lease.
+
+#### Mode change abort
+
+When a task is in ``AUTO_PLANNED`` or ``AUTO_GRACE`` and the
+effective scheduling mode changes from ``SUPERVISED_AUTO`` to
+anything else, WP5a-2 must fail closed:
+
+- abort the autonomous execution (no ``AUTO_DISPATCHED``)
+- stop the grace countdown (``auto_grace_deadline_at`` cleared
+  on transition)
+- no dispatch
+- pending shadow cleaned / finalised per the lifecycle rules in
+  ``docs/M1_WP5_SPEC.md`` §3.6
+- no stale autonomous action after owner policy change
+
+The clear-on-veto helper that wipes ``auto_decision_id`` /
+``auto_grace_deadline_at`` / ``auto_acked_at`` /
+``auto_reason`` lands in WP5a-2; WP5a-1 deliberately does NOT
+clear them on a ``READY`` veto so the helper's commit can
+intentionally introduce the clear.
+
+### Test coverage summary
+
+- ``tests/test_dispatch_initiator.py`` (9 tests) — refactor
+  preservation contract.
+- ``tests/test_dispatch_recommendation_service.py`` (6 tests) —
+  recommendation service contract.
+- ``tests/test_scheduling_settings.py`` (10 tests) — mode
+  round-trip + ACTIVE gate 409 + legacy payload compatibility.
+- ``tests/test_project_settings.py`` (10 tests) — fresh DB,
+  pre-WP5a-1 DB migration, set_project_settings round-trip,
+  grace_seconds validation, audit event.
+- ``tests/test_safety_kernel_transactions.py`` (+9 tests) —
+  AUTO_PLANNED / AUTO_GRACE state machine, version increments,
+  rollback, persistence, veto path.
+- Swift ``ModelAndStatusTests`` (+7 tests since commit 1) —
+  SchedulingSettingsView + ProjectView + TaskView decode
+  (current + lenient legacy).
+- Swift ``RoutingContractTests`` (+1 test) — SUPERVISED_AUTO
+  decode on the routing view (no new fixture file).
+- ``integrations/opencode/decision_contract.test.ts`` (+7 tests)
+  — closed-union parser, mode mismatch, switch_requested
+  rejection, legacy ACTIVE / SHADOW / BYPASS regression.
+
+### Items NOT yet implemented (WP5a-2 scope)
+
+- ``supervised_auto_step`` tick in ``DaemonSupervisor``.
+- ``SwitchLeaseAuthority.has_active_lease`` helper.
+- ``dispatch_executor`` autonomous path with
+  ``expected_state=AUTO_GRACE``.
+- ``routing_service._record_pending_shadow`` extension for
+  ``mode == SUPERVISED_AUTO``.
+- ``POST /v1/tasks/{id}/auto/{ack,veto,dispatch-now}``
+  endpoints.
+- ``mode`` change abort behaviour (the
+  ``AUTO_ABORTED{reason="mode_changed"}`` audit + the
+  clear-on-veto helper).
+- Pending-shadow autonomous lifecycle (veto / finalise / abort).
+- 24h unacked timeout for ``AUTO_GRACE``.
