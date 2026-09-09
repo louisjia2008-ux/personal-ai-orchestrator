@@ -245,3 +245,80 @@ spec left open; **no safety semantics were weakened**:
    `supervised_auto_step=` + daemon wiring). The product daemon is
    `--control-only` today and therefore performs zero autonomous tick
    execution until the owner opts into the non-control-only runtime.
+
+## 14. WP5a-2 crash-consistency closeout (post-review repair)
+
+Independent review found the AUTO lifecycle exits were multi-stage
+writes (transition → audit → filesystem discard → metadata clear, plus
+a separate policy force for veto): a crash between the durable commits
+left `READY` + active-looking auto metadata and possibly an orphan
+pending shadow. The repair (same PR, follow-up commits):
+
+### 14.1 Atomic lifecycle close
+
+`SafetyKernelStore.abort_auto_lifecycle(task_id, *, expected_version,
+reason, event_type="AUTO_ABORTED", request_id=None, target=None,
+force_manual=False, allow_blocked=False)` — ONE `BEGIN IMMEDIATE`:
+
+1. re-read + exact version check;
+2. source gate: `AUTO_PLANNED` / `AUTO_GRACE`; `BLOCKED` only with
+   `allow_blocked` **and** non-NULL `auto_decision_id` (a plain owner
+   BLOCKED task can never take the path);
+3. `READY` + all four auto columns NULL + optional MANUAL lock;
+4. exactly ONE `state_version` increment for the whole logical close;
+5. one durable audit event (`AUTO_ABORTED` / `AUTO_VETOED`) with the
+   previous decision id, reason, request id, target, resulting version;
+6. one durable shadow-cleanup intent (outbox row) — same transaction.
+
+Veto (endpoint + cancel-as-veto), mode-change abort, project-disable
+abort, unacked-timeout abort, frozen-decision aborts and the pre-worker
+BLOCKED reconciliation all route through this helper: one abort → one
+authoritative audit event, no transition-then-clear flow.
+
+### 14.2 Durable shadow-cleanup outbox
+
+`auto_shadow_cleanup_outbox(pending_id PRIMARY KEY, task_id, reason,
+created_at, completed_at)`. The pending discard is *promised* inside
+the abort transaction and *fulfilled* after COMMIT by
+`drain_auto_shadow_cleanup_outbox` (idempotent, bounded 64/attempt):
+crash after COMMIT before discard → retry; crash after discard before
+the completed marker → re-discard (absent file = success) + mark;
+nonexistent pending = successful cleanup; an unavailable/malformed
+journal leaves the row open for the next drain and NEVER rolls back
+the already-safe SQLite truth. `clear_auto_state_metadata` enqueues
+the same intent, so the terminal sweep and the executor close-out get
+the guarantee for free. No ACID pretence across the SQLite authority
+and the filesystem journal.
+
+### 14.3 Tick ordering + READY stale-metadata recovery
+
+Tick order: (1) drain outbox, (2) recover stale READY metadata,
+(3) mode revocation, (4) project revocation, (5) planning, (6) AUTO
+advancement, (7) dispatch reconciliation, (8) terminal sweep,
+(9) second lightweight drain. Old-lifecycle cleanup always precedes
+new planning.
+
+`recover_ready_auto_metadata`: a `READY` row carrying lifecycle
+metadata (`auto_decision_id` / `auto_grace_deadline_at` /
+`auto_acked_at`) is stale (old-build crash residue), never an active
+lifecycle — recovered atomically (clear + one bump +
+`AUTO_METADATA_RECOVERED{reason="ready_state_stale_auto_metadata"}` +
+cleanup enqueue). `auto_reason` alone on a READY row is the tick's
+legal deduped skip hint and is deliberately NOT treated as stale.
+A `READY` row with only a routing-decision row is the legal
+frozen-decision crash boundary (§13 item 4) and stays untouched.
+
+### 14.4 ACK contract (frozen wording)
+
+- FIRST ACK: requires the exact `task_state_version` (409
+  `stale_task_state_version` on mismatch).
+- ALREADY-ACKED retry: idempotent 200 with the current task; the
+  deadline keeps its original value — a retry can never extend it.
+- VETO: exact version before the first mutation; a replay of the same
+  durable `request_id` is idempotent.
+- DISPATCH-NOW: exact version execution-admission guard.
+
+Do NOT describe the three endpoints as "all always enforce exact
+task_state_version" — the ACK already-acked replay is deliberately
+idempotent without a version check (extending the wire schema with a
+durable ACK request id was considered and rejected for this round).
