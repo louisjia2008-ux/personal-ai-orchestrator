@@ -133,6 +133,46 @@ _AUTO_TERMINAL_STATES = {
 }
 
 
+def drain_auto_shadow_cleanup_outbox(
+    store: SafetyKernelStore,
+    shadow_journal: ShadowEvidenceJournal | None,
+    *,
+    limit: int = 64,
+) -> int:
+    """Drain durable shadow-cleanup intents (crash-consistent closeout).
+
+    The abort/veto/metadata-clear transactions in ``SafetyKernelStore``
+    commit the authoritative SQLite truth (READY + metadata NULL) and an
+    outbox row promising the pending-shadow discard. This drain fulfils
+    that promise *after* the commit, so a crash at any point is safe:
+
+    - crash after COMMIT, before discard → the row is still open → the
+      next drain retries the discard;
+    - crash after discard, before the completed marker → the next drain
+      re-discards (``discard_pending`` is idempotent — an absent file is
+      success) and marks completed;
+    - a nonexistent pending is treated as a successful cleanup;
+    - an unavailable / malformed journal only leaves the row open for the
+      next drain — it can never roll back the already-safe task state.
+
+    Returns the number of intents completed by this call.
+    """
+
+    completed = 0
+    for row in store.pending_shadow_cleanups(limit=limit):
+        pending_id = row["pending_id"]
+        if shadow_journal is not None:
+            try:
+                shadow_journal.discard_pending(pending_id)
+            except (OSError, ValueError):
+                # Journal unavailable or malformed: leave the intent open;
+                # the SQLite task truth is already owner-safe.
+                continue
+        store.complete_shadow_cleanup(pending_id)
+        completed += 1
+    return completed
+
+
 class SupervisedAutoStep:
     """One bounded SUPERVISED_AUTO sweep over the durable task truth."""
 
@@ -171,9 +211,17 @@ class SupervisedAutoStep:
     # ------------------------------------------------------------------
 
     def tick(self, now: datetime) -> None:
-        """One bounded sweep. Never raises for per-task gate failures."""
+        """One bounded sweep. Never raises for per-task gate failures.
+
+        Ordering contract (crash-consistency closeout): old-lifecycle
+        cleanup always precedes new planning — the outbox drain and the
+        stale-READY-metadata recovery run first so no new cycle can
+        overlap an uncleaned predecessor.
+        """
 
         try:
+            self._drain_shadow_cleanup_outbox()
+            self._recover_stale_ready_auto_metadata()
             self._abort_tasks_with_revoked_mode(now)
             self._abort_tasks_with_revoked_project(now)
             if self._mode() == "SUPERVISED_AUTO":
@@ -185,11 +233,49 @@ class SupervisedAutoStep:
                     self._advance(task, now)
             self._reconcile_supervised_auto_dispatches(now)
             self._close_terminal_auto_lifecycles()
+            self._drain_shadow_cleanup_outbox()
         except Exception as error:  # noqa: BLE001 — bounded tick, audit + continue
             self._safe_system_event(
                 "SUPERVISED_AUTO_TICK_FAILED",
                 {"exc_type": type(error).__name__, "message": str(error)[:256]},
             )
+
+    # ------------------------------------------------------------------
+    # crash-consistency recovery (outbox drain + stale READY metadata)
+    # ------------------------------------------------------------------
+
+    def _drain_shadow_cleanup_outbox(self) -> None:
+        drain_auto_shadow_cleanup_outbox(self._store, self._shadow_journal)
+
+    def _recover_stale_ready_auto_metadata(self) -> None:
+        """READY rows with residual lifecycle metadata are stale, never active.
+
+        The predicate keys on the three lifecycle columns
+        (``auto_decision_id`` / ``auto_grace_deadline_at`` /
+        ``auto_acked_at``) — a real lifecycle always carries them, while
+        ``auto_reason`` alone on a READY row is the tick's deliberate
+        deduped skip hint, never active control state, and must survive
+        this sweep. ``READY`` with a NULL ``auto_decision_id`` but an
+        existing routing-decision row is the legal frozen-decision crash
+        boundary (decision persisted, task not yet AUTO_PLANNED) — also
+        explicitly NOT inconsistent and untouched here.
+        """
+
+        rows = self._store.connection.execute(
+            """
+            SELECT task_id FROM tasks
+            WHERE state = ?
+              AND (auto_decision_id IS NOT NULL OR auto_grace_deadline_at IS NOT NULL
+                   OR auto_acked_at IS NOT NULL)
+            ORDER BY task_id
+            """,
+            (TaskState.READY.value,),
+        ).fetchall()
+        for row in rows:
+            try:
+                self._store.recover_ready_auto_metadata(row["task_id"])
+            except (KeyError, RuntimeError):
+                continue  # concurrent writer owns the row
 
     # ------------------------------------------------------------------
     # mode / project revocation sweeps (fail-closed §8)
@@ -582,22 +668,31 @@ class SupervisedAutoStep:
             if task.state not in {TaskState.BLOCKED, TaskState.AUTO_GRACE}:
                 continue
             reason = f"admission_failed:{row['failure_code'] or row['status']}"
-            task = self._store.transition_task(
-                task.task_id,
-                TaskState.READY,
-                expected_version=task.state_version,
-                reason=f"supervised auto dispatch aborted pre-worker: {reason}",
-            )
-            self._audit(
-                task.task_id,
-                "AUTO_ABORTED",
-                {
-                    "auto_decision_id": task.auto_decision_id,
-                    "reason": reason,
-                    "target": None,
-                },
-            )
-            self._finalize_abort(task, now, reason=reason)
+            if task.state is TaskState.AUTO_GRACE:
+                # The reservation was rejected before the executor ever
+                # moved the task (e.g. initiate_owner_dispatch validation).
+                self._abort_auto_task(task, now, reason=reason)
+                continue
+            if task.auto_decision_id is not None:
+                # Pre-worker supervised-auto BLOCKED: the same crash-atomic
+                # close, gated on the auto lifecycle's decision id so a
+                # plain owner BLOCKED task can never take this path.
+                self._abort_auto_task(task, now, reason=reason, allow_blocked=True)
+                continue
+            # Legacy half-state (BLOCKED, no auto metadata): no lifecycle
+            # to close — a plain owner-controlled READY recovery.
+            try:
+                self._store.transition_task(
+                    task.task_id,
+                    TaskState.READY,
+                    expected_version=task.state_version,
+                    reason=(
+                        "supervised auto dispatch aborted pre-worker: "
+                        f"{reason} (no auto metadata)"
+                    ),
+                )
+            except (ValueError, RuntimeError):
+                pass
 
     # ------------------------------------------------------------------
     # terminal lifecycle close-out (§32)
@@ -624,6 +719,9 @@ class SupervisedAutoStep:
             if task.auto_decision_id is None:  # pragma: no cover — raced clear
                 continue
             self._discard_pending(task.auto_decision_id)
+            # The clear transaction also enqueues the durable cleanup
+            # intent, so a crash between these two steps still drains on
+            # the next tick — the metadata clear is the atomic authority.
             self._store.clear_auto_state_metadata(
                 task.task_id,
                 expected_version=task.state_version,
@@ -634,45 +732,42 @@ class SupervisedAutoStep:
     # shared abort path
     # ------------------------------------------------------------------
 
-    def _abort_auto_task(self, task: TaskRecord, now: datetime, *, reason: str) -> None:
-        """Fail-closed exit: AUTO_* → READY + audit + pending discard + clear."""
+    def _abort_auto_task(
+        self,
+        task: TaskRecord,
+        now: datetime,
+        *,
+        reason: str,
+        allow_blocked: bool = False,
+    ) -> None:
+        """Fail-closed exit: ONE crash-atomic authoritative close.
 
-        fresh = self._store.get_task(task.task_id)
-        if fresh.state not in {TaskState.AUTO_PLANNED, TaskState.AUTO_GRACE}:
-            return
-        updated = self._store.transition_task(
-            task.task_id,
-            TaskState.READY,
-            expected_version=fresh.state_version,
-            reason=f"supervised auto aborted: {reason}",
-            auto_reason=f"AUTO_ABORTED reason={reason}",
-        )
-        self._audit(
-            task.task_id,
-            "AUTO_ABORTED",
-            {
-                "auto_decision_id": fresh.auto_decision_id,
-                "reason": reason,
-                "target": None,
-            },
-        )
-        self._finalize_abort(updated, now, reason=reason)
+        ``SafetyKernelStore.abort_auto_lifecycle`` performs the state
+        move to READY, the four-column metadata clear, the (optional)
+        MANUAL policy lock, the single version bump, the abort audit and
+        the durable shadow-cleanup intent in a single SQLite
+        transaction — there is no crash window that can leave
+        ``READY`` + active-looking auto metadata. The pending discard
+        itself happens after COMMIT via the idempotent outbox drain.
+        """
 
-    def _finalize_abort(self, task: TaskRecord, now: datetime, *, reason: str) -> None:
-        """Discard the pending shadow and clear metadata after an abort."""
-
-        if task.auto_decision_id is not None:
-            self._discard_pending(task.auto_decision_id)
+        del now  # the durable timestamp comes from the store transaction
         try:
-            self._store.clear_auto_state_metadata(
+            fresh = self._store.get_task(task.task_id)
+        except KeyError:
+            return
+        try:
+            self._store.abort_auto_lifecycle(
                 task.task_id,
-                expected_version=task.state_version,
-                reason=f"supervised auto aborted: {reason}",
+                expected_version=fresh.state_version,
+                reason=reason,
+                allow_blocked=allow_blocked,
             )
-        except RuntimeError:
-            # Version moved during the abort — the next sweep retries; the
-            # READY transition already made the state owner-controlled.
-            pass
+        except (ValueError, RuntimeError):
+            # A concurrent writer (veto, promotion, another abort) owns
+            # the outcome — fail closed and let the sweeps re-decide.
+            return
+        self._drain_shadow_cleanup_outbox()
 
     # ------------------------------------------------------------------
     # frozen decision helpers
@@ -900,6 +995,7 @@ __all__ = [
     "SUPERVISED_AUTO_STEP_NAME",
     "SupervisedAutoStep",
     "UNACKED_TIMEOUT_SECONDS",
+    "drain_auto_shadow_cleanup_outbox",
     "supervised_auto_decision_id",
     "supervised_auto_dispatch_request_id",
     "supervised_auto_routing_request_id",

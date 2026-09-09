@@ -1976,52 +1976,43 @@ class ControlPlaneService:
     ) -> None:
         """Shared veto core (endpoint veto + cancel-as-veto, §3.5/§23).
 
-        Fail-closed and idempotent: AUTO_* → READY, task policy forced
-        MANUAL (the tick will not re-plan it), pending shadow discarded,
-        all four auto columns cleared, ``AUTO_VETOED`` audited with the
-        durable ``request_id`` so a replay is recognizable.
+        ONE crash-atomic SQLite transaction (§10 of the closeout
+        ruling): ``AUTO_* → READY``, task policy forced MANUAL (the tick
+        will not re-plan it), all four auto columns cleared, exactly one
+        ``state_version`` bump, ``AUTO_VETOED`` audited with the durable
+        ``request_id`` and the pending-cleanup intent recorded — all
+        before COMMIT. The owner-visible truth (READY + MANUAL + clean
+        metadata) holds even if the shadow journal is unavailable; the
+        pending discard runs after COMMIT via the idempotent outbox
+        drain.
         """
 
         fresh = self.store.get_task(task.task_id)
         if fresh.state not in {TaskState.AUTO_PLANNED, TaskState.AUTO_GRACE}:
             raise ControlPlaneError(409, "task_state_not_auto")
         target = self._auto_frozen_target(fresh)
-        self.store.transition_task(
-            task.task_id,
-            TaskState.READY,
-            expected_version=fresh.state_version,
-            reason=f"supervised auto vetoed: {audit_reason}",
-        )
-        self.store.force_task_scheduling_policy(
-            task.task_id, scheduling_policy="MANUAL"
-        )
-        if fresh.auto_decision_id is not None and self.shadow_journal is not None:
-            try:
-                self.shadow_journal.discard_pending(fresh.auto_decision_id)
-            except (OSError, ValueError):
-                pass
-        self.store.connection.execute("BEGIN IMMEDIATE")
         try:
-            self.store._audit(
+            self.store.abort_auto_lifecycle(
                 task.task_id,
-                "AUTO_VETOED",
-                {
-                    "auto_decision_id": fresh.auto_decision_id,
-                    "target": target,
-                    "request_id": request_id,
-                    "reason": audit_reason,
-                },
+                expected_version=fresh.state_version,
+                reason=audit_reason,
+                event_type="AUTO_VETOED",
+                request_id=request_id,
+                target=target,
+                force_manual=True,
             )
-            self.store.connection.execute("COMMIT")
-        except Exception:
-            if self.store.connection.in_transaction:
-                self.store.connection.execute("ROLLBACK")
-        current = self.store.get_task(task.task_id)
-        self.store.clear_auto_state_metadata(
-            task.task_id,
-            expected_version=current.state_version,
-            reason=f"supervised auto vetoed: {audit_reason}",
+        except ValueError:
+            raise ControlPlaneError(409, "task_state_not_auto") from None
+        except RuntimeError as error:
+            raise ControlPlaneError(409, "stale_task_state_version") from error
+        # Best-effort immediate cleanup; the tick's drain is the
+        # crash-recovery backstop. A journal failure never rolls back
+        # the already-committed SQLite truth above.
+        from personal_ai_orchestrator.supervised_auto_step import (
+            drain_auto_shadow_cleanup_outbox,
         )
+
+        drain_auto_shadow_cleanup_outbox(self.store, self.shadow_journal)
 
     def _auto_frozen_target(self, task: TaskRecord) -> str | None:
         from personal_ai_orchestrator.supervised_auto_step import (
