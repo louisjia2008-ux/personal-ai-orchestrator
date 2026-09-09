@@ -332,6 +332,16 @@ class SafetyKernelStore:
                 reset_at TEXT,
                 state TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS auto_shadow_cleanup_outbox (
+                pending_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                completed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS auto_shadow_cleanup_outbox_open
+                ON auto_shadow_cleanup_outbox(created_at)
+                WHERE completed_at IS NULL;
             """
         )
         self._ensure_column("tasks", "project_id", "TEXT")
@@ -1081,6 +1091,18 @@ class SafetyKernelStore:
             )
             if updated.rowcount != 1:
                 raise RuntimeError("auto metadata clear lost optimistic concurrency race")
+            if current.auto_decision_id is not None:
+                # Durable cleanup intent: the pending shadow whose id equals
+                # the cleared decision id (裁决 15) must eventually be
+                # discarded even if this process dies right after COMMIT.
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO auto_shadow_cleanup_outbox
+                        (pending_id, task_id, reason, created_at)
+                    VALUES(?,?,?,?)
+                    """,
+                    (current.auto_decision_id, task_id, reason or "metadata_cleared", stamp),
+                )
             self._audit(
                 task_id,
                 "AUTO_METADATA_CLEARED",
@@ -1226,6 +1248,206 @@ class SafetyKernelStore:
         except Exception:
             self.connection.execute("ROLLBACK")
             raise
+
+    def abort_auto_lifecycle(
+        self,
+        task_id: str,
+        *,
+        expected_version: int | None = None,
+        reason: str,
+        event_type: str = "AUTO_ABORTED",
+        request_id: str | None = None,
+        target: str | None = None,
+        force_manual: bool = False,
+        allow_blocked: bool = False,
+    ) -> TaskRecord:
+        """Crash-atomic fail-closed close of one AUTO lifecycle.
+
+        ONE ``BEGIN IMMEDIATE`` transaction performs every authoritative
+        SQLite mutation of the close (§ crash-consistency closeout):
+
+        - re-read + exact ``expected_version`` check;
+        - source-state gate: ``AUTO_PLANNED`` / ``AUTO_GRACE`` always;
+          ``BLOCKED`` only with ``allow_blocked`` **and** a non-NULL
+          ``auto_decision_id`` (pre-worker supervised-auto recovery — a
+          plain owner BLOCKED task can never take this path);
+        - state → ``READY`` + all four ``auto_*`` columns → NULL +
+          optional ``scheduling_policy = MANUAL`` (veto lock);
+        - exactly ONE ``state_version`` increment for the whole logical
+          close (no transition bump + policy bump + clear bump);
+        - one durable audit event (``AUTO_ABORTED`` / ``AUTO_VETOED``)
+          in the same transaction;
+        - one durable shadow-cleanup intent row in the same transaction.
+
+        The pending-shadow journal is a separate filesystem store and can
+        never share this SQLite transaction — the outbox row is the
+        durable promise that the discard will eventually happen; the
+        supervised-auto tick drains it idempotently on every sweep.
+        """
+
+        if event_type not in {"AUTO_ABORTED", "AUTO_VETOED"}:
+            raise ValueError(f"unsupported auto lifecycle event {event_type}")
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get_task(task_id)
+            if expected_version is not None and current.state_version != expected_version:
+                raise RuntimeError("stale task state_version")
+            allowed_source = current.state in {
+                TaskState.AUTO_PLANNED,
+                TaskState.AUTO_GRACE,
+            }
+            if not allowed_source and allow_blocked:
+                allowed_source = (
+                    current.state is TaskState.BLOCKED
+                    and current.auto_decision_id is not None
+                )
+            if not allowed_source:
+                raise ValueError(
+                    "auto lifecycle abort requires AUTO_PLANNED/AUTO_GRACE"
+                    f" (or supervised-auto BLOCKED), task is {current.state.value}"
+                )
+            previous_decision_id = current.auto_decision_id
+            stamp = _now()
+            next_version = current.state_version + 1
+            update_columns = (
+                "state=?, auto_decision_id=NULL, auto_grace_deadline_at=NULL,"
+                " auto_acked_at=NULL, auto_reason=NULL, state_version=?,"
+                " updated_at=?"
+            )
+            update_values: list[object] = [TaskState.READY.value, next_version, stamp]
+            if force_manual:
+                update_columns += ", scheduling_policy='MANUAL'"
+            update_values.extend([task_id, current.state_version])
+            updated = self.connection.execute(
+                f"UPDATE tasks SET {update_columns} WHERE task_id=? AND state_version=?",
+                update_values,
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("auto lifecycle abort lost optimistic concurrency race")
+            payload: dict[str, object] = {
+                "from": current.state.value,
+                "to": TaskState.READY.value,
+                "state_version": next_version,
+                "reason": reason,
+                "auto_decision_id": previous_decision_id,
+                "target": target,
+                "request_id": request_id,
+                "force_manual": force_manual,
+            }
+            self._audit(task_id, event_type, payload)
+            if previous_decision_id is not None:
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO auto_shadow_cleanup_outbox
+                        (pending_id, task_id, reason, created_at)
+                    VALUES(?,?,?,?)
+                    """,
+                    (previous_decision_id, task_id, reason, stamp),
+                )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_task(task_id)
+
+    def recover_ready_auto_metadata(self, task_id: str) -> TaskRecord | None:
+        """Atomic recovery of a ``READY`` row that still carries auto metadata.
+
+        An old build's multi-stage abort (or a torn downgrade) can leave
+        ``state == READY`` with ``auto_*`` columns set — that is stale,
+        active-looking control state no runtime path may interpret as a
+        live lifecycle. This closeout detects the inconsistency and, in
+        ONE transaction: captures the stale decision id, NULLs all four
+        columns, bumps the version exactly once, audits
+        ``AUTO_METADATA_RECOVERED`` and enqueues the stale pending
+        shadow for durable cleanup. The state stays ``READY``; no worker
+        side effect ever runs. Returns ``None`` when the row raced out
+        of READY (a concurrent writer owns it) — never clobbers.
+        """
+
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get_task(task_id)
+            if current.state is not TaskState.READY:
+                self.connection.execute("COMMIT")
+                return None
+            if (
+                current.auto_decision_id is None
+                and current.auto_grace_deadline_at is None
+                and current.auto_acked_at is None
+            ):
+                # ``auto_reason`` alone is the tick's legal skip hint on a
+                # READY row — not lifecycle metadata, never recovered.
+                self.connection.execute("COMMIT")
+                return current
+            stale_decision_id = current.auto_decision_id
+            stamp = _now()
+            next_version = current.state_version + 1
+            updated = self.connection.execute(
+                """
+                UPDATE tasks
+                SET auto_decision_id=NULL, auto_grace_deadline_at=NULL,
+                    auto_acked_at=NULL, auto_reason=NULL,
+                    state_version=?, updated_at=?
+                WHERE task_id=? AND state_version=?
+                """,
+                (next_version, stamp, task_id, current.state_version),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("auto metadata recovery lost optimistic concurrency race")
+            self._audit(
+                task_id,
+                "AUTO_METADATA_RECOVERED",
+                {
+                    "reason": "ready_state_stale_auto_metadata",
+                    "cleared_decision_id": stale_decision_id,
+                    "state_version": next_version,
+                },
+            )
+            if stale_decision_id is not None:
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO auto_shadow_cleanup_outbox
+                        (pending_id, task_id, reason, created_at)
+                    VALUES(?,?,?,?)
+                    """,
+                    (
+                        stale_decision_id,
+                        task_id,
+                        "ready_state_stale_auto_metadata",
+                        stamp,
+                    ),
+                )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_task(task_id)
+
+    def pending_shadow_cleanups(self, *, limit: int = 64) -> tuple[sqlite3.Row, ...]:
+        """Open (not yet completed) shadow-cleanup intents, oldest first."""
+
+        return tuple(
+            self.connection.execute(
+                """
+                SELECT pending_id, task_id, reason, created_at
+                FROM auto_shadow_cleanup_outbox
+                WHERE completed_at IS NULL
+                ORDER BY created_at, pending_id
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        )
+
+    def complete_shadow_cleanup(self, pending_id: str) -> None:
+        """Mark one shadow-cleanup intent completed (idempotent)."""
+
+        self.connection.execute(
+            "UPDATE auto_shadow_cleanup_outbox SET completed_at=? "
+            "WHERE pending_id=? AND completed_at IS NULL",
+            (_now(), pending_id),
+        )
 
     def routing_decision_by_request_id(self, request_id: str) -> Any | None:
         """Return the raw durable routing-decision row for a request id.
