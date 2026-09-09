@@ -70,16 +70,16 @@ _ALLOWED_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
     TaskState.COMPLETED: frozenset(),
     # M1 WP5a-1: AUTO_PLANNED is the planning-tick's terminal state
     # until the task is vetoed back to READY or promoted into
-    # AUTO_GRACE. AUTO_GRACE is the supervised-grace terminal state
-    # — the autonomous dispatch path that promotes AUTO_GRACE →
-    # RUNNING lands in WP5a-2 (deliberately NOT in this map;
-    # AUTO_GRACE's transition set below lists only the
-    # owner-controlled paths).
+    # AUTO_GRACE. M1 WP5a-2 adds the autonomous execution edge:
+    # AUTO_GRACE → RUNNING is legal ONLY through the host dispatch
+    # pathway (``start_dispatched_worker(expected_state=AUTO_GRACE)``);
+    # there is no public "set state RUNNING" API, and every caller
+    # must hold a durable dispatch reservation first.
     TaskState.AUTO_PLANNED: frozenset(
         {TaskState.AUTO_GRACE, TaskState.READY, TaskState.BLOCKED, TaskState.CANCELLED}
     ),
     TaskState.AUTO_GRACE: frozenset(
-        {TaskState.READY, TaskState.BLOCKED, TaskState.CANCELLED}
+        {TaskState.RUNNING, TaskState.READY, TaskState.BLOCKED, TaskState.CANCELLED}
     ),
 }
 
@@ -1026,6 +1026,222 @@ class SafetyKernelStore:
             raise
         return self.get_task(task_id)
 
+    # ------------------------------------------------------------------
+    # M1 WP5a-2: AUTO lifecycle metadata helpers.
+    #
+    # ``transition_task``'s ``auto_*`` parameters treat ``None`` as
+    # "do not modify the column", which made it impossible for an
+    # ``AUTO_* → READY`` transition to clear stale metadata (the
+    # WP5a-1 debt). The helpers below own explicit clear / ack /
+    # reason semantics with optimistic concurrency so the active task
+    # row never carries misleading active-auto control state after a
+    # lifecycle terminal exit (§32).
+    # ------------------------------------------------------------------
+
+    def clear_auto_state_metadata(
+        self,
+        task_id: str,
+        *,
+        expected_version: int,
+        reason: str | None = None,
+    ) -> TaskRecord:
+        """Atomically NULL all four ``auto_*`` columns with a version bump.
+
+        Idempotent: when the columns are already NULL the row is returned
+        unchanged (no version bump, no audit) so crash-recovery replays and
+        duplicate veto/abort calls stay cheap. Raises ``RuntimeError`` when
+        ``expected_version`` does not match the authoritative row — the
+        caller must re-read and re-decide, never clobber.
+        """
+
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get_task(task_id)
+            if current.state_version != expected_version:
+                raise RuntimeError("stale task state_version")
+            if (
+                current.auto_decision_id is None
+                and current.auto_grace_deadline_at is None
+                and current.auto_acked_at is None
+                and current.auto_reason is None
+            ):
+                self.connection.execute("COMMIT")
+                return current
+            stamp = _now()
+            next_version = current.state_version + 1
+            updated = self.connection.execute(
+                """
+                UPDATE tasks
+                SET auto_decision_id=NULL, auto_grace_deadline_at=NULL,
+                    auto_acked_at=NULL, auto_reason=NULL,
+                    state_version=?, updated_at=?
+                WHERE task_id=? AND state_version=?
+                """,
+                (next_version, stamp, task_id, current.state_version),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("auto metadata clear lost optimistic concurrency race")
+            self._audit(
+                task_id,
+                "AUTO_METADATA_CLEARED",
+                {
+                    "state_version": next_version,
+                    "cleared_decision_id": current.auto_decision_id,
+                    "reason": reason,
+                },
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_task(task_id)
+
+    def ack_auto_grace(
+        self,
+        task_id: str,
+        *,
+        acked_at: str,
+        grace_deadline: str,
+        expected_version: int,
+    ) -> TaskRecord:
+        """Record the owner's one-time acknowledgement of an ``AUTO_GRACE`` task.
+
+        Fail-closed contract (§22):
+
+        - the task must currently be ``AUTO_GRACE``;
+        - ``expected_version`` must match exactly (stale clients get
+          ``RuntimeError`` and must re-read);
+        - a task that is already acked is returned **unchanged** — an ACK
+          retry never rewrites ``auto_acked_at`` and never extends the
+          deadline (``auto_grace_deadline_at`` keeps its original value).
+        """
+
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get_task(task_id)
+            if current.state is not TaskState.AUTO_GRACE:
+                raise ValueError(
+                    f"auto ack requires AUTO_GRACE, task is {current.state.value}"
+                )
+            if current.auto_acked_at is not None:
+                self.connection.execute("COMMIT")
+                return current
+            if current.state_version != expected_version:
+                raise RuntimeError("stale task state_version")
+            stamp = _now()
+            next_version = current.state_version + 1
+            updated = self.connection.execute(
+                """
+                UPDATE tasks
+                SET auto_acked_at=?, auto_grace_deadline_at=?,
+                    state_version=?, updated_at=?
+                WHERE task_id=? AND state_version=?
+                """,
+                (acked_at, grace_deadline, next_version, stamp, task_id, expected_version),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("auto ack lost optimistic concurrency race")
+            self._audit(
+                task_id,
+                "AUTO_ACKED",
+                {
+                    "auto_decision_id": current.auto_decision_id,
+                    "acked_at": acked_at,
+                    "auto_grace_deadline_at": grace_deadline,
+                    "state_version": next_version,
+                },
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_task(task_id)
+
+    def set_auto_reason(self, task_id: str, *, reason: str) -> None:
+        """Write the ``AUTO_SKIPPED`` reason hint with per-(task, reason) dedup.
+
+        ``auto_reason`` is a display hint, never authority. The write (and the
+        matching ``AUTO_SKIPPED`` audit event) fires only when the reason
+        actually changed, so a failing gate evaluated every tick does not
+        produce one audit row per tick (§3.4 step 1 dedup). Bumps
+        ``state_version`` so clients holding a stale version re-read.
+        """
+
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get_task(task_id)
+            if current.auto_reason == reason:
+                self.connection.execute("COMMIT")
+                return
+            stamp = _now()
+            next_version = current.state_version + 1
+            updated = self.connection.execute(
+                """
+                UPDATE tasks SET auto_reason=?, state_version=?, updated_at=?
+                WHERE task_id=? AND state_version=?
+                """,
+                (reason, next_version, stamp, task_id, current.state_version),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("auto reason write lost optimistic concurrency race")
+            self._audit(
+                task_id,
+                "AUTO_SKIPPED",
+                {"reason": reason, "state_version": next_version},
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+
+    def force_task_scheduling_policy(self, task_id: str, *, scheduling_policy: str) -> None:
+        """Force a task's scheduling policy (veto locks the task to MANUAL)."""
+
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get_task(task_id)
+            if current.scheduling_policy == scheduling_policy:
+                self.connection.execute("COMMIT")
+                return
+            stamp = _now()
+            next_version = current.state_version + 1
+            updated = self.connection.execute(
+                """
+                UPDATE tasks SET scheduling_policy=?, state_version=?, updated_at=?
+                WHERE task_id=? AND state_version=?
+                """,
+                (scheduling_policy, next_version, stamp, task_id, current.state_version),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("task policy force lost optimistic concurrency race")
+            self._audit(
+                task_id,
+                "TASK_SCHEDULING_POLICY_FORCED",
+                {
+                    "scheduling_policy": scheduling_policy,
+                    "state_version": next_version,
+                },
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+
+    def routing_decision_by_request_id(self, request_id: str) -> Any | None:
+        """Return the raw durable routing-decision row for a request id.
+
+        WP5a-2's tick uses this to prove a frozen decision already exists
+        before re-planning (crash recovery: decision persisted, task not yet
+        transitioned). Returns ``None`` when no decision exists.
+        """
+
+        row = self.connection.execute(
+            "SELECT decision_id,request_id,task_id,payload_json FROM routing_decisions "
+            "WHERE request_id=?",
+            (request_id,),
+        ).fetchone()
+        return row
+
     def register_workspace(
         self,
         *,
@@ -1420,7 +1636,21 @@ class SafetyKernelStore:
         worker_id: str,
         writer_token: str,
         pid: int | None = None,
+        expected_state: TaskState = TaskState.READY,
     ) -> TaskRecord:
+        """Atomically pair the run row, the state transition and dispatch START.
+
+        M1 WP5a-2 adds ``expected_state``: the owner-dispatch path keeps the
+        ``READY`` default, while the host-owned SUPERVISED_AUTO dispatch path
+        passes ``AUTO_GRACE`` so the transition never routes through READY
+        (§3.2 — a READY intermediate would let the next planning tick
+        re-plan a task that is already being dispatched). The transition is
+        validated against the exact expected state both in Python and in the
+        SQL ``WHERE state=?`` guard, so a concurrent veto / mode-change abort
+        that moved the task out of the expected state fails closed instead of
+        racing the worker start.
+        """
+
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             dispatch = self.connection.execute(
@@ -1433,8 +1663,10 @@ class SafetyKernelStore:
             if dispatch["status"] != OwnerDispatchStatus.RESERVED.value:
                 raise RuntimeError("owner dispatch is not reserved")
             task = self.get_task(task_id)
-            if task.state is not TaskState.READY:
-                raise ValueError("dispatched worker can only start from READY")
+            if task.state is not expected_state:
+                raise ValueError(
+                    f"dispatched worker can only start from {expected_state.value}"
+                )
             if task.state_version != expected_task_version:
                 raise RuntimeError("stale task state_version")
             workspace = self.get_workspace(task_id)
@@ -1464,7 +1696,7 @@ class SafetyKernelStore:
                     stamp,
                     task_id,
                     task.state_version,
-                    TaskState.READY.value,
+                    expected_state.value,
                 ),
             )
             if updated_task.rowcount != 1:
@@ -1492,7 +1724,7 @@ class SafetyKernelStore:
                 task_id,
                 "TASK_STATE_CHANGED",
                 {
-                    "from": TaskState.READY.value,
+                    "from": expected_state.value,
                     "to": TaskState.RUNNING.value,
                     "state_version": next_version,
                     "reason": "host-supervised owner dispatch worker started",

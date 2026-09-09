@@ -190,6 +190,13 @@ class TaskView(_ViewModel):
     # render the picker at the same default without a separate
     # backwards-compat round-trip.
     min_tier: str = "T1"
+    # M1 WP5a-2: AUTO lifecycle control state. All four default to
+    # ``None`` so pre-WP5a payloads and non-AUTO tasks decode cleanly
+    # (the Swift ``TaskView`` already lenient-decodes them since WP5a-1).
+    auto_decision_id: str | None = None
+    auto_grace_deadline_at: str | None = None
+    auto_acked_at: str | None = None
+    auto_reason: str | None = None
 
 
 class CancelView(_ViewModel):
@@ -1174,6 +1181,10 @@ def _task_view(record) -> TaskView:
         scheduling_policy=record.scheduling_policy,
         manual_execution_target_id=record.manual_execution_target_id,
         min_tier=record.min_tier,
+        auto_decision_id=record.auto_decision_id,
+        auto_grace_deadline_at=record.auto_grace_deadline_at,
+        auto_acked_at=record.auto_acked_at,
+        auto_reason=record.auto_reason,
     )
 
 
@@ -1210,6 +1221,14 @@ class ControlPlaneService:
     #: malformed host file that fell back to the shipped defaults.
     #: ``None`` when ``tier_table`` is ``None``.
     model_tiers_source: str | None = None
+    #: M1 WP5a-2: pending-shadow journal for the SUPERVISED_AUTO
+    #: lifecycle. ``None`` keeps the pre-WP5a-2 behavior (no pending
+    #: shadows are recorded; the tick still runs gate-safe).
+    shadow_journal: Any = None
+    #: M1 WP5a-2: catalog snapshot id stamped into the frozen routing
+    #: decisions the tick creates. The daemon wires the runtime config's
+    #: value; ad-hoc services fall back to a stable local default.
+    catalog_snapshot_id: str = "control-catalog-v1"
 
     @property
     def owner_initiated_execution_enabled(self) -> bool:
@@ -1236,6 +1255,8 @@ class ControlPlaneService:
             supervisor=self.supervisor,
             tier_table=self.tier_table,
             model_tiers_source=self.model_tiers_source,
+            shadow_journal=self.shadow_journal,
+            catalog_snapshot_id=self.catalog_snapshot_id,
         )
 
     @staticmethod
@@ -1284,6 +1305,63 @@ class ControlPlaneService:
             runtime_availability=self.runtime_availability,
             runtime_availability_fallback=self._runtime_available,
         )
+
+    def _supervised_auto_step(self):
+        """Build the WP5a-2 supervised-auto tick step on demand.
+
+        The step is stateless; constructing it per call keeps ``open_request``
+        service clones correct without cache invalidation. The same factory
+        backs the periodic supervisor step and the owner abort helpers.
+        """
+
+        from personal_ai_orchestrator.supervised_auto_step import SupervisedAutoStep
+
+        return SupervisedAutoStep(
+            store=self.store,
+            scheduling_settings=self.scheduling_settings,
+            owner_execution_enabled=lambda: self.owner_initiated_execution_enabled,
+            recommendation_service_factory=self._recommendation_service,
+            project_provider=self.get_project,
+            registry_provider=self._effective_registry,
+            provider_registry_manager=self.provider_registry_manager,
+            runtime_available_provider=self._runtime_available,
+            execution_evidence_journal=self.execution_evidence_journal,
+            executor=self.dispatch_executor,
+            shadow_journal=self.shadow_journal,
+            catalog_snapshot_id=self.catalog_snapshot_id,
+        )
+
+    def supervised_auto_tick(self, now) -> None:
+        """Run one bounded SUPERVISED_AUTO sweep (supervisor step body)."""
+
+        self._supervised_auto_step().tick(now)
+
+    def build_supervised_auto_step(self):
+        """Return the supervisor-callable tick (``fn(now) -> None``).
+
+        Registered by the daemon on the ``DaemonSupervisor`` under
+        ``supervised-auto`` — but ONLY on the non-control-only daemon
+        (§19: control-only must never execute autonomous steps).
+
+        Each invocation opens a request-scoped service (fresh SQLite
+        connection) because the supervisor drives steps on its own thread
+        while the long-lived service store is bound to the constructing
+        thread — the same per-request discipline the UDS server applies.
+        ``:memory:`` services (tests, ad-hoc CLIs) share the single
+        connection instead.
+        """
+
+        def _step(now) -> None:
+            if self.store.path == ":memory:":
+                self.supervised_auto_tick(now)
+                return
+            request_service = self.open_request()
+            try:
+                request_service.supervised_auto_tick(now)
+            finally:
+                request_service.store.close()
+
+        return _step
 
     @staticmethod
     def _project_id_for(git_root: str, working_subpath: str | None) -> str:
@@ -1550,10 +1628,50 @@ class ControlPlaneService:
                     "production_active_not_authorized",
                 )
             try:
+                previous_mode = self.scheduling_settings.mode
                 self.scheduling_settings.set_mode(request.mode)
             except ValueError:
                 raise ControlPlaneError(400, "unsupported_scheduling_mode") from None
+            # M1 WP5a-2 (§3.1): leaving SUPERVISED_AUTO aborts every
+            # AUTO_PLANNED / AUTO_GRACE task in the same handler — the
+            # owner's mode change takes effect immediately, no in-flight
+            # grace window may outlive it. The tick's revocation sweep is
+            # the crash-recovery backstop for an abort write lost to a
+            # crash between these two writes.
+            if (
+                previous_mode != request.mode
+                and request.mode != SchedulingMode.SUPERVISED_AUTO.value
+            ):
+                self._abort_auto_tasks(reason="mode_changed")
         return self.scheduling_settings_view()
+
+    def _abort_auto_tasks(self, *, reason: str, project_id: str | None = None) -> None:
+        """Fail-closed owner abort of every AUTO_* lifecycle (§3.1).
+
+        AUTO_PLANNED / AUTO_GRACE → READY, pending shadows discarded, auto
+        metadata cleared and the abort audited. RUNNING tasks are never
+        touched — their worker is governed by the executor + verifier path.
+        Shared by the mode-change handler, the project-settings disable
+        handler, the veto endpoint and the cancel-as-veto path.
+        """
+
+        step = self._supervised_auto_step()
+        rows = self.store.connection.execute(
+            "SELECT task_id FROM tasks WHERE state IN (?,?) ORDER BY task_id",
+            (
+                TaskState.AUTO_PLANNED.value,
+                TaskState.AUTO_GRACE.value,
+            ),
+        ).fetchall()
+        now = datetime.now(UTC)
+        for row in rows:
+            try:
+                task = self.store.get_task(row["task_id"])
+            except KeyError:
+                continue
+            if project_id is not None and task.project_id != project_id:
+                continue
+            step._abort_auto_task(task, now, reason=reason)  # noqa: SLF001 — same-package lifecycle helper
 
     def set_project_scheduling_policy(
         self,
@@ -1592,16 +1710,23 @@ class ControlPlaneService:
         self._validate_identifier("project_id", project_id)
         request = ProjectSupervisedAutoSettingsRequest.model_validate(payload)
         try:
+            previous = self.store.get_project(project_id)
+        except KeyError:
+            raise ControlPlaneError(404, "project_not_found") from None
+        try:
             project = self.store.set_project_settings(
                 project_id,
                 supervised_auto_allowed=request.supervised_auto_allowed,
                 unattended_allowed=request.unattended_allowed,
                 grace_seconds=request.grace_seconds,
             )
-        except KeyError:
-            raise ControlPlaneError(404, "project_not_found") from None
         except ValueError as error:
             raise ControlPlaneError(400, "invalid_grace_seconds") from error
+        # M1 WP5a-2 (§3.1 裁决 5): revoking the project opt-in aborts the
+        # project's AUTO_* lifecycles immediately — same fail-closed
+        # contract as the global mode change.
+        if previous.supervised_auto_allowed and not request.supervised_auto_allowed:
+            self._abort_auto_tasks(reason="project_auto_disabled", project_id=project_id)
         return self._project_view(project)
 
     def import_provider_connections(self, payload: dict[str, Any]) -> ImportConnectionsView:

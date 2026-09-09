@@ -78,6 +78,7 @@ from personal_ai_orchestrator.safety_kernel import (
     SafetyKernelStore,
     TaskState,
 )
+from personal_ai_orchestrator.shadow_evidence import ShadowEvidenceJournal
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
 from personal_ai_orchestrator.verifier import (
     DeterministicVerifier,
@@ -228,6 +229,7 @@ class OwnerDispatchExecutor:
         supervisor: ProcessSupervisor | None = None,
         execution_supervisor: ExecutionSupervisor | None = None,
         store_factory: Callable[[], SafetyKernelStore] | None = None,
+        shadow_journal: ShadowEvidenceJournal | None = None,
     ) -> None:
         self._state_db = state_db
         self.config = config
@@ -239,6 +241,10 @@ class OwnerDispatchExecutor:
         self._supervisor = supervisor or ProcessSupervisor()
         self.execution_supervisor = execution_supervisor or ExecutionSupervisor()
         self._store_factory = store_factory or (lambda: SafetyKernelStore(state_db))
+        # M1 WP5a-2: journal used to finalize the SUPERVISED_AUTO pending
+        # shadow once the run reaches a truthful outcome. ``None`` keeps the
+        # owner-dispatch-only behavior (no pending shadow exists to finalize).
+        self._shadow_journal = shadow_journal
 
     # ------------------------------------------------------------------
     # public entrypoints
@@ -285,14 +291,22 @@ class OwnerDispatchExecutor:
             return
 
         task = store.get_task(dispatch.task_id)
-        if task.state is not TaskState.READY:
+        # M1 WP5a-2: SUPERVISED_AUTO dispatches arrive in AUTO_GRACE; the
+        # owner path arrives in READY (or SUBMITTED pre-transitioned by
+        # ``initiate_owner_dispatch``). The exact current state becomes the
+        # ``expected_state`` for the atomic RUNNING transition below — if a
+        # concurrent veto / mode-change abort moved the task to READY (or
+        # anything else) between reservation and worker start, the guard
+        # fails closed and no worker is spawned (TOCTOU §8).
+        if task.state not in {TaskState.READY, TaskState.AUTO_GRACE}:
             store.mark_owner_dispatch_blocked(
                 request_id,
                 failure_code="TASK_NOT_READY",
-                failure_reason=f"task state {task.state.value} is not READY",
+                failure_reason=f"task state {task.state.value} is not dispatchable",
             )
             store.close()
             return
+        expected_state = task.state
         ready_version = task.state_version
 
         project_root = self._project_root_or_blocked(store, dispatch, request_id)
@@ -395,6 +409,7 @@ class OwnerDispatchExecutor:
                 worker_id=dispatch.execution_target_id,
                 writer_token=writer_token,
                 pid=supervised.pid,
+                expected_state=expected_state,
             )
         except Exception as error:
             # The child exists but is not durably owned: kill the exact
@@ -424,8 +439,10 @@ class OwnerDispatchExecutor:
 
         # -- supervised worker lifecycle ---------------------------------
         real_invocation_succeeded = False
+        worker_exit_code: int | None = None
         try:
             exit_code, stdout, stderr, truncated = await self._wait_for_worker(supervised)
+            worker_exit_code = exit_code
             if (
                 exit_code != 0
                 and execution.cancel_requested.is_set()
@@ -499,6 +516,7 @@ class OwnerDispatchExecutor:
             exit_code = await self._supervisor.cancel(
                 supervised, grace_seconds=self.config.worker_grace_seconds
             )
+            worker_exit_code = exit_code
             result = self._host_result_envelope(
                 exit_code, b"", b"", truncated=False, timeout=True
             )
@@ -548,6 +566,15 @@ class OwnerDispatchExecutor:
             self.execution_supervisor.unregister(dispatch.task_id)
 
         # -- deterministic verification ----------------------------------
+        # M1 WP5a-2: when this is a SUPERVISED_AUTO dispatch, the
+        # verification path owns the pending-shadow finalization — only a
+        # deterministic verifier verdict may close the shadow observation
+        # as verified. ``auto_pending_finalized`` tracks whether that
+        # happened so the close-out below never double-finalizes with a
+        # different payload (observation ids are deterministic; content
+        # divergence would fail-closed in the journal instead).
+        auto_pending_finalized = False
+        auto_pending_discarded = False
         if next_state is TaskState.WORKER_FINISHED:
             try:
                 begin_verification(store, task_id=dispatch.task_id)
@@ -573,12 +600,22 @@ class OwnerDispatchExecutor:
                     )
                     self._verification_journal.append(raw)
                     verdict = raw
+                shadow_pending_id = self._supervised_auto_pending_id(store, dispatch)
                 next_state = apply_verification_result(
                     store,
                     task_id=dispatch.task_id,
                     result=verdict,
                     evidence_journal=self._verification_journal,
+                    shadow_journal=self._shadow_journal if shadow_pending_id else None,
+                    shadow_pending_id=shadow_pending_id,
+                    shadow_execution_success=worker_exit_code == 0,
                 )
+                auto_pending_finalized = shadow_pending_id is not None
+                if auto_pending_finalized:
+                    # The observation carries the truth now; the pending
+                    # row must not linger as a hanging lifecycle.
+                    self._discard_supervised_auto_pending(shadow_pending_id)
+                    auto_pending_discarded = True
             except Exception as error:
                 store.transition_task(
                     dispatch.task_id,
@@ -642,6 +679,25 @@ class OwnerDispatchExecutor:
                 failure_code=failure_code,
                 failure_reason=None if verified else f"task ended in {next_state.value}",
             )
+        # M1 WP5a-2: close the SUPERVISED_AUTO shadow lifecycle for
+        # outcomes the verification path did not already finalize
+        # (worker failed before WORKER_FINISHED, concurrent cancel, ...)
+        # and clear the now-inert auto metadata off the active task row.
+        # Both steps are best-effort: the tick's terminal-state sweep is
+        # the durable backstop when the executor dies here.
+        if not auto_pending_finalized:
+            self._finalize_supervised_auto_pending(
+                store,
+                dispatch,
+                verified=False,
+                execution_success=worker_exit_code == 0,
+            )
+            auto_pending_discarded = True
+        if not auto_pending_discarded:
+            pending_id = self._supervised_auto_pending_id(store, dispatch)
+            if pending_id is not None:
+                self._discard_supervised_auto_pending(pending_id)
+        self._clear_supervised_auto_metadata(store, dispatch)
         try:
             store._audit(
                 dispatch.task_id,
@@ -787,6 +843,95 @@ class OwnerDispatchExecutor:
 
     def _open_store(self) -> SafetyKernelStore:
         return self._store_factory()
+
+    def _supervised_auto_pending_id(
+        self, store: SafetyKernelStore, dispatch: OwnerDispatchRecord
+    ) -> str | None:
+        """The pending-shadow id for a SUPERVISED_AUTO dispatch, if any.
+
+        裁决 15 keeps ``pending_id`` and the task row's ``auto_decision_id``
+        at the same value. Owner-initiated dispatches carry no auto metadata
+        and return ``None`` — the existing owner path never touches the
+        pending-shadow journal.
+        """
+
+        if dispatch.authority != "SUPERVISED_AUTO":
+            return None
+        try:
+            task = store.get_task(dispatch.task_id)
+        except Exception:
+            return None
+        return task.auto_decision_id
+
+    def _finalize_supervised_auto_pending(
+        self,
+        store: SafetyKernelStore,
+        dispatch: OwnerDispatchRecord,
+        *,
+        verified: bool,
+        execution_success: bool,
+    ) -> None:
+        """Finalize the pending shadow with a truthful non-verified outcome.
+
+        Called only for terminal outcomes the deterministic verification
+        path did not already finalize. Missing / already-finalized pendings
+        are a no-op (``finalize_pending`` is idempotent on identical content,
+        and a discarded pending simply no longer exists).
+        """
+
+        pending_id = self._supervised_auto_pending_id(store, dispatch)
+        if pending_id is None or self._shadow_journal is None:
+            return
+        try:
+            self._shadow_journal.load_pending(pending_id)
+        except (FileNotFoundError, ValueError):
+            return
+        try:
+            self._shadow_journal.finalize_pending(
+                pending_id,
+                execution_success=execution_success,
+                verification_success=False,
+                verified=False,
+                observed_at=datetime.now(UTC),
+            )
+        except Exception:
+            pass
+        self._discard_supervised_auto_pending(pending_id)
+
+    def _discard_supervised_auto_pending(self, pending_id: str) -> None:
+        """Best-effort pending-file removal after a finalize/abort."""
+
+        if self._shadow_journal is None:
+            return
+        try:
+            self._shadow_journal.discard_pending(pending_id)
+        except (OSError, ValueError):
+            pass
+
+    def _clear_supervised_auto_metadata(
+        self, store: SafetyKernelStore, dispatch: OwnerDispatchRecord
+    ) -> None:
+        """Clear the task row's auto metadata once the auto lifecycle ends.
+
+        §32: after the run reached a post-RUNNING state the four ``auto_*``
+        columns are inert control state and must not linger on the active
+        row. Historical truth lives in the audit trail, the routing
+        decision row and the shadow journal.
+        """
+
+        if dispatch.authority != "SUPERVISED_AUTO":
+            return
+        try:
+            task = store.get_task(dispatch.task_id)
+            if task.auto_decision_id is None:
+                return
+            store.clear_auto_state_metadata(
+                dispatch.task_id,
+                expected_version=task.state_version,
+                reason="supervised auto lifecycle closed after dispatch",
+            )
+        except Exception:
+            pass
 
     def _project_root_or_blocked(
         self,
@@ -1456,7 +1601,7 @@ class OwnerDispatchExecutor:
             except Exception:
                 pass
         task = store.get_task(dispatch.task_id)
-        if task.state is TaskState.READY:
+        if task.state in {TaskState.READY, TaskState.AUTO_GRACE}:
             store.transition_task(
                 dispatch.task_id,
                 TaskState.BLOCKED,
