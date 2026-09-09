@@ -329,7 +329,7 @@ Known limitation inherited by M1:
 
 ---
 
-## M1 — 额度压力驱动调度 (WP0 + WP1 + WP2 + WP3 + WP4 + WP5a-1 DELIVERED 2026-09-08 on `feat/m1-wp0-daemon-tick` + `feat/m1-wp1-burn` + `feat/m1-wp2-tiers` + `feat/m1-wp3-pressure-scoring` + `feat/m1-wp4-unlimited-pool` + `feat/m1-wp5a1-auto-foundations`; WP5a-2 next)
+## M1 — 额度压力驱动调度 (WP0 + WP1 + WP2 + WP3 + WP4 + WP5a-1 + WP5a-2 DELIVERED 2026-09-09 on `feat/m1-wp0-daemon-tick` + `feat/m1-wp1-burn` + `feat/m1-wp2-tiers` + `feat/m1-wp3-pressure-scoring` + `feat/m1-wp4-unlimited-pool` + `feat/m1-wp5a1-auto-foundations` + `feat/m1-wp5a2-auto-tick`; WP5b next)
 
 > **开工纪律**:WP5a / WP5b / WP6 / WP7 开工前必须先读对应 spec(`docs/M1_WP5_SPEC.md` / `docs/M1_WP6_SPEC.md` / `docs/M1_WP7_SPEC.md`)。WP 序列由裁决固定,禁止重排;PAID_USAGE 是 M3,不许在 M1 提。
 
@@ -349,7 +349,7 @@ Working order (each WP ships as its own branch from `fix/m0-trust`):
 | WP4 | `feat/m1-wp4-unlimited-pool` | DONE — OpenCode Zen free-model family (auth=none, pool_kind=unmetered) + `QuotaWindowKind.UNMETERED` + `QuotaAvailabilityState.AVAILABLE_UNMETERED` + `observe_rate_limited` + local `UnmeteredQuotaCollector` + `worker_outcome_classifier` (conservative stderr markers, no bare "quota") + `ExecutionVerificationOutcome.QUOTA_BLOCKED` evidence with demote-fallback + `pool_kind` / `unmetered` read-time view + macOS Resources page "Free / unmetered" section + 6 L10n keys (en + zh-Hans) |
 | WP3 | `feat/m1-wp3-pressure-scoring` | `ScoreWeights` (scheduler + recommender share it); pressure + headroom weights; `RoutingObjective.BURN_DOWN` for the BURN_DOWN preset; smoothing / STARVED branches |
 | WP4 | `feat/m1-wp4-unlimited-pool` | `QuotaWindowKind.UNMETERED` + `UnlimitedPool`; opencode-free entry on `ProviderFamilySpec`; discovery reads real `opencode models` output (fixture-driven) |
-| WP5a | `feat/m1-wp5a-supervised-auto-core` | state machine additions (`AUTO_PLANNED`, `AUTO_GRACE`), `scheduling_settings.mode`, project-level three-field settings (`supervised_auto_allowed`, `unattended_allowed`, `grace_seconds`), `POST /v1/tasks/{id}/auto/{ack,veto,dispatch-now}`, scheduler-side tick `supervised_auto_step(now)` — split into WP5a-1 (foundations, DONE) and WP5a-2 (tick + endpoints + mode-change abort, NEXT) |
+| WP5a | `feat/m1-wp5a-supervised-auto-core` | state machine additions (`AUTO_PLANNED`, `AUTO_GRACE`), `scheduling_settings.mode`, project-level three-field settings (`supervised_auto_allowed`, `unattended_allowed`, `grace_seconds`), `POST /v1/tasks/{id}/auto/{ack,veto,dispatch-now}`, scheduler-side tick `supervised_auto_step(now)` — split into WP5a-1 (foundations, DONE) and WP5a-2 (tick + endpoints + mode-change abort, DONE — `feat/m1-wp5a2-auto-tick`: six hard gates, frozen decision + stable request ids, ack/veto/dispatch-now, fail-closed mode/project aborts, 24h unacked timeout, pending-shadow lifecycle, verifier-authoritative autonomous dispatch; control-only daemons never tick) |
 | WP5b | `feat/m1-wp5b-supervised-auto-ui` | auto-grace banner + countdown + VETO / DISPATCH_NOW buttons; menu-bar "急停" item; Settings mode picker; project settings UI; `TestDaemon` canned routes |
 | WP6 | `feat/m1-wp6-backlog` | `backlog_items` SQL table; `GET/POST/DELETE /v1/projects/{id}/backlog`; `backlog_filler_step(now)` (STARVED → notify or auto-create) |
 | WP7 | `feat/m1-wp7-weekly-report` | `weekly_report.py` aggregator over `audit`, `QuotaSnapshotJournal`, `backlog`, `ExecutionEvidenceJournal`; three KPI tiles on Overview |
