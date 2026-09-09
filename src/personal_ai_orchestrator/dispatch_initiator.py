@@ -79,6 +79,14 @@ if TYPE_CHECKING:
 #: ``control_api``) so the authority value is owned by this module.
 AUTHORITY_OWNER_INITIATED_EXECUTION = "OWNER_INITIATED_EXECUTION"
 
+#: M1 WP5a-2: authority value for the host-owned supervised-auto dispatch
+#: path. Deliberately distinct from ``OWNER_INITIATED_EXECUTION`` — nobody
+#: clicked an owner button; the dispatch authority is the Safety Kernel's
+#: planning tick operating under SUPERVISED_AUTO mode + project opt-in +
+#: grace-window semantics. The two values must never be conflated because
+#: the audit trail (and the pending-shadow lifecycle) keys off them.
+AUTHORITY_SUPERVISED_AUTO_EXECUTION = "SUPERVISED_AUTO"
+
 
 def initiate_owner_dispatch(
     store: SafetyKernelStore,
@@ -94,6 +102,7 @@ def initiate_owner_dispatch(
     provider_registry_manager: Any | None,
     runtime_available_provider: Callable[[str], bool],
     execution_evidence_journal: Any | None,
+    expected_state: TaskState = TaskState.READY,
 ) -> tuple[OwnerDispatchRecord, bool, TaskRecord | None]:
     """Reserve, validate, transition, and spawn — the irreversible tail.
 
@@ -165,7 +174,16 @@ def initiate_owner_dispatch(
             failure_reason="dispatch task_state_version did not match authoritative task",
         )
         raise _control_plane_error(409, "stale_task_state_version")
-    if task.state not in {TaskState.SUBMITTED, TaskState.READY}:
+    # M1 WP5a-2: the dispatchable-state guard is anchored on
+    # ``expected_state``. The owner path keeps the historical contract
+    # (READY, or SUBMITTED which transitions to READY below); the
+    # supervised-auto path requires exactly AUTO_GRACE — a task that was
+    # vetoed / aborted back to READY between the tick's read and this
+    # reservation fails closed here with no side effect.
+    dispatchable_states: set[TaskState] = {expected_state}
+    if expected_state is TaskState.READY:
+        dispatchable_states.add(TaskState.SUBMITTED)
+    if task.state not in dispatchable_states:
         store.mark_owner_dispatch_blocked(
             request_id,
             failure_code="TASK_STATE_NOT_DISPATCHABLE",
@@ -230,7 +248,7 @@ def initiate_owner_dispatch(
 
     # --- All guards passed: transition + thread -------------------------
     transitioned_task = None
-    if task.state is TaskState.SUBMITTED:
+    if expected_state is TaskState.READY and task.state is TaskState.SUBMITTED:
         transitioned_task = store.transition_task(
             task.task_id,
             TaskState.READY,
@@ -250,5 +268,6 @@ def initiate_owner_dispatch(
 
 __all__ = [
     "AUTHORITY_OWNER_INITIATED_EXECUTION",
+    "AUTHORITY_SUPERVISED_AUTO_EXECUTION",
     "initiate_owner_dispatch",
 ]

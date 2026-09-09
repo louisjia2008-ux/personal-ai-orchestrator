@@ -324,8 +324,13 @@ def test_illegal_transition_auto_planned_to_running_fails(tmp_path) -> None:
 
 
 def test_illegal_transition_auto_grace_to_running_fails(tmp_path) -> None:
-    """AUTO_GRACE → RUNNING is NOT in WP5a-1's transition map. The
-    autonomous dispatch path lands in WP5a-2.
+    """WP5a-2: AUTO_GRACE → RUNNING is legal ONLY through the host
+    dispatch pathway. A bare ``transition_task`` call can move the map
+    edge (parity with READY → RUNNING), but the resulting RUNNING row
+    violates ``assert_running_invariant`` unless a run row + writer lock
+    were paired atomically — which only ``start_dispatched_worker``
+    does. This test pins the WP5a-1→WP5a-2 contract change: the edge
+    exists, the invariant still fails closed for unpaired transitions.
     """
 
     store = SafetyKernelStore(tmp_path / "safety.db")
@@ -355,12 +360,16 @@ def test_illegal_transition_auto_grace_to_running_fails(tmp_path) -> None:
             "t1", TaskState.AUTO_GRACE,
             expected_version=planned.state_version,
         )
-        with pytest.raises((ValueError, RuntimeError)):
-            store.transition_task(
-                "t1", TaskState.RUNNING,
-                expected_version=grace.state_version,
-            )
-        assert store.get_task("t1").state is TaskState.AUTO_GRACE
+        # WP5a-2: the map edge now exists...
+        running = store.transition_task(
+            "t1", TaskState.RUNNING,
+            expected_version=grace.state_version,
+        )
+        assert running.state is TaskState.RUNNING
+        # ...but a RUNNING row without a paired run row still fails the
+        # durable invariant — a bare state write is never a worker.
+        with pytest.raises(RuntimeError):
+            store.assert_running_invariant("t1")
     finally:
         store.close()
 
