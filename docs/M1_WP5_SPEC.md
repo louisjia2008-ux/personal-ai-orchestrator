@@ -200,3 +200,48 @@ pending 在 worker 跑完后由 `execution_controller.apply_verification_result`
 ---
 
 **文档维护**:M1 后续工作包开工前,把对应裁决全文纳入本目录(`/docs/M1_WP{xx}_SPEC.md`),避免新会话丢上下文。
+## 13. WP5a-2 implementation clarifications (recorded post-implementation)
+
+These notes pin how the frozen contract above was realized in
+`feat/m1-wp5a2-auto-tick`. They clarify naming/derivation details the
+spec left open; **no safety semantics were weakened**:
+
+1. **§3.4 step 1 "执行分支不在受保护列表"** is realized by reusing
+   `validate_execution_target_launch` (enabled + runtime-verified +
+   runtime available) as the planning-time launchability gate — the
+   same host policy the owner-dispatch path enforces. No new protected
+   list was invented.
+2. **`auto_decision_id`** is `f"auto-{task_id}-v{state_version}"` —
+   the READY state version at planning. Stable across the cycle's
+   ticks; a veto / abort / unacked timeout bumps the version so the
+   next cycle derives a fresh id. The frozen RoutingDecision's own
+   `decision_id` (hash-derived) is recorded alongside it in the audit
+   trail.
+3. **裁决 15 "pending_id 与 auto_decision_id 同值"** is literal: the
+   pending shadow's `pending_id` IS the task row's
+   `auto_decision_id` (the `pending-{decision_id}` prefix convention
+   stays specific to the SHADOW routing path).
+4. **§3.4 step 2 "随即 AUTO_PLANNED → AUTO_GRACE"** is two durable
+   transactions; a crash between them leaves AUTO_PLANNED, and the
+   next tick completes the promotion from the frozen decision
+   (crash-boundary recovery, idempotent).
+5. **§3.1 "切回 MANUAL → 同一事务内 abort"**: the settings handler
+   aborts AUTO_* lifecycles immediately after persisting the mode
+   (two stores — JSON settings + SQLite — cannot share one literal
+   transaction). The tick's revocation sweep is the crash backstop,
+   and the executor's exact-expected-state RUNNING guard closes the
+   reserve→start race. Every interleaving fails closed.
+6. **§3.4 step 4's "重新调 _admit_quota"** happens inside the
+   executor at worker-start time (unchanged owner-path discipline);
+   a pre-worker admission failure leaves a BLOCKED dispatch which the
+   next tick reconciles to READY + `AUTO_ABORTED{admission_failed:*}`
+   + pending discard.
+7. **§3.5 veto "删除 pending shadow"**: veto/abort exits *discard*
+   the pending (no truthful observation exists to finalize); real
+   runs *finalize* through `apply_verification_result` with the
+   verifier's verdict.
+8. **Tick registration**: the supervised-auto step registers on the
+   non-control-only daemon only (`build_default_supervisor`
+   `supervised_auto_step=` + daemon wiring). The product daemon is
+   `--control-only` today and therefore performs zero autonomous tick
+   execution until the owner opts into the non-control-only runtime.

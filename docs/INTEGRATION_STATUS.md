@@ -1161,3 +1161,132 @@ intentionally introduce the clear.
   clear-on-veto helper).
 - Pending-shadow autonomous lifecycle (veto / finalise / abort).
 - 24h unacked timeout for ``AUTO_GRACE``.
+
+## M1 WP5a-2 — SUPERVISED_AUTO execution loop (`feat/m1-wp5a2-auto-tick`)
+
+WP5a-1 landed the foundations; WP5a-2 lands the first real autonomous
+side effect. Current status:
+
+- **SUPERVISED_AUTO: IMPLEMENTED** — host-owned planning tick, frozen
+  decision, grace / ack / veto, safe autonomous dispatch, verifier
+  gatekeeping, pending-shadow lifecycle.
+- **Production ACTIVE: UNCHANGED** — still
+  ``DISABLED_BY_DESIGN`` unless activation authority authorises it;
+  the two modes remain separate authorities.
+- **Plugin autonomous authority: NO** —
+  ``integrations/opencode/plugin.ts`` is byte-identical to WP5a-1;
+  ``optionMode`` still rejects SUPERVISED_AUTO and the
+  ``mode !== "ACTIVE"`` side-effect gate is untouched.
+- **Auto dispatch authority: HOST / SAFETY KERNEL** — dispatch flows
+  through ``initiate_owner_dispatch`` with the distinct
+  ``authority="SUPERVISED_AUTO"`` and ``expected_state=AUTO_GRACE``;
+  quota admission, worktree isolation, single-writer lock, main-repo
+  immutability and the deterministic verifier all apply unchanged.
+- **Verifier: AUTHORITATIVE** — worker exit ≠ VERIFIED; only a
+  deterministic verifier PASS backed by immutable evidence may
+  finalize a verified pending shadow.
+
+### Tick (`supervised_auto_step.py`)
+
+One bounded, deterministic, fake-clock-friendly sweep per invocation;
+registered on ``DaemonSupervisor`` under ``supervised-auto``. The
+``--control-only`` daemon **never registers it** (zero autonomous tick
+execution; the product daemon is control-only today, so autonomous
+execution is opt-in via the non-control-only runtime). Tick failures
+are bounded: audited via ``SUPERVISED_AUTO_TICK_FAILED`` and the
+supervisor's existing backoff — the daemon never crashes, and no task
+is ever marked successful by a tick failure.
+
+Six hard gates before any side effect (spec §3.4 step 1): admitted
+top-1 recommendation; quota availability in
+``{AVAILABLE_OBSERVED, AVAILABLE_UNMETERED}``; evidence freshness
+(≤ 7 days); tier ≥ min_tier (via recommender admission); execution
+target launchable (reusing ``validate_execution_target_launch`` as
+the protected-surface gate — spec §3.4 item 5 clarification); no
+active switch lease. Any gate failing ⇒ ``AUTO_SKIPPED{reason}``
+(deduped per task+reason) and no side effect.
+
+### Frozen decision contract
+
+- ``auto_decision_id = f"auto-{task_id}-v{state_version-at-planning}"``
+  — stable across ticks of one cycle; a veto/abort/timeout bumps the
+  version, starting a fresh cycle.
+- Routing ``request_id = f"supervised-auto-{auto_decision_id}"`` —
+  no timestamps, no per-tick randomness; the durable
+  ``routing_decisions.request_id`` UNIQUE constraint is unchanged and
+  later ticks reuse the exact frozen decision (crash boundary A
+  reconciles without a second decision).
+- Dispatch ``request_id =
+  f"supervised-auto-dispatch-{auto_decision_id}"`` — idempotent
+  reservation; duplicates return the existing record, never a second
+  worker.
+- Pending shadow ``pending_id == auto_decision_id`` (裁决 15).
+
+### Grace / ack / veto / dispatch-now
+
+- ``unattended_allowed=True``: deadline set on entering AUTO_GRACE.
+- ``unattended_allowed=False``: no countdown before the owner ack
+  (``POST /v1/tasks/{id}/auto/ack``); deadline computed once from the
+  ack time; ACK retries never extend it. 24h unacked ⇒ abort to READY
+  (``AUTO_ABORTED{reason="unacked_timeout"}``).
+- ``POST /v1/tasks/{id}/auto/veto`` and ``/v1/tasks/{id}/cancel`` on
+  AUTO_*: back to READY, task policy locked MANUAL, pending shadow
+  discarded, all four auto columns cleared, ``AUTO_VETOED`` audited
+  (durable ``request_id`` idempotency).
+- ``POST /v1/tasks/{id}/auto/dispatch-now``: skips only the remaining
+  grace; every execution-admission gate still applies.
+
+### Fail-closed aborts (§8/§25)
+
+Mode change away from SUPERVISED_AUTO and project opt-out revoke
+abort every AUTO_* lifecycle inside the same settings handler; the
+tick's revocation sweeps are the crash backstop. The dispatch path
+revalidates mode/project/version/lease immediately before reserving
+(TOCTOU), and the executor's exact-``expected_state`` RUNNING guard
+closes the reserve→start race: a concurrent veto turns the worker
+start into a fail-closed ``TASK_NOT_READY`` with no process spawned.
+
+### AUTO metadata invariants (§32)
+
+Every terminal exit clears the four ``auto_*`` columns off the active
+task row: veto, mode abort, project abort, unacked timeout,
+pre-worker admission failure, and the executor close-out (verified /
+failed / cancelled). The tick's terminal-state sweep is the durable
+backstop when the executor dies mid-close-out. Historical truth lives
+in the audit trail, the routing decision row and the shadow journal —
+never in stale task-row fields.
+
+### Pending-shadow lifecycle (§26)
+
+Planning writes exactly one pending; repeated ticks never duplicate.
+Verified runs finalize into exactly one real observation (deterministic
+``observation_id`` makes double-finalization content-idempotent);
+failed workers finalize with a truthful failed outcome; every abort
+exit discards. Nothing hangs.
+
+### Test coverage summary
+
+- ``tests/test_supervised_auto_step.py`` (33 tests) — gates, frozen
+  decision stability, request-id stability, unattended/attended grace,
+  ack deadline pinning, dispatch exactly once, lease blocking (active
+  vs expired), mode/project aborts, 24h timeout, crash boundaries A/C,
+  restart round-trip, pre-worker BLOCKED reconciliation, terminal
+  sweep, supervisor registration (control-only excluded).
+- ``tests/test_mode_change_abort.py`` (7 tests) — §25 matrix incl.
+  TOCTOU (deadline passed + mode flip ⇒ no dispatch), ACTIVE API
+  rejection leaving AUTO intact, RUNNING immunity, executor-side
+  expected-state guard.
+- ``tests/test_auto_endpoints.py`` (18 tests) — ack/veto/dispatch-now
+  success/stale/wrong-state/duplicate matrix, deadline pinning,
+  cancel-as-veto, HTTP 400/404/409/200 over the real UDS surface.
+- ``tests/test_pending_shadow_lifecycle.py`` (6 tests) — lifecycle
+  disposition matrix; verified + failed finals run the REAL
+  ``OwnerDispatchExecutor`` with the scripted worker + deterministic
+  verifier.
+- ``tests/test_switch_lease.py`` (+5 tests) — ``has_active_lease``
+  truth table (matching unexpired / expired / wrong task / COMPLETED /
+  ABORTED).
+- ``tests/test_safety_kernel_transactions.py`` — the WP5a-1
+  AUTO_GRACE→RUNNING prohibition test updated to the WP5a-2 contract
+  (edge exists; unpaired bare transitions still fail
+  ``assert_running_invariant``).
