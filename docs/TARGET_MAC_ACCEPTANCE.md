@@ -480,3 +480,32 @@ The first real autonomous side effect. Acceptance evidence:
 - 914 Python tests pass (845 baseline + 69 new); 441 Swift tests
   pass; 17/17 TypeScript cases pass; ruff zero findings;
   ``git diff --check`` clean.
+
+### P0 M1 WP5a-2 crash-consistency closeout (PASS on `feat/m1-wp5a2-auto-tick`, follow-up commits)
+
+Independent review merge blocker closed with deterministic
+crash-injection evidence (no sleep, no wall-clock races):
+
+- **AUTO abort / veto SQLite-atomic**: one `BEGIN IMMEDIATE` per
+  logical close — source gate, version check, READY, four-column
+  clear, optional MANUAL lock, one audit event, one cleanup intent;
+  exactly ONE `state_version` bump (pinned by test).
+- **Veto**: READY + MANUAL + clean metadata commit together; a store
+  reopen right after COMMIT (discard "lost") shows the owner-safe row.
+- **Durable outbox**: pending discard promised in-transaction,
+  fulfilled post-COMMIT idempotently; crash-after-commit /
+  crash-after-discard / duplicate drain / nonexistent pending /
+  unavailable-journal interleavings all pinned; completed rows never
+  reprocessed.
+- **READY stale metadata recovered** (`AUTO_METADATA_RECOVERED`),
+  while the legal frozen-decision boundary (READY + routing row only)
+  and the legal `auto_reason` skip hint are provably untouched.
+- **Mode-change / project-disable / unacked-timeout / pre-worker
+  BLOCKED crash windows** all recover on the restart tick: READY,
+  metadata clean, pending drained, no dispatch, no worker; a fresh
+  cycle after timeout derives a NEW `auto_decision_id` (old id never
+  reused).
+- 929 Python tests pass (914 + 15 crash-recovery); ruff zero
+  findings; `git diff --check` clean; plugin.ts /
+  decision_contract.ts byte-identical to the WP5a-1 baseline;
+  Production ACTIVE unchanged.

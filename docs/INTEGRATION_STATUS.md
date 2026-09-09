@@ -1226,8 +1226,10 @@ active switch lease. Any gate failing ⇒ ``AUTO_SKIPPED{reason}``
 
 - ``unattended_allowed=True``: deadline set on entering AUTO_GRACE.
 - ``unattended_allowed=False``: no countdown before the owner ack
-  (``POST /v1/tasks/{id}/auto/ack``); deadline computed once from the
-  ack time; ACK retries never extend it. 24h unacked ⇒ abort to READY
+  (``POST /v1/tasks/{id}/auto/ack``); the FIRST ack requires the exact
+  ``task_state_version``; an already-acked retry is idempotent (200
+  with the current task) and can never extend the deadline. 24h
+  unacked ⇒ abort to READY
   (``AUTO_ABORTED{reason="unacked_timeout"}``).
 - ``POST /v1/tasks/{id}/auto/veto`` and ``/v1/tasks/{id}/cancel`` on
   AUTO_*: back to READY, task policy locked MANUAL, pending shadow
@@ -1290,3 +1292,45 @@ exit discards. Nothing hangs.
   AUTO_GRACE→RUNNING prohibition test updated to the WP5a-2 contract
   (edge exists; unpaired bare transitions still fail
   ``assert_running_invariant``).
+
+## M1 WP5a-2 crash-consistency closeout (`feat/m1-wp5a2-auto-tick`, follow-up commits)
+
+Independent review blocked the merge: the AUTO lifecycle exits were
+multi-stage writes, so a crash between durable commits could leave
+``READY`` + active-looking auto metadata and an orphan pending shadow
+(the terminal sweep never covered READY). Repaired on the same branch:
+
+- **Atomic lifecycle close**: ``abort_auto_lifecycle`` performs the
+  source-state gate (AUTO_PLANNED / AUTO_GRACE; BLOCKED only with
+  ``allow_blocked`` AND a non-NULL ``auto_decision_id``), the exact
+  version check, READY + four-column clear + optional MANUAL lock,
+  exactly ONE ``state_version`` bump, one audit event and one cleanup
+  intent — all in ONE ``BEGIN IMMEDIATE``. Abort, veto (incl.
+  cancel-as-veto), unacked timeout and the pre-worker BLOCKED
+  reconciliation all route through it.
+- **Durable shadow-cleanup outbox** (``auto_shadow_cleanup_outbox``):
+  the pending discard is promised in the abort transaction and
+  fulfilled after COMMIT by an idempotent, bounded drain — crash-safe
+  at every interleaving; a journal failure never rolls back SQLite
+  truth. ``clear_auto_state_metadata`` enqueues the same intent so the
+  terminal sweep / executor close-out inherit the guarantee.
+- **Tick ordering**: outbox drain + stale-READY-metadata recovery run
+  BEFORE revocation sweeps, planning and dispatch (old-lifecycle
+  cleanup precedes new planning), with a second drain at tick end.
+- **READY stale-metadata recovery**: a READY row with lifecycle
+  metadata (decision id / deadline / ack) is recovered atomically with
+  ``AUTO_METADATA_RECOVERED{ready_state_stale_auto_metadata}``;
+  ``auto_reason`` alone is the tick's legal skip hint and a READY row
+  with only a frozen routing decision is the legal crash boundary A —
+  neither is mistaken for staleness.
+- **ACK contract frozen**: first ACK requires the exact version; an
+  already-acked retry is idempotent and never extends the deadline.
+  VETO is exact before first mutation (same-``request_id`` replay
+  idempotent); DISPATCH-NOW is an exact admission guard.
+- Tests: ``tests/test_auto_crash_recovery.py`` (15) — deterministic
+  fault injection (failing journal, store-level commits without the
+  drain, fresh-connection restarts; no sleep) covering the veto /
+  mode-change / project-disable / unacked-timeout / pre-worker-BLOCKED
+  crash windows, the legacy READY stale-metadata row, the frozen
+  boundary-A negative, the outbox mechanics (§20 matrix) and the
+  one-bump / one-audit / plain-owner-BLOCKED-untouched invariants.
