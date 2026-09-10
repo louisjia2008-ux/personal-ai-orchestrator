@@ -15,6 +15,7 @@ from personal_ai_orchestrator.safety_kernel import (
     SafetyKernelStore,
     ShadowFinalizationIntent,
     TaskState,
+    shadow_identity_payload,
 )
 from personal_ai_orchestrator.shadow_evidence import ShadowEvidenceJournal
 from personal_ai_orchestrator.supervised_auto_step import (
@@ -77,6 +78,10 @@ def _intent_for(env, decision: str, *, verified: bool, **overrides) -> ShadowFin
         "execution_success": True,
         "verification_success": None,
         "observed_at": datetime.now(UTC).isoformat(),
+        # Round 4 §17: the intent must be self-sufficient — freeze the
+        # pending's immutable identity so restarts can prove replays
+        # even after the pending file is gone.
+        "identity_json": shadow_identity_payload(pending),
     }
     fields.update(overrides)
     return ShadowFinalizationIntent(**fields)
