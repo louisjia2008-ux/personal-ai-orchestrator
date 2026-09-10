@@ -636,18 +636,31 @@ class SupervisedAutoStep:
     # ------------------------------------------------------------------
 
     def _reconcile_supervised_auto_dispatches(self, now: datetime) -> None:
-        """Reconcile SUPERVISED_AUTO dispatch rows that ended pre-worker.
+        """Reconcile the CURRENT cycle's dispatch row, pre-worker only.
 
-        A dispatch that never started a worker (no run row, terminal
-        BLOCKED status) is §3.4 step 4's fail branch: the task returns to
-        READY, the pending shadow is discarded and the abort is audited.
-        Dispatches that DID start a worker keep their outcome — the
-        verifier + executor path owns that truth.
+        Correlation is strictly current-cycle: a terminal SUPERVISED_AUTO
+        dispatch row participates only when its ``request_id`` equals
+        ``supervised_auto_dispatch_request_id(task.auto_decision_id)``
+        (§3.4 step 4's fail branch for THIS cycle). Rows from older
+        auto cycles — and historical task runs — can never mutate the
+        current lifecycle.
+
+        "This dispatch produced a run" is dispatch-scoped: the executor
+        always registers the run as ``run-{dispatch_id}``, so an exact
+        ``run_id`` lookup decides whether the worker truly launched.
+        A dispatch that did launch keeps its outcome — the verifier +
+        executor path owns that truth.
+
+        A task without a current ``auto_decision_id`` is never touched:
+        a historical SUPERVISED_AUTO row alone proves nothing about the
+        current lifecycle, so reconciliation fails closed (BLOCKED
+        stays BLOCKED; owner-controlled recovery owns it).
         """
 
         rows = self._store.connection.execute(
             """
-            SELECT d.request_id, d.task_id, d.status, d.failure_code
+            SELECT d.dispatch_id, d.request_id, d.task_id, d.status,
+                   d.failure_code
             FROM owner_dispatches d
             WHERE d.authority = ?
               AND d.status IN ('BLOCKED', 'CANCELLED')
@@ -660,39 +673,38 @@ class SupervisedAutoStep:
                 task = self._store.get_task(row["task_id"])
             except KeyError:
                 continue
-            has_run = self._store.connection.execute(
-                "SELECT 1 FROM runs WHERE task_id=? LIMIT 1", (row["task_id"],)
-            ).fetchone()
-            if has_run is not None:
-                continue  # a real worker ran — executor path owns the truth
+            # Current-cycle gate BEFORE any mutation: without a live
+            # auto decision id there is no current lifecycle to close.
+            if task.auto_decision_id is None:
+                continue
+            if (
+                row["request_id"]
+                != supervised_auto_dispatch_request_id(task.auto_decision_id)
+            ):
+                continue  # stale dispatch from an older auto cycle
             if task.state not in {TaskState.BLOCKED, TaskState.AUTO_GRACE}:
                 continue
+            # Dispatch-scoped run correlation: the executor's durable
+            # run row for this exact dispatch is always run-{dispatch_id}.
+            expected_run_id = f"run-{row['dispatch_id']}"
+            current_dispatch_has_run = self._store.connection.execute(
+                "SELECT run_id FROM runs WHERE run_id=? LIMIT 1",
+                (expected_run_id,),
+            ).fetchone()
+            if current_dispatch_has_run is not None:
+                continue  # this dispatch truly launched a worker
             reason = f"admission_failed:{row['failure_code'] or row['status']}"
             if task.state is TaskState.AUTO_GRACE:
                 # The reservation was rejected before the executor ever
                 # moved the task (e.g. initiate_owner_dispatch validation).
                 self._abort_auto_task(task, now, reason=reason)
                 continue
-            if task.auto_decision_id is not None:
-                # Pre-worker supervised-auto BLOCKED: the same crash-atomic
-                # close, gated on the auto lifecycle's decision id so a
-                # plain owner BLOCKED task can never take this path.
-                self._abort_auto_task(task, now, reason=reason, allow_blocked=True)
-                continue
-            # Legacy half-state (BLOCKED, no auto metadata): no lifecycle
-            # to close — a plain owner-controlled READY recovery.
-            try:
-                self._store.transition_task(
-                    task.task_id,
-                    TaskState.READY,
-                    expected_version=task.state_version,
-                    reason=(
-                        "supervised auto dispatch aborted pre-worker: "
-                        f"{reason} (no auto metadata)"
-                    ),
-                )
-            except (ValueError, RuntimeError):
-                pass
+            # Pre-worker supervised-auto BLOCKED for the CURRENT cycle:
+            # the same crash-atomic close. The request-id match above is
+            # the durable proof this BLOCKED task belongs to this
+            # supervised-auto dispatch, so allow_blocked cannot be
+            # reached by a plain owner BLOCKED task.
+            self._abort_auto_task(task, now, reason=reason, allow_blocked=True)
 
     # ------------------------------------------------------------------
     # terminal lifecycle close-out (§32)

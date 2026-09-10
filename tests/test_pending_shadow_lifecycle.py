@@ -88,16 +88,21 @@ def test_admission_failure_discards_pending(tmp_path) -> None:
     env = _env(tmp_path, unattended=True, grace_seconds=300)
     _plan(env)
     task = env.store.get_task("task-1")
+    # Current-cycle request id: reconciliation only honors the dispatch
+    # row that belongs to the task's CURRENT auto decision.
+    request_id = (
+        f"supervised-auto-dispatch-{task.auto_decision_id}"
+    )
     env.store.reserve_owner_dispatch(
-        dispatch_id=f"owner-dispatch-{HELLO_REQUEST_ID}",
-        request_id=HELLO_REQUEST_ID,
+        dispatch_id=f"owner-dispatch-{request_id}",
+        request_id=request_id,
         task_id="task-1",
         task_state_version=task.state_version,
         execution_target_id="m3-sub",
         authority="SUPERVISED_AUTO",
     )
     env.store.mark_owner_dispatch_blocked(
-        HELLO_REQUEST_ID,
+        request_id,
         failure_code="QUOTA_EXHAUSTED",
         failure_reason="test admission failure",
     )
