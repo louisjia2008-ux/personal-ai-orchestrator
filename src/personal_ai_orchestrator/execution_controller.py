@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from personal_ai_orchestrator.process_supervisor import ProcessSupervisor, SupervisedProcess
-from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
+from personal_ai_orchestrator.safety_kernel import (
+    SafetyKernelStore,
+    ShadowFinalizationIntent,
+    TaskState,
+)
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.shadow_evidence import (
     ShadowEvidenceJournal,
@@ -403,6 +407,7 @@ def apply_verification_result(
     evidence_journal: VerificationEvidenceJournal,
     shadow_journal: ShadowEvidenceJournal | None = None,
     shadow_pending_id: str | None = None,
+    shadow_dispatch_id: str = "",
     shadow_reset_cycle_ids: tuple[str, ...] = (),
     shadow_quota_after_snapshot_ids: tuple[str, ...] = (),
     shadow_observed_burn_fraction: float | None = None,
@@ -421,6 +426,17 @@ def apply_verification_result(
     A non-null ``evidence_id`` is only an identifier, not authority. The immutable journal must
     already contain the exact result before this transition is allowed; forged or mismatched
     in-memory results fail closed to BLOCKED.
+
+    Round 3 (crash-consistency): when a shadow pending is supplied, the
+    terminal transition and a DURABLE shadow-finalization intent commit
+    in ONE SQLite transaction (``apply_verification_outcome``); the
+    filesystem finalize is then replayed post-COMMIT through the
+    idempotent finalize-outbox drain. A crash between the terminal
+    COMMIT and the filesystem finalize can no longer lose the real
+    observation — the intent replays it byte-identically (``observed_at``
+    is pinned durably at enqueue time). The pending identity is loaded
+    BEFORE any mutation: a missing/malformed pending fails closed while
+    the task is still VERIFYING.
     """
 
     task = store.get_task(task_id)
@@ -438,30 +454,59 @@ def apply_verification_result(
         reason = f"deterministic verification passed: {result.evidence_id}"
     else:
         reason = result.failure_reason or "deterministic verification failed"
-    next_state = store.transition_task(
-        task_id,
-        target,
-        expected_version=task.state_version,
-        reason=reason,
-    ).state
+
+    finalize_intent = None
     if shadow_journal is not None and shadow_pending_id is not None:
-        shadow_journal.finalize_pending(
-            shadow_pending_id,
-            reset_cycle_ids=shadow_reset_cycle_ids,
-            quota_after_snapshot_ids=shadow_quota_after_snapshot_ids,
-            observed_burn_fraction=shadow_observed_burn_fraction,
+        # Load the pending identity BEFORE mutating: the observation's
+        # identity keys (routing request id + frozen decision id) must
+        # be captured durably, and a missing pending must fail closed
+        # while the task is still VERIFYING.
+        pending = shadow_journal.load_pending(shadow_pending_id)
+        finalize_intent = ShadowFinalizationIntent(
+            pending_id=shadow_pending_id,
+            task_id=task_id,
+            dispatch_id=shadow_dispatch_id,
+            request_id=pending.request_id,
+            decision_id=pending.decision_id,
+            verified=has_authoritative_pass,
             execution_success=shadow_execution_success,
             verification_success=shadow_verification_success,
-            quality_outcome=shadow_quality_outcome,
-            failure_class=shadow_failure_class,
-            failure_stage=shadow_failure_stage,
-            verified=has_authoritative_pass,
+            quality_outcome=(
+                shadow_quality_outcome.value
+                if shadow_quality_outcome is not None
+                else None
+            ),
+            failure_class=(
+                shadow_failure_class.value if shadow_failure_class is not None else None
+            ),
+            failure_stage=(
+                shadow_failure_stage.value if shadow_failure_stage is not None else None
+            ),
             regression_detected=shadow_regression_detected,
             attempts_to_green=shadow_attempts_to_green,
             time_to_green_seconds=shadow_time_to_green_seconds,
             handoff_count=shadow_handoff_count,
-            observed_at=datetime.now(UTC),
+            reset_cycle_ids=shadow_reset_cycle_ids,
+            quota_after_snapshot_ids=shadow_quota_after_snapshot_ids,
+            observed_burn_fraction=shadow_observed_burn_fraction,
+            observed_at=datetime.now(UTC).isoformat(),
         )
+    next_state = store.apply_verification_outcome(
+        task_id,
+        expected_version=task.state_version,
+        target=target,
+        reason=reason,
+        finalize=finalize_intent,
+    )
+    if finalize_intent is not None:
+        # Best-effort inline drain: replays the durable intent so the
+        # common case finalizes + discards immediately; a failure only
+        # leaves the intent open for the next drain (tick / restart).
+        from personal_ai_orchestrator.supervised_auto_step import (
+            drain_auto_shadow_finalize_outbox,
+        )
+
+        drain_auto_shadow_finalize_outbox(store, shadow_journal)
     return next_state
 
 

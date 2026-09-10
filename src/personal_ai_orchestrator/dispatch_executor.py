@@ -574,7 +574,6 @@ class OwnerDispatchExecutor:
         # different payload (observation ids are deterministic; content
         # divergence would fail-closed in the journal instead).
         auto_pending_finalized = False
-        auto_pending_discarded = False
         if next_state is TaskState.WORKER_FINISHED:
             try:
                 begin_verification(store, task_id=dispatch.task_id)
@@ -608,14 +607,15 @@ class OwnerDispatchExecutor:
                     evidence_journal=self._verification_journal,
                     shadow_journal=self._shadow_journal if shadow_pending_id else None,
                     shadow_pending_id=shadow_pending_id,
+                    shadow_dispatch_id=dispatch.dispatch_id,
                     shadow_execution_success=worker_exit_code == 0,
                 )
+                # Round 3: the terminal truth + durable finalization
+                # intent committed in ONE transaction, and the inline
+                # drain already replayed the observation + discarded the
+                # pending on the happy path. A failed drain only leaves
+                # the intent open — the tick / restart replay finishes it.
                 auto_pending_finalized = shadow_pending_id is not None
-                if auto_pending_finalized:
-                    # The observation carries the truth now; the pending
-                    # row must not linger as a hanging lifecycle.
-                    self._discard_supervised_auto_pending(shadow_pending_id)
-                    auto_pending_discarded = True
             except Exception as error:
                 store.transition_task(
                     dispatch.task_id,
@@ -683,8 +683,11 @@ class OwnerDispatchExecutor:
         # outcomes the verification path did not already finalize
         # (worker failed before WORKER_FINISHED, concurrent cancel, ...)
         # and clear the now-inert auto metadata off the active task row.
-        # Both steps are best-effort: the tick's terminal-state sweep is
-        # the durable backstop when the executor dies here.
+        # Round 3: the failed-execution finalize is now a DURABLE intent
+        # + best-effort drain — a real worker ran, so its observation
+        # must survive an executor crash (the tick's terminal sweep and
+        # the finalize outbox replay it); the blind filesystem discard
+        # fallback is gone.
         if not auto_pending_finalized:
             self._finalize_supervised_auto_pending(
                 store,
@@ -692,11 +695,6 @@ class OwnerDispatchExecutor:
                 verified=False,
                 execution_success=worker_exit_code == 0,
             )
-            auto_pending_discarded = True
-        if not auto_pending_discarded:
-            pending_id = self._supervised_auto_pending_id(store, dispatch)
-            if pending_id is not None:
-                self._discard_supervised_auto_pending(pending_id)
         self._clear_supervised_auto_metadata(store, dispatch)
         try:
             store._audit(
@@ -873,30 +871,47 @@ class OwnerDispatchExecutor:
     ) -> None:
         """Finalize the pending shadow with a truthful non-verified outcome.
 
-        Called only for terminal outcomes the deterministic verification
-        path did not already finalize. Missing / already-finalized pendings
-        are a no-op (``finalize_pending`` is idempotent on identical content,
-        and a discarded pending simply no longer exists).
+        Round 3: a real worker launched (run row exists), so the
+        observation is DURABLE truth — record the finalization intent
+        first (immutable payload, ``observed_at`` pinned once), then
+        best-effort drain. A crash before the drain leaves the intent
+        open; the tick / restart replay finalizes + discards exactly
+        once. When an intent already owns this pending (e.g. a tick
+        reconstruction raced us), the first durable intent wins and we
+        only drain it.
         """
+
+        from personal_ai_orchestrator.safety_kernel import ShadowFinalizationIntent
+        from personal_ai_orchestrator.supervised_auto_step import (
+            drain_auto_shadow_finalize_outbox,
+        )
 
         pending_id = self._supervised_auto_pending_id(store, dispatch)
         if pending_id is None or self._shadow_journal is None:
             return
         try:
-            self._shadow_journal.load_pending(pending_id)
+            pending = self._shadow_journal.load_pending(pending_id)
         except (FileNotFoundError, ValueError):
             return
-        try:
-            self._shadow_journal.finalize_pending(
-                pending_id,
+        if not store.shadow_finalize_intent_exists(pending_id):
+            intent = ShadowFinalizationIntent(
+                pending_id=pending_id,
+                task_id=dispatch.task_id,
+                dispatch_id=dispatch.dispatch_id,
+                request_id=pending.request_id,
+                decision_id=pending.decision_id,
+                verified=verified,
                 execution_success=execution_success,
                 verification_success=False,
-                verified=False,
-                observed_at=datetime.now(UTC),
+                observed_at=datetime.now(UTC).isoformat(),
             )
-        except Exception:
-            pass
-        self._discard_supervised_auto_pending(pending_id)
+            try:
+                store.enqueue_shadow_finalization(intent)
+            except RuntimeError:
+                # A different payload already owns this finalization id
+                # — the first durable intent is authoritative.
+                pass
+        drain_auto_shadow_finalize_outbox(store, self._shadow_journal)
 
     def _discard_supervised_auto_pending(self, pending_id: str) -> None:
         """Best-effort pending-file removal after a finalize/abort."""

@@ -41,9 +41,10 @@ Safety invariants enforced here:
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from personal_ai_orchestrator.dispatch_initiator import (
@@ -68,6 +69,7 @@ from personal_ai_orchestrator.routing_bridge import build_routing_decision
 from personal_ai_orchestrator.safety_kernel import (
     ProjectRecord,
     SafetyKernelStore,
+    ShadowFinalizationIntent,
     TaskRecord,
     TaskState,
 )
@@ -78,6 +80,10 @@ from personal_ai_orchestrator.scheduler import (
 from personal_ai_orchestrator.shadow_evidence import (
     PendingShadowObservation,
     ShadowEvidenceJournal,
+    ShadowFailureClass,
+    ShadowFailureStage,
+    ShadowObservation,
+    ShadowQualityOutcome,
 )
 from personal_ai_orchestrator.switch_lease import SwitchLeaseAuthority
 
@@ -161,14 +167,158 @@ def drain_auto_shadow_cleanup_outbox(
     completed = 0
     for row in store.pending_shadow_cleanups(limit=limit):
         pending_id = row["pending_id"]
-        if shadow_journal is not None:
-            try:
-                shadow_journal.discard_pending(pending_id)
-            except (OSError, ValueError):
-                # Journal unavailable or malformed: leave the intent open;
-                # the SQLite task truth is already owner-safe.
-                continue
+        if store.open_shadow_finalize_intent(pending_id):
+            # §16 conflict rule: finalize outranks discard — never let
+            # the cleanup path remove a pending whose real-execution
+            # observation is still owed.
+            continue
+        if shadow_journal is None:
+            # §17: no journal means the discard cannot be performed;
+            # the intent must stay OPEN for a later drain, never be
+            # marked completed.
+            continue
+        try:
+            shadow_journal.discard_pending(pending_id)
+        except (OSError, ValueError):
+            # Journal unavailable or malformed: leave the intent open;
+            # the SQLite task truth is already owner-safe.
+            continue
         store.complete_shadow_cleanup(pending_id)
+        completed += 1
+    return completed
+
+
+def _finalize_kwargs_from_intent_row(row: Any) -> dict[str, Any]:
+    """Rebuild ``finalize_pending`` kwargs from a durable intent row."""
+
+    def _enum(cls: type, value: Any) -> Any:
+        return cls(value) if value is not None else None
+
+    return {
+        "reset_cycle_ids": tuple(json.loads(row["reset_cycle_ids"])),
+        "quota_after_snapshot_ids": tuple(json.loads(row["quota_after_snapshot_ids"])),
+        "observed_burn_fraction": row["observed_burn_fraction"],
+        "execution_success": bool(row["execution_success"]),
+        "verification_success": (
+            None if row["verification_success"] is None
+            else bool(row["verification_success"])
+        ),
+        "quality_outcome": _enum(ShadowQualityOutcome, row["quality_outcome"]),
+        "failure_class": _enum(ShadowFailureClass, row["failure_class"]),
+        "failure_stage": _enum(ShadowFailureStage, row["failure_stage"]),
+        "verified": bool(row["verified"]),
+        "regression_detected": bool(row["regression_detected"]),
+        "attempts_to_green": row["attempts_to_green"],
+        "time_to_green_seconds": row["time_to_green_seconds"],
+        "handoff_count": row["handoff_count"],
+        "observed_at": datetime.fromisoformat(row["observed_at"]),
+    }
+
+
+def _observation_proves_intent(
+    journal: ShadowEvidenceJournal, row: Any
+) -> bool:
+    """§12: prove the finalized observation already exists.
+
+    Only an observation whose identity keys (task_id + routing request
+    id + frozen decision id) match the intent AND whose recorded verdict
+    matches the durable intent counts as proof — anything else is
+    evidence loss or divergence and must fail closed, never be marked
+    completed.
+    """
+
+    matches = [
+        observation
+        for observation in journal.load_all()
+        if observation.task_id == row["task_id"]
+        and observation.request_id == row["request_id"]
+        and observation.decision_id == row["decision_id"]
+    ]
+    if len(matches) != 1:
+        return False
+    observed: ShadowObservation = matches[0]
+    return (
+        observed.verified == bool(row["verified"])
+        and observed.execution_success == bool(row["execution_success"])
+    )
+
+
+def drain_auto_shadow_finalize_outbox(
+    store: SafetyKernelStore,
+    shadow_journal: ShadowEvidenceJournal | None,
+    *,
+    limit: int = 64,
+) -> int:
+    """Drain durable shadow-FINALIZATION intents (round 3 closeout).
+
+    A real worker executed and the authoritative verdict is already in
+    SQLite — the pending shadow MUST become a truthful observation, so
+    this drain (unlike the cleanup drain) replays a filesystem
+    finalize, never a discard:
+
+    - pending exists → ``finalize_pending`` with the EXACT durable
+      payload (``observed_at`` pinned at enqueue → byte-identical
+      replay; the journal accepts identical content idempotently),
+      then discard, then the completed marker;
+    - pending missing (crash after a completed finalize+discard, or
+      torn state) → mark completed ONLY when the finalized observation
+      is proven present with a matching verdict (§12); otherwise the
+      intent stays OPEN and a sanitized system event records the
+      retry failure — evidence loss is never treated as success;
+    - journal unavailable → all intents stay OPEN (never completed).
+
+    Returns the number of intents completed by this call.
+    """
+
+    completed = 0
+    if shadow_journal is None:
+        return 0
+    for row in store.pending_shadow_finalizations(limit=limit):
+        pending_id = row["pending_id"]
+        try:
+            shadow_journal.load_pending(pending_id)
+        except FileNotFoundError:
+            if _observation_proves_intent(shadow_journal, row):
+                store.complete_shadow_finalization(row["finalization_id"])
+                completed += 1
+            else:
+                try:
+                    store.record_system_event(
+                        "AUTO_SHADOW_FINALIZE_RETRY_FAILED",
+                        {
+                            "finalization_id": row["finalization_id"],
+                            "task_id": row["task_id"],
+                            "pending_id": pending_id,
+                            "exc_type": "PendingMissingObservationUnproven",
+                        },
+                    )
+                except Exception:  # noqa: BLE001 — event best-effort
+                    pass
+            continue
+        except (OSError, ValueError):
+            # Journal unavailable or malformed: leave the intent open.
+            continue
+        try:
+            shadow_journal.finalize_pending(
+                pending_id, **_finalize_kwargs_from_intent_row(row)
+            )
+            shadow_journal.discard_pending(pending_id)
+        except (OSError, ValueError) as error:
+            # Leave the intent open; the retry event is sanitized.
+            try:
+                store.record_system_event(
+                    "AUTO_SHADOW_FINALIZE_RETRY_FAILED",
+                    {
+                        "finalization_id": row["finalization_id"],
+                        "task_id": row["task_id"],
+                        "pending_id": pending_id,
+                        "exc_type": type(error).__name__,
+                    },
+                )
+            except Exception:  # noqa: BLE001 — event best-effort
+                pass
+            continue
+        store.complete_shadow_finalization(row["finalization_id"])
         completed += 1
     return completed
 
@@ -214,12 +364,15 @@ class SupervisedAutoStep:
         """One bounded sweep. Never raises for per-task gate failures.
 
         Ordering contract (crash-consistency closeout): old-lifecycle
-        cleanup always precedes new planning — the outbox drain and the
+        cleanup always precedes new planning — the outbox drains and the
         stale-READY-metadata recovery run first so no new cycle can
-        overlap an uncleaned predecessor.
+        overlap an uncleaned predecessor. The FINALIZE drain runs before
+        the cleanup drain (round 3: real-execution evidence outranks
+        discard promises), again at tick end.
         """
 
         try:
+            self._drain_shadow_finalize_outbox()
             self._drain_shadow_cleanup_outbox()
             self._recover_stale_ready_auto_metadata()
             self._abort_tasks_with_revoked_mode(now)
@@ -233,6 +386,7 @@ class SupervisedAutoStep:
                     self._advance(task, now)
             self._reconcile_supervised_auto_dispatches(now)
             self._close_terminal_auto_lifecycles()
+            self._drain_shadow_finalize_outbox()
             self._drain_shadow_cleanup_outbox()
         except Exception as error:  # noqa: BLE001 — bounded tick, audit + continue
             self._safe_system_event(
@@ -246,6 +400,9 @@ class SupervisedAutoStep:
 
     def _drain_shadow_cleanup_outbox(self) -> None:
         drain_auto_shadow_cleanup_outbox(self._store, self._shadow_journal)
+
+    def _drain_shadow_finalize_outbox(self) -> None:
+        drain_auto_shadow_finalize_outbox(self._store, self._shadow_journal)
 
     def _recover_stale_ready_auto_metadata(self) -> None:
         """READY rows with residual lifecycle metadata are stale, never active.
@@ -713,9 +870,22 @@ class SupervisedAutoStep:
     def _close_terminal_auto_lifecycles(self) -> None:
         """Post-RUNNING terminal tasks must not carry active-auto metadata.
 
-        The executor clears the metadata itself on every close-out; this
-        sweep is the durable backstop when the executor died between the
-        terminal transition and the clear (crash boundary D).
+        Round 3 classification (crash boundary D): a terminal task whose
+        CURRENT dispatch truly launched a worker (exact ``run-{dispatch_id}``
+        row) is a REAL EXECUTION — its pending must become a truthful
+        finalized observation, never a silent discard:
+
+        - open finalize intent → leave it to the finalize drain; the
+          metadata clear (guarded) enqueues no cleanup intent;
+        - no intent (old-build crash residue) → reconstruct one from
+          durable truth (task terminal state + run row; or an existing
+          observation replayed byte-identically), THEN clear metadata;
+        - reconstruction impossible (pending file gone, no observation
+          provable) → fail closed: keep the metadata, sanitize + record
+          a system event, never discard.
+
+        A terminal lifecycle WITHOUT an exact run row is pre-worker /
+        aborted: discard + clear (cleanup outbox) as before.
         """
 
         rows = self._store.connection.execute(
@@ -730,7 +900,11 @@ class SupervisedAutoStep:
                 continue
             if task.auto_decision_id is None:  # pragma: no cover — raced clear
                 continue
-            self._discard_pending(task.auto_decision_id)
+            pending_id = task.auto_decision_id
+            if self._terminal_lifecycle_had_real_run(pending_id):
+                self._close_real_execution_lifecycle(task, pending_id)
+                continue
+            self._discard_pending(pending_id)
             # The clear transaction also enqueues the durable cleanup
             # intent, so a crash between these two steps still drains on
             # the next tick — the metadata clear is the atomic authority.
@@ -739,6 +913,138 @@ class SupervisedAutoStep:
                 expected_version=task.state_version,
                 reason="terminal state sweep closed the auto lifecycle",
             )
+
+    def _terminal_lifecycle_had_real_run(self, pending_id: str) -> bool:
+        """Exact current-cycle dispatch/run correlation (round 2 rules)."""
+
+        dispatch_row = self._store.connection.execute(
+            "SELECT dispatch_id FROM owner_dispatches WHERE request_id=?",
+            (supervised_auto_dispatch_request_id(pending_id),),
+        ).fetchone()
+        if dispatch_row is None:
+            return False
+        run_row = self._store.connection.execute(
+            "SELECT run_id, status FROM runs WHERE run_id=? LIMIT 1",
+            (f"run-{dispatch_row['dispatch_id']}",),
+        ).fetchone()
+        return run_row is not None
+
+    def _close_real_execution_lifecycle(self, task: TaskRecord, pending_id: str) -> None:
+        """Real-execution terminal close: finalize truthfully, never discard."""
+
+        if not self._store.shadow_finalize_intent_exists(pending_id):
+            if not self._enqueue_reconstructed_finalize_intent(task, pending_id):
+                # Fail closed (§14 case C): not enough durable truth to
+                # promise the observation — preserve every trace.
+                self._safe_system_event(
+                    "AUTO_SHADOW_FINALIZE_RECONSTRUCTION_FAILED",
+                    {
+                        "task_id": task.task_id,
+                        "pending_id": pending_id,
+                        "reason": "pending missing and observation unproven",
+                    },
+                )
+                return
+        # §24: the finalize intent is durable — the metadata may clear;
+        # the guarded clear enqueues NO cleanup intent for this pending.
+        self._store.clear_auto_state_metadata(
+            task.task_id,
+            expected_version=task.state_version,
+            reason="terminal state sweep closed the auto lifecycle",
+        )
+        self._drain_shadow_finalize_outbox()
+
+    def _enqueue_reconstructed_finalize_intent(
+        self, task: TaskRecord, pending_id: str
+    ) -> bool:
+        """Rebuild a finalize intent from durable truth (§14 case C).
+
+        Returns False when reconstruction is impossible (fail closed).
+        Prefer replaying an EXISTING observation byte-identically (its
+        verdict fields + observed_at) so the idempotent drain cannot
+        diverge from what is already on disk.
+        """
+
+        if self._shadow_journal is None:
+            return False
+        try:
+            pending = self._shadow_journal.load_pending(pending_id)
+        except (OSError, ValueError):
+            return False
+        existing = [
+            observation
+            for observation in self._shadow_journal.load_all()
+            if observation.task_id == task.task_id
+            and observation.request_id == pending.request_id
+            and observation.decision_id == pending.decision_id
+        ]
+        dispatch_row = self._store.connection.execute(
+            "SELECT dispatch_id FROM owner_dispatches WHERE request_id=?",
+            (supervised_auto_dispatch_request_id(pending_id),),
+        ).fetchone()
+        dispatch_id = (
+            dispatch_row["dispatch_id"] if dispatch_row is not None else ""
+        )
+        if existing:
+            observed: ShadowObservation = existing[0]
+            intent = ShadowFinalizationIntent(
+                pending_id=pending_id,
+                task_id=task.task_id,
+                dispatch_id=dispatch_id,
+                request_id=pending.request_id,
+                decision_id=pending.decision_id,
+                verified=observed.verified,
+                execution_success=observed.execution_success,
+                verification_success=observed.verification_success,
+                quality_outcome=(
+                    observed.quality_outcome.value
+                    if observed.quality_outcome is not None
+                    else None
+                ),
+                failure_class=(
+                    observed.failure_class.value
+                    if observed.failure_class is not None
+                    else None
+                ),
+                failure_stage=(
+                    observed.failure_stage.value
+                    if observed.failure_stage is not None
+                    else None
+                ),
+                regression_detected=observed.regression_detected,
+                attempts_to_green=observed.attempts_to_green,
+                time_to_green_seconds=observed.time_to_green_seconds,
+                handoff_count=observed.handoff_count,
+                reset_cycle_ids=observed.reset_cycle_ids,
+                quota_after_snapshot_ids=observed.quota_after_snapshot_ids,
+                observed_burn_fraction=observed.observed_burn_fraction,
+                observed_at=observed.observed_at.isoformat(),
+            )
+        else:
+            run_status = self._store.connection.execute(
+                "SELECT status FROM runs WHERE run_id=? LIMIT 1",
+                (f"run-{dispatch_id}",),
+            ).fetchone()
+            intent = ShadowFinalizationIntent(
+                pending_id=pending_id,
+                task_id=task.task_id,
+                dispatch_id=dispatch_id,
+                request_id=pending.request_id,
+                decision_id=pending.decision_id,
+                verified=task.state is TaskState.VERIFIED,
+                execution_success=(
+                    run_status is not None and run_status["status"] == "FINISHED"
+                ),
+                verification_success=None,
+                observed_at=datetime.now(UTC).isoformat(),
+            )
+        try:
+            self._store.enqueue_shadow_finalization(intent)
+        except RuntimeError:
+            # A different payload already owns this finalization id —
+            # the first durable intent is authoritative; drain replays it.
+            return True
+        return True
 
     # ------------------------------------------------------------------
     # shared abort path
@@ -1008,6 +1314,7 @@ __all__ = [
     "SupervisedAutoStep",
     "UNACKED_TIMEOUT_SECONDS",
     "drain_auto_shadow_cleanup_outbox",
+    "drain_auto_shadow_finalize_outbox",
     "supervised_auto_decision_id",
     "supervised_auto_dispatch_request_id",
     "supervised_auto_routing_request_id",

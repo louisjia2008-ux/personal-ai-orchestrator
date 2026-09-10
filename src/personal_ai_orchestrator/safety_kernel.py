@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -207,6 +208,70 @@ def _json(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
 
 
+@dataclass(frozen=True)
+class ShadowFinalizationIntent:
+    """Immutable durable payload for a post-worker shadow finalization.
+
+    Every input ``finalize_pending`` needs must be reconstructable from
+    this intent alone (round 3 crash-consistency): no executor process
+    state, no transient Python objects and no re-derived wall clock.
+    ``observed_at`` is pinned at enqueue time — replays reuse the exact
+    stored value so the deterministic ``observation_id`` byte-content
+    stays identical. ``request_id`` / ``decision_id`` are the PENDING's
+    routing identity (the observation's identity keys), not the
+    dispatch request id.
+    """
+
+    pending_id: str
+    task_id: str
+    request_id: str
+    decision_id: str
+    dispatch_id: str = ""
+    verified: bool = False
+    execution_success: bool = False
+    verification_success: bool | None = None
+    quality_outcome: str | None = None
+    failure_class: str | None = None
+    failure_stage: str | None = None
+    regression_detected: bool = False
+    attempts_to_green: int | None = None
+    time_to_green_seconds: float | None = None
+    handoff_count: int = 0
+    reset_cycle_ids: tuple[str, ...] = ()
+    quota_after_snapshot_ids: tuple[str, ...] = ()
+    observed_burn_fraction: float | None = None
+    observed_at: str = ""
+
+    @property
+    def finalization_id(self) -> str:
+        return f"shadow-finalize-{self.pending_id}"
+
+    def payload_json(self) -> str:
+        return _json(
+            {
+                "pending_id": self.pending_id,
+                "task_id": self.task_id,
+                "dispatch_id": self.dispatch_id,
+                "request_id": self.request_id,
+                "decision_id": self.decision_id,
+                "verified": self.verified,
+                "execution_success": self.execution_success,
+                "verification_success": self.verification_success,
+                "quality_outcome": self.quality_outcome,
+                "failure_class": self.failure_class,
+                "failure_stage": self.failure_stage,
+                "regression_detected": self.regression_detected,
+                "attempts_to_green": self.attempts_to_green,
+                "time_to_green_seconds": self.time_to_green_seconds,
+                "handoff_count": self.handoff_count,
+                "reset_cycle_ids": list(self.reset_cycle_ids),
+                "quota_after_snapshot_ids": list(self.quota_after_snapshot_ids),
+                "observed_burn_fraction": self.observed_burn_fraction,
+                "observed_at": self.observed_at,
+            }
+        )
+
+
 #: M1 WP2: the set of min_tier values the schema accepts. Mirrors
 #: :class:`personal_ai_orchestrator.model_tiers.ModelTier`; we
 #: deliberately inline the four strings here so this module does not
@@ -342,6 +407,36 @@ class SafetyKernelStore:
             CREATE INDEX IF NOT EXISTS auto_shadow_cleanup_outbox_open
                 ON auto_shadow_cleanup_outbox(created_at)
                 WHERE completed_at IS NULL;
+            CREATE TABLE IF NOT EXISTS auto_shadow_finalize_outbox (
+                finalization_id TEXT PRIMARY KEY,
+                pending_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                dispatch_id TEXT NOT NULL DEFAULT '',
+                request_id TEXT NOT NULL,
+                decision_id TEXT NOT NULL,
+                verified INTEGER NOT NULL,
+                execution_success INTEGER NOT NULL,
+                verification_success INTEGER,
+                quality_outcome TEXT,
+                failure_class TEXT,
+                failure_stage TEXT,
+                regression_detected INTEGER NOT NULL DEFAULT 0,
+                attempts_to_green INTEGER,
+                time_to_green_seconds REAL,
+                handoff_count INTEGER NOT NULL DEFAULT 0,
+                reset_cycle_ids TEXT NOT NULL DEFAULT '[]',
+                quota_after_snapshot_ids TEXT NOT NULL DEFAULT '[]',
+                observed_burn_fraction REAL,
+                observed_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                completed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS auto_shadow_finalize_outbox_open
+                ON auto_shadow_finalize_outbox(created_at)
+                WHERE completed_at IS NULL;
+            CREATE INDEX IF NOT EXISTS auto_shadow_finalize_outbox_pending
+                ON auto_shadow_finalize_outbox(pending_id);
             """
         )
         self._ensure_column("tasks", "project_id", "TEXT")
@@ -973,68 +1068,133 @@ class SafetyKernelStore:
     ) -> TaskRecord:
         self.connection.execute("BEGIN IMMEDIATE")
         try:
-            current = self.get_task(task_id)
-            if expected_version is not None and current.state_version != expected_version:
-                raise RuntimeError("stale task state_version")
-            if new_state not in _ALLOWED_TRANSITIONS[current.state]:
-                raise ValueError(f"invalid task transition {current.state} -> {new_state}")
-            stamp = _now()
-            next_version = current.state_version + 1
-            # Build the UPDATE column list dynamically so a pre-WP5a-1
-            # call that does not pass the new fields stays byte-equivalent
-            # (the SQL only touches the columns the call site touched).
-            update_columns = (
-                "state=?, state_version=?, updated_at=?"
-            )
-            update_values: list[object] = [
-                new_state.value, next_version, stamp,
-            ]
-            if auto_decision_id is not None:
-                update_columns += ", auto_decision_id=?"
-                update_values.append(auto_decision_id)
-            if auto_grace_deadline_at is not None:
-                update_columns += ", auto_grace_deadline_at=?"
-                update_values.append(auto_grace_deadline_at)
-            if auto_acked_at is not None:
-                update_columns += ", auto_acked_at=?"
-                update_values.append(auto_acked_at)
-            if auto_reason is not None:
-                update_columns += ", auto_reason=?"
-                update_values.append(auto_reason)
-            update_values.extend([task_id, current.state_version])
-            updated = self.connection.execute(
-                f"""
-                UPDATE tasks SET {update_columns}
-                WHERE task_id=? AND state_version=?
-                """,
-                update_values,
-            )
-            if updated.rowcount != 1:
-                raise RuntimeError("task transition lost optimistic concurrency race")
-            audit_payload: dict[str, object] = {
-                "from": current.state.value,
-                "to": new_state.value,
-                "state_version": next_version,
-                "reason": reason,
-            }
-            if auto_decision_id is not None:
-                audit_payload["auto_decision_id"] = auto_decision_id
-            if auto_grace_deadline_at is not None:
-                audit_payload["auto_grace_deadline_at"] = auto_grace_deadline_at
-            if auto_acked_at is not None:
-                audit_payload["auto_acked_at"] = auto_acked_at
-            if auto_reason is not None:
-                audit_payload["auto_reason"] = auto_reason
-            self._audit(
+            self._transition_task_tx(
                 task_id,
-                "TASK_STATE_CHANGED",
-                audit_payload,
+                new_state,
+                expected_version=expected_version,
+                reason=reason,
+                auto_decision_id=auto_decision_id,
+                auto_grace_deadline_at=auto_grace_deadline_at,
+                auto_acked_at=auto_acked_at,
+                auto_reason=auto_reason,
             )
             self.connection.execute("COMMIT")
         except Exception:
             self.connection.execute("ROLLBACK")
             raise
         return self.get_task(task_id)
+
+    def _transition_task_tx(
+        self,
+        task_id: str,
+        new_state: TaskState,
+        *,
+        expected_version: int | None,
+        reason: str | None,
+        auto_decision_id: str | None = None,
+        auto_grace_deadline_at: str | None = None,
+        auto_acked_at: str | None = None,
+        auto_reason: str | None = None,
+    ) -> None:
+        """Transition internals for an ALREADY-OPEN transaction."""
+
+        current = self.get_task(task_id)
+        if expected_version is not None and current.state_version != expected_version:
+            raise RuntimeError("stale task state_version")
+        if new_state not in _ALLOWED_TRANSITIONS[current.state]:
+            raise ValueError(f"invalid task transition {current.state} -> {new_state}")
+        stamp = _now()
+        next_version = current.state_version + 1
+        # Build the UPDATE column list dynamically so a pre-WP5a-1
+        # call that does not pass the new fields stays byte-equivalent
+        # (the SQL only touches the columns the call site touched).
+        update_columns = (
+            "state=?, state_version=?, updated_at=?"
+        )
+        update_values: list[object] = [
+            new_state.value, next_version, stamp,
+        ]
+        if auto_decision_id is not None:
+            update_columns += ", auto_decision_id=?"
+            update_values.append(auto_decision_id)
+        if auto_grace_deadline_at is not None:
+            update_columns += ", auto_grace_deadline_at=?"
+            update_values.append(auto_grace_deadline_at)
+        if auto_acked_at is not None:
+            update_columns += ", auto_acked_at=?"
+            update_values.append(auto_acked_at)
+        if auto_reason is not None:
+            update_columns += ", auto_reason=?"
+            update_values.append(auto_reason)
+        update_values.extend([task_id, current.state_version])
+        updated = self.connection.execute(
+            f"""
+            UPDATE tasks SET {update_columns}
+            WHERE task_id=? AND state_version=?
+            """,
+            update_values,
+        )
+        if updated.rowcount != 1:
+            raise RuntimeError("task transition lost optimistic concurrency race")
+        audit_payload: dict[str, object] = {
+            "from": current.state.value,
+            "to": new_state.value,
+            "state_version": next_version,
+            "reason": reason,
+        }
+        if auto_decision_id is not None:
+            audit_payload["auto_decision_id"] = auto_decision_id
+        if auto_grace_deadline_at is not None:
+            audit_payload["auto_grace_deadline_at"] = auto_grace_deadline_at
+        if auto_acked_at is not None:
+            audit_payload["auto_acked_at"] = auto_acked_at
+        if auto_reason is not None:
+            audit_payload["auto_reason"] = auto_reason
+        self._audit(
+            task_id,
+            "TASK_STATE_CHANGED",
+            audit_payload,
+        )
+
+    def apply_verification_outcome(
+        self,
+        task_id: str,
+        *,
+        expected_version: int,
+        target: TaskState,
+        reason: str,
+        finalize: ShadowFinalizationIntent | None = None,
+    ) -> TaskState:
+        """OPTION A (round 3): terminal truth + shadow-intent in ONE tx.
+
+        The authoritative VERIFYING → VERIFIED/BLOCKED transition and the
+        durable shadow-finalization intent commit atomically: a crash can
+        never leave terminal SQLite truth whose pending observation is
+        only reachable through a lost filesystem side effect. The
+        filesystem finalize itself happens post-COMMIT via the idempotent
+        finalize-outbox drain.
+        """
+
+        if target not in (TaskState.VERIFIED, TaskState.BLOCKED):
+            raise ValueError("verification outcome target must be VERIFIED or BLOCKED")
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get_task(task_id)
+            if current.state is not TaskState.VERIFYING:
+                raise ValueError("verification result requires VERIFYING state")
+            self._transition_task_tx(
+                task_id,
+                target,
+                expected_version=expected_version,
+                reason=reason,
+            )
+            if finalize is not None:
+                self._insert_shadow_finalize_locked(finalize)
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_task(task_id).state
 
     # ------------------------------------------------------------------
     # M1 WP5a-2: AUTO lifecycle metadata helpers.
@@ -1095,13 +1255,8 @@ class SafetyKernelStore:
                 # Durable cleanup intent: the pending shadow whose id equals
                 # the cleared decision id (裁决 15) must eventually be
                 # discarded even if this process dies right after COMMIT.
-                self.connection.execute(
-                    """
-                    INSERT OR IGNORE INTO auto_shadow_cleanup_outbox
-                        (pending_id, task_id, reason, created_at)
-                    VALUES(?,?,?,?)
-                    """,
-                    (current.auto_decision_id, task_id, reason or "metadata_cleared", stamp),
+                self._enqueue_cleanup_intent_locked(
+                    current.auto_decision_id, task_id, reason or "metadata_cleared", stamp
                 )
             self._audit(
                 task_id,
@@ -1336,13 +1491,8 @@ class SafetyKernelStore:
             }
             self._audit(task_id, event_type, payload)
             if previous_decision_id is not None:
-                self.connection.execute(
-                    """
-                    INSERT OR IGNORE INTO auto_shadow_cleanup_outbox
-                        (pending_id, task_id, reason, created_at)
-                    VALUES(?,?,?,?)
-                    """,
-                    (previous_decision_id, task_id, reason, stamp),
+                self._enqueue_cleanup_intent_locked(
+                    previous_decision_id, task_id, reason, stamp
                 )
             self.connection.execute("COMMIT")
         except Exception:
@@ -1405,18 +1555,11 @@ class SafetyKernelStore:
                 },
             )
             if stale_decision_id is not None:
-                self.connection.execute(
-                    """
-                    INSERT OR IGNORE INTO auto_shadow_cleanup_outbox
-                        (pending_id, task_id, reason, created_at)
-                    VALUES(?,?,?,?)
-                    """,
-                    (
-                        stale_decision_id,
-                        task_id,
-                        "ready_state_stale_auto_metadata",
-                        stamp,
-                    ),
+                self._enqueue_cleanup_intent_locked(
+                    stale_decision_id,
+                    task_id,
+                    "ready_state_stale_auto_metadata",
+                    stamp,
                 )
             self.connection.execute("COMMIT")
         except Exception:
@@ -1448,6 +1591,165 @@ class SafetyKernelStore:
             "WHERE pending_id=? AND completed_at IS NULL",
             (_now(), pending_id),
         )
+
+    def _enqueue_cleanup_intent_locked(
+        self, pending_id: str, task_id: str, reason: str, stamp: str
+    ) -> None:
+        """Insert a cleanup intent INSIDE an open transaction (§16 guard).
+
+        Round-3 conflict rule: a pending with a real-execution
+        finalization intent (open OR completed — a completed intent
+        already discarded the pending) is never promised to the discard
+        path — finalize outranks discard, so the insert is suppressed
+        (no-op) whenever a finalize intent exists for the same pending
+        id.
+        """
+
+        self.connection.execute(
+            """
+            INSERT OR IGNORE INTO auto_shadow_cleanup_outbox
+                (pending_id, task_id, reason, created_at)
+            SELECT ?,?,?,?
+            WHERE NOT EXISTS (
+                SELECT 1 FROM auto_shadow_finalize_outbox
+                WHERE pending_id=?
+            )
+            """,
+            (pending_id, task_id, reason, stamp, pending_id),
+        )
+
+    def _insert_shadow_finalize_locked(self, intent: ShadowFinalizationIntent) -> None:
+        """Insert a finalize intent INSIDE an open transaction.
+
+        Collision semantics (§9): a second enqueue with an IDENTICAL
+        payload is idempotent; a different payload for the same
+        finalization id fails closed — the first durable intent owns the
+        truth. A still-open cleanup intent for the same pending is
+        superseded (completed) in the same transaction: real execution
+        evidence outranks a discard promise.
+        """
+
+        stamp = _now()
+        existing = self.connection.execute(
+            "SELECT payload_json FROM auto_shadow_finalize_outbox "
+            "WHERE finalization_id=?",
+            (intent.finalization_id,),
+        ).fetchone()
+        if existing is not None:
+            if existing["payload_json"] != intent.payload_json():
+                raise RuntimeError(
+                    "shadow finalization id reused with different payload: "
+                    f"{intent.finalization_id}"
+                )
+        else:
+            self.connection.execute(
+                """
+                INSERT INTO auto_shadow_finalize_outbox (
+                    finalization_id, pending_id, task_id, dispatch_id,
+                    request_id, decision_id, verified, execution_success,
+                    verification_success, quality_outcome, failure_class,
+                    failure_stage, regression_detected, attempts_to_green,
+                    time_to_green_seconds, handoff_count, reset_cycle_ids,
+                    quota_after_snapshot_ids, observed_burn_fraction,
+                    observed_at, payload_json, created_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    intent.finalization_id,
+                    intent.pending_id,
+                    intent.task_id,
+                    intent.dispatch_id,
+                    intent.request_id,
+                    intent.decision_id,
+                    int(intent.verified),
+                    int(intent.execution_success),
+                    None
+                    if intent.verification_success is None
+                    else int(intent.verification_success),
+                    intent.quality_outcome,
+                    intent.failure_class,
+                    intent.failure_stage,
+                    int(intent.regression_detected),
+                    intent.attempts_to_green,
+                    intent.time_to_green_seconds,
+                    intent.handoff_count,
+                    _json(list(intent.reset_cycle_ids)),
+                    _json(list(intent.quota_after_snapshot_ids)),
+                    intent.observed_burn_fraction,
+                    intent.observed_at,
+                    intent.payload_json(),
+                    stamp,
+                ),
+            )
+        # Finalize outranks discard: close any open cleanup intent for
+        # the same pending in this same transaction.
+        self.connection.execute(
+            "UPDATE auto_shadow_cleanup_outbox SET completed_at=? "
+            "WHERE pending_id=? AND completed_at IS NULL",
+            (stamp, intent.pending_id),
+        )
+
+    def enqueue_shadow_finalization(self, intent: ShadowFinalizationIntent) -> None:
+        """Durably record a post-worker shadow finalization intent."""
+
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._insert_shadow_finalize_locked(intent)
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+
+    def pending_shadow_finalizations(self, *, limit: int = 64) -> tuple[sqlite3.Row, ...]:
+        """Open (not yet completed) shadow-finalize intents, oldest first."""
+
+        return tuple(
+            self.connection.execute(
+                """
+                SELECT finalization_id, pending_id, task_id, dispatch_id,
+                       request_id, decision_id, verified, execution_success,
+                       verification_success, quality_outcome, failure_class,
+                       failure_stage, regression_detected, attempts_to_green,
+                       time_to_green_seconds, handoff_count, reset_cycle_ids,
+                       quota_after_snapshot_ids, observed_burn_fraction,
+                       observed_at, created_at
+                FROM auto_shadow_finalize_outbox
+                WHERE completed_at IS NULL
+                ORDER BY created_at, finalization_id
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        )
+
+    def complete_shadow_finalization(self, finalization_id: str) -> None:
+        """Mark one shadow-finalize intent completed (idempotent)."""
+
+        self.connection.execute(
+            "UPDATE auto_shadow_finalize_outbox SET completed_at=? "
+            "WHERE finalization_id=? AND completed_at IS NULL",
+            (_now(), finalization_id),
+        )
+
+    def open_shadow_finalize_intent(self, pending_id: str) -> bool:
+        """True when an OPEN finalize intent exists for the pending."""
+
+        row = self.connection.execute(
+            "SELECT 1 FROM auto_shadow_finalize_outbox "
+            "WHERE pending_id=? AND completed_at IS NULL LIMIT 1",
+            (pending_id,),
+        ).fetchone()
+        return row is not None
+
+    def shadow_finalize_intent_exists(self, pending_id: str) -> bool:
+        """True when ANY finalize intent (open or completed) exists."""
+
+        row = self.connection.execute(
+            "SELECT 1 FROM auto_shadow_finalize_outbox "
+            "WHERE pending_id=? LIMIT 1",
+            (pending_id,),
+        ).fetchone()
+        return row is not None
 
     def routing_decision_by_request_id(self, request_id: str) -> Any | None:
         """Return the raw durable routing-decision row for a request id.
