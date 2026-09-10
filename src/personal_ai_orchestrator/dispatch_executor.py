@@ -77,6 +77,7 @@ from personal_ai_orchestrator.safety_kernel import (
     OwnerDispatchStatus,
     SafetyKernelStore,
     TaskState,
+    shadow_identity_payload,
 )
 from personal_ai_orchestrator.shadow_evidence import ShadowEvidenceJournal
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
@@ -573,7 +574,17 @@ class OwnerDispatchExecutor:
         # happened so the close-out below never double-finalizes with a
         # different payload (observation ids are deterministic; content
         # divergence would fail-closed in the journal instead).
+        #
+        # Round 4 (final outcome ordering): the verifier runs FIRST but
+        # commits NOTHING terminal — the main-repo immutability result is
+        # computed next, and only the COMPOSED final host outcome
+        # (verifier authoritative pass AND main repo unchanged) enters
+        # the single terminal transaction + immutable finalize intent.
+        # The normal path can therefore never leave a verified=True
+        # shadow behind a later VERIFIED → BLOCKED downgrade.
         auto_pending_finalized = False
+        verdict = None
+        shadow_pending_id: str | None = None
         if next_state is TaskState.WORKER_FINISHED:
             try:
                 begin_verification(store, task_id=dispatch.task_id)
@@ -600,6 +611,39 @@ class OwnerDispatchExecutor:
                     self._verification_journal.append(raw)
                     verdict = raw
                 shadow_pending_id = self._supervised_auto_pending_id(store, dispatch)
+                # ``begin_verification`` moved the durable task row to
+                # VERIFYING; mirror it locally so the composed final
+                # commit below runs exactly on this success path.
+                next_state = TaskState.VERIFYING
+            except Exception as error:
+                store.transition_task(
+                    dispatch.task_id,
+                    TaskState.BLOCKED,
+                    expected_version=store.get_task(dispatch.task_id).state_version,
+                    reason=f"verification stage failed closed: {type(error).__name__}",
+                )
+                next_state = TaskState.BLOCKED
+                verdict = None
+                shadow_pending_id = None
+
+        # -- main repo immutability --------------------------------------
+        # Round 4: computed BEFORE the terminal commit so the immutable
+        # finalize intent freezes the FINAL host outcome (§2). A
+        # fingerprint failure is fail-closed as a mutation.
+        try:
+            main_after = main_repo_fingerprint(project_root)
+            main_unchanged = main_before == main_after
+        except Exception:
+            main_after = dict(main_before)
+            main_unchanged = False
+
+        # -- ONE final terminal commit -----------------------------------
+        # Composes verifier authority + main-repo immutability into a
+        # single VERIFYING → VERIFIED/BLOCKED transaction with the
+        # immutable finalize intent; no later downgrade is needed or
+        # possible on this path.
+        if next_state is TaskState.VERIFYING and verdict is not None:
+            try:
                 next_state = apply_verification_result(
                     store,
                     task_id=dispatch.task_id,
@@ -609,6 +653,7 @@ class OwnerDispatchExecutor:
                     shadow_pending_id=shadow_pending_id,
                     shadow_dispatch_id=dispatch.dispatch_id,
                     shadow_execution_success=worker_exit_code == 0,
+                    shadow_main_repo_unchanged=main_unchanged,
                 )
                 # Round 3: the terminal truth + durable finalization
                 # intent committed in ONE transaction, and the inline
@@ -625,25 +670,8 @@ class OwnerDispatchExecutor:
                 )
                 next_state = TaskState.BLOCKED
 
-        # -- main repo immutability --------------------------------------
-        try:
-            main_after = main_repo_fingerprint(project_root)
-            main_unchanged = main_before == main_after
-        except Exception:
-            main_after = dict(main_before)
-            main_unchanged = False
-
         # -- evidence + lock release -------------------------------------
         verified = next_state is TaskState.VERIFIED
-        if verified and not main_unchanged:
-            store.transition_task(
-                dispatch.task_id,
-                TaskState.BLOCKED,
-                expected_version=store.get_task(dispatch.task_id).state_version,
-                reason="main repository mutated during owner dispatch",
-            )
-            next_state = TaskState.BLOCKED
-            verified = False
 
         evidence = build_execution_evidence(
             provider_id=self._provider_id(dispatch),
@@ -904,6 +932,7 @@ class OwnerDispatchExecutor:
                 execution_success=execution_success,
                 verification_success=False,
                 observed_at=datetime.now(UTC).isoformat(),
+                identity_json=shadow_identity_payload(pending),
             )
             try:
                 store.enqueue_shadow_finalization(intent)
@@ -922,6 +951,15 @@ class OwnerDispatchExecutor:
         columns are inert control state and must not linger on the active
         row. Historical truth lives in the audit trail, the routing
         decision row and the shadow journal.
+
+        Round 4 §8/§9 (hard recovery guard): when THIS lifecycle truly
+        launched a worker (exact current-cycle dispatch + exact
+        ``run-{dispatch_id}`` row), the metadata — the last recovery
+        correlation to the pending's routing identity — may clear ONLY
+        when a durable finalize intent exists or the finalized
+        observation is already proven. Without that proof the clear is
+        refused, a sanitized system event records why, and the task row
+        stays fail-closed recoverable.
         """
 
         if dispatch.authority != "SUPERVISED_AUTO":
@@ -929,6 +967,31 @@ class OwnerDispatchExecutor:
         try:
             task = store.get_task(dispatch.task_id)
             if task.auto_decision_id is None:
+                return
+            from personal_ai_orchestrator.supervised_auto_step import (
+                real_execution_recovery_proof,
+            )
+
+            if not real_execution_recovery_proof(
+                store,
+                self._shadow_journal,
+                task_id=dispatch.task_id,
+                pending_id=task.auto_decision_id,
+            ):
+                try:
+                    store.record_system_event(
+                        "AUTO_SHADOW_RECOVERY_GUARD_HELD",
+                        {
+                            "task_id": dispatch.task_id,
+                            "pending_id": task.auto_decision_id,
+                            "reason": (
+                                "real execution without durable finalize "
+                                "intent or proven observation"
+                            ),
+                        },
+                    )
+                except Exception:  # noqa: BLE001 — event best-effort
+                    pass
                 return
             store.clear_auto_state_metadata(
                 dispatch.task_id,

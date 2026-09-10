@@ -65,6 +65,7 @@ from personal_ai_orchestrator.opencode_contract import (
 )
 from personal_ai_orchestrator.policy_snapshot import PolicySnapshot
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityState
+from personal_ai_orchestrator.quota_collectors.base import QuotaCollectionStatus
 from personal_ai_orchestrator.routing_bridge import build_routing_decision
 from personal_ai_orchestrator.safety_kernel import (
     ProjectRecord,
@@ -72,6 +73,7 @@ from personal_ai_orchestrator.safety_kernel import (
     ShadowFinalizationIntent,
     TaskRecord,
     TaskState,
+    shadow_identity_payload,
 )
 from personal_ai_orchestrator.scheduler import (
     RoutingPolicy,
@@ -215,32 +217,66 @@ def _finalize_kwargs_from_intent_row(row: Any) -> dict[str, Any]:
     }
 
 
+def _expected_observation_from_intent(row: Any) -> ShadowObservation | None:
+    """Build the exact observation the durable intent demands (§16).
+
+    Returns ``None`` when the intent predates the frozen-identity
+    schema (empty ``identity_json``) — such an intent can never prove a
+    replay and must fail closed instead of guessing identity fields.
+    """
+
+    if not row["identity_json"] or row["identity_json"] == "{}":
+        return None
+    identity = json.loads(row["identity_json"])
+    kwargs = _finalize_kwargs_from_intent_row(row)
+    collector_status = identity.get("collector_status")
+    return ShadowObservation.build(
+        task_id=row["task_id"],
+        request_id=row["request_id"],
+        decision_id=row["decision_id"],
+        manual_execution_target_id=identity["manual_execution_target_id"],
+        scheduler_execution_target_id=identity.get("scheduler_execution_target_id"),
+        catalog_snapshot_id=identity["catalog_snapshot_id"],
+        policy_snapshot_id=identity["policy_snapshot_id"],
+        quota_snapshot_ids=tuple(identity["quota_snapshot_ids"]),
+        provider_id=identity.get("provider_id"),
+        quota_pool_id=identity.get("quota_pool_id"),
+        task_family=identity.get("task_family") or "unknown",
+        quota_confidence=EvidenceConfidence(
+            identity.get("quota_confidence") or EvidenceConfidence.UNKNOWN.value
+        ),
+        collector_status=(
+            QuotaCollectionStatus(collector_status) if collector_status else None
+        ),
+        predicted_burn_fraction=identity.get("predicted_burn_fraction"),
+        **kwargs,
+    )
+
+
 def _observation_proves_intent(
     journal: ShadowEvidenceJournal, row: Any
 ) -> bool:
-    """§12: prove the finalized observation already exists.
+    """§14/§15: prove the observation is the intent's EXACT semantic result.
 
-    Only an observation whose identity keys (task_id + routing request
-    id + frozen decision id) match the intent AND whose recorded verdict
-    matches the durable intent counts as proof — anything else is
-    evidence loss or divergence and must fail closed, never be marked
-    completed.
+    ``observation_id`` is only a digest of the identity payload — it
+    does not cover the verdict, taxonomy, quota-after data or the
+    pinned ``observed_at``. Proof therefore REBUILDS the expected
+    :class:`ShadowObservation` from the durable intent (verdict columns
+    + frozen pending identity) and demands exact model equality; a
+    divergent ``failure_class``, ``verification_success``,
+    ``observed_at``, ``quota_after_snapshot_ids`` or burn fraction is
+    NOT intent fulfillment and must fail closed.
     """
 
+    expected = _expected_observation_from_intent(row)
+    if expected is None:
+        return False
     matches = [
         observation
         for observation in journal.load_all()
-        if observation.task_id == row["task_id"]
-        and observation.request_id == row["request_id"]
-        and observation.decision_id == row["decision_id"]
+        if observation.observation_id == expected.observation_id
     ]
-    if len(matches) != 1:
-        return False
-    observed: ShadowObservation = matches[0]
-    return (
-        observed.verified == bool(row["verified"])
-        and observed.execution_success == bool(row["execution_success"])
-    )
+    return len(matches) == 1 and matches[0] == expected
 
 
 def drain_auto_shadow_finalize_outbox(
@@ -321,6 +357,62 @@ def drain_auto_shadow_finalize_outbox(
         store.complete_shadow_finalization(row["finalization_id"])
         completed += 1
     return completed
+
+
+def real_execution_recovery_proof(
+    store: SafetyKernelStore,
+    shadow_journal: ShadowEvidenceJournal | None,
+    *,
+    task_id: str,
+    pending_id: str,
+) -> bool:
+    """Round 4 §8/§9 — the hard metadata-clear recovery guard.
+
+    A SUPERVISED_AUTO lifecycle whose current dispatch truly launched a
+    worker (exact round-2 correlation: dispatch row for
+    ``supervised-auto-dispatch-{pending_id}`` + exact ``run-{dispatch_id}``
+    row) may clear its auto metadata ONLY when the observation truth is
+    durably recoverable:
+
+    A. a durable shadow-finalization intent exists for the pending, OR
+    B. a finalized observation for the exact lifecycle identity
+       (task + routing request id + frozen decision id) is present.
+
+    Lifecycles WITHOUT a real exact run (pre-worker) return ``True``:
+    the ordinary abort/cleanup path owns them, and the two path classes
+    must never be mixed. Real-run lifecycles without proof return
+    ``False`` — callers must keep the metadata, refuse any discard and
+    record a sanitized recovery failure.
+    """
+
+    dispatch_row = store.connection.execute(
+        "SELECT dispatch_id FROM owner_dispatches WHERE request_id=?",
+        (supervised_auto_dispatch_request_id(pending_id),),
+    ).fetchone()
+    if dispatch_row is None:
+        return True
+    run_row = store.connection.execute(
+        "SELECT 1 FROM runs WHERE run_id=? LIMIT 1",
+        (f"run-{dispatch_row['dispatch_id']}",),
+    ).fetchone()
+    if run_row is None:
+        return True
+    if store.shadow_finalize_intent_exists(pending_id):
+        return True
+    if shadow_journal is not None:
+        request_id = supervised_auto_routing_request_id(pending_id)
+        try:
+            proven = any(
+                observation.task_id == task_id
+                and observation.request_id == request_id
+                and observation.decision_id == pending_id
+                for observation in shadow_journal.load_all()
+            )
+        except OSError:
+            proven = False
+        if proven:
+            return True
+    return False
 
 
 class SupervisedAutoStep:
@@ -1019,6 +1111,7 @@ class SupervisedAutoStep:
                 quota_after_snapshot_ids=observed.quota_after_snapshot_ids,
                 observed_burn_fraction=observed.observed_burn_fraction,
                 observed_at=observed.observed_at.isoformat(),
+                identity_json=shadow_identity_payload(pending),
             )
         else:
             run_status = self._store.connection.execute(
@@ -1037,6 +1130,7 @@ class SupervisedAutoStep:
                 ),
                 verification_success=None,
                 observed_at=datetime.now(UTC).isoformat(),
+                identity_json=shadow_identity_payload(pending),
             )
         try:
             self._store.enqueue_shadow_finalization(intent)
@@ -1315,6 +1409,7 @@ __all__ = [
     "UNACKED_TIMEOUT_SECONDS",
     "drain_auto_shadow_cleanup_outbox",
     "drain_auto_shadow_finalize_outbox",
+    "real_execution_recovery_proof",
     "supervised_auto_decision_id",
     "supervised_auto_dispatch_request_id",
     "supervised_auto_routing_request_id",

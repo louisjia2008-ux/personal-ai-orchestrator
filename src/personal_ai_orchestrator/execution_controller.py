@@ -13,6 +13,7 @@ from personal_ai_orchestrator.safety_kernel import (
     SafetyKernelStore,
     ShadowFinalizationIntent,
     TaskState,
+    shadow_identity_payload,
 )
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.shadow_evidence import (
@@ -412,6 +413,7 @@ def apply_verification_result(
     shadow_quota_after_snapshot_ids: tuple[str, ...] = (),
     shadow_observed_burn_fraction: float | None = None,
     shadow_execution_success: bool = True,
+    shadow_main_repo_unchanged: bool = True,
     shadow_verification_success: bool | None = None,
     shadow_quality_outcome: ShadowQualityOutcome | None = None,
     shadow_failure_class: ShadowFailureClass | None = None,
@@ -437,6 +439,15 @@ def apply_verification_result(
     is pinned durably at enqueue time). The pending identity is loaded
     BEFORE any mutation: a missing/malformed pending fails closed while
     the task is still VERIFYING.
+
+    Round 4 (final outcome ordering): the immutable intent freezes the
+    FINAL HOST-AUTHORITATIVE outcome, not the intermediate verifier
+    verdict. The caller supplies the main-repo immutability result
+    (computed BEFORE this call) and this helper composes both facts into
+    ONE terminal commit: verifier PASS + main repo mutated ⇒ BLOCKED
+    with a truthful ``verified=False`` / ``verification_success=True``
+    shadow — there is no normal VERIFIED → BLOCKED downgrade after the
+    intent exists.
     """
 
     task = store.get_task(task_id)
@@ -445,11 +456,15 @@ def apply_verification_result(
 
     evidence_matches = _persisted_evidence_matches(evidence_journal, result)
     has_authoritative_pass = result.passed and evidence_matches
-    target = TaskState.VERIFIED if has_authoritative_pass else TaskState.BLOCKED
+    main_repo_mutated = has_authoritative_pass and not shadow_main_repo_unchanged
+    final_verified = has_authoritative_pass and not main_repo_mutated
+    target = TaskState.VERIFIED if final_verified else TaskState.BLOCKED
     if result.passed and result.evidence_id is None:
         reason = "passing verifier result is missing immutable host evidence"
     elif result.passed and not evidence_matches:
         reason = "passing verifier result is not backed by matching persisted host evidence"
+    elif main_repo_mutated:
+        reason = "main repository mutated during owner dispatch"
     elif result.passed:
         reason = f"deterministic verification passed: {result.evidence_id}"
     else:
@@ -468,19 +483,46 @@ def apply_verification_result(
             dispatch_id=shadow_dispatch_id,
             request_id=pending.request_id,
             decision_id=pending.decision_id,
-            verified=has_authoritative_pass,
+            verified=final_verified,
             execution_success=shadow_execution_success,
-            verification_success=shadow_verification_success,
+            verification_success=(
+                # The verifier's OWN authoritative result — distinct
+                # from the composed final verdict: a passed verifier
+                # plus a mutated main repo keeps verification_success
+                # True while verified becomes False (round 4 §6).
+                shadow_verification_success
+                if shadow_verification_success is not None
+                else has_authoritative_pass
+            ),
             quality_outcome=(
                 shadow_quality_outcome.value
                 if shadow_quality_outcome is not None
-                else None
+                else (
+                    # Host-safety failure, not a model/verifier quality
+                    # failure: the most accurate existing taxonomy for a
+                    # mutated main repo (round 4 §6).
+                    ShadowQualityOutcome.OPERATIONAL_FAILED.value
+                    if main_repo_mutated
+                    else None
+                )
             ),
             failure_class=(
-                shadow_failure_class.value if shadow_failure_class is not None else None
+                shadow_failure_class.value
+                if shadow_failure_class is not None
+                else (
+                    ShadowFailureClass.INFRA_FAILURE.value
+                    if main_repo_mutated
+                    else None
+                )
             ),
             failure_stage=(
-                shadow_failure_stage.value if shadow_failure_stage is not None else None
+                shadow_failure_stage.value
+                if shadow_failure_stage is not None
+                else (
+                    ShadowFailureStage.INFRASTRUCTURE.value
+                    if main_repo_mutated
+                    else None
+                )
             ),
             regression_detected=shadow_regression_detected,
             attempts_to_green=shadow_attempts_to_green,
@@ -490,6 +532,7 @@ def apply_verification_result(
             quota_after_snapshot_ids=shadow_quota_after_snapshot_ids,
             observed_burn_fraction=shadow_observed_burn_fraction,
             observed_at=datetime.now(UTC).isoformat(),
+            identity_json=shadow_identity_payload(pending),
         )
     next_state = store.apply_verification_outcome(
         task_id,

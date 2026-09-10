@@ -220,6 +220,13 @@ class ShadowFinalizationIntent:
     stays identical. ``request_id`` / ``decision_id`` are the PENDING's
     routing identity (the observation's identity keys), not the
     dispatch request id.
+
+    Round 4 (§17): ``identity_json`` freezes the pending's remaining
+    immutable identity (execution targets, snapshot ids, provider /
+    pool, task family, quota confidence, collector status, predicted
+    burn). With it the intent is SELF-SUFFICIENT — a restart can build
+    the exact expected :class:`ShadowObservation` and prove an existing
+    observation byte-for-byte even after the pending file is gone.
     """
 
     pending_id: str
@@ -241,6 +248,7 @@ class ShadowFinalizationIntent:
     quota_after_snapshot_ids: tuple[str, ...] = ()
     observed_burn_fraction: float | None = None
     observed_at: str = ""
+    identity_json: str = "{}"
 
     @property
     def finalization_id(self) -> str:
@@ -268,8 +276,41 @@ class ShadowFinalizationIntent:
                 "quota_after_snapshot_ids": list(self.quota_after_snapshot_ids),
                 "observed_burn_fraction": self.observed_burn_fraction,
                 "observed_at": self.observed_at,
+                "identity_json": self.identity_json,
             }
         )
+
+
+def shadow_identity_payload(pending: Any) -> str:
+    """Freeze a pending shadow's immutable identity for an intent.
+
+    Duck-typed against ``PendingShadowObservation`` so this module stays
+    decoupled from ``shadow_evidence``. Enums are stored by value,
+    tuples as lists — canonical JSON makes the payload immutable
+    conflict-detection material (round 4 §17).
+    """
+
+    collector_status = getattr(pending, "collector_status", None)
+    quota_confidence = getattr(pending, "quota_confidence", None)
+    return _json(
+        {
+            "manual_execution_target_id": pending.manual_execution_target_id,
+            "scheduler_execution_target_id": pending.scheduler_execution_target_id,
+            "catalog_snapshot_id": pending.catalog_snapshot_id,
+            "policy_snapshot_id": pending.policy_snapshot_id,
+            "quota_snapshot_ids": list(pending.quota_snapshot_ids),
+            "provider_id": pending.provider_id,
+            "quota_pool_id": pending.quota_pool_id,
+            "task_family": pending.task_family,
+            "quota_confidence": (
+                None if quota_confidence is None else quota_confidence.value
+            ),
+            "collector_status": (
+                None if collector_status is None else collector_status.value
+            ),
+            "predicted_burn_fraction": pending.predicted_burn_fraction,
+        }
+    )
 
 
 #: M1 WP2: the set of min_tier values the schema accepts. Mirrors
@@ -428,6 +469,7 @@ class SafetyKernelStore:
                 quota_after_snapshot_ids TEXT NOT NULL DEFAULT '[]',
                 observed_burn_fraction REAL,
                 observed_at TEXT NOT NULL,
+                identity_json TEXT NOT NULL DEFAULT '{}',
                 payload_json TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 completed_at TEXT
@@ -459,6 +501,12 @@ class SafetyKernelStore:
         self._ensure_column("tasks", "auto_grace_deadline_at", "TEXT")
         self._ensure_column("tasks", "auto_acked_at", "TEXT")
         self._ensure_column("tasks", "auto_reason", "TEXT")
+        # Round 4 §17: the finalize outbox freezes the pending's full
+        # immutable identity so restarts can prove observations without
+        # the pending file.
+        self._ensure_column(
+            "auto_shadow_finalize_outbox", "identity_json", "TEXT NOT NULL DEFAULT '{}'"
+        )
         self._ensure_column("projects", "scheduling_policy", "TEXT")
         self._ensure_column("projects", "manual_execution_target_id", "TEXT")
         # M1 WP5a-1: project-level supervised-auto settings. The
@@ -1651,8 +1699,8 @@ class SafetyKernelStore:
                     failure_stage, regression_detected, attempts_to_green,
                     time_to_green_seconds, handoff_count, reset_cycle_ids,
                     quota_after_snapshot_ids, observed_burn_fraction,
-                    observed_at, payload_json, created_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    observed_at, identity_json, payload_json, created_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     intent.finalization_id,
@@ -1677,6 +1725,7 @@ class SafetyKernelStore:
                     _json(list(intent.quota_after_snapshot_ids)),
                     intent.observed_burn_fraction,
                     intent.observed_at,
+                    intent.identity_json,
                     intent.payload_json(),
                     stamp,
                 ),
@@ -1712,7 +1761,7 @@ class SafetyKernelStore:
                        failure_stage, regression_detected, attempts_to_green,
                        time_to_green_seconds, handoff_count, reset_cycle_ids,
                        quota_after_snapshot_ids, observed_burn_fraction,
-                       observed_at, created_at
+                       observed_at, identity_json, created_at
                 FROM auto_shadow_finalize_outbox
                 WHERE completed_at IS NULL
                 ORDER BY created_at, finalization_id
