@@ -1334,3 +1334,18 @@ multi-stage writes, so a crash between durable commits could leave
   crash windows, the legacy READY stale-metadata row, the frozen
   boundary-A negative, the outbox mechanics (§20 matrix) and the
   one-bump / one-audit / plain-owner-BLOCKED-untouched invariants.
+
+### WP5a-2 current-cycle reconciliation repair (review round 2)
+
+Reconciliation of terminal SUPERVISED_AUTO dispatch rows is now
+strictly current-cycle: the row must match
+`supervised_auto_dispatch_request_id(task.auto_decision_id)` (gate
+before any mutation), and "this dispatch has a run" is decided by the
+exact `run-{dispatch_id}` row — never by a task-scoped historical run
+lookup. Historical blocked rows cannot abort a new cycle
+(`tests/test_auto_reconciliation.py`: old run cannot hide a current
+pre-worker failure; old blocked dispatch cannot abort a new cycle;
+current dispatch with its exact run is never pre-worker aborted;
+run correlation is dispatch-scoped — only `run-X` counts for
+dispatch X; a no-metadata historical row fails closed, BLOCKED stays
+BLOCKED).
