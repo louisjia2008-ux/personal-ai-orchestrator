@@ -322,3 +322,34 @@ Do NOT describe the three endpoints as "all always enforce exact
 task_state_version" — the ACK already-acked replay is deliberately
 idempotent without a version check (extending the wire schema with a
 durable ACK request id was considered and rejected for this round).
+
+### 14.5 Current-cycle dispatch reconciliation (review round 2)
+
+`_reconcile_supervised_auto_dispatches` correlates terminal
+(`BLOCKED`/`CANCELLED`) SUPERVISED_AUTO dispatch rows to the task's
+**current** auto cycle only, in four gated layers:
+
+1. **Current cycle source** — `task.auto_decision_id` must be live
+   (non-NULL). A task without current auto metadata is never touched
+   by reconciliation: a historical SUPERVISED_AUTO row alone proves
+   nothing about the current lifecycle (fail closed — a BLOCKED task
+   stays BLOCKED; the legacy `BLOCKED + no metadata → READY` fallback
+   was removed for exactly this reason).
+2. **Current dispatch request id** — the row participates only when
+   `row.request_id ==
+   supervised_auto_dispatch_request_id(task.auto_decision_id)`.
+   Rows from older cycles are ignored — no cross-cycle mutation.
+3. **State gate** — `AUTO_GRACE` or `BLOCKED` only.
+4. **Dispatch-scoped run correlation** — "this dispatch produced a
+   run" is decided by the exact `run-{dispatch_id}` row
+   (`runs.run_id` is the PK; the executor always registers the run
+   with that id). A run row for the same task under any other id —
+   including a real run from an older cycle — does NOT count. A
+   dispatch whose exact run exists keeps its outcome (executor +
+   verifier own that truth); one without it takes the crash-atomic
+   `abort_auto_lifecycle` close (reason
+   `admission_failed:{failure_code|status}`).
+
+The task-scoped `SELECT 1 FROM runs WHERE task_id=?` lookup is gone
+from this path entirely. Owner-initiated dispatches are unaffected
+(the query stays filtered on `authority = 'SUPERVISED_AUTO'`).
