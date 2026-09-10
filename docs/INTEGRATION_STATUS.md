@@ -1349,3 +1349,23 @@ current dispatch with its exact run is never pre-worker aborted;
 run correlation is dispatch-scoped — only `run-X` counts for
 dispatch X; a no-metadata historical row fails closed, BLOCKED stays
 BLOCKED).
+
+### WP5a-2 post-worker shadow finalization repair (review round 3)
+
+The terminal VERIFYING → VERIFIED/BLOCKED commit previously preceded
+the filesystem `finalize_pending` — a crash in between let the restart
+terminal sweep DISCARD the pending of a really-executed worker
+(permanent observation loss). Now: durable
+`auto_shadow_finalize_outbox` intents with immutable payloads
+(observed_at pinned for byte-identical replays), the terminal
+transition + intent in ONE SQLite transaction
+(`apply_verification_outcome`), an idempotent bounded drain
+(missing pendings complete only with a proven matching observation,
+else fail closed with a sanitized system event), finalize-beats-discard
+precedence in both the enqueue rules and the drains, exact-run
+terminal-sweep classification with fail-closed reconstruction, and the
+`shadow_journal=None` cleanup-drain bug fixed (intents stay OPEN).
+Deterministic crash tests: tests/test_auto_shadow_finalize_recovery.py
+(15) — verified/failed-verdict/non-zero-exit recovery, byte-identical
+replays, payload-conflict fail-closed, pre-worker discard boundary,
+outbox precedence and the None-journal contract.
