@@ -353,3 +353,50 @@ durable ACK request id was considered and rejected for this round).
 The task-scoped `SELECT 1 FROM runs WHERE task_id=?` lookup is gone
 from this path entirely. Owner-initiated dispatches are unaffected
 (the query stays filtered on `authority = 'SUPERVISED_AUTO'`).
+
+### 14.6 Post-worker shadow finalization outbox (review round 3)
+
+A REAL worker execution whose authoritative verdict is durable in
+SQLite must produce a truthful finalized shadow observation — never a
+silent discard. Round 3 closed the last crash window (terminal COMMIT
+before the filesystem finalize):
+
+- **`auto_shadow_finalize_outbox`** — durable finalization intent with
+  an IMMUTABLE payload (`ShadowFinalizationIntent`): every
+  `finalize_pending` input, the observation identity keys (the
+  pending's routing request id + frozen decision id) and an
+  `observed_at` PINNED at enqueue (observation ids are content digests
+  that exclude the verdict and `observed_at`, so replays must reuse
+  the exact stored value to stay byte-identical).
+- **One authoritative transaction (OPTION A)** —
+  `apply_verification_outcome` commits the VERIFYING → VERIFIED /
+  BLOCKED transition, its audit and the finalize intent in ONE
+  `BEGIN IMMEDIATE`; the filesystem finalize is replayed post-COMMIT
+  by the idempotent `drain_auto_shadow_finalize_outbox` (bounded 64).
+- **Collision semantics** — same payload → idempotent; different
+  payload for the same `finalization_id` → `RuntimeError` (first
+  durable intent owns the truth). `shadow-finalize-{pending_id}` is
+  the stable id.
+- **Finalize outranks discard** — enqueueing a finalize intent closes
+  any open cleanup intent for the pending in the same transaction, and
+  cleanup-intent inserts are structurally suppressed while ANY
+  finalize intent exists; the cleanup drain also skips pendings with
+  an open finalize intent.
+- **Drain recovery matrix** — pending present → exact replay +
+  discard + completed marker; pending missing → completed ONLY when
+  the finalized observation is proven present (identity + verdict
+  match), otherwise the intent stays open with a sanitized
+  `AUTO_SHADOW_FINALIZE_RETRY_FAILED` system event (evidence loss is
+  never success); journal `None` → intents stay OPEN (this also fixed
+  the round-3 P1: the cleanup drain previously marked intents
+  completed without a journal).
+- **Terminal sweep classification** — a terminal lifecycle whose
+  current dispatch has an exact `run-{dispatch_id}` row is REAL
+  EXECUTION: finalize/reconstruct (existing observations replay
+  byte-identically; residue reconstructed from the task + run truth),
+  fail closed when reconstruction is impossible. Without an exact run
+  row the pre-worker discard path applies unchanged.
+- **Tick order** — finalize drain BEFORE cleanup drain (evidence
+  outranks discard), both again at tick end; metadata clears only
+  after the recovery information is durable (the outbox alone
+  suffices at restart).

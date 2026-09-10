@@ -913,16 +913,6 @@ class OwnerDispatchExecutor:
                 pass
         drain_auto_shadow_finalize_outbox(store, self._shadow_journal)
 
-    def _discard_supervised_auto_pending(self, pending_id: str) -> None:
-        """Best-effort pending-file removal after a finalize/abort."""
-
-        if self._shadow_journal is None:
-            return
-        try:
-            self._shadow_journal.discard_pending(pending_id)
-        except (OSError, ValueError):
-            pass
-
     def _clear_supervised_auto_metadata(
         self, store: SafetyKernelStore, dispatch: OwnerDispatchRecord
     ) -> None:
