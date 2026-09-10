@@ -400,3 +400,38 @@ before the filesystem finalize):
   outranks discard), both again at tick end; metadata clears only
   after the recovery information is durable (the outbox alone
   suffices at restart).
+
+### 14.7 Final outcome ordering + recovery guard (review round 4)
+
+The shadow observation must represent the FINAL HOST-AUTHORITATIVE
+execution outcome — never the intermediate verifier verdict:
+
+- **Composition before the terminal commit** — the executor runs the
+  deterministic verifier WITHOUT committing anything terminal, computes
+  the main-repo fingerprint, and only then commits ONE final outcome:
+  `apply_verification_result(shadow_main_repo_unchanged=...)` requires
+  verifier-authoritative PASS **AND** main repo unchanged for VERIFIED.
+  Verifier PASS + main repo mutated ⇒ BLOCKED with a truthful shadow
+  (`verified=False`, `execution_success=True`,
+  `verification_success=True`, taxonomy `INFRA_FAILURE` /
+  `INFRASTRUCTURE` / `OPERATIONAL_FAILED` — the host safety
+  composition failed while the worker and verifier both succeeded).
+  There is no normal `VERIFYING → VERIFIED → BLOCKED` two-step
+  downgrade; the first immutable intent already freezes the final
+  verdict.
+- **Hard metadata-clear recovery guard** —
+  `real_execution_recovery_proof()`: a lifecycle whose current dispatch
+  has an exact `run-{dispatch_id}` row (REAL EXECUTION) may clear
+  `auto_decision_id` only when a durable finalize intent exists OR a
+  finalized observation is proven for the exact lifecycle identity;
+  otherwise the clear is refused (`AUTO_SHADOW_RECOVERY_GUARD_HELD`),
+  no discard is promised and the row stays fail-closed recoverable.
+  Pre-worker aborts keep the original abort/cleanup path.
+- **Self-sufficient intents + exact proof** — the finalize outbox
+  freezes the pending's full immutable identity (`identity_json`,
+  schema-migrated). Completion proof REBUILDS the exact expected
+  `ShadowObservation` (verdict columns + frozen identity + pinned
+  `observed_at`) and demands exact model equality: `observation_id`
+  alone proves nothing about the verdict (it digests identity only), so
+  divergent `failure_class`, `verification_success`, `observed_at`,
+  `quota_after_snapshot_ids` or burn data fail closed.

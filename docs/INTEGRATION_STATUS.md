@@ -1369,3 +1369,22 @@ Deterministic crash tests: tests/test_auto_shadow_finalize_recovery.py
 (15) — verified/failed-verdict/non-zero-exit recovery, byte-identical
 replays, payload-conflict fail-closed, pre-worker discard boundary,
 outbox precedence and the None-journal contract.
+
+### WP5a-2 final outcome ordering repair (review round 4)
+
+Shadow finalization previously froze the intermediate verifier
+outcome — a later main-repo check downgraded VERIFIED → BLOCKED and
+left a stale verified=True observation; and a real-run lifecycle with
+a missing pending could clear `auto_decision_id` before any durable
+finalize intent / proven observation existed. Now: the main-repo
+immutability result is composed with the verifier verdict BEFORE one
+final terminal transaction (verifier PASS + mutation ⇒ BLOCKED +
+verified=False/verification_success=True shadow), a central
+real-execution recovery guard gates every metadata clear
+(intent-or-proven-observation), and the finalize outbox freezes the
+pending's full immutable identity so completion proof rebuilds and
+exactly compares the expected observation. Deterministic tests:
+tests/test_auto_final_outcome.py (9) — real-worker main-mutation
+ordering, happy path, missing-pending preservation (executor + sweep),
+intent-authorized clear with outbox-alone restart proof, and full
+semantic proof (divergent taxonomy/timestamp/quota/burn rejected).
