@@ -16,9 +16,15 @@ Authority chain (§4 of the WP5a-2 ruling)::
         → final state
 
 The tick is deterministic and fake-clock friendly: one invocation performs
-one bounded sweep, never sleeps, never spawns threads, never reads
-credentials and never executes shell commands. The ``DaemonSupervisor``
-owns the periodic cadence; this module owns the per-tick semantics.
+one bounded sweep of host-owned work — it never sleeps, never reads
+credentials and never executes shell commands. Its own dispatch
+admission hands execution to the existing ``DispatchExecutor``
+boundary, and the reserved-dispatch crash-recovery path may spawn an
+executor thread for an already-durable reservation (round 6 §37: the
+tick itself performs no worker execution; the only thread hand-off is
+re-entering the executor for a reservation the executor owns). The
+``DaemonSupervisor`` owns the periodic cadence; this module owns the
+per-tick semantics.
 
 Safety invariants enforced here:
 
@@ -45,6 +51,7 @@ import json
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from typing import Any
 
 from personal_ai_orchestrator.dispatch_initiator import (
@@ -460,6 +467,154 @@ def drain_auto_shadow_finalize_outbox(
     return completed
 
 
+#: Sanitized system-event name for a terminal namespace conflict
+#: (round 6 §28). Payload is task_id + auto_decision_id + reason only.
+AUTO_EXECUTION_CORRELATION_CONFLICT_EVENT = "AUTO_EXECUTION_CORRELATION_CONFLICT"
+
+
+class AutoExecutionCorrelation(Enum):
+    """Round 6 §27 — classification of the current AUTO lifecycle's
+    durable dispatch/run truth. A boolean cannot distinguish "genuinely
+    pre-worker" from "the namespace is occupied by a conflicting row" —
+    the latter is a fail-closed conflict, never an ordinary cleanup."""
+
+    #: No durable dispatch row occupies the deterministic request id —
+    #: the lifecycle is genuinely pre-reservation (crash before
+    #: reserve). Ordinary pre-worker semantics apply.
+    NO_DISPATCH = "NO_DISPATCH"
+    #: The EXACT current SUPERVISED_AUTO reservation is proven and no
+    #: exact ``run-{dispatch_id}`` row exists — pre-worker.
+    EXACT_PREWORKER = "EXACT_PREWORKER"
+    #: The exact reservation is proven AND the exact run row exists —
+    #: real AUTO execution; shadow evidence is owed.
+    EXACT_REAL_RUN = "EXACT_REAL_RUN"
+    #: A durable row occupies the deterministic request id but is NOT
+    #: the exact current SUPERVISED_AUTO reservation (foreign authority,
+    #: wrong task / target / dispatch id / cycle). Fail closed: never
+    #: executed, never adopted, never treated as ordinary pre-worker.
+    CONFLICT = "CONFLICT"
+
+
+def current_supervised_auto_dispatch(
+    store: SafetyKernelStore,
+    *,
+    task_id: str,
+    auto_decision_id: str,
+    expected_task_state_version: int | None = None,
+) -> Any | None:
+    """Round 6 §16/§18 — the ONE exact current-AUTO dispatch proof.
+
+    Returns the durable ``OwnerDispatchRecord`` only when it is the
+    EXACT reservation this AUTO cycle would create:
+
+    - ``request_id == supervised-auto-dispatch-{auto_decision_id}``
+      (the lookup key — the id embeds the planning-cycle version);
+    - the frozen routing decision for
+      ``supervised-auto-{auto_decision_id}`` exists, belongs to
+      ``task_id`` and pins ``execution_target_id``;
+    - deterministic ``dispatch_id == owner-dispatch-{request_id}``;
+    - ``task_id`` exact;
+    - ``authority == SUPERVISED_AUTO`` (an OWNER row is NEVER AUTO
+      evidence — §19);
+    - ``execution_target_id`` equals the frozen target (§30: a foreign
+      row can never substitute its own target).
+
+    State-version rule (§17): the reservation stores the AUTO_GRACE
+    ``state_version`` at reserve time, which is NECESSARILY different
+    from the later terminal version (RUNNING → WORKER_FINISHED →
+    VERIFYING → terminal advanced it). Callers that know the live
+    reservation-cycle version (dispatch admission, task still in
+    AUTO_GRACE) pass ``expected_task_state_version`` for an exact
+    equality check. Terminal/recovery callers pass ``None`` — the
+    current cycle is then proven by the five durable dimensions above
+    plus the ordering invariant ``row.task_state_version`` strictly
+    below the task's current version (a reservation can only precede
+    the terminal transitions). No caller may compare the reservation
+    version against the terminal task version for equality.
+    """
+
+    routing_row = store.routing_decision_by_request_id(
+        supervised_auto_routing_request_id(auto_decision_id)
+    )
+    if routing_row is None or routing_row["task_id"] != task_id:
+        return None
+    expected_target = _routing_decision_target(routing_row)
+    if expected_target is None:
+        return None
+    request_id = supervised_auto_dispatch_request_id(auto_decision_id)
+    try:
+        record = store.get_owner_dispatch_by_request_id(request_id)
+    except KeyError:
+        return None
+    version_ok: bool
+    if expected_task_state_version is not None:
+        version_ok = record.task_state_version == expected_task_state_version
+    else:
+        task = store.get_task(task_id)
+        version_ok = record.task_state_version < task.state_version
+    if not version_ok:
+        return None
+    if not owner_dispatch_matches_expected(
+        record,
+        dispatch_id=f"owner-dispatch-{request_id}",
+        request_id=request_id,
+        task_id=task_id,
+        task_state_version=record.task_state_version,
+        execution_target_id=expected_target,
+        authority=AUTHORITY_SUPERVISED_AUTO_EXECUTION,
+    ):
+        return None
+    return record
+
+
+def _routing_decision_target(routing_row: Any) -> str | None:
+    """Extract ``selected_execution_target_id`` from the durable row."""
+
+    try:
+        payload = json.loads(routing_row["payload_json"])
+    except (TypeError, ValueError):
+        return None
+    target = payload.get("selected_execution_target_id")
+    return target if isinstance(target, str) and target else None
+
+
+def correlate_supervised_auto_execution(
+    store: SafetyKernelStore,
+    *,
+    task_id: str,
+    auto_decision_id: str,
+    expected_task_state_version: int | None = None,
+) -> AutoExecutionCorrelation:
+    """Round 6 §21/§27 — classify the current AUTO lifecycle's run truth.
+
+    Exact dispatch proof FIRST; only then the exact ``run-{dispatch_id}``
+    lookup. A namespace occupied by a non-exact row is CONFLICT — it can
+    never collapse into "no run / pre-worker".
+    """
+
+    dispatch = current_supervised_auto_dispatch(
+        store,
+        task_id=task_id,
+        auto_decision_id=auto_decision_id,
+        expected_task_state_version=expected_task_state_version,
+    )
+    if dispatch is None:
+        try:
+            store.get_owner_dispatch_by_request_id(
+                supervised_auto_dispatch_request_id(auto_decision_id)
+            )
+        except KeyError:
+            return AutoExecutionCorrelation.NO_DISPATCH
+        return AutoExecutionCorrelation.CONFLICT
+    run_row = store.connection.execute(
+        "SELECT 1 FROM runs WHERE run_id=? LIMIT 1",
+        (f"run-{dispatch.dispatch_id}",),
+    ).fetchone()
+    if run_row is not None:
+        return AutoExecutionCorrelation.EXACT_REAL_RUN
+    return AutoExecutionCorrelation.EXACT_PREWORKER
+
+
 def real_execution_recovery_proof(
     store: SafetyKernelStore,
     shadow_journal: ShadowEvidenceJournal | None,
@@ -470,9 +625,7 @@ def real_execution_recovery_proof(
     """Round 4 §8/§9 — the hard metadata-clear recovery guard.
 
     A SUPERVISED_AUTO lifecycle whose current dispatch truly launched a
-    worker (exact round-2 correlation: dispatch row for
-    ``supervised-auto-dispatch-{pending_id}`` + exact ``run-{dispatch_id}``
-    row) may clear its auto metadata ONLY when the observation truth is
+    worker may clear its auto metadata ONLY when the observation truth is
     durably recoverable:
 
     A. a durable shadow-finalization intent exists for the pending (the
@@ -486,25 +639,27 @@ def real_execution_recovery_proof(
        state (VERIFIED ⇔ verified=True, other terminal states ⇔
        verified=False; a non-terminal state never proves recovery).
 
-    Lifecycles WITHOUT a real exact run (pre-worker) return ``True``:
-    the ordinary abort/cleanup path owns them, and the two path classes
-    must never be mixed. Real-run lifecycles without proof return
-    ``False`` — callers must keep the metadata, refuse any discard and
-    record a sanitized recovery failure.
+    Round 6 §26: the real-run classification itself comes from
+    :func:`correlate_supervised_auto_execution` — the EXACT current
+    SUPERVISED_AUTO reservation is proven first (a foreign OWNER row
+    with its own run can never be AUTO evidence), and a namespace
+    CONFLICT fails closed (``False``): it is NOT ordinary pre-worker.
+
+    Lifecycles WITHOUT a real exact run (genuinely pre-worker:
+    NO_DISPATCH or EXACT_PREWORKER) return ``True``: the ordinary
+    abort/cleanup path owns them, and the two path classes must never be
+    mixed. Real-run lifecycles without proof return ``False`` — callers
+    must keep the metadata, refuse any discard and record a sanitized
+    recovery failure.
     """
 
-    dispatch_row = store.connection.execute(
-        "SELECT dispatch_id FROM owner_dispatches WHERE request_id=?",
-        (supervised_auto_dispatch_request_id(pending_id),),
-    ).fetchone()
-    if dispatch_row is None:
-        return True
-    run_row = store.connection.execute(
-        "SELECT 1 FROM runs WHERE run_id=? LIMIT 1",
-        (f"run-{dispatch_row['dispatch_id']}",),
-    ).fetchone()
-    if run_row is None:
-        return True
+    correlation = correlate_supervised_auto_execution(
+        store, task_id=task_id, auto_decision_id=pending_id
+    )
+    if correlation is AutoExecutionCorrelation.CONFLICT:
+        return False
+    if correlation is not AutoExecutionCorrelation.EXACT_REAL_RUN:
+        return True  # genuinely pre-worker (NO_DISPATCH / EXACT_PREWORKER)
     if store.shadow_finalize_intent_exists(pending_id):
         return True
     if shadow_journal is not None:
@@ -932,44 +1087,43 @@ class SupervisedAutoStep:
         # re-validates the RESERVED status + expected state atomically, so
         # a re-spawn can never produce a second worker.
         #
-        # Round 5 §6: the deterministic AUTO request-id namespace can be
-        # occupied by a legacy / foreign row (e.g. an OWNER_INITIATED
-        # dispatch reserved before the namespace became reserved). An
-        # existing row is valid AUTO recovery ONLY when it is the EXACT
-        # reservation this cycle would create — authority, task, state
-        # version, frozen target and dispatch id all identical (the same
-        # single comparison ``reserve_owner_dispatch`` uses). Anything
+        # Round 5 §6 / round 6 §20: the deterministic AUTO request-id
+        # namespace can be occupied by a legacy / foreign row (e.g. an
+        # OWNER_INITIATED dispatch reserved before the namespace became
+        # reserved). An existing row is valid AUTO recovery ONLY when
+        # the ONE canonical exact proof
+        # (``current_supervised_auto_dispatch`` — the same single
+        # comparison ``reserve_owner_dispatch`` uses) accepts it. Anything
         # else is a namespace conflict: never executed, never adopted,
         # never mutated — the current lifecycle fails closed instead.
-        try:
-            existing_dispatch = self._store.get_owner_dispatch_by_request_id(request_id)
-        except KeyError:
-            existing_dispatch = None
-        if existing_dispatch is not None:
-            expected_dispatch_id = f"owner-dispatch-{request_id}"
-            exact_match = owner_dispatch_matches_expected(
-                existing_dispatch,
-                dispatch_id=expected_dispatch_id,
-                request_id=request_id,
-                task_id=fresh.task_id,
-                task_state_version=fresh.state_version,
-                execution_target_id=target_id,
-                authority=AUTHORITY_SUPERVISED_AUTO_EXECUTION,
+        correlation = correlate_supervised_auto_execution(
+            self._store,
+            task_id=fresh.task_id,
+            auto_decision_id=fresh.auto_decision_id,
+            expected_task_state_version=fresh.state_version,
+        )
+        if correlation is AutoExecutionCorrelation.CONFLICT:
+            # §8/§30: the foreign row remains untouched as historical
+            # truth; the CURRENT lifecycle closes fail-closed (atomic
+            # READY + metadata clear + cleanup outbox). A new planning
+            # cycle derives a fresh state_version → fresh
+            # auto_decision_id → fresh request id.
+            self._abort_auto_task(
+                fresh,
+                now,
+                reason="dispatch_namespace_conflict",
             )
-            if not exact_match:
-                # §8/§30: the foreign row remains untouched as historical
-                # truth; the CURRENT lifecycle closes fail-closed (atomic
-                # READY + metadata clear + cleanup outbox). A new planning
-                # cycle derives a fresh state_version → fresh
-                # auto_decision_id → fresh request id.
-                self._abort_auto_task(
-                    fresh,
-                    now,
-                    reason="dispatch_namespace_conflict",
-                )
-                return
+            return
+        if correlation is AutoExecutionCorrelation.EXACT_PREWORKER:
+            existing_dispatch = current_supervised_auto_dispatch(
+                self._store,
+                task_id=fresh.task_id,
+                auto_decision_id=fresh.auto_decision_id,
+                expected_task_state_version=fresh.state_version,
+            )
             if (
-                existing_dispatch.status == "RESERVED"
+                existing_dispatch is not None
+                and existing_dispatch.status == "RESERVED"
                 and self._executor is not None
                 and not self._has_active_run(fresh.task_id)
             ):
@@ -995,6 +1149,11 @@ class SupervisedAutoStep:
                             "recovery": True,
                         },
                     )
+            return
+        if correlation is AutoExecutionCorrelation.EXACT_REAL_RUN:
+            # The exact dispatch already launched its worker — the
+            # executor / reconciliation owns the outcome; never reserve
+            # or re-enter here.
             return
         try:
             initiate_owner_dispatch(
@@ -1147,9 +1306,31 @@ class SupervisedAutoStep:
             if task.auto_decision_id is None:  # pragma: no cover — raced clear
                 continue
             pending_id = task.auto_decision_id
-            if self._terminal_lifecycle_had_real_run(pending_id):
+            correlation = correlate_supervised_auto_execution(
+                self._store, task_id=task.task_id, auto_decision_id=pending_id
+            )
+            if correlation is AutoExecutionCorrelation.CONFLICT:
+                # Round 6 §28: the deterministic namespace is occupied by
+                # a row that is NOT the exact current SUPERVISED_AUTO
+                # reservation. This is NOT ordinary pre-worker — never
+                # discard the pending, never reconstruct finalize truth
+                # from a foreign run, never clear the metadata. Fail
+                # closed with a sanitized event; every trace is kept.
+                self._safe_system_event(
+                    AUTO_EXECUTION_CORRELATION_CONFLICT_EVENT,
+                    {
+                        "task_id": task.task_id,
+                        "auto_decision_id": pending_id,
+                        "reason": "dispatch namespace occupied by a"
+                        " non-exact reservation",
+                    },
+                )
+                continue
+            if correlation is AutoExecutionCorrelation.EXACT_REAL_RUN:
                 self._close_real_execution_lifecycle(task, pending_id)
                 continue
+            # NO_DISPATCH / EXACT_PREWORKER (§29): genuinely pre-worker —
+            # discard + clear (cleanup outbox) as before.
             self._discard_pending(pending_id)
             # The clear transaction also enqueues the durable cleanup
             # intent, so a crash between these two steps still drains on
@@ -1159,21 +1340,6 @@ class SupervisedAutoStep:
                 expected_version=task.state_version,
                 reason="terminal state sweep closed the auto lifecycle",
             )
-
-    def _terminal_lifecycle_had_real_run(self, pending_id: str) -> bool:
-        """Exact current-cycle dispatch/run correlation (round 2 rules)."""
-
-        dispatch_row = self._store.connection.execute(
-            "SELECT dispatch_id FROM owner_dispatches WHERE request_id=?",
-            (supervised_auto_dispatch_request_id(pending_id),),
-        ).fetchone()
-        if dispatch_row is None:
-            return False
-        run_row = self._store.connection.execute(
-            "SELECT run_id, status FROM runs WHERE run_id=? LIMIT 1",
-            (f"run-{dispatch_row['dispatch_id']}",),
-        ).fetchone()
-        return run_row is not None
 
     def _close_real_execution_lifecycle(self, task: TaskRecord, pending_id: str) -> None:
         """Real-execution terminal close: finalize truthfully, never discard."""
@@ -1224,13 +1390,15 @@ class SupervisedAutoStep:
             and observation.request_id == pending.request_id
             and observation.decision_id == pending.decision_id
         ]
-        dispatch_row = self._store.connection.execute(
-            "SELECT dispatch_id FROM owner_dispatches WHERE request_id=?",
-            (supervised_auto_dispatch_request_id(pending_id),),
-        ).fetchone()
-        dispatch_id = (
-            dispatch_row["dispatch_id"] if dispatch_row is not None else ""
+        # Round 6 §20: the dispatch id comes from the canonical exact
+        # proof — never a raw namespace lookup that a foreign OWNER row
+        # could satisfy. (This reconstruction only runs after an
+        # EXACT_REAL_RUN classification, so the proof is expected to
+        # hold; an empty id is the fail-closed fallback.)
+        dispatch = current_supervised_auto_dispatch(
+            self._store, task_id=task.task_id, auto_decision_id=pending_id
         )
+        dispatch_id = dispatch.dispatch_id if dispatch is not None else ""
         if existing:
             observed: ShadowObservation = existing[0]
             intent = ShadowFinalizationIntent(
@@ -1558,10 +1726,14 @@ class SupervisedAutoStep:
 
 
 __all__ = [
+    "AUTO_EXECUTION_CORRELATION_CONFLICT_EVENT",
+    "AutoExecutionCorrelation",
     "SUPERVISED_AUTO_DISPATCH_REQUEST_PREFIX",
     "SUPERVISED_AUTO_STEP_NAME",
     "SupervisedAutoStep",
     "UNACKED_TIMEOUT_SECONDS",
+    "correlate_supervised_auto_execution",
+    "current_supervised_auto_dispatch",
     "drain_auto_shadow_cleanup_outbox",
     "drain_auto_shadow_finalize_outbox",
     "is_reserved_auto_dispatch_request_id",
