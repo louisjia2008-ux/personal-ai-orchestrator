@@ -12,6 +12,8 @@ stage can mask the verdict.
 from datetime import timedelta
 from pathlib import Path
 
+import pytest
+
 from personal_ai_orchestrator.safety_kernel import TaskState
 from personal_ai_orchestrator.supervised_auto_step import (
     supervised_auto_dispatch_request_id,
@@ -230,4 +232,337 @@ def test_no_metadata_historical_dispatch_fails_closed(tmp_path: Path) -> None:
     assert [e["payload"]["reason"] for e in _abort_events(env.store)] == [
         "cycle_1_closed"
     ]
+    env.store.close()
+
+
+# ---------------------------------------------------------------------------
+# Round 7 — reconciliation gates every mutation on the canonical
+# AutoExecutionCorrelation classifier (review matrix A–G).
+# ---------------------------------------------------------------------------
+
+from personal_ai_orchestrator.supervised_auto_step import (  # noqa: E402
+    AutoExecutionCorrelation,
+    correlate_supervised_auto_execution,
+)
+
+
+def _count_rows(store, table: str) -> int:
+    return store.connection.execute(
+        f"SELECT COUNT(*) AS n FROM {table}"  # noqa: S608 — test fixture table
+    ).fetchone()["n"]
+
+
+def _conflict_events(store) -> list:
+    return store.connection.execute(
+        "SELECT payload_json FROM audit_events"
+        " WHERE event_type='AUTO_EXECUTION_CORRELATION_CONFLICT'"
+        " AND task_id IS NULL"
+    ).fetchall()
+
+
+def _insert_dispatch_row(
+    store,
+    *,
+    request_id: str,
+    dispatch_id: str,
+    version: int,
+    target: str,
+    authority: str = "SUPERVISED_AUTO",
+    task_id: str = "task-1",
+    status: str = "BLOCKED",
+) -> None:
+    store.connection.execute(
+        "INSERT INTO owner_dispatches(dispatch_id, request_id, task_id,"
+        " task_state_version, execution_target_id, authority, status,"
+        " created_at, started_at, finished_at, failure_code, failure_reason)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            dispatch_id,
+            request_id,
+            task_id,
+            version,
+            target,
+            authority,
+            status,
+            NOW.isoformat(),
+            None,
+            None,
+            None,
+            None,
+        ),
+    )
+    store.connection.commit()
+
+
+def _assert_conflict_preserved(env, decision: str) -> None:
+    task = env.store.get_task("task-1")
+    assert task.state is TaskState.BLOCKED  # never READY — not aborted
+    assert task.auto_decision_id == decision  # metadata PRESERVED
+    assert env.shadow.load_pending(decision) is not None  # pending PRESERVED
+    assert env.shadow.load_all() == ()  # no fake observation
+    assert _count_rows(env.store, "auto_shadow_cleanup_outbox") == 0
+    assert _count_rows(env.store, "auto_shadow_finalize_outbox") == 0
+    # Sanitized event, deduped across reconciliation + terminal sweep.
+    assert len(_conflict_events(env.store)) == 1
+    assert _abort_events(env.store) == []
+
+
+def test_reconciliation_wrong_target_conflict_preserves_everything(tmp_path) -> None:
+    """Matrix A (§12): frozen TARGET_A, row TARGET_B, no run → CONFLICT."""
+
+    env = _env(tmp_path, unattended=True, grace_seconds=300)
+    _plan(env)
+    task = env.store.get_task("task-1")
+    decision = task.auto_decision_id
+    request_id = supervised_auto_dispatch_request_id(decision)
+    _insert_dispatch_row(
+        env.store,
+        request_id=request_id,
+        dispatch_id=f"owner-dispatch-{request_id}",
+        version=task.state_version,
+        target="TARGET_B",
+    )
+    env.store.transition_task(
+        "task-1", TaskState.BLOCKED, expected_version=task.state_version
+    )
+
+    assert (
+        correlate_supervised_auto_execution(
+            env.store, task_id="task-1", auto_decision_id=decision
+        )
+        is AutoExecutionCorrelation.CONFLICT
+    )
+    env.tick(_TICK_LATER)
+    _assert_conflict_preserved(env, decision)
+    env.store.close()
+
+
+def test_reconciliation_wrong_dispatch_id_conflict_preserves(tmp_path) -> None:
+    """Matrix B (§13): deterministic request id, foreign dispatch id."""
+
+    env = _env(tmp_path, unattended=True, grace_seconds=300)
+    _plan(env)
+    task = env.store.get_task("task-1")
+    decision = task.auto_decision_id
+    request_id = supervised_auto_dispatch_request_id(decision)
+    _insert_dispatch_row(
+        env.store,
+        request_id=request_id,
+        dispatch_id="owner-dispatch-foreign",
+        version=task.state_version,
+        target="m3-sub",
+    )
+    env.store.transition_task(
+        "task-1", TaskState.BLOCKED, expected_version=task.state_version
+    )
+
+    assert (
+        correlate_supervised_auto_execution(
+            env.store, task_id="task-1", auto_decision_id=decision
+        )
+        is AutoExecutionCorrelation.CONFLICT
+    )
+    env.tick(_TICK_LATER)
+    _assert_conflict_preserved(env, decision)
+    env.store.close()
+
+
+@pytest.mark.parametrize("delta", [1, -1])
+def test_reconciliation_wrong_live_version_conflict_preserves(tmp_path, delta) -> None:
+    """Matrix C case 1 (§14): AUTO_GRACE task, reservation version V±1."""
+
+    env = _env(tmp_path, unattended=True, grace_seconds=300)
+    _plan(env)
+    task = env.store.get_task("task-1")
+    decision = task.auto_decision_id
+    request_id = supervised_auto_dispatch_request_id(decision)
+    _insert_dispatch_row(
+        env.store,
+        request_id=request_id,
+        dispatch_id=f"owner-dispatch-{request_id}",
+        version=task.state_version + delta,
+        target="m3-sub",
+    )
+
+    assert (
+        correlate_supervised_auto_execution(
+            env.store,
+            task_id="task-1",
+            auto_decision_id=decision,
+            expected_task_state_version=task.state_version,
+        )
+        is AutoExecutionCorrelation.CONFLICT
+    )
+    # Before the grace deadline: only reconciliation can act.
+    env.tick(NOW + timedelta(seconds=5))
+    task = env.store.get_task("task-1")
+    assert task.state is TaskState.AUTO_GRACE  # never aborted
+    assert task.auto_decision_id == decision
+    assert env.shadow.load_pending(decision) is not None
+    assert _count_rows(env.store, "auto_shadow_cleanup_outbox") == 0
+    assert _abort_events(env.store) == []
+    env.store.close()
+
+
+def test_reconciliation_invalid_terminal_version_conflict_preserves(tmp_path) -> None:
+    """Matrix C case 2 (§14): BLOCKED task, reservation version NOT
+    strictly below the terminal version → ordering contract violated."""
+
+    env = _env(tmp_path, unattended=True, grace_seconds=300)
+    _plan(env)
+    task = env.store.get_task("task-1")
+    decision = task.auto_decision_id
+    request_id = supervised_auto_dispatch_request_id(decision)
+    # Reservation version 4; the task's BLOCKED version will also be 4 —
+    # not strictly below → CONFLICT under terminal semantics.
+    _insert_dispatch_row(
+        env.store,
+        request_id=request_id,
+        dispatch_id=f"owner-dispatch-{request_id}",
+        version=task.state_version + 1,
+        target="m3-sub",
+    )
+    blocked = env.store.transition_task(
+        "task-1", TaskState.BLOCKED, expected_version=task.state_version
+    )
+    assert blocked.state_version == task.state_version + 1
+
+    assert (
+        correlate_supervised_auto_execution(
+            env.store, task_id="task-1", auto_decision_id=decision
+        )
+        is AutoExecutionCorrelation.CONFLICT
+    )
+    env.tick(_TICK_LATER)
+    _assert_conflict_preserved(env, decision)
+    env.store.close()
+
+
+def test_reconciliation_exact_preworker_auto_grace_still_aborts(tmp_path) -> None:
+    """Matrix D (§15): exact current BLOCKED reservation, no run →
+    legitimate pre-worker abort (not frozen by the fix)."""
+
+    env = _env(tmp_path, unattended=True, grace_seconds=300)
+    _plan(env)
+    task = env.store.get_task("task-1")
+    decision = task.auto_decision_id
+    _blocked_dispatch(env.store, task, decision_id=decision)
+
+    assert (
+        correlate_supervised_auto_execution(
+            env.store,
+            task_id="task-1",
+            auto_decision_id=decision,
+            expected_task_state_version=task.state_version,
+        )
+        is AutoExecutionCorrelation.EXACT_PREWORKER
+    )
+    env.tick(NOW + timedelta(seconds=5))
+
+    after = env.store.get_task("task-1")
+    assert after.state is TaskState.READY
+    assert after.auto_decision_id is None
+    assert env.shadow.load_pending_all() == ()  # cleanup intent drained
+    assert _count_rows(env.store, "auto_shadow_cleanup_outbox") == 1
+    assert _conflict_events(env.store) == []
+    env.store.close()
+
+
+def test_reconciliation_exact_preworker_blocked_still_aborts(tmp_path) -> None:
+    """Matrix E (§16): terminal BLOCKED + exact reservation (version
+    strictly below) + no run → allow_blocked crash-atomic abort."""
+
+    env = _env(tmp_path, unattended=True, grace_seconds=300)
+    _plan(env)
+    task = env.store.get_task("task-1")
+    decision = task.auto_decision_id
+    _blocked_dispatch(env.store, task, decision_id=decision)
+    env.store.transition_task(
+        "task-1", TaskState.BLOCKED, expected_version=task.state_version
+    )
+
+    assert (
+        correlate_supervised_auto_execution(
+            env.store, task_id="task-1", auto_decision_id=decision
+        )
+        is AutoExecutionCorrelation.EXACT_PREWORKER
+    )
+    env.tick(_TICK_LATER)
+
+    after = env.store.get_task("task-1")
+    assert after.state is TaskState.READY
+    assert after.auto_decision_id is None
+    assert env.shadow.load_pending_all() == ()
+    assert _count_rows(env.store, "auto_shadow_cleanup_outbox") == 1
+    assert _conflict_events(env.store) == []
+    env.store.close()
+
+
+def test_reconciliation_exact_real_run_is_never_preworker_aborted(tmp_path) -> None:
+    """Matrix F (§17): exact reservation + exact run → the executor /
+    terminal recovery owns the outcome; no abort, no discard."""
+
+    env = _env(tmp_path, unattended=True, grace_seconds=300)
+    _plan(env)
+    task = env.store.get_task("task-1")
+    decision = task.auto_decision_id
+    dispatch_id = _blocked_dispatch(env.store, task, decision_id=decision)
+    _insert_run(env.store, "task-1", f"run-{dispatch_id}")
+    env.store.transition_task(
+        "task-1", TaskState.BLOCKED, expected_version=task.state_version
+    )
+
+    assert (
+        correlate_supervised_auto_execution(
+            env.store, task_id="task-1", auto_decision_id=decision
+        )
+        is AutoExecutionCorrelation.EXACT_REAL_RUN
+    )
+    env.tick(_TICK_LATER)
+
+    after = env.store.get_task("task-1")
+    assert after.state is TaskState.BLOCKED  # NOT aborted to READY
+    # Real-execution close owns it: finalize evidence, never discard.
+    assert _count_rows(env.store, "auto_shadow_cleanup_outbox") == 0
+    assert _count_rows(env.store, "auto_shadow_finalize_outbox") == 1
+    assert len(env.shadow.load_all()) == 1
+    assert after.auto_decision_id is None  # cleared AFTER durable proof
+    env.store.close()
+
+
+def test_reconciliation_no_dispatch_ignores_historical_rows(tmp_path) -> None:
+    """Matrix G (§18): no current-cycle dispatch row — an unrelated
+    historical SUPERVISED_AUTO BLOCKED row must not abort the cycle."""
+
+    env = _env(tmp_path, unattended=True, grace_seconds=300)
+    _plan(env)
+    task = env.store.get_task("task-1")
+    decision = task.auto_decision_id
+    # An OLD-cycle terminal row for the same task (different request id).
+    _insert_dispatch_row(
+        env.store,
+        request_id="supervised-auto-dispatch-auto-task-1-v0",
+        dispatch_id="owner-dispatch-supervised-auto-dispatch-auto-task-1-v0",
+        version=1,
+        target="m3-sub",
+    )
+
+    assert (
+        correlate_supervised_auto_execution(
+            env.store,
+            task_id="task-1",
+            auto_decision_id=decision,
+            expected_task_state_version=task.state_version,
+        )
+        is AutoExecutionCorrelation.NO_DISPATCH
+    )
+    env.tick(NOW + timedelta(seconds=5))
+
+    after = env.store.get_task("task-1")
+    assert after.state is TaskState.AUTO_GRACE  # untouched
+    assert after.auto_decision_id == decision
+    assert env.shadow.load_pending(decision) is not None
+    assert _count_rows(env.store, "auto_shadow_cleanup_outbox") == 0
+    assert _abort_events(env.store) == []
+    assert _conflict_events(env.store) == []
     env.store.close()

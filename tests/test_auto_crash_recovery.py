@@ -330,32 +330,29 @@ def test_unacked_timeout_crash_recovers_and_new_cycle_is_fresh(tmp_path) -> None
 
 
 def test_pre_worker_blocked_closeout_crash_recovers_atomically(tmp_path) -> None:
-    from personal_ai_orchestrator.dispatch_initiator import initiate_owner_dispatch
-
     env = _env(tmp_path, unattended=True, grace_seconds=300)
     _plan(env)
     task = env.store.get_task("task-1")
     old_decision_id = task.auto_decision_id
-    # Admission fails before any worker: dispatch row BLOCKED + the
-    # executor's pre-worker path parks the task in BLOCKED.
-    try:
-        initiate_owner_dispatch(
-            env.store,
-            env.executor,
-            task=task,
-            request_id=f"supervised-auto-dispatch-{old_decision_id}",
-            task_state_version=task.state_version + 99,
-            execution_target_id="m3-sub",
-            authority="SUPERVISED_AUTO",
-            project_provider=env.service.get_project,
-            registry_provider=env.service._effective_registry,  # noqa: SLF001
-            provider_registry_manager=None,
-            runtime_available_provider=env.service._runtime_available,  # noqa: SLF001
-            execution_evidence_journal=env.service.execution_evidence_journal,
-            expected_state=TaskState.AUTO_GRACE,
-        )
-    except ControlPlaneError:
-        pass
+    # Admission fails before any worker: an EXACT current reservation
+    # (round 7: correct live version + frozen target "m3-sub") whose
+    # post-reservation validation fails — the same BLOCKED audit row
+    # ``initiate_owner_dispatch`` writes via ``mark_owner_dispatch_blocked``
+    # — then the executor's pre-worker path parks the task in BLOCKED.
+    request_id = f"supervised-auto-dispatch-{old_decision_id}"
+    env.store.reserve_owner_dispatch(
+        dispatch_id=f"owner-dispatch-{request_id}",
+        request_id=request_id,
+        task_id="task-1",
+        task_state_version=task.state_version,
+        execution_target_id="m3-sub",
+        authority="SUPERVISED_AUTO",
+    )
+    env.store.mark_owner_dispatch_blocked(
+        request_id,
+        failure_code="QUOTA_ADMISSION_FAILED",
+        failure_reason="quota admission blocked the billable launch",
+    )
     env.store.transition_task(
         "task-1", TaskState.BLOCKED, expected_version=task.state_version
     )
