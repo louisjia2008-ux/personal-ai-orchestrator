@@ -34,8 +34,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import re
 import secrets
 import shutil
+import signal
 import subprocess
 import threading
 from collections.abc import Callable
@@ -75,16 +77,27 @@ from personal_ai_orchestrator.safety_kernel import (
     OwnerDispatchStatus,
     SafetyKernelStore,
     TaskState,
+    expected_source_state_for_dispatch_authority,
+    shadow_identity_payload,
 )
+from personal_ai_orchestrator.shadow_evidence import ShadowEvidenceJournal
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
 from personal_ai_orchestrator.verifier import (
     DeterministicVerifier,
     VerifierProfile,
 )
+from personal_ai_orchestrator.worker_outcome_classifier import WorkerFailureClass
 from personal_ai_orchestrator.worktree_manager import ManagedWorktree, WorktreeManager
 
 MAX_WORKER_STDOUT_BYTES = 256 * 1024
 MAX_WORKER_STDERR_BYTES = 64 * 1024
+
+# Bounded, sanitized transcript tails kept in the run result so the owner
+# can see what the worker actually did. The worker's text keeps zero task
+# authority — it is evidence for human eyes, never an input to any gate.
+WORKER_TRANSCRIPT_TAIL_BYTES = 8 * 1024
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 # Minimum execution environment for the authenticated OpenCode runtime.
 # This is deliberately NOT the discovery blocklist reuse: discovery strips
@@ -218,6 +231,7 @@ class OwnerDispatchExecutor:
         supervisor: ProcessSupervisor | None = None,
         execution_supervisor: ExecutionSupervisor | None = None,
         store_factory: Callable[[], SafetyKernelStore] | None = None,
+        shadow_journal: ShadowEvidenceJournal | None = None,
     ) -> None:
         self._state_db = state_db
         self.config = config
@@ -229,6 +243,10 @@ class OwnerDispatchExecutor:
         self._supervisor = supervisor or ProcessSupervisor()
         self.execution_supervisor = execution_supervisor or ExecutionSupervisor()
         self._store_factory = store_factory or (lambda: SafetyKernelStore(state_db))
+        # M1 WP5a-2: journal used to finalize the SUPERVISED_AUTO pending
+        # shadow once the run reaches a truthful outcome. ``None`` keeps the
+        # owner-dispatch-only behavior (no pending shadow exists to finalize).
+        self._shadow_journal = shadow_journal
 
     # ------------------------------------------------------------------
     # public entrypoints
@@ -275,11 +293,38 @@ class OwnerDispatchExecutor:
             return
 
         task = store.get_task(dispatch.task_id)
-        if task.state is not TaskState.READY:
+        # Round 6 §4-§7: the legal source state is a property of the
+        # DURABLE dispatch authority, never of the current task row. A
+        # stale SUPERVISED_AUTO reservation whose task was vetoed /
+        # mode-aborted back to READY must fail closed here — it may NOT
+        # be reinterpreted as an owner dispatch merely because the task
+        # happens to be READY. Unknown authority fails closed with a
+        # sanitized dispatch BLOCKED marker and no worker spawn (no
+        # quota / worktree / writer side effect can have happened yet:
+        # this is the first gate after the durable row load).
+        try:
+            expected_state = expected_source_state_for_dispatch_authority(
+                dispatch.authority
+            )
+        except ValueError:
+            store.mark_owner_dispatch_blocked(
+                request_id,
+                failure_code="UNKNOWN_DISPATCH_AUTHORITY",
+                failure_reason=(
+                    "dispatch authority has no legal worker source state"
+                ),
+            )
+            store.close()
+            return
+        if task.state is not expected_state:
             store.mark_owner_dispatch_blocked(
                 request_id,
                 failure_code="TASK_NOT_READY",
-                failure_reason=f"task state {task.state.value} is not READY",
+                failure_reason=(
+                    f"task state {task.state.value} is not the legal source"
+                    f" state {expected_state.value} for authority"
+                    f" {dispatch.authority}"
+                ),
             )
             store.close()
             return
@@ -385,6 +430,7 @@ class OwnerDispatchExecutor:
                 worker_id=dispatch.execution_target_id,
                 writer_token=writer_token,
                 pid=supervised.pid,
+                expected_state=expected_state,
             )
         except Exception as error:
             # The child exists but is not durably owned: kill the exact
@@ -414,8 +460,10 @@ class OwnerDispatchExecutor:
 
         # -- supervised worker lifecycle ---------------------------------
         real_invocation_succeeded = False
+        worker_exit_code: int | None = None
         try:
             exit_code, stdout, stderr, truncated = await self._wait_for_worker(supervised)
+            worker_exit_code = exit_code
             if (
                 exit_code != 0
                 and execution.cancel_requested.is_set()
@@ -454,6 +502,23 @@ class OwnerDispatchExecutor:
             real_invocation_succeeded = (
                 exit_code == 0 and next_state is TaskState.WORKER_FINISHED
             )
+            # M1 WP4: classify the worker outcome and write the
+            # ``QUOTA_BLOCKED`` evidence + ``observe_*`` journal
+            # row when the classifier flags a rate-limit / quota
+            # hit. The classification runs **before** the dispatch
+            # writes its own evidence so the journal row points
+            # at the same instant as the worker exit. ``A2`` is
+            # explicitly off-limits: the helper never bumps
+            # ``consecutive_failures`` (the journal write below
+            # uses ``observe_exhaustion`` for windowed targets
+            # and ``observe_rate_limited`` for unmetered ones).
+            self._classify_and_record_worker_outcome(
+                store,
+                dispatch=dispatch,
+                execution_target_id=dispatch.execution_target_id,
+                exit_code=exit_code,
+                worker_result=result,
+            )
         except asyncio.CancelledError:
             # Loop shutdown/cancellation must never strand a live child,
             # a RUNNING task or the writer lock. Repair synchronously
@@ -472,6 +537,7 @@ class OwnerDispatchExecutor:
             exit_code = await self._supervisor.cancel(
                 supervised, grace_seconds=self.config.worker_grace_seconds
             )
+            worker_exit_code = exit_code
             result = self._host_result_envelope(
                 exit_code, b"", b"", truncated=False, timeout=True
             )
@@ -521,6 +587,24 @@ class OwnerDispatchExecutor:
             self.execution_supervisor.unregister(dispatch.task_id)
 
         # -- deterministic verification ----------------------------------
+        # M1 WP5a-2: when this is a SUPERVISED_AUTO dispatch, the
+        # verification path owns the pending-shadow finalization — only a
+        # deterministic verifier verdict may close the shadow observation
+        # as verified. ``auto_pending_finalized`` tracks whether that
+        # happened so the close-out below never double-finalizes with a
+        # different payload (observation ids are deterministic; content
+        # divergence would fail-closed in the journal instead).
+        #
+        # Round 4 (final outcome ordering): the verifier runs FIRST but
+        # commits NOTHING terminal — the main-repo immutability result is
+        # computed next, and only the COMPOSED final host outcome
+        # (verifier authoritative pass AND main repo unchanged) enters
+        # the single terminal transaction + immutable finalize intent.
+        # The normal path can therefore never leave a verified=True
+        # shadow behind a later VERIFIED → BLOCKED downgrade.
+        auto_pending_finalized = False
+        verdict = None
+        shadow_pending_id: str | None = None
         if next_state is TaskState.WORKER_FINISHED:
             try:
                 begin_verification(store, task_id=dispatch.task_id)
@@ -546,12 +630,57 @@ class OwnerDispatchExecutor:
                     )
                     self._verification_journal.append(raw)
                     verdict = raw
+                shadow_pending_id = self._supervised_auto_pending_id(store, dispatch)
+                # ``begin_verification`` moved the durable task row to
+                # VERIFYING; mirror it locally so the composed final
+                # commit below runs exactly on this success path.
+                next_state = TaskState.VERIFYING
+            except Exception as error:
+                store.transition_task(
+                    dispatch.task_id,
+                    TaskState.BLOCKED,
+                    expected_version=store.get_task(dispatch.task_id).state_version,
+                    reason=f"verification stage failed closed: {type(error).__name__}",
+                )
+                next_state = TaskState.BLOCKED
+                verdict = None
+                shadow_pending_id = None
+
+        # -- main repo immutability --------------------------------------
+        # Round 4: computed BEFORE the terminal commit so the immutable
+        # finalize intent freezes the FINAL host outcome (§2). A
+        # fingerprint failure is fail-closed as a mutation.
+        try:
+            main_after = main_repo_fingerprint(project_root)
+            main_unchanged = main_before == main_after
+        except Exception:
+            main_after = dict(main_before)
+            main_unchanged = False
+
+        # -- ONE final terminal commit -----------------------------------
+        # Composes verifier authority + main-repo immutability into a
+        # single VERIFYING → VERIFIED/BLOCKED transaction with the
+        # immutable finalize intent; no later downgrade is needed or
+        # possible on this path.
+        if next_state is TaskState.VERIFYING and verdict is not None:
+            try:
                 next_state = apply_verification_result(
                     store,
                     task_id=dispatch.task_id,
                     result=verdict,
                     evidence_journal=self._verification_journal,
+                    shadow_journal=self._shadow_journal if shadow_pending_id else None,
+                    shadow_pending_id=shadow_pending_id,
+                    shadow_dispatch_id=dispatch.dispatch_id,
+                    shadow_execution_success=worker_exit_code == 0,
+                    shadow_main_repo_unchanged=main_unchanged,
                 )
+                # Round 3: the terminal truth + durable finalization
+                # intent committed in ONE transaction, and the inline
+                # drain already replayed the observation + discarded the
+                # pending on the happy path. A failed drain only leaves
+                # the intent open — the tick / restart replay finishes it.
+                auto_pending_finalized = shadow_pending_id is not None
             except Exception as error:
                 store.transition_task(
                     dispatch.task_id,
@@ -561,25 +690,8 @@ class OwnerDispatchExecutor:
                 )
                 next_state = TaskState.BLOCKED
 
-        # -- main repo immutability --------------------------------------
-        try:
-            main_after = main_repo_fingerprint(project_root)
-            main_unchanged = main_before == main_after
-        except Exception:
-            main_after = dict(main_before)
-            main_unchanged = False
-
         # -- evidence + lock release -------------------------------------
         verified = next_state is TaskState.VERIFIED
-        if verified and not main_unchanged:
-            store.transition_task(
-                dispatch.task_id,
-                TaskState.BLOCKED,
-                expected_version=store.get_task(dispatch.task_id).state_version,
-                reason="main repository mutated during owner dispatch",
-            )
-            next_state = TaskState.BLOCKED
-            verified = False
 
         evidence = build_execution_evidence(
             provider_id=self._provider_id(dispatch),
@@ -615,6 +727,23 @@ class OwnerDispatchExecutor:
                 failure_code=failure_code,
                 failure_reason=None if verified else f"task ended in {next_state.value}",
             )
+        # M1 WP5a-2: close the SUPERVISED_AUTO shadow lifecycle for
+        # outcomes the verification path did not already finalize
+        # (worker failed before WORKER_FINISHED, concurrent cancel, ...)
+        # and clear the now-inert auto metadata off the active task row.
+        # Round 3: the failed-execution finalize is now a DURABLE intent
+        # + best-effort drain — a real worker ran, so its observation
+        # must survive an executor crash (the tick's terminal sweep and
+        # the finalize outbox replay it); the blind filesystem discard
+        # fallback is gone.
+        if not auto_pending_finalized:
+            self._finalize_supervised_auto_pending(
+                store,
+                dispatch,
+                verified=False,
+                execution_success=worker_exit_code == 0,
+            )
+        self._clear_supervised_auto_metadata(store, dispatch)
         try:
             store._audit(
                 dispatch.task_id,
@@ -703,14 +832,28 @@ class OwnerDispatchExecutor:
     ) -> None:
         """Last-resort fail-closed repair after RUNNING was granted.
 
-        Kills the exact supervised child, closes the run row, blocks the
-        task, releases the writer lock and blocks the dispatch. Every
-        step is best-effort so one broken step cannot skip the rest.
-        Synchronous by design so it also works during loop teardown.
+        Kills the exact supervised child, closes the run row with a
+        human-readable reason, blocks the task, releases the writer lock
+        and blocks the dispatch. Every step is best-effort so one broken
+        step cannot skip the rest. Synchronous by design so it also works
+        during loop teardown.
         """
+
+        from personal_ai_orchestrator.execution_controller import (
+            _failure_result_payload,
+            _human_reason_for_failure,
+        )
 
         self.execution_supervisor.unregister(dispatch.task_id)
         self._supervisor.emergency_kill(supervised)
+        # emergency_kill always sends SIGKILL to the process group. Tails
+        # are not drained (the supervisor does not buffer them in this
+        # path), so worker_result is None and only the signal is reported.
+        failure_payload = _failure_result_payload(
+            exit_code=None, signal=signal.SIGKILL, worker_result=None
+        )
+        failure_payload["emergency_repair"] = True
+        reason = _human_reason_for_failure(exit_code=None, signal=signal.SIGKILL)
         try:
             task = store.get_task(dispatch.task_id)
             if task.state is TaskState.RUNNING:
@@ -719,13 +862,13 @@ class OwnerDispatchExecutor:
                 ).fetchone()
                 if run is not None and run["status"] == "RUNNING":
                     store.finish_run(
-                        run_id, status="FAILED", result={"emergency_repair": True}
+                        run_id, status="FAILED", result=failure_payload
                     )
                 store.transition_task(
                     dispatch.task_id,
                     TaskState.BLOCKED,
                     expected_version=task.state_version,
-                    reason="executor emergency repair after internal error",
+                    reason=f"executor emergency repair: {reason}",
                 )
         except Exception:
             pass
@@ -738,7 +881,7 @@ class OwnerDispatchExecutor:
                 request_id,
                 failure_code="EXECUTOR_INTERNAL_ERROR",
                 failure_reason=(
-                    type(error).__name__ if error is not None else "CANCELLED"
+                    f"{type(error).__name__ if error is not None else 'CANCELLED'}; {reason}"
                 ),
             )
         except Exception:
@@ -746,6 +889,137 @@ class OwnerDispatchExecutor:
 
     def _open_store(self) -> SafetyKernelStore:
         return self._store_factory()
+
+    def _supervised_auto_pending_id(
+        self, store: SafetyKernelStore, dispatch: OwnerDispatchRecord
+    ) -> str | None:
+        """The pending-shadow id for a SUPERVISED_AUTO dispatch, if any.
+
+        裁决 15 keeps ``pending_id`` and the task row's ``auto_decision_id``
+        at the same value. Owner-initiated dispatches carry no auto metadata
+        and return ``None`` — the existing owner path never touches the
+        pending-shadow journal.
+        """
+
+        if dispatch.authority != "SUPERVISED_AUTO":
+            return None
+        try:
+            task = store.get_task(dispatch.task_id)
+        except Exception:
+            return None
+        return task.auto_decision_id
+
+    def _finalize_supervised_auto_pending(
+        self,
+        store: SafetyKernelStore,
+        dispatch: OwnerDispatchRecord,
+        *,
+        verified: bool,
+        execution_success: bool,
+    ) -> None:
+        """Finalize the pending shadow with a truthful non-verified outcome.
+
+        Round 3: a real worker launched (run row exists), so the
+        observation is DURABLE truth — record the finalization intent
+        first (immutable payload, ``observed_at`` pinned once), then
+        best-effort drain. A crash before the drain leaves the intent
+        open; the tick / restart replay finalizes + discards exactly
+        once. When an intent already owns this pending (e.g. a tick
+        reconstruction raced us), the first durable intent wins and we
+        only drain it.
+        """
+
+        from personal_ai_orchestrator.safety_kernel import ShadowFinalizationIntent
+        from personal_ai_orchestrator.supervised_auto_step import (
+            drain_auto_shadow_finalize_outbox,
+        )
+
+        pending_id = self._supervised_auto_pending_id(store, dispatch)
+        if pending_id is None or self._shadow_journal is None:
+            return
+        try:
+            pending = self._shadow_journal.load_pending(pending_id)
+        except (FileNotFoundError, ValueError):
+            return
+        if not store.shadow_finalize_intent_exists(pending_id):
+            intent = ShadowFinalizationIntent(
+                pending_id=pending_id,
+                task_id=dispatch.task_id,
+                dispatch_id=dispatch.dispatch_id,
+                request_id=pending.request_id,
+                decision_id=pending.decision_id,
+                verified=verified,
+                execution_success=execution_success,
+                verification_success=False,
+                observed_at=datetime.now(UTC).isoformat(),
+                identity_json=shadow_identity_payload(pending),
+            )
+            try:
+                store.enqueue_shadow_finalization(intent)
+            except RuntimeError:
+                # A different payload already owns this finalization id
+                # — the first durable intent is authoritative.
+                pass
+        drain_auto_shadow_finalize_outbox(store, self._shadow_journal)
+
+    def _clear_supervised_auto_metadata(
+        self, store: SafetyKernelStore, dispatch: OwnerDispatchRecord
+    ) -> None:
+        """Clear the task row's auto metadata once the auto lifecycle ends.
+
+        §32: after the run reached a post-RUNNING state the four ``auto_*``
+        columns are inert control state and must not linger on the active
+        row. Historical truth lives in the audit trail, the routing
+        decision row and the shadow journal.
+
+        Round 4 §8/§9 (hard recovery guard): when THIS lifecycle truly
+        launched a worker (exact current-cycle dispatch + exact
+        ``run-{dispatch_id}`` row), the metadata — the last recovery
+        correlation to the pending's routing identity — may clear ONLY
+        when a durable finalize intent exists or the finalized
+        observation is already proven. Without that proof the clear is
+        refused, a sanitized system event records why, and the task row
+        stays fail-closed recoverable.
+        """
+
+        if dispatch.authority != "SUPERVISED_AUTO":
+            return
+        try:
+            task = store.get_task(dispatch.task_id)
+            if task.auto_decision_id is None:
+                return
+            from personal_ai_orchestrator.supervised_auto_step import (
+                real_execution_recovery_proof,
+            )
+
+            if not real_execution_recovery_proof(
+                store,
+                self._shadow_journal,
+                task_id=dispatch.task_id,
+                pending_id=task.auto_decision_id,
+            ):
+                try:
+                    store.record_system_event(
+                        "AUTO_SHADOW_RECOVERY_GUARD_HELD",
+                        {
+                            "task_id": dispatch.task_id,
+                            "pending_id": task.auto_decision_id,
+                            "reason": (
+                                "real execution without durable finalize "
+                                "intent or proven observation"
+                            ),
+                        },
+                    )
+                except Exception:  # noqa: BLE001 — event best-effort
+                    pass
+                return
+            store.clear_auto_state_metadata(
+                dispatch.task_id,
+                expected_version=task.state_version,
+                reason="supervised auto lifecycle closed after dispatch",
+            )
+        except Exception:
+            pass
 
     def _project_root_or_blocked(
         self,
@@ -919,6 +1193,196 @@ class OwnerDispatchExecutor:
             return
         target.write_bytes(seed.read_bytes())
 
+    # -- M1 WP4: worker-outcome classification + journal write ------
+    def _classify_and_record_worker_outcome(
+        self,
+        store: SafetyKernelStore,
+        *,
+        dispatch: OwnerDispatchRecord,
+        execution_target_id: str,
+        exit_code: int,
+        worker_result: dict[str, object],
+    ) -> None:
+        """Inspect the worker's stderr and persist a quota-or-rate-limit cooldown.
+
+        M1 WP4 closes the gap where ``owner-dispatch`` had no
+        worker-side quota signal: every dispatch exited either
+        ``VERIFIED`` (zero exit) or ``UNKNOWN`` (any non-zero exit),
+        with no classifier to tell apart a rate-limit cooldown from
+        an unrelated failure. The classifier replaces the legacy
+        shadow text-match (which used the bare ``"quota"`` token
+        and matched this project's own source code) with the
+        conservative marker list in ``worker_outcome_classifier``.
+
+        Windowed targets: ``observe_exhaustion`` flips the journal
+        to COOLDOWN with a 1-hour window (the existing windowed
+        behaviour). The execution-evidence journal also records a
+        ``QUOTA_BLOCKED`` row so ``latest_verified_for_target``
+        falls back to the most recent VERIFIED row (the
+        post-WP3 §3.4 contract).
+        Unmetered targets: ``observe_rate_limited`` with the
+        15-minute default; the cooldown expires back to
+        ``AVAILABLE_UNMETERED`` directly (the unmetered baseline
+        tells ``state_at`` to skip the probe round-trip).
+
+        V4 refactor: the body is split into three helpers
+        (``_classify_worker_failure``,
+        ``_apply_pool_kind_cooldown``,
+        ``_record_quota_blocked_evidence``); this method is now a
+        thin orchestrator.
+        """
+
+        verdict = self._classify_worker_failure(
+            exit_code=exit_code,
+            worker_result=worker_result,
+        )
+        if verdict is WorkerFailureClass.NONE:
+            return
+        if verdict is not WorkerFailureClass.QUOTA_OR_RATE_LIMIT:
+            # Auth / unclassified failures do not advance the
+            # quota journal. A future commit will add an
+            # auth-evidence row; for now we keep the contract
+            # tight so a regression cannot silently disable it.
+            return
+
+        provider_id = self._provider_id(dispatch)
+        observed_at = datetime.now(UTC)
+        try:
+            reason_code = self._apply_pool_kind_cooldown(
+                dispatch=dispatch,
+                execution_target_id=execution_target_id,
+                provider_id=provider_id,
+                observed_at=observed_at,
+            )
+        except Exception:
+            return
+        if reason_code is None:
+            return
+        self._record_quota_blocked_evidence(
+            dispatch=dispatch,
+            execution_target_id=execution_target_id,
+            provider_id=provider_id,
+            observed_at=observed_at,
+            reason_code=reason_code,
+        )
+
+    def _classify_worker_failure(
+        self,
+        *,
+        exit_code: int,
+        worker_result: dict[str, object],
+    ) -> WorkerFailureClass:
+        """Run the worker's stderr through ``classify_worker_failure``.
+
+        Pulled out of ``_classify_and_record_worker_outcome`` (V4
+        refactor — zero behaviour change). Returning a frozen enum
+        keeps the orchestrator free of imports.
+        """
+
+        from personal_ai_orchestrator.worker_outcome_classifier import (
+            classify_worker_failure as _classify,
+        )
+
+        stderr_tail_obj = worker_result.get("stderr_tail")
+        stderr_tail = stderr_tail_obj if isinstance(stderr_tail_obj, str) else ""
+        return _classify(exit_code=exit_code, stderr_tail=stderr_tail)
+
+    def _apply_pool_kind_cooldown(
+        self,
+        *,
+        dispatch: OwnerDispatchRecord,
+        execution_target_id: str,
+        provider_id: str,
+        observed_at: datetime,
+    ) -> str | None:
+        """Apply the windowed-vs-unmetered cooldown to the quota journal.
+
+        Windowed targets hit ``observe_exhaustion`` (1-hour
+        cooldown, ``USAGE_LIMIT`` reason). Unmetered targets hit
+        ``observe_rate_limited`` (15-minute default, the unmetered
+        baseline tells ``state_at`` to skip the probe round-trip).
+        Returns the reason code for the execution-evidence row, or
+        ``None`` when the provider is not in the family registry
+        (a defensive no-op — pre-WP4 dispatch has no signal).
+        """
+
+        from personal_ai_orchestrator.provider_discovery import (
+            PROVIDER_FAMILIES as _PF,
+        )
+        from personal_ai_orchestrator.quota_availability import (
+            observe_exhaustion as _observe_exhaustion,
+        )
+        from personal_ai_orchestrator.quota_availability import (
+            observe_rate_limited as _observe_rate_limited,
+        )
+
+        family = next(
+            (spec for spec in _PF if spec.provider_id == provider_id),
+            None,
+        )
+        is_unmetered = bool(family and family.pool_kind == "unmetered")
+        previous = self._quota_availability_journal.load(execution_target_id)
+        quota_pool_id = provider_id
+        if is_unmetered:
+            self._quota_availability_journal.save(
+                _observe_rate_limited(
+                    previous,
+                    execution_target_id=execution_target_id,
+                    provider_id=provider_id,
+                    quota_pool_id=quota_pool_id,
+                    observed_at=observed_at,
+                )
+            )
+            return "WORKER_RATE_LIMIT"
+        self._quota_availability_journal.save(
+            _observe_exhaustion(
+                previous,
+                execution_target_id=execution_target_id,
+                provider_id=provider_id,
+                quota_pool_id=quota_pool_id,
+                observed_at=observed_at,
+                sanitized_reason_code="USAGE_LIMIT",
+            )
+        )
+        return "WORKER_QUOTA_BLOCKED"
+
+    def _record_quota_blocked_evidence(
+        self,
+        *,
+        dispatch: OwnerDispatchRecord,
+        execution_target_id: str,
+        provider_id: str,
+        observed_at: datetime,
+        reason_code: str,
+    ) -> None:
+        """Append a ``QUOTA_BLOCKED`` row to the execution-evidence journal.
+
+        The ``latest_verified_for_target`` helper already demote-
+        falls back from any non-VERIFIED outcome to the most recent
+        VERIFIED row, so this single row keeps the dispatcher honest
+        even when the cooldown is the only signal we have.
+        """
+
+        from personal_ai_orchestrator.execution_evidence import (
+            ExecutionVerificationOutcome as _EVO,
+        )
+        from personal_ai_orchestrator.execution_evidence import (
+            build_execution_evidence as _build_evidence,
+        )
+
+        try:
+            evidence = _build_evidence(
+                provider_id=provider_id,
+                execution_target_id=execution_target_id,
+                model_sku_id=self._model_sku_id(dispatch),
+                observed_at=observed_at,
+                result=_EVO.QUOTA_BLOCKED,
+                reason_code=reason_code,
+            )
+            self._execution_evidence_journal.append(evidence)
+        except Exception:
+            pass
+
     def _admit_quota(
         self, store: SafetyKernelStore, dispatch: OwnerDispatchRecord
     ) -> QuotaAdmission:
@@ -928,6 +1392,10 @@ class OwnerDispatchExecutor:
         quota_pool_id = provider_id
 
         previous = self._quota_availability_journal.load(execution_target_id)
+        # Definitive exhaustions short-circuit before any observation: they
+        # are not expected to clear on their own within the dispatch window.
+        # UNCERTAIN_LOCKED is checked AFTER the new observation instead so a
+        # single successful collection can release the lock atomically.
         if previous is not None and previous.blocks_quota_billable_launch(now=now):
             return QuotaAdmission(
                 admitted=False,
@@ -944,9 +1412,19 @@ class OwnerDispatchExecutor:
                 provider_id=provider_id,
                 quota_pool_id=quota_pool_id,
                 observed_at=now,
+                previous=previous,
             )
             # UNKNOWN must remain UNKNOWN — and must remain durable.
             self._quota_availability_journal.save(evidence)
+            # Re-projection: the save may have pushed us over the failure
+            # threshold. Reject before falling through to the admit path.
+            if evidence.state_at(now=now) is QuotaAvailabilityState.UNCERTAIN_LOCKED:
+                return QuotaAdmission(
+                    admitted=False,
+                    failure_code="QUOTA_UNKNOWN",
+                    evidence=evidence,
+                    collected=False,
+                )
             if self.config.require_quota_certainty:
                 return QuotaAdmission(
                     admitted=False,
@@ -975,6 +1453,13 @@ class OwnerDispatchExecutor:
                     evidence=evidence,
                     collected=True,
                 )
+            if evidence.state_at(now=now) is QuotaAvailabilityState.UNCERTAIN_LOCKED:
+                return QuotaAdmission(
+                    admitted=False,
+                    failure_code="QUOTA_UNKNOWN",
+                    evidence=evidence,
+                    collected=True,
+                )
             if (
                 self.config.require_quota_certainty
                 and evidence.state is QuotaAvailabilityState.UNKNOWN
@@ -995,6 +1480,7 @@ class OwnerDispatchExecutor:
                 "quota_state": evidence.state.value,
                 "quota_confidence": evidence.confidence.value,
                 "collected": collector is not None,
+                "consecutive_failures": evidence.consecutive_failures,
             },
         )
         return QuotaAdmission(
@@ -1042,11 +1528,14 @@ class OwnerDispatchExecutor:
                 observed_at=now,
                 sanitized_reason_code="LAST_KNOWN_GOOD_EXHAUSTED",
             )
+        # UNKNOWN outcome: bump the streak so the lock can fire after the
+        # configured number of consecutive failures.
         return unknown_availability(
             execution_target_id=execution_target_id,
             provider_id=provider_id,
             quota_pool_id=quota_pool_id,
             observed_at=now,
+            previous=previous,
         )
 
     def _provider_id(self, dispatch: OwnerDispatchRecord) -> str:
@@ -1140,7 +1629,18 @@ class OwnerDispatchExecutor:
         return returncode, stdout, stderr, truncated
 
     @staticmethod
+    def _sanitize_transcript(data: bytes) -> str:
+        """Bounded, printable, ANSI-free worker text for human eyes only."""
+
+        tail = data[-WORKER_TRANSCRIPT_TAIL_BYTES:]
+        text = tail.decode("utf-8", errors="replace")
+        text = _ANSI_ESCAPE_RE.sub("", text)
+        text = _CONTROL_CHARS_RE.sub("", text)
+        return text
+
+    @classmethod
     def _host_result_envelope(
+        cls,
         exit_code: int,
         stdout: bytes,
         stderr: bytes,
@@ -1148,7 +1648,12 @@ class OwnerDispatchExecutor:
         truncated: bool,
         timeout: bool = False,
     ) -> dict[str, Any]:
-        """Host-derived metadata only. Worker text has zero task authority."""
+        """Host-derived metadata only. Worker text has zero task authority.
+
+        The transcript tails are sanitized display evidence: the owner can
+        finally see what the worker did (opencode narrates progress on
+        stderr) without the raw bytes ever feeding a gate or a decision.
+        """
 
         return {
             "exit_code": exit_code,
@@ -1158,6 +1663,8 @@ class OwnerDispatchExecutor:
             "stderr_bytes": len(stderr),
             "output_truncated": truncated,
             "timed_out": timeout,
+            "stdout_tail": cls._sanitize_transcript(stdout),
+            "stderr_tail": cls._sanitize_transcript(stderr),
         }
 
     def _fail_pre_worker(
@@ -1173,6 +1680,13 @@ class OwnerDispatchExecutor:
 
         Only a writer token acquired by THIS execution is released; a
         pre-existing foreign lock is never touched.
+
+        Round 6 §11 — the task mutation is authority-aware: only the
+        dispatch authority's OWN legal source state may transition to
+        BLOCKED (OWNER → READY, SUPERVISED_AUTO → AUTO_GRACE). A stale
+        SUPERVISED_AUTO reservation failing after a veto moved the task
+        to READY must NOT mutate the owner-controlled READY task — the
+        veto already won; the dispatch row alone carries the failure.
         """
 
         dispatch = store.get_owner_dispatch_by_request_id(request_id)
@@ -1182,7 +1696,16 @@ class OwnerDispatchExecutor:
             except Exception:
                 pass
         task = store.get_task(dispatch.task_id)
-        if task.state is TaskState.READY:
+        try:
+            authority_source_state = (
+                expected_source_state_for_dispatch_authority(dispatch.authority)
+            )
+        except ValueError:
+            authority_source_state = None  # unknown authority: never mutate
+        if (
+            authority_source_state is not None
+            and task.state is authority_source_state
+        ):
             store.transition_task(
                 dispatch.task_id,
                 TaskState.BLOCKED,

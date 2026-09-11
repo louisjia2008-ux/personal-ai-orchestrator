@@ -268,6 +268,35 @@ class SwitchLeaseAuthority:
             raise
         return self.get(lease_id)
 
+    def has_active_lease(
+        self,
+        task_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        """M1 WP5a-2: does this task hold a live, unexpired AUTHORIZED lease?
+
+        A lease only counts as active when ALL of:
+
+        - ``task_id`` matches, AND
+        - ``status == AUTHORIZED``, AND
+        - ``expires_at > now``
+
+        Expired leases are invisible (an expired freeze must not permanently
+        block the supervised-auto tick). COMPLETED / ABORTED / EXPIRED rows
+        never block. The optional ``now`` keeps the check fake-clock friendly;
+        wall-clock is only read when ``now`` is omitted.
+        """
+
+        reference = datetime.now(UTC) if now is None else now
+        now_epoch = int(reference.timestamp())
+        row = self.store.connection.execute(
+            "SELECT 1 FROM switch_leases "
+            "WHERE task_id=? AND status=? AND expires_at_epoch>? LIMIT 1",
+            (task_id, SwitchLeaseStatus.AUTHORIZED.value, now_epoch),
+        ).fetchone()
+        return row is not None
+
     def abort_for_task(self, task_id: str, *, reason: str) -> tuple[str, ...]:
         """Release any live switch freeze before a host cancellation/state transition."""
 

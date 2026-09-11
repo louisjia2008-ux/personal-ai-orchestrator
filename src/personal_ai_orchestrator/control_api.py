@@ -21,7 +21,7 @@ import socket
 import subprocess
 import threading
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,14 +34,34 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from personal_ai_orchestrator.activation import ActiveRoutingGate
 from personal_ai_orchestrator.approval import ApprovalAuthority
 from personal_ai_orchestrator.build_identity import resolve_build_identity
-from personal_ai_orchestrator.execution_controller import validate_execution_target_launch
-from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
+from personal_ai_orchestrator.daemon_supervisor import (
+    DaemonSupervisor,
+    DaemonSupervisorSnapshot,
+)
+from personal_ai_orchestrator.dispatch_initiator import (
+    initiate_owner_dispatch,
+)
+from personal_ai_orchestrator.dispatch_recommendation_service import (
+    DispatchRecommendationService,
+)
+from personal_ai_orchestrator.dispatch_recommender import (
+    DispatchCandidateInput,
+    source_pressure_for,
+)
+from personal_ai_orchestrator.execution_evidence import (
+    ExecutionEvidenceJournal,
+    ExecutionVerificationEvidence,
+    ExecutionVerificationOutcome,
+)
 from personal_ai_orchestrator.model_registry import EvidenceConfidence, ModelRegistry
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
 from personal_ai_orchestrator.provider_registry_manager import (
     ProviderRegistryManager,
 )
-from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
+from personal_ai_orchestrator.quota_availability import (
+    QuotaAvailabilityJournal,
+    QuotaAvailabilityState,
+)
 from personal_ai_orchestrator.quota_equivalent_capacity import (
     EquivalentCapacityEstimate,
     estimate_equivalent_capacity,
@@ -59,10 +79,13 @@ from personal_ai_orchestrator.safety_kernel import (
     ProjectAvailability,
     ProjectRecord,
     SafetyKernelStore,
+    TaskRecord,
     TaskState,
 )
+from personal_ai_orchestrator.scheduler import RoutingObjective
 from personal_ai_orchestrator.scheduling_settings import (
     SELECTABLE_GLOBAL_POLICIES,
+    SELECTABLE_MODES,
     SchedulingSettings,
 )
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
@@ -82,6 +105,27 @@ def datetime_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _opencode_binary_available() -> bool:
+    """Whether a real opencode worker binary can be launched on this host.
+
+    ``shutil.which`` alone only sees the daemon's own ``PATH``. A daemon
+    started by a GUI app inherits the launch-time environment, which on
+    macOS is routinely ``/usr/bin:/bin:/usr/sbin:/sbin`` — the canonical
+    ``~/.opencode/bin/opencode`` install location would be invisible even
+    though discovery itself resolves exactly that path. Mirror discovery's
+    resolution so runtime availability never contradicts the catalog that
+    was discovered through the same binary.
+    """
+
+    if shutil.which("opencode") is not None:
+        return True
+    fallback = Path.home() / ".opencode" / "bin" / "opencode"
+    try:
+        return fallback.is_file() and os.access(fallback, os.X_OK)
+    except OSError:
+        return False
+
+
 class ControlPlaneError(Exception):
     """Sanitized control-plane failure mapped to an HTTP status and error code."""
 
@@ -93,6 +137,9 @@ class ControlPlaneError(Exception):
 
 class DispatchAuthority(StrEnum):
     OWNER_INITIATED_EXECUTION = "OWNER_INITIATED_EXECUTION"
+    #: M1 WP5a-2: the host-owned supervised-auto dispatch path. Distinct
+    #: from OWNER_INITIATED_EXECUTION — nobody clicked an owner button.
+    SUPERVISED_AUTO = "SUPERVISED_AUTO"
 
 
 class _ViewModel(BaseModel):
@@ -111,10 +158,44 @@ class TaskSubmitRequest(_ViewModel):
     intent: str = Field(min_length=1, max_length=MAX_INTENT_LENGTH)
     scheduling_policy: str | None = Field(default=None, min_length=1, max_length=64)
     manual_execution_target_id: str | None = Field(default=None, min_length=1, max_length=128)
+    # M1 WP2: tier floor for the dispatch target. ``None`` is normalised
+    # to ``"T1"`` (workhorse) at storage time. Strings outside the four
+    # known tier values are rejected with a 400 by the submit handler
+    # so the storage layer never sees a typo. We do NOT add a
+    # ``max_length`` here — the dispatch handler owns the
+    # member-of-enum check and emits the user-friendly error code.
+    min_tier: str | None = Field(default=None)
 
 
 class CancelRequest(_ViewModel):
     request_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class AutoAckRequest(_ViewModel):
+    """M1 WP5a-2: owner ack of an AUTO_GRACE planning decision.
+
+    ``task_state_version`` pins optimistic concurrency — a stale client
+    cannot ack a state version it has not seen.
+    """
+
+    task_state_version: int = Field(ge=0)
+
+
+class AutoVetoRequest(_ViewModel):
+    """M1 WP5a-2: owner veto of an AUTO_* lifecycle.
+
+    ``request_id`` is the durable idempotency key: a replayed veto of the
+    same request returns the current task view instead of 409.
+    """
+
+    request_id: str = Field(min_length=1, max_length=128)
+    task_state_version: int = Field(ge=0)
+
+
+class AutoDispatchNowRequest(_ViewModel):
+    """M1 WP5a-2: owner explicit acceleration (skip remaining grace)."""
+
+    task_state_version: int = Field(ge=0)
 
 
 class DispatchTaskRequest(_ViewModel):
@@ -136,6 +217,17 @@ class TaskView(_ViewModel):
     updated_at: str
     scheduling_policy: str | None = None
     manual_execution_target_id: str | None = None
+    # M1 WP2: defaults to T1 in the view so the Swift dashboard can
+    # render the picker at the same default without a separate
+    # backwards-compat round-trip.
+    min_tier: str = "T1"
+    # M1 WP5a-2: AUTO lifecycle control state. All four default to
+    # ``None`` so pre-WP5a payloads and non-AUTO tasks decode cleanly
+    # (the Swift ``TaskView`` already lenient-decodes them since WP5a-1).
+    auto_decision_id: str | None = None
+    auto_grace_deadline_at: str | None = None
+    auto_acked_at: str | None = None
+    auto_reason: str | None = None
 
 
 class CancelView(_ViewModel):
@@ -164,11 +256,94 @@ class OwnerExecutionSettingsUpdateRequest(_ViewModel):
     owner_initiated_execution_enabled: bool
 
 
+class DispatchRecommendationRequest(_ViewModel):
+    """Optional override for the task's archived scheduling_policy."""
+
+    scheduling_policy: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class DispatchRecommendationScoreComponent(_ViewModel):
+    """One ``Σ weight × value`` row on the wire.
+
+    M1 WP3 fix (F4): the wire shape carries the **raw unweighted**
+    value (``value``) and the multiplier (``weight``) separately.
+    The UI multiplies them at display time so a future tuning
+    commit that changes ``FRESHNESS_WEIGHT`` (or any other weight
+    in :class:`scheduler.ScoreWeights`) does not have to push a
+    new ``contribution`` field — the panel just re-renders. The
+    ``Σ weight × value == score`` identity is now a property of
+    the raw rows, not of a pre-multiplied value the server wrote
+    on the wire.
+    """
+
+    name: str
+    value: float
+    #: M1 WP3: weight the recommender applied to ``value``. ``None``
+    #: for the auxiliary ``legacy_nudge`` rows the scheduler and
+    #: recommender both append for shadow-campaign compatibility —
+    #: they do not enter the Σ identity and the UI should label
+    #: them as "weight: unknown" rather than guessing.
+    weight: float | None = None
+
+
+class DispatchRecommendationCandidate(_ViewModel):
+    execution_target_id: str
+    model_sku_id: str
+    eligible: bool
+    admitted: bool
+    score: float | None = None
+    headroom_mean: float | None = None
+    evidence_fresh: bool = False
+    runtime_available: bool = False
+    verified: bool = False
+    #: True when ``verified`` is the demote-fallback result (latest evidence
+    #: is non-VERIFIED while an older VERIFIED row exists). Lets the
+    #: recommendation panel surface the staleness alongside the score.
+    execution_verified_stale: bool = False
+    # M1 WP3: binding-window headroom. Drives ``headroom_term`` on the
+    # score path; ``None`` when every window has missing data so the
+    # dashboard can render the row as "headroom unmetered" with the
+    # ``burn_unmetered`` chip. ``headroom_mean`` stays alongside as
+    # the average — the Swift UI shows the min as the headline number.
+    headroom_min: float | None = None
+    quota_state: str | None = None
+    #: M1 WP1 burn pressure for this candidate's WEEKLY window at the
+    #: handler's ``now``. Mirrors the provider-card-level
+    #: ``source_pressure`` field. ``None`` until commit 4 wires the
+    #: recommender pipeline; we still surface it here so the dashboard
+    #: can render the chip alongside the score without a second API call.
+    source_pressure: str | None = None
+    score_components: tuple[DispatchRecommendationScoreComponent, ...] = ()
+    reasons: tuple[str, ...] = ()
+    # M1 WP2: capability tier for this candidate. ``None`` when the
+    # host-owned tier table could not classify the target (the
+    # recommender assumes T1 in scoring and the reasons tuple records
+    # ``tier_unknown_assumed_T1``). ``tier_match_reason`` is one of
+    # ``\"exact\"`` / ``\"glob\"`` / ``\"default\"``.
+    tier: str | None = None
+    tier_match_reason: str | None = None
+
+
+class DispatchRecommendationView(_ViewModel):
+    task_id: str
+    scheduling_policy: str
+    candidates: tuple[DispatchRecommendationCandidate, ...]
+    top_pick: str | None
+    decision_reason: str
+
+
 class RunView(_ViewModel):
     run_id: str
     task_id: str
     worker_id: str
     pid: int | None
+    #: True iff ``pid`` was just probed and the OS confirms the process is
+    #: still alive. ``None`` when ``pid`` is unknown (no probe ran) or when
+    #: the run is already in a terminal status (the process is by
+    #: definition gone). Lets the UI replace "running pid 40618" with
+    #: "exited" the moment the worker really is gone, even before the
+    #: database catches up.
+    pid_alive: bool | None = None
     status: str
     started_at: str
     finished_at: str | None
@@ -199,6 +374,78 @@ class RoutingDecisionView(_ViewModel):
     request_id: str
     created_at: str
     decision: dict[str, Any]
+
+
+# Routing plan / role / decision contract (Gate-R).
+#
+# See docs/ROUTING_ROLE_CONTRACT.md. These models freeze the wire shape so the
+# client can be built against it before the execution layer plans roles. The
+# daemon does not populate `TaskDetailView.routing_plan` yet: role assignments
+# are authoritative execution state and are never fabricated here.
+
+
+class RoutingPlanCandidateView(_ViewModel):
+    execution_target_id: str | None = None
+    provider_id: str | None = None
+    model_display_name: str | None = None
+    model_sku_id: str | None = None
+    score: float | None = None
+    eligible: bool | None = None
+    admitted: bool | None = None
+    selected: bool | None = None
+    why_not_selected: str | None = None
+    quota_snapshot_id: str | None = None
+
+
+class RoutingDecisionRecordView(_ViewModel):
+    """One selection for one role at one moment, independent of every other."""
+
+    decision_id: str
+    role: str
+    created_at: str
+    mode: str | None = None
+    selected_execution_target_id: str | None = None
+    provider_id: str | None = None
+    model_display_name: str | None = None
+    why_selected: str | None = None
+    supersedes_decision_id: str | None = None
+    reroute_reason: str | None = None
+    quota_snapshot_id: str | None = None
+    candidates: tuple[RoutingPlanCandidateView, ...] = ()
+
+
+class RoutingRoleStateView(_ViewModel):
+    """Where one declared role stands, plus every selection made for it.
+
+    `status` is lifecycle and `outcome` is result; collapsing them would make a
+    review that rejected the work indistinguishable from one that crashed.
+    """
+
+    role: str
+    status: str
+    outcome: str = "NONE"
+    active_decision_id: str | None = None
+    decisions: tuple[RoutingDecisionRecordView, ...] = ()
+
+
+class RoutingPlanView(_ViewModel):
+    """One immutable execution plan revision for a task.
+
+    `declared_roles` is authoritative orchestrator policy state: it is frozen
+    when the plan is created, and a later policy change produces a new revision
+    rather than mutating this one.
+    """
+
+    plan_id: str
+    revision: int = 1
+    task_id: str
+    created_at: str
+    policy_id: str | None = None
+    resolved_policy: str | None = None
+    policy_resolution_source: str | None = None
+    superseded_by_plan_id: str | None = None
+    declared_roles: tuple[str, ...] = ()
+    roles: tuple[RoutingRoleStateView, ...] = ()
 
 
 class DashboardCountsView(_ViewModel):
@@ -311,6 +558,9 @@ class TaskDetailView(_ViewModel):
     approvals: ApprovalListView
     workspace: WorkspaceView | None = None
     events: tuple[ActivityEventView, ...]
+    #: Authoritative multi-role routing plan. ``None`` until the execution layer
+    #: plans roles; clients then fall back to ``routing`` for the primary.
+    routing_plan: RoutingPlanView | None = None
 
 
 class SanitizedEvidenceSourceView(_ViewModel):
@@ -344,6 +594,11 @@ class ObservedAvailabilityView(_ViewModel):
     measurement_source: str
     confidence: str
     sanitized_reason_code: str | None = None
+    #: Consecutive failed quota collections since the last successful
+    #: observation. ``None`` means the journal has no record (no streak).
+    #: The UI surfaces this as a "consecutive failures: N" badge so the
+    #: owner can spot a target the host has been unable to probe.
+    consecutive_failures: int | None = None
 
 
 class ExecutionTargetHealthView(_ViewModel):
@@ -352,8 +607,31 @@ class ExecutionTargetHealthView(_ViewModel):
     runtime_id: str
     enabled: bool
     execution_verified: bool
+    #: True when the latest evidence for this target is non-VERIFIED while
+    #: an older VERIFIED row still exists (demote-fallback semantics). Lets
+    #: the UI surface "we have history, but the most recent run did not
+    #: actually succeed" without re-running the verification probe.
+    execution_verified_stale: bool = False
     runtime_available: bool | None = None
     observed_availability: ObservedAvailabilityView | None = None
+# M1 WP2: capability tier for this target. ``None`` means the
+    # host-owned tier table could not classify the target — the
+    # Swift dashboard falls back to its "unknown" label and the recommender
+    # assumes T1 in scoring.
+    tier: str | None = None
+    tier_match_reason: str | None = None
+    # M1 WP4: how this target's provider family authenticates.
+    # ``"env"`` means an API credential is required; ``"none"``
+    # means the OpenCode Zen family routes through its own
+    # proxy and the host needs no credential. Surfaced for the
+    # Resources page so the owner can tell at a glance which
+    # targets the daemon can dispatch to without setup.
+    auth_kind: str = "env"
+    # M1 WP4: ``"windowed"`` (the pre-WP4 default — the family
+    # reports quota windows) or ``"unmetered"`` (no quota window,
+    # only locally observed rate limits). The Resources page
+    # uses this to group "free / unmetered" targets separately.
+    pool_kind: str = "windowed"
 
 
 class ProviderHealthView(_ViewModel):
@@ -371,10 +649,40 @@ class ProviderHealthView(_ViewModel):
     plan_surface: str | None = None
     region: str | None = None
     last_checked: str | None = None
+    #: M1 WP4: ``"windowed"`` (default) or ``"unmetered"``.
+    # Surfaced so the Resources page can group providers by
+    # ``pool_kind`` without inspecting every target. The
+    # family-level pool_kind is constant per provider so any
+    # target's pool_kind is authoritative.
+    pool_kind: str | None = None
 
 
 class ProviderHealthListView(_ViewModel):
     providers: tuple[ProviderHealthView, ...]
+
+
+class UnmeteredObservationView(_ViewModel):
+    """M1 WP4: locally observed metrics for an unmetered provider.
+
+    The unmetered path has no upstream quota window to read. The
+    three metrics the Resources page shows are derived at read
+    time from existing stores (``runs``, ``ExecutionEvidenceJournal``,
+    ``QuotaAvailabilityJournal.cooldown_until``).
+    """
+
+    #: Number of run records for this provider's targets in the
+    #: last 60 seconds. ``None`` when the runs store has no
+    #: records for this provider.
+    rpm_observed: int
+    #: Ratio of non-VERIFIED execution-evidence rows to total rows
+    #: in the last hour. ``None`` when no evidence rows exist in
+    #: the window (the value ``0.0`` is reserved for "ran and
+    #: all-verified"; ``None`` means "no data"). V3 acceptance.
+    error_rate_1h: float | None = None
+    #: ISO timestamp at which the cooldown (set by the worker
+    #: outcome classifier) expires. ``None`` when no target is
+    #: currently in COOLDOWN.
+    cooldown_until: str | None = None
 
 
 class QuotaProviderCardView(_ViewModel):
@@ -413,6 +721,56 @@ class QuotaProviderCardView(_ViewModel):
     #: plan balance may be UNKNOWN while model consumption is known, and that
     #: combination is exactly what this field exists to carry.
     plan: QuotaPlanView | None = None
+    #: Burn pressure of the plan's WEEKLY window at the handler's ``now``.
+    #: ``None`` when the plan carries no WEEKLY window — the dashboard
+    #: renders the card without a pressure chip in that case rather than
+    #: inventing one. Mirrors what the recommender will eventually score
+    #: against; both paths read the same ``assess`` primitive.
+    source_pressure: str | None = None
+    #: M1 WP3 fix (F5): the maximum ``consecutive_failures`` streak
+    #: across this provider's targets. The per-target streak already
+    #: lives on :class:`ObservedAvailabilityView`; this card-level
+    #: rollup lets the quota page surface a single "we have not
+    #: been able to read this provider for N attempts" badge even
+    #: when only one of the provider's targets is in the journal
+    #: (or when the owner looks at the page before drilling into a
+    #: target row). ``0`` when no journal entry exists for any
+    #: target under this provider — the absence of a value, not
+    #: the absence of a problem.
+    collection_failure_streak: int = 0
+    #: M1 WP4: ``"windowed"`` (default — collector reads quota windows)
+    # or ``"unmetered"`` (no upstream quota endpoint). The Resources
+    # page groups ``unmetered`` cards into a "Free / unmetered"
+    # section with a different visual chrome (no 5h / weekly
+    # progress bars, no ideal-pace tick).
+    pool_kind: str = "windowed"
+    #: M1 WP4: read-time metrics for unmetered providers. ``None``
+    #: for windowed providers (their quota page surfaces the
+    #: existing quota_pools + pool_p table metrics). The
+    # Resources page renders the metrics in the unmetered
+    # card.
+    unmetered: UnmeteredObservationView | None = None
+
+
+class QuotaBurnView(_ViewModel):
+    """M1 WP1 burn assessment for one plan window.
+
+    All five numerical fields are ``None`` for ``UNMETERED`` (the window
+    was never read) and carry the real values for ``STALE`` so the bar
+    can still draw on cached data. ``pressure`` is always present so the
+    UI can pick a chip without branching on Optional. ``pressure_score``
+    is signed: positive = orchestrator should consume less, negative =
+    consume more; WP3 reads it through ``pressure_weight * -pressure_score``.
+    """
+
+    expected_used_fraction: float | None = None
+    actual_used_fraction: float | None = None
+    deviation: float | None = None
+    remaining_fraction: float | None = None
+    seconds_to_reset: float | None = None
+    pressure: str = "UNMETERED"
+    pressure_score: float = 0.0
+    window_start_inferred: bool = False
 
 
 class QuotaPlanWindowView(_ViewModel):
@@ -420,6 +778,9 @@ class QuotaPlanWindowView(_ViewModel):
 
     ``remaining_fraction`` is populated only for EXACT/ESTIMATED windows, so a
     client cannot draw a bar for a figure the provider never gave us.
+    ``burn`` carries the M1 WP1 burn assessment (expected vs actual used,
+    deviation, pressure, score). All fields are optional so a pre-WP1
+    daemon still decodes.
     """
 
     window_id: str
@@ -431,6 +792,7 @@ class QuotaPlanWindowView(_ViewModel):
     total_units: float | None = None
     unit: str | None = None
     reset_at: str | None = None
+    burn: QuotaBurnView | None = None
 
 
 class BindingWindowView(_ViewModel):
@@ -651,10 +1013,41 @@ class ImportConnectionsView(_ViewModel):
 class SchedulingSettingsView(_ViewModel):
     default_scheduling_policy: str
     selectable_policies: tuple[str, ...]
+    #: M1 WP5a-1: orchestrator scheduling mode. ``"MANUAL"`` is the
+    #: pre-WP5a-1 default — owner explicitly dispatches each task.
+    #: ``"SUPERVISED_AUTO"`` opts the daemon into host-owned planning
+    #: with a per-task grace window the owner can veto. ``"ACTIVE"``
+    #: remains production-disabled; ``PUT /v1/settings/scheduling``
+    #: rejects ``mode="ACTIVE"`` with 409 when activation authority
+    #: is not authorised (fail-closed).
+    mode: str = "MANUAL"
+    selectable_modes: tuple[str, ...] = (
+        "MANUAL",
+        "SUPERVISED_AUTO",
+        "ACTIVE",
+    )
 
 
 class SchedulingSettingsUpdateRequest(_ViewModel):
     default_scheduling_policy: str = Field(min_length=1, max_length=64)
+    #: M1 WP5a-1: optional mode field on the update request. ``None``
+    #: (legacy callers) leaves the mode unchanged.
+    mode: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class SchedulingMode(StrEnum):
+    """M1 WP5a-1: orchestrator scheduling mode values.
+
+    ``MANUAL`` is the only mode that exercises the full dispatch
+    path today. ``SUPERVISED_AUTO`` is the host-owned planning mode
+    this WP enables the foundation for (the tick step itself lands
+    in WP5a-2). ``ACTIVE`` remains production-disabled; selecting
+    it without activation authority returns 409.
+    """
+
+    MANUAL = "MANUAL"
+    SUPERVISED_AUTO = "SUPERVISED_AUTO"
+    ACTIVE = "ACTIVE"
 
 
 class ProjectSchedulingPolicyRequest(_ViewModel):
@@ -662,6 +1055,22 @@ class ProjectSchedulingPolicyRequest(_ViewModel):
 
     scheduling_policy: str | None = Field(default=None, min_length=1, max_length=64)
     manual_execution_target_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class ProjectSupervisedAutoSettingsRequest(_ViewModel):
+    """M1 WP5a-1: project-level supervised-auto settings.
+
+    All three fields are required on a PUT — there is no
+    field-by-field partial update. The store validates ``grace_seconds``
+    range (1..86_400); the Pydantic constraint is intentionally loose
+    so the store's ``ValueError`` is the single source of truth for
+    the range error and the facade can map it to 400
+    ``invalid_grace_seconds`` rather than catching pydantic errors.
+    """
+
+    supervised_auto_allowed: bool
+    unattended_allowed: bool
+    grace_seconds: int
 
 
 class DisconnectProviderRequest(_ViewModel):
@@ -701,9 +1110,32 @@ class ApprovalListView(_ViewModel):
     approvals: tuple[ApprovalView, ...]
 
 
+class SupervisorStepView(_ViewModel):
+    """One periodic step registered with the daemon supervisor (WP0)."""
+
+    name: str
+    last_run_at: str | None = None
+    last_duration_ms: float | None = None
+    consecutive_failures: int = 0
+    in_backoff: bool = False
+
+
 class HealthView(_ViewModel):
     status: str
     api_version: str
+    #: ``/v1/health`` is the single source of truth for whether the
+    #: bundled daemon is still ticking. ``None`` until the first tick
+    #: has run (typically within one ``tick_interval_seconds`` of boot).
+    last_tick_at: str | None = None
+    tick_interval_seconds: float | None = None
+    supervisor_steps: tuple[SupervisorStepView, ...] = ()
+    #: M1 WP2: which tier table the daemon is running. ``"owner_file"``
+    #: means a host-owned JSON was loaded; ``"default_fallback"`` means
+    #: the shipped defaults were used (either because no file was
+    #: provided or because the file failed to parse). ``None`` means
+    #: tier-table wiring is not active (e.g. an ad-hoc CLI that did
+    #: not inject one).
+    model_tiers_source: str | None = None
 
 
 class BuildView(_ViewModel):
@@ -753,6 +1185,12 @@ class ProjectView(_ViewModel):
     current_branch: str | None = None
     scheduling_policy: str | None = None
     manual_execution_target_id: str | None = None
+    #: M1 WP5a-1: project-level supervised-auto settings. See
+    #: ``SafetyKernelStore.set_project_settings`` and
+    #: ``ProjectRecord`` for the contract.
+    supervised_auto_allowed: bool = False
+    unattended_allowed: bool = False
+    grace_seconds: int = 120
 
 
 class ProjectListView(_ViewModel):
@@ -773,6 +1211,11 @@ def _task_view(record) -> TaskView:
         updated_at=record.updated_at.isoformat(),
         scheduling_policy=record.scheduling_policy,
         manual_execution_target_id=record.manual_execution_target_id,
+        min_tier=record.min_tier,
+        auto_decision_id=record.auto_decision_id,
+        auto_grace_deadline_at=record.auto_grace_deadline_at,
+        auto_acked_at=record.auto_acked_at,
+        auto_reason=record.auto_reason,
     )
 
 
@@ -795,6 +1238,28 @@ class ControlPlaneService:
     #: control plane still works (reporting UNKNOWN truthfully) before the
     #: daemon wires a runtime-state root.
     quota_refresh_service: QuotaRefreshService | None = None
+    #: Optional DaemonSupervisor reference (WP0). ``/v1/health`` reads its
+    #: snapshot to surface ``last_tick_at``, ``tick_interval_seconds`` and
+    #: per-step status. ``None`` is allowed — the bundled daemon always
+    #: wires one in, but unit tests / ad-hoc CLIs do not have to.
+    supervisor: DaemonSupervisor | None = None
+    #: M1 WP2 tier table. ``None`` is allowed so ad-hoc tests / CLIs
+    #: that don't care about tier gating still build a service. The
+    #: recommender treats ``None`` as "default to T1 with no caps".
+    tier_table: Any = None
+    #: Where the active ``tier_table`` came from — surfaces on
+    #: ``/v1/health.model_tiers_source`` so the owner can spot a
+    #: malformed host file that fell back to the shipped defaults.
+    #: ``None`` when ``tier_table`` is ``None``.
+    model_tiers_source: str | None = None
+    #: M1 WP5a-2: pending-shadow journal for the SUPERVISED_AUTO
+    #: lifecycle. ``None`` keeps the pre-WP5a-2 behavior (no pending
+    #: shadows are recorded; the tick still runs gate-safe).
+    shadow_journal: Any = None
+    #: M1 WP5a-2: catalog snapshot id stamped into the frozen routing
+    #: decisions the tick creates. The daemon wires the runtime config's
+    #: value; ad-hoc services fall back to a stable local default.
+    catalog_snapshot_id: str = "control-catalog-v1"
 
     @property
     def owner_initiated_execution_enabled(self) -> bool:
@@ -818,6 +1283,11 @@ class ControlPlaneService:
             execution_evidence_journal=self.execution_evidence_journal,
             dispatch_executor=self.dispatch_executor,
             quota_refresh_service=self.quota_refresh_service,
+            supervisor=self.supervisor,
+            tier_table=self.tier_table,
+            model_tiers_source=self.model_tiers_source,
+            shadow_journal=self.shadow_journal,
+            catalog_snapshot_id=self.catalog_snapshot_id,
         )
 
     @staticmethod
@@ -844,7 +1314,85 @@ class ControlPlaneService:
         runtime_provider = target.runtime_provider_id or "opencode"
         if runtime_provider != "opencode":
             return False
-        return shutil.which("opencode") is not None
+        return _opencode_binary_available()
+
+    def _recommendation_service(self) -> DispatchRecommendationService:
+        """Build the host recommendation service on demand.
+
+        WP5a-1 commit 1 — pure refactor. The service is stateless and
+        cheap to build; constructing it on every call avoids threading
+        cache invalidation concerns across ``open_request`` service
+        instances. The constructor takes the same references the inline
+        ``_collect_dispatch_candidates`` method used, byte-equivalent.
+        """
+
+        return DispatchRecommendationService(
+            self.store,
+            registry_provider=self._effective_registry,
+            quota_refresh_service=self.quota_refresh_service,
+            execution_evidence_journal=self.execution_evidence_journal,
+            quota_availability_journal=self.quota_availability_journal,
+            tier_table=self.tier_table,
+            runtime_availability=self.runtime_availability,
+            runtime_availability_fallback=self._runtime_available,
+        )
+
+    def _supervised_auto_step(self):
+        """Build the WP5a-2 supervised-auto tick step on demand.
+
+        The step is stateless; constructing it per call keeps ``open_request``
+        service clones correct without cache invalidation. The same factory
+        backs the periodic supervisor step and the owner abort helpers.
+        """
+
+        from personal_ai_orchestrator.supervised_auto_step import SupervisedAutoStep
+
+        return SupervisedAutoStep(
+            store=self.store,
+            scheduling_settings=self.scheduling_settings,
+            owner_execution_enabled=lambda: self.owner_initiated_execution_enabled,
+            recommendation_service_factory=self._recommendation_service,
+            project_provider=self.get_project,
+            registry_provider=self._effective_registry,
+            provider_registry_manager=self.provider_registry_manager,
+            runtime_available_provider=self._runtime_available,
+            execution_evidence_journal=self.execution_evidence_journal,
+            executor=self.dispatch_executor,
+            shadow_journal=self.shadow_journal,
+            catalog_snapshot_id=self.catalog_snapshot_id,
+        )
+
+    def supervised_auto_tick(self, now) -> None:
+        """Run one bounded SUPERVISED_AUTO sweep (supervisor step body)."""
+
+        self._supervised_auto_step().tick(now)
+
+    def build_supervised_auto_step(self):
+        """Return the supervisor-callable tick (``fn(now) -> None``).
+
+        Registered by the daemon on the ``DaemonSupervisor`` under
+        ``supervised-auto`` — but ONLY on the non-control-only daemon
+        (§19: control-only must never execute autonomous steps).
+
+        Each invocation opens a request-scoped service (fresh SQLite
+        connection) because the supervisor drives steps on its own thread
+        while the long-lived service store is bound to the constructing
+        thread — the same per-request discipline the UDS server applies.
+        ``:memory:`` services (tests, ad-hoc CLIs) share the single
+        connection instead.
+        """
+
+        def _step(now) -> None:
+            if self.store.path == ":memory:":
+                self.supervised_auto_tick(now)
+                return
+            request_service = self.open_request()
+            try:
+                request_service.supervised_auto_tick(now)
+            finally:
+                request_service.store.close()
+
+        return _step
 
     @staticmethod
     def _project_id_for(git_root: str, working_subpath: str | None) -> str:
@@ -966,6 +1514,9 @@ class ControlPlaneService:
             current_branch=current_branch,
             scheduling_policy=project.scheduling_policy,
             manual_execution_target_id=project.manual_execution_target_id,
+            supervised_auto_allowed=project.supervised_auto_allowed,
+            unattended_allowed=project.unattended_allowed,
+            grace_seconds=project.grace_seconds,
         )
 
     def resolve_project(self, payload: dict[str, Any]) -> ProjectView:
@@ -1081,6 +1632,8 @@ class ControlPlaneService:
         return SchedulingSettingsView(
             default_scheduling_policy=self.scheduling_settings.default_policy,
             selectable_policies=SELECTABLE_GLOBAL_POLICIES,
+            mode=self.scheduling_settings.mode,
+            selectable_modes=SELECTABLE_MODES,
         )
 
     def update_scheduling_settings(self, payload: dict[str, Any]) -> SchedulingSettingsView:
@@ -1089,7 +1642,67 @@ class ControlPlaneService:
             self.scheduling_settings.set_default_policy(request.default_scheduling_policy)
         except ValueError:
             raise ControlPlaneError(400, "unsupported_global_scheduling_policy") from None
+        if request.mode is not None:
+            try:
+                SchedulingMode(request.mode)
+            except ValueError as error:
+                raise ControlPlaneError(400, "unsupported_scheduling_mode") from error
+            # Production ACTIVE is reachable on the wire only when
+            # activation authority is authorised. ``SUPERVISED_AUTO``
+            # and ``MANUAL`` always succeed.
+            if request.mode == SchedulingMode.ACTIVE and (
+                self.activation_gate is None
+                or not self.activation_gate.authorized
+            ):
+                raise ControlPlaneError(
+                    409,
+                    "production_active_not_authorized",
+                )
+            try:
+                previous_mode = self.scheduling_settings.mode
+                self.scheduling_settings.set_mode(request.mode)
+            except ValueError:
+                raise ControlPlaneError(400, "unsupported_scheduling_mode") from None
+            # M1 WP5a-2 (§3.1): leaving SUPERVISED_AUTO aborts every
+            # AUTO_PLANNED / AUTO_GRACE task in the same handler — the
+            # owner's mode change takes effect immediately, no in-flight
+            # grace window may outlive it. The tick's revocation sweep is
+            # the crash-recovery backstop for an abort write lost to a
+            # crash between these two writes.
+            if (
+                previous_mode != request.mode
+                and request.mode != SchedulingMode.SUPERVISED_AUTO.value
+            ):
+                self._abort_auto_tasks(reason="mode_changed")
         return self.scheduling_settings_view()
+
+    def _abort_auto_tasks(self, *, reason: str, project_id: str | None = None) -> None:
+        """Fail-closed owner abort of every AUTO_* lifecycle (§3.1).
+
+        AUTO_PLANNED / AUTO_GRACE → READY, pending shadows discarded, auto
+        metadata cleared and the abort audited. RUNNING tasks are never
+        touched — their worker is governed by the executor + verifier path.
+        Shared by the mode-change handler, the project-settings disable
+        handler, the veto endpoint and the cancel-as-veto path.
+        """
+
+        step = self._supervised_auto_step()
+        rows = self.store.connection.execute(
+            "SELECT task_id FROM tasks WHERE state IN (?,?) ORDER BY task_id",
+            (
+                TaskState.AUTO_PLANNED.value,
+                TaskState.AUTO_GRACE.value,
+            ),
+        ).fetchall()
+        now = datetime.now(UTC)
+        for row in rows:
+            try:
+                task = self.store.get_task(row["task_id"])
+            except KeyError:
+                continue
+            if project_id is not None and task.project_id != project_id:
+                continue
+            step._abort_auto_task(task, now, reason=reason)  # noqa: SLF001 — same-package lifecycle helper
 
     def set_project_scheduling_policy(
         self,
@@ -1110,6 +1723,41 @@ class ControlPlaneService:
             )
         except KeyError:
             raise ControlPlaneError(404, "project_not_found") from None
+        return self._project_view(project)
+
+    def set_project_supervised_auto_settings(
+        self,
+        project_id: str,
+        payload: dict[str, Any],
+    ) -> ProjectView:
+        """M1 WP5a-1: persist the project-level supervised-auto settings.
+
+        The store validates ``grace_seconds`` (1..86_400) and raises
+        ``ValueError`` on out-of-range input — mapped to 400 here.
+        ``KeyError`` from the underlying ``get_project`` propagates
+        as 404 ``project_not_found``.
+        """
+
+        self._validate_identifier("project_id", project_id)
+        request = ProjectSupervisedAutoSettingsRequest.model_validate(payload)
+        try:
+            previous = self.store.get_project(project_id)
+        except KeyError:
+            raise ControlPlaneError(404, "project_not_found") from None
+        try:
+            project = self.store.set_project_settings(
+                project_id,
+                supervised_auto_allowed=request.supervised_auto_allowed,
+                unattended_allowed=request.unattended_allowed,
+                grace_seconds=request.grace_seconds,
+            )
+        except ValueError as error:
+            raise ControlPlaneError(400, "invalid_grace_seconds") from error
+        # M1 WP5a-2 (§3.1 裁决 5): revoking the project opt-in aborts the
+        # project's AUTO_* lifecycles immediately — same fail-closed
+        # contract as the global mode change.
+        if previous.supervised_auto_allowed and not request.supervised_auto_allowed:
+            self._abort_auto_tasks(reason="project_auto_disabled", project_id=project_id)
         return self._project_view(project)
 
     def import_provider_connections(self, payload: dict[str, Any]) -> ImportConnectionsView:
@@ -1164,6 +1812,20 @@ class ControlPlaneService:
             request.scheduling_policy,
             request.manual_execution_target_id,
         )
+        # M1 WP2: validate the tier floor here so a typo lands as a
+        # 400 instead of an opaque error from the storage layer.
+        # ``None`` is the UI-default; storage normalises to "T1".
+        # ``is None`` (not ``or "T1"``) so empty strings still hit the
+        # invalid-tier path below.
+        if request.min_tier is None:
+            min_tier = "T1"
+        else:
+            min_tier = request.min_tier
+        if min_tier not in {"T0", "T1", "T2", "T3"}:
+            raise ControlPlaneError(
+                400,
+                f"invalid_min_tier: must be one of T0/T1/T2/T3, got {min_tier!r}",
+            )
         try:
             record = self.store.submit_task(
                 task_id=request.task_id,
@@ -1174,6 +1836,7 @@ class ControlPlaneService:
                 working_subpath=project.working_subpath,
                 scheduling_policy=scheduling_policy,
                 manual_execution_target_id=manual_target,
+                min_tier=min_tier,
             )
         except ValueError:
             raise ControlPlaneError(400, "conflicting_request_id") from None
@@ -1223,11 +1886,29 @@ class ControlPlaneService:
         rendered = json.dumps(result, default=str) if result is not None else ""
         if len(rendered) > MAX_REQUEST_BYTES:
             result = {"truncated": True}
+        pid = row["pid"]
+        # pid_alive is None when there is no pid to probe or the run is
+        # already terminal (the worker can't still be running). When the
+        # run is still RUNNING we ask the OS — ProcessLookupError means
+        # gone, PermissionError means alive-but-ours (other entries
+        # returned by the same lookup would be different processes).
+        pid_alive: bool | None = None
+        if pid is not None and row["status"] == "RUNNING":
+            try:
+                os.kill(pid, 0)
+                pid_alive = True
+            except ProcessLookupError:
+                pid_alive = False
+            except PermissionError:
+                pid_alive = True
+            except OSError:
+                pid_alive = False
         return RunView(
             run_id=row["run_id"],
             task_id=row["task_id"],
             worker_id=row["worker_id"],
-            pid=row["pid"],
+            pid=pid,
+            pid_alive=pid_alive,
             status=row["status"],
             started_at=row["started_at"],
             finished_at=row["finished_at"],
@@ -1243,6 +1924,19 @@ class ControlPlaneService:
             task = self.store.get_task(task_id)
         except KeyError:
             raise ControlPlaneError(404, "task_not_found") from None
+        # M1 WP5a-2 (§3.5): cancel on an AUTO_* task is exactly a veto —
+        # back to READY, policy locked MANUAL, pending shadow discarded,
+        # auto metadata cleared, audited. No new semantics.
+        if task.state in {TaskState.AUTO_PLANNED, TaskState.AUTO_GRACE}:
+            self._veto_auto_lifecycle(
+                task,
+                request_id=request.request_id or f"cancel-{task.task_id}",
+                audit_reason="owner_cancel",
+            )
+            return CancelView(
+                task=_task_view(self.store.get_task(task_id)),
+                cancelled_now=True,
+            )
         if task.state is TaskState.CANCELLED:
             return CancelView(task=_task_view(task), cancelled_now=False)
         if task.state is TaskState.RUNNING:
@@ -1273,6 +1967,233 @@ class ControlPlaneService:
             raise ControlPlaneError(409, "task_state_cannot_be_cancelled") from error
         return CancelView(task=_task_view(updated), cancelled_now=True)
 
+    def _veto_auto_lifecycle(
+        self,
+        task: TaskRecord,
+        *,
+        request_id: str,
+        audit_reason: str,
+    ) -> None:
+        """Shared veto core (endpoint veto + cancel-as-veto, §3.5/§23).
+
+        ONE crash-atomic SQLite transaction (§10 of the closeout
+        ruling): ``AUTO_* → READY``, task policy forced MANUAL (the tick
+        will not re-plan it), all four auto columns cleared, exactly one
+        ``state_version`` bump, ``AUTO_VETOED`` audited with the durable
+        ``request_id`` and the pending-cleanup intent recorded — all
+        before COMMIT. The owner-visible truth (READY + MANUAL + clean
+        metadata) holds even if the shadow journal is unavailable; the
+        pending discard runs after COMMIT via the idempotent outbox
+        drain.
+        """
+
+        fresh = self.store.get_task(task.task_id)
+        if fresh.state not in {TaskState.AUTO_PLANNED, TaskState.AUTO_GRACE}:
+            raise ControlPlaneError(409, "task_state_not_auto")
+        target = self._auto_frozen_target(fresh)
+        try:
+            self.store.abort_auto_lifecycle(
+                task.task_id,
+                expected_version=fresh.state_version,
+                reason=audit_reason,
+                event_type="AUTO_VETOED",
+                request_id=request_id,
+                target=target,
+                force_manual=True,
+            )
+        except ValueError:
+            raise ControlPlaneError(409, "task_state_not_auto") from None
+        except RuntimeError as error:
+            raise ControlPlaneError(409, "stale_task_state_version") from error
+        # Best-effort immediate cleanup; the tick's drain is the
+        # crash-recovery backstop. A journal failure never rolls back
+        # the already-committed SQLite truth above.
+        from personal_ai_orchestrator.supervised_auto_step import (
+            drain_auto_shadow_cleanup_outbox,
+        )
+
+        drain_auto_shadow_cleanup_outbox(self.store, self.shadow_journal)
+
+    def _auto_frozen_target(self, task: TaskRecord) -> str | None:
+        from personal_ai_orchestrator.supervised_auto_step import (
+            supervised_auto_routing_request_id,
+        )
+
+        if task.auto_decision_id is None:
+            return None
+        row = self.store.routing_decision_by_request_id(
+            supervised_auto_routing_request_id(task.auto_decision_id)
+        )
+        if row is None:
+            return None
+        import json as _json
+
+        try:
+            decision = _json.loads(row["payload_json"])
+        except ValueError:
+            return None
+        return decision.get("selected_execution_target_id")
+
+    def auto_ack(self, task_id: str, payload: dict[str, Any]) -> TaskView:
+        """POST /v1/tasks/{id}/auto/ack (§22).
+
+        Only an unacked AUTO_GRACE task may be acked; the deadline is
+        computed once from the ack time; a retry returns the current
+        task unchanged (never extends the deadline). Stale versions are
+        rejected unless the task is already acked (idempotent replay).
+        """
+
+        self._validate_identifier("task_id", task_id)
+        request = AutoAckRequest.model_validate(payload)
+        try:
+            task = self.store.get_task(task_id)
+        except KeyError:
+            raise ControlPlaneError(404, "task_not_found") from None
+        if task.state is not TaskState.AUTO_GRACE:
+            raise ControlPlaneError(409, "task_state_not_auto_grace")
+        if task.auto_acked_at is not None:
+            return _task_view(task)
+        if task.state_version != request.task_state_version:
+            raise ControlPlaneError(409, "stale_task_state_version")
+        if task.project_id is None:
+            raise ControlPlaneError(409, "task_has_no_project")
+        try:
+            project = self.store.get_project(task.project_id)
+        except KeyError:
+            raise ControlPlaneError(409, "project_not_registered") from None
+        now = datetime.now(UTC)
+        try:
+            updated = self.store.ack_auto_grace(
+                task_id,
+                acked_at=now.isoformat(),
+                grace_deadline=(
+                    now + timedelta(seconds=project.grace_seconds)
+                ).isoformat(),
+                expected_version=request.task_state_version,
+            )
+        except RuntimeError as error:
+            raise ControlPlaneError(409, "stale_task_state_version") from error
+        return _task_view(updated)
+
+    def auto_veto(self, task_id: str, payload: dict[str, Any]) -> TaskView:
+        """POST /v1/tasks/{id}/auto/veto (§23).
+
+        Idempotent via the durable ``request_id``: a replay of the same
+        veto returns the current task view. A different request id on a
+        non-AUTO task is a 409 (nothing to veto).
+        """
+
+        self._validate_identifier("task_id", task_id)
+        request = AutoVetoRequest.model_validate(payload)
+        self._validate_identifier("request_id", request.request_id)
+        try:
+            task = self.store.get_task(task_id)
+        except KeyError:
+            raise ControlPlaneError(404, "task_not_found") from None
+        for event in self.store.audit_events(task_id):
+            if event["event_type"] == "AUTO_VETOED" and (
+                event["payload"].get("request_id") == request.request_id
+            ):
+                return _task_view(self.store.get_task(task_id))
+        if task.state not in {TaskState.AUTO_PLANNED, TaskState.AUTO_GRACE}:
+            raise ControlPlaneError(409, "task_state_not_auto")
+        if task.state_version != request.task_state_version:
+            raise ControlPlaneError(409, "stale_task_state_version")
+        self._veto_auto_lifecycle(task, request_id=request.request_id, audit_reason="owner_veto")
+        return _task_view(self.store.get_task(task_id))
+
+    def auto_dispatch_now(self, task_id: str, payload: dict[str, Any]) -> DispatchTaskView:
+        """POST /v1/tasks/{id}/auto/dispatch-now (§24).
+
+        Owner explicit acceleration: skips the remaining grace window
+        only. Every execution-admission gate still applies — the frozen
+        decision's exact target, mode revalidation, project opt-in,
+        lease truth, writer/quota/verifier discipline inside the shared
+        dispatch initiator. Not a Safety Kernel bypass.
+        """
+
+        self._validate_identifier("task_id", task_id)
+        request = AutoDispatchNowRequest.model_validate(payload)
+        try:
+            task = self.store.get_task(task_id)
+        except KeyError:
+            raise ControlPlaneError(404, "task_not_found") from None
+        if task.state is not TaskState.AUTO_GRACE:
+            raise ControlPlaneError(409, "task_state_not_auto_grace")
+        if task.auto_decision_id is None:
+            raise ControlPlaneError(409, "auto_decision_missing")
+        if task.state_version != request.task_state_version:
+            raise ControlPlaneError(409, "stale_task_state_version")
+        if self.scheduling_settings.mode != "SUPERVISED_AUTO":
+            raise ControlPlaneError(409, "scheduling_mode_not_supervised_auto")
+        if not self.owner_initiated_execution_enabled:
+            raise ControlPlaneError(403, "owner_initiated_execution_disabled")
+        if task.project_id is None:
+            raise ControlPlaneError(409, "task_has_no_project")
+        try:
+            project = self.store.get_project(task.project_id)
+        except KeyError:
+            raise ControlPlaneError(409, "project_not_registered") from None
+        if not project.supervised_auto_allowed:
+            raise ControlPlaneError(409, "project_supervised_auto_disabled")
+        target = self._auto_frozen_target(task)
+        if target is None:
+            raise ControlPlaneError(409, "frozen_decision_missing")
+
+        from personal_ai_orchestrator.dispatch_initiator import (
+            initiate_owner_dispatch,
+        )
+        from personal_ai_orchestrator.supervised_auto_step import (
+            supervised_auto_dispatch_request_id,
+        )
+        from personal_ai_orchestrator.switch_lease import SwitchLeaseAuthority
+
+        if SwitchLeaseAuthority(self.store).has_active_lease(task_id):
+            raise ControlPlaneError(409, "active_switch_lease")
+        active_run = self.store.connection.execute(
+            "SELECT 1 FROM runs WHERE task_id=? AND status='RUNNING' LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        if active_run is not None:
+            raise ControlPlaneError(409, "active_run")
+
+        request_id = supervised_auto_dispatch_request_id(task.auto_decision_id)
+        try:
+            dispatch, _created, _transitioned = initiate_owner_dispatch(
+                self.store,
+                self.dispatch_executor,
+                task=task,
+                request_id=request_id,
+                task_state_version=task.state_version,
+                execution_target_id=target,
+                authority=DispatchAuthority.SUPERVISED_AUTO.value,
+                project_provider=self.get_project,
+                registry_provider=self._effective_registry,
+                provider_registry_manager=self.provider_registry_manager,
+                runtime_available_provider=self._runtime_available,
+                execution_evidence_journal=self.execution_evidence_journal,
+                expected_state=TaskState.AUTO_GRACE,
+            )
+        except ValueError:
+            raise ControlPlaneError(409, "conflicting_dispatch_request_id") from None
+        self.store.connection.execute("BEGIN IMMEDIATE")
+        try:
+            self.store._audit(
+                task_id,
+                "AUTO_DISPATCHED",
+                {
+                    "auto_decision_id": task.auto_decision_id,
+                    "target": target,
+                    "trigger": "dispatch_now",
+                    "request_id": request_id,
+                },
+            )
+            self.store.connection.execute("COMMIT")
+        except Exception:
+            if self.store.connection.in_transaction:
+                self.store.connection.execute("ROLLBACK")
+        return self._dispatch_view(dispatch)
+
     def dispatch_task(self, task_id: str, payload: dict[str, Any]) -> DispatchTaskView:
         self._validate_identifier("task_id", task_id)
         request = DispatchTaskRequest.model_validate(payload)
@@ -1284,108 +2205,175 @@ class ControlPlaneService:
             task = self.store.get_task(task_id)
         except KeyError:
             raise ControlPlaneError(404, "task_not_found") from None
-        dispatch_id = f"owner-dispatch-{request.request_id}"
+        # All validation guards → delegate the irreversible
+        # reservation + validation + transition + thread-spawn
+        # sequence to the extracted service helper (WP5a-1
+        # commit 1 — pure refactor). ``initiate_owner_dispatch``
+        # returns ``created=False`` when a previous dispatch with
+        # the same ``request_id`` already exists (idempotent retry),
+        # in which case we short-circuit straight to the view —
+        # matching the pre-refactor behavior. ``ValueError`` from
+        # ``reserve_owner_dispatch`` propagates and the handler maps
+        # it to 409 ``conflicting_dispatch_request_id`` (same as the
+        # pre-refactor handler).
         try:
-            dispatch, created = self.store.reserve_owner_dispatch(
-                dispatch_id=dispatch_id,
+            dispatch, _created, _transitioned = initiate_owner_dispatch(
+                self.store,
+                self.dispatch_executor,
+                task=task,
                 request_id=request.request_id,
-                task_id=task_id,
                 task_state_version=request.task_state_version,
                 execution_target_id=request.execution_target_id,
                 authority=DispatchAuthority.OWNER_INITIATED_EXECUTION.value,
+                project_provider=self.get_project,
+                registry_provider=self._effective_registry,
+                provider_registry_manager=self.provider_registry_manager,
+                runtime_available_provider=self._runtime_available,
+                execution_evidence_journal=self.execution_evidence_journal,
             )
         except ValueError:
             raise ControlPlaneError(409, "conflicting_dispatch_request_id") from None
-        if not created:
-            return self._dispatch_view(dispatch)
-        if task.state_version != request.task_state_version:
-            self.store.mark_owner_dispatch_blocked(
-                request.request_id,
-                failure_code="STALE_TASK_STATE_VERSION",
-                failure_reason="dispatch task_state_version did not match authoritative task",
-            )
-            raise ControlPlaneError(409, "stale_task_state_version")
-        if task.state not in {TaskState.SUBMITTED, TaskState.READY}:
-            self.store.mark_owner_dispatch_blocked(
-                request.request_id,
-                failure_code="TASK_STATE_NOT_DISPATCHABLE",
-                failure_reason=f"task state {task.state.value} is not dispatchable",
-            )
-            raise ControlPlaneError(409, "task_state_not_dispatchable")
-        if task.project_id is None:
-            self.store.mark_owner_dispatch_blocked(
-                request.request_id,
-                failure_code="MISSING_PROJECT_ID",
-                failure_reason="coding tasks require an explicit registered project",
-            )
-            raise ControlPlaneError(409, "missing_project_id")
-        if task.base_sha is None:
-            self.store.mark_owner_dispatch_blocked(
-                request.request_id,
-                failure_code="PROJECT_BASE_SHA_MISSING",
-                failure_reason="coding tasks require a durable base_sha",
-            )
-            raise ControlPlaneError(409, "project_base_sha_missing")
-        project_view = self.get_project(task.project_id)
-        if project_view.storage_availability != ProjectAvailability.ONLINE.value:
-            self.store.mark_owner_dispatch_blocked(
-                request.request_id,
-                failure_code=f"PROJECT_{project_view.storage_availability}",
-                failure_reason="registered project is not currently available",
-            )
-            raise ControlPlaneError(409, "project_not_available")
-
-        effective_registry = (
-            self.provider_registry_manager.registry()
-            if self.provider_registry_manager is not None
-            else self.registry
-        )
-        if self.provider_registry_manager is not None:
-            target = effective_registry.execution_targets.get(request.execution_target_id)
-            model = (
-                effective_registry.models.get(target.model_sku_id)
-                if target is not None
-                else None
-            )
-            connected_provider_ids = self.provider_registry_manager.connected_provider_ids()
-            if model is None or model.provider_id not in connected_provider_ids:
-                self.store.mark_owner_dispatch_blocked(
-                    request.request_id,
-                    failure_code="PROVIDER_NOT_CONNECTED",
-                    failure_reason="execution target provider is not connected by owner",
-                )
-                raise ControlPlaneError(409, "provider_not_connected") from None
-        try:
-            validate_execution_target_launch(
-                effective_registry,
-                execution_target_id=request.execution_target_id,
-                runtime_available=self._runtime_available(request.execution_target_id),
-                execution_evidence_journal=self.execution_evidence_journal,
-            )
-        except RuntimeError as error:
-            self.store.mark_owner_dispatch_blocked(
-                request.request_id,
-                failure_code="EXECUTION_TARGET_NOT_LAUNCHABLE",
-                failure_reason=str(error),
-            )
-            raise ControlPlaneError(409, "execution_target_not_launchable") from None
-
-        if task.state is TaskState.SUBMITTED:
-            task = self.store.transition_task(
-                task_id,
-                TaskState.READY,
-                expected_version=task.state_version,
-                reason="owner initiated execution dispatch reserved",
-            )
-        if self.dispatch_executor is not None:
-            thread = threading.Thread(
-                target=self.dispatch_executor.execute,
-                args=(request.request_id,),
-                name=f"owner-dispatch-{request.request_id}",
-                daemon=True,
-            )
-            thread.start()
         return self._dispatch_view(dispatch)
+
+    def recommend_dispatch(
+        self, task_id: str, payload: dict[str, Any]
+    ) -> DispatchRecommendationView:
+        """Rank all dispatchable targets by the task's archived policy.
+
+        The ranking is the same value object the rest of the scheduler
+        produces, but the capability fit is uniformly 1.0 — owner dispatch
+        does not yet infer task intent into required capabilities, and a
+        guessed number would be less honest than a declared one.
+        """
+
+        self._validate_identifier("task_id", task_id)
+        try:
+            self.store.get_task(task_id)
+        except KeyError:
+            raise ControlPlaneError(404, "task_not_found") from None
+
+        try:
+            request = DispatchRecommendationRequest.model_validate(payload or {})
+        except ValidationError as error:
+            raise ControlPlaneError(400, "invalid_json_schema") from error
+
+        task = self.store.get_task(task_id)
+        policy_name = request.scheduling_policy or task.scheduling_policy
+        policy_name = policy_name or RoutingObjective.BALANCED.value
+        try:
+            policy = RoutingObjective(policy_name)
+        except ValueError as error:
+            raise ControlPlaneError(
+                400, f"unknown_scheduling_policy:{policy_name}"
+            ) from error
+
+        # One ``now`` shared by the score path and the per-candidate
+        # source_pressure projection, so the score and the chip agree on
+        # the same instant even if the request takes ~1 ms to render.
+        now = datetime.now(UTC)
+        # Delegate the candidate-gathering + ranking to the host
+        # application/service layer (WP5a-1 commit 1 — pure refactor).
+        # The service owns the ``min_tier`` validation gate and the
+        # ``TASK_MIN_TIER_INVALID`` system event so the handler stays
+        # focused on view-model construction.
+        recommendation, candidates, invalid_min_tier = (
+            self._recommendation_service().recommend_for_task(
+                task, policy=policy, now=now,
+            )
+        )
+
+        candidate_views = tuple(
+            self._dispatch_recommendation_candidate_view(evaluation, candidates, now=now)
+            for evaluation in recommendation.evaluations
+        )
+        top = recommendation.top_pick
+        decision_reason = (
+            f"policy={policy.value} admitted {sum(1 for c in candidate_views if c.admitted)} "
+            f"of {len(candidate_views)} candidates; "
+            f"hard eligibility and quota admission gates ran before scoring"
+        )
+        return DispatchRecommendationView(
+            task_id=task_id,
+            scheduling_policy=policy.value,
+            candidates=candidate_views,
+            top_pick=top.execution_target_id if top is not None else None,
+            decision_reason=decision_reason,
+        )
+
+    @staticmethod
+    def _dispatch_recommendation_candidate_view(
+        evaluation,
+        candidates: list[DispatchCandidateInput],
+        *,
+        now: datetime,
+    ) -> DispatchRecommendationCandidate:
+        inputs = next(
+            (c for c in candidates if c.execution_target_id == evaluation.execution_target_id),
+            None,
+        )
+        return DispatchRecommendationCandidate(
+            execution_target_id=evaluation.execution_target_id,
+            model_sku_id=evaluation.model_sku_id,
+            eligible=evaluation.eligible,
+            admitted=evaluation.admitted,
+            score=evaluation.score,
+            headroom_mean=(
+                sum(inputs.remaining_fractions) / len(inputs.remaining_fractions)
+                if inputs and inputs.remaining_fractions
+                else None
+            ),
+            # M1 WP3: binding-window minimum. Reuses the same data the
+            # scheduler's ``minimum_remaining_fraction`` reads from
+            # ``QuotaSnapshot``. ``None`` propagates the "missing
+            # data" signal end-to-end.
+            headroom_min=(
+                min(inputs.remaining_fractions)
+                if inputs and inputs.remaining_fractions
+                else None
+            ),
+            evidence_fresh=bool(
+                inputs and inputs.evidence_observed_at is not None
+            ),
+            runtime_available=bool(inputs and inputs.runtime_available),
+            verified=bool(inputs and inputs.verified),
+            execution_verified_stale=bool(inputs and inputs.verified_stale),
+            quota_state=(
+                inputs.availability_state.value
+                if inputs else None
+            ),
+            source_pressure=(
+                source_pressure_for(inputs.windows, now=now)
+                if inputs is not None
+                else None
+            ).value,
+            score_components=tuple(
+                DispatchRecommendationScoreComponent(
+                    name=component.name,
+                    # M1 WP3 fix (F4): wire shape carries the raw
+                    # unweighted ``value`` plus the per-row ``weight``.
+                    # The UI multiplies them at display time so the
+                    # ``Σ weight × value == score`` identity is
+                    # visible end-to-end (and a tuning commit does
+                    # not have to push a new ``contribution``).
+                    value=(
+                        float(component.value)
+                        if isinstance(component.value, (int, float))
+                        else 0.0
+                    ),
+                    weight=component.weight,
+                )
+                for component in evaluation.score_components
+            ),
+            reasons=tuple(evaluation.reasons),
+            tier=(
+                inputs.tier.value
+                if inputs is not None and inputs.tier is not None
+                else None
+            ),
+            tier_match_reason=(
+                inputs.tier_match_reason if inputs is not None else None
+            ),
+        )
 
     def owner_execution_settings(self) -> OwnerExecutionSettingsView:
         return OwnerExecutionSettingsView(
@@ -1910,27 +2898,56 @@ class ControlPlaneService:
                     measurement_source=evidence.measurement_source.value,
                     confidence=evidence.confidence.value,
                     sanitized_reason_code=evidence.sanitized_reason_code,
+                    consecutive_failures=evidence.consecutive_failures,
                 )
-        execution_verified = target.execution_verified
-        if not execution_verified and self.execution_evidence_journal is not None:
+        # Demote-fallback: journal wins over the static registry flag so a
+        # transient UNKNOWN does not destroy a real verified history. The
+        # stale flag tells the caller when the fallback fired (latest is
+        # non-VERIFIED while an older VERIFIED row exists).
+        execution_verified = False
+        execution_verified_stale = False
+        if self.execution_evidence_journal is not None:
             try:
-                execution_verified = (
-                    self.execution_evidence_journal.target_has_verified_evidence(target.id)
+                verified_evidence, stale_since = (
+                    self.execution_evidence_journal.latest_verified_for_target(target.id)
                 )
             except Exception:
-                execution_verified = False
+                verified_evidence, stale_since = None, None
+            if verified_evidence is not None:
+                execution_verified = True
+                execution_verified_stale = stale_since is not None
+        # M1 WP2: classify the target against the host-owned tier
+        # table. ``None`` means the table is not wired (ad-hoc CLI) or
+        # could not classify the target — both surface as ``tier=None``
+        # on the view-model.
+        tier_value: str | None = None
+        tier_match_reason: str | None = None
+        if self.tier_table is not None:
+            entry, tier_match_reason = self.tier_table.lookup(target.id)
+            tier_value = entry.tier.value
         return ExecutionTargetHealthView(
             execution_target_id=target.id,
             model_sku_id=target.model_sku_id,
             runtime_id=target.runtime_id,
             enabled=target.enabled,
             execution_verified=execution_verified,
+            execution_verified_stale=execution_verified_stale,
             runtime_available=(
                 self.runtime_availability.get(target.id)
                 if target.id in self.runtime_availability
                 else self._runtime_available(target.id)
             ),
             observed_availability=observed,
+            tier=tier_value,
+            tier_match_reason=tier_match_reason,
+            # M1 WP4: surface the family-level ``auth_kind`` and
+            # ``pool_kind`` so the Resources page can group targets
+            # by family without round-tripping through
+            # ``provider_discovery``. The defaults keep the
+            # pre-WP4 behaviour for ad-hoc CLI invocations
+            # (no registry → ``env`` + ``windowed``).
+            auth_kind=self._auth_kind_for_target(target),
+            pool_kind=self._pool_kind_for_target(target),
         )
 
     def providers(self) -> ProviderHealthListView:
@@ -2000,6 +3017,10 @@ class ControlPlaneService:
                         if evidence is not None and evidence.observed_at is not None
                         else None
                     ),
+                    # M1 WP4: carry the family pool_kind on the
+                    # provider-level view so the Resources page can
+                    # group by it without iterating targets.
+                    pool_kind=self._pool_kind_for_provider(provider_id),
                 )
             )
         return ProviderHealthListView(providers=tuple(views))
@@ -2217,13 +3238,42 @@ class ControlPlaneService:
         )
 
     @staticmethod
-    def _plan_view(observation: QuotaProviderObservation) -> QuotaPlanView | None:
+    def _burn_view_for_window(
+        window, *, now: datetime
+    ) -> QuotaBurnView | None:
+        """Render the M1 WP1 burn view-model for one plan window.
+
+        Returns ``None`` when the window has no ``reset_at`` (UNMETERED
+        short-circuits inside `` ``burn``); the UI renders no chip in
+        that case rather than drawing an empty one.
+        """
+
+        if window.reset_at is None:
+            return None
+        assessment, inferred = window.burn(now=now)
+        return QuotaBurnView(
+            expected_used_fraction=assessment.expected_used_fraction,
+            actual_used_fraction=assessment.actual_used_fraction,
+            deviation=assessment.deviation,
+            remaining_fraction=assessment.remaining_fraction,
+            seconds_to_reset=assessment.seconds_to_reset,
+            pressure=assessment.pressure.value,
+            pressure_score=assessment.pressure_score,
+            window_start_inferred=inferred,
+        )
+
+    @staticmethod
+    def _plan_view(
+        observation: QuotaProviderObservation, *, now: datetime
+    ) -> QuotaPlanView | None:
         """Render the shared-plan projection the Quota page leads with.
 
         Returns ``None`` only when there is no plan evidence at all. A plan
         whose *balance* is UNKNOWN still renders, because the per-model
         consumption and equivalents beside it are real, and dropping the whole
         card to hide the one unknown reports less than we know.
+        ``now`` is injected by the caller so all per-window burn figures and
+        the card-level ``source_pressure`` agree on the same instant.
         """
 
         projection = observation.projection
@@ -2249,6 +3299,7 @@ class ControlPlaneService:
                 total_units=window.total_units,
                 unit=window.unit,
                 reset_at=iso(window.reset_at),
+                burn=ControlPlaneService._burn_view_for_window(window, now=now),
             )
             for window in projection.windows
         )
@@ -2388,6 +3439,158 @@ class ControlPlaneService:
             if connection.scheduler_connected
         }
 
+    # M1 WP4: target → family ``auth_kind`` / ``pool_kind`` helpers.
+    # The default fallback (``"env"`` / ``"windowed"``) preserves
+    # the pre-WP4 behaviour for ad-hoc CLI invocations that do
+    # not run ``provider_discovery``. When the registry knows the
+    # target's provider family, the discovery-set fields win.
+    def _auth_kind_for_target(self, target) -> str:
+        if self.registry is None:
+            return "env"
+        model = self.registry.models.get(target.model_sku_id)
+        if model is None:
+            return "env"
+        from personal_ai_orchestrator.provider_discovery import (
+            PROVIDER_FAMILIES as _PF,
+        )
+        for spec in _PF:
+            if spec.provider_id == model.provider_id:
+                return spec.auth
+        return "env"
+
+    def _pool_kind_for_target(self, target) -> str:
+        if self.registry is None:
+            return "windowed"
+        model = self.registry.models.get(target.model_sku_id)
+        if model is None:
+            return "windowed"
+        from personal_ai_orchestrator.provider_discovery import (
+            PROVIDER_FAMILIES as _PF,
+        )
+        for spec in _PF:
+            if spec.provider_id == model.provider_id:
+                return spec.pool_kind
+        return "windowed"
+
+    def _pool_kind_for_provider(self, provider_id: str) -> str:
+        """Provider-level pool_kind lookup for the quota overview card.
+
+        The ``_pool_kind_for_target`` helper is target-scoped; the
+        card builder knows the ``provider_id`` directly. Symmetric
+        implementation — same family scan, same default.
+        """
+        from personal_ai_orchestrator.provider_discovery import (
+            PROVIDER_FAMILIES as _PF,
+        )
+        for spec in _PF:
+            if spec.provider_id == provider_id:
+                return spec.pool_kind
+        return "windowed"
+
+    def _build_unmetered_observation(
+        self,
+        connection,
+    ) -> UnmeteredObservationView | None:
+        """Read-time metrics for an unmetered provider.
+
+        No new supervisor step, no new tables. The fields are
+        derived at read time from existing stores so a future
+        migration to OpenCode typed errors cannot strand the
+        Resources page.
+        """
+
+        from personal_ai_orchestrator.provider_discovery import (
+            PROVIDER_FAMILIES as _PF,
+        )
+        family = next(
+            (spec for spec in _PF if spec.provider_id == connection.provider_id),
+            None,
+        )
+        if family is None or family.pool_kind != "unmetered":
+            return None
+        targets = (
+            [
+                target
+                for target in self.registry.execution_targets.values()
+                if self.registry.models.get(target.model_sku_id)
+                and self.registry.models[target.model_sku_id].provider_id
+                == connection.provider_id
+            ]
+            if self.registry is not None
+            else []
+        )
+        target_ids = {target.id for target in targets}
+
+        rpm_observed = 0
+        if self.store is not None:
+            now = datetime.now(UTC)
+            cutoff = now - timedelta(seconds=60)
+            try:
+                rows = self.store.connection.execute(
+                    "SELECT COUNT(*) FROM runs WHERE started_at >= ?",
+                    (cutoff,),
+                ).fetchone()
+                if rows is not None:
+                    rpm_observed = int(rows[0])
+            except Exception:
+                rpm_observed = 0
+
+        error_rate: float | None = None
+        if self.execution_evidence_journal is not None:
+            cutoff = datetime.now(UTC) - timedelta(seconds=3600)
+            total = 0
+            non_verified = 0
+            try:
+                for path in sorted(
+                    self.execution_evidence_journal.directory.glob(
+                        "exec-verify-*.json"
+                    )
+                ):
+                    try:
+                        evidence = (
+                            ExecutionVerificationEvidence.model_validate_json(
+                                path.read_text(encoding="utf-8")
+                            )
+                        )
+                    except Exception:
+                        continue
+                    if evidence.execution_target_id not in target_ids:
+                        continue
+                    if evidence.observed_at < cutoff:
+                        continue
+                    total += 1
+                    if evidence.result is not ExecutionVerificationOutcome.VERIFIED:
+                        non_verified += 1
+            except Exception:
+                pass
+            if total > 0:
+                error_rate = non_verified / total
+
+        cooldown_until: str | None = None
+        if self.quota_availability_journal is not None:
+            earliest: datetime | None = None
+            for target in targets:
+                try:
+                    evidence = self.quota_availability_journal.load(target.id)
+                except Exception:
+                    continue
+                if evidence is None:
+                    continue
+                if (
+                    evidence.state is QuotaAvailabilityState.COOLDOWN
+                    and evidence.cooldown_until is not None
+                ):
+                    if earliest is None or evidence.cooldown_until < earliest:
+                        earliest = evidence.cooldown_until
+            if earliest is not None:
+                cooldown_until = earliest.isoformat()
+
+        return UnmeteredObservationView(
+            rpm_observed=rpm_observed,
+            error_rate_1h=error_rate,
+            cooldown_until=cooldown_until,
+        )
+
     def _quota_provider_card(
         self,
         connection,
@@ -2398,6 +3601,36 @@ class ControlPlaneService:
             if observation is not None
             else ()
         )
+        # One ``now`` for the entire card so the per-window ``burn`` figures
+        # and the provider-level ``source_pressure`` compare like-for-like
+        # — and so two providers rendered in the same response agree on
+        # "now" rather than disagreeing across the ~1 ms gap between two
+        # ``datetime.now(UTC)`` calls.
+        now = datetime.now(UTC)
+        plan_view = (
+            self._plan_view(observation, now=now) if observation is not None else None
+        )
+        source_pressure: str | None = None
+        if observation is not None and observation.projection is not None:
+            source_pressure = observation.projection.source_pressure(now=now).value
+        # M1 WP3 fix (F5): card-level collection failure streak.
+        # Walk every target under this provider (model_sku_id ->
+        # model.provider_id == connection.provider_id) and pick
+        # the maximum ``consecutive_failures`` from the per-target
+        # journal. ``0`` when no journal entry exists.
+        collection_failure_streak = 0
+        if self.quota_availability_journal is not None and self.registry is not None:
+            for target in self.registry.execution_targets.values():
+                target_model = self.registry.models.get(target.model_sku_id)
+                if target_model is None:
+                    continue
+                if target_model.provider_id != connection.provider_id:
+                    continue
+                evidence = self.quota_availability_journal.load(target.id)
+                if evidence is None:
+                    continue
+                if evidence.consecutive_failures > collection_failure_streak:
+                    collection_failure_streak = evidence.consecutive_failures
         return QuotaProviderCardView(
             provider_id=connection.provider_id,
             display_name=connection.display_name,
@@ -2434,7 +3667,18 @@ class ControlPlaneService:
                 observation.credential_source if observation is not None else "NONE"
             ),
             quota_pools=pools,
-            plan=(self._plan_view(observation) if observation is not None else None),
+            plan=plan_view,
+            source_pressure=source_pressure,
+            collection_failure_streak=collection_failure_streak,
+            # M1 WP4: surface pool_kind + the unmetered observation
+            # object so the Resources page can render a
+            # separate "Free / unmetered" group without
+            # round-tripping through provider_discovery. The
+            # ``unmetered`` block is None for windowed
+            # providers — their quota surfaces are surfaced
+            # through ``quota_pools`` + ``plan``.
+            pool_kind=self._pool_kind_for_provider(connection.provider_id),
+            unmetered=self._build_unmetered_observation(connection),
         )
 
     def quota(self) -> QuotaOverviewView:
@@ -2591,7 +3835,37 @@ class ControlPlaneService:
         )
 
     def health(self) -> HealthView:
-        return HealthView(status="ok", api_version=CONTROL_API_VERSION)
+        if self.supervisor is None:
+            return HealthView(
+                status="ok",
+                api_version=CONTROL_API_VERSION,
+                model_tiers_source=self.model_tiers_source,
+            )
+        snapshot: DaemonSupervisorSnapshot = self.supervisor.snapshot()
+        steps_view: tuple[SupervisorStepView, ...] = tuple(
+            SupervisorStepView(
+                name=step.name,
+                last_run_at=(
+                    step.last_run_at.isoformat() if step.last_run_at is not None else None
+                ),
+                last_duration_ms=step.last_duration_ms,
+                consecutive_failures=step.consecutive_failures,
+                in_backoff=step.in_backoff,
+            )
+            for step in snapshot.steps
+        )
+        return HealthView(
+            status="ok",
+            api_version=CONTROL_API_VERSION,
+            last_tick_at=(
+                snapshot.last_tick_at.isoformat()
+                if snapshot.last_tick_at is not None
+                else None
+            ),
+            tick_interval_seconds=snapshot.interval_seconds,
+            supervisor_steps=steps_view,
+            model_tiers_source=self.model_tiers_source,
+        )
 
     def build(self) -> BuildView:
         """Report which commit produced this daemon, or ``unknown`` if unresolvable."""
@@ -2711,7 +3985,19 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                 self._json(error.status, {"error": error.code})
             except ValidationError:
                 self._json(400, {"error": "invalid_json_schema"})
-            except Exception:
+            except Exception as exc:
+                # Operator-supports-us-visible failure: when an unhandled
+                # exception escapes into the catch-all the daemon would
+                # otherwise return a bare 503, swallowing the cause.
+                # A small file under /tmp is the simplest durable trace.
+                try:
+                    import traceback
+                    with open("/tmp/pao_control_plane_unavailable.log", "a") as fh:
+                        fh.write(f"{type(exc).__name__}: {exc}\n")
+                        fh.write(traceback.format_exc())
+                        fh.write("\n---\n")
+                except Exception:
+                    pass
                 self._json(503, {"error": "control_plane_unavailable"})
 
         def _route(
@@ -2807,6 +4093,20 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                         request_service.set_project_scheduling_policy(project_id, payload),
                     )
                     return
+                if count == 3 and sub == "settings" and method == "PUT":
+                    # M1 WP5a-1: PUT /v1/projects/{id}/settings persists
+                    # the project-level supervised-auto toggle,
+                    # unattended toggle, and grace window.
+                    payload = self._read_json()
+                    if payload is None:
+                        return
+                    self._view(
+                        200,
+                        request_service.set_project_supervised_auto_settings(
+                            project_id, payload,
+                        ),
+                    )
+                    return
                 self._json(404, {"error": "not_found"})
                 return
 
@@ -2840,6 +4140,37 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                         return
                     self._view(200, request_service.dispatch_task(task_id, payload))
                     return
+                if (
+                    count == 4
+                    and rest[2] == "dispatch"
+                    and rest[3] == "recommendation"
+                    and method == "POST"
+                ):
+                    payload = self._read_json() or {}
+                    self._view(200, request_service.recommend_dispatch(task_id, payload))
+                    return
+                # M1 WP5a-2: supervised-auto owner controls.
+                if count == 4 and rest[2] == "auto" and method == "POST":
+                    if rest[3] == "ack":
+                        payload = self._read_json()
+                        if payload is None:
+                            return
+                        self._view(200, request_service.auto_ack(task_id, payload))
+                        return
+                    if rest[3] == "veto":
+                        payload = self._read_json()
+                        if payload is None:
+                            return
+                        self._view(200, request_service.auto_veto(task_id, payload))
+                        return
+                    if rest[3] == "dispatch-now":
+                        payload = self._read_json()
+                        if payload is None:
+                            return
+                        self._view(
+                            200, request_service.auto_dispatch_now(task_id, payload)
+                        )
+                        return
                 if count == 3 and sub == "approvals" and method == "GET":
                     self._view(200, request_service.approvals_for_task(task_id))
                     return

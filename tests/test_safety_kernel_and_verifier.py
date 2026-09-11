@@ -62,6 +62,57 @@ def test_task_submission_is_idempotent_and_state_machine_is_explicit(tmp_path: P
         store.transition_task("t1", TaskState.READY)
 
 
+# M1 WP2 -----------------------------------------------------------
+
+
+def test_task_min_tier_storage_round_trip(tmp_path: Path) -> None:
+    """Submit + reopen + read returns the same ``min_tier``."""
+
+    store = SafetyKernelStore(tmp_path / "state.sqlite3")
+    record = store.submit_task(
+        task_id="t1", request_id="r1", intent="implement", min_tier="T0"
+    )
+    assert record.min_tier == "T0"
+    store.close()
+
+    reopened = SafetyKernelStore(tmp_path / "state.sqlite3")
+    try:
+        again = reopened.get_task("t1")
+    finally:
+        reopened.close()
+    assert again.min_tier == "T0"
+
+
+def test_task_min_tier_defaults_to_T1_when_omitted(tmp_path: Path) -> None:
+    store = SafetyKernelStore(tmp_path / "state.sqlite3")
+    record = store.submit_task(task_id="t1", request_id="r1", intent="implement")
+    assert record.min_tier == "T1"
+
+
+def test_task_min_tier_unknown_value_raises_at_storage(tmp_path: Path) -> None:
+    store = SafetyKernelStore(tmp_path / "state.sqlite3")
+    with pytest.raises(ValueError, match="min_tier must be one of"):
+        store.submit_task(
+            task_id="t1", request_id="r1", intent="implement", min_tier="T9"
+        )
+
+
+def test_task_min_tier_change_between_identical_submits_raises(tmp_path: Path) -> None:
+    """Two submits with the same request_id but different min_tier conflict.
+
+    The idempotency check now compares min_tier alongside the other
+    fields — a typo in a second submission must not silently overwrite
+    the first row.
+    """
+
+    store = SafetyKernelStore(tmp_path / "state.sqlite3")
+    store.submit_task(task_id="t1", request_id="r1", intent="implement", min_tier="T0")
+    with pytest.raises(ValueError, match="request_id already belongs to a different task submission"):
+        store.submit_task(
+            task_id="t1", request_id="r1", intent="implement", min_tier="T3"
+        )
+
+
 def test_single_writer_lock_fails_closed(tmp_path: Path) -> None:
     store = SafetyKernelStore(tmp_path / "state.sqlite3")
     store.submit_task(task_id="t1", request_id="r1", intent="implement")

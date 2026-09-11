@@ -1,0 +1,572 @@
+# M1 WP5a · SUPERVISED_AUTO 后端 —— 工作包规格
+
+> **目的**:在任何新会话开 WP5a 前,先把本文档读完。文档自包含,包含裁决全文、产品语义、状态机、端点、commit 切分建议。
+>
+> **本文件是命令式的**,不只是背景资料。开工前逐条对照 §3.0–§3.9。改动清单必须在开工前交;若 ≥ 28 文件,按 commit 1–3 / 4–7 拆成 WP5a-1 / WP5a-2。
+
+## 0. WP 序列(裁决固定,不许重排)
+
+```
+WP0  daemon tick                  ✅
+WP1  燃烧曲线                     ✅
+WP2  Tier 表 + min_tier           ✅
+WP3  ScoreWeights + BURN_DOWN     ✅
+WP4  UnlimitedPool + opencode-free ✅
+WP5a SUPERVISED_AUTO 后端         ← 下一个
+WP5b SUPERVISED_AUTO macOS 前端
+WP6  Backlog Filler
+WP7  周报端点
+```
+
+- `fix/stale-badge` 是 WP5b 的一个**待办项提前做了**,不是 WP5b 本身。
+- PAID_USAGE 是 **M3**,不许在 M1 提。
+- 禁止提"WP5a'"/"WP6'/新的 N 方案"等不在上面 8 个里的工作包。
+
+## 1. 3.0 产品语义(一句话)
+
+在 MANUAL(属主每次点派发)和 ACTIVE(全自动,受 6-gate 约束,仍 DISABLED_BY_DESIGN)之间加中间态:**daemon 按 WP3 推荐器自动选目标,通知属主,宽限期内属主不否决就派发**。"收到通知且没拦" = 同意,所以倒计时只在通知送达后开始。
+
+## 2. 3.1 设置
+
+### 全局
+
+- `SchedulingSettingsView` 加 `mode: str = "MANUAL"`、`selectable_modes: tuple = ("MANUAL","SUPERVISED_AUTO","ACTIVE")`。
+- `PUT /v1/settings/scheduling` 接受 `mode`。
+- `mode="ACTIVE"` 且 `activation_authority.authorized == False` → **409** `production_active_not_authorized`(fail-closed,**不实现** ACTIVE 行为)。
+- 切回 `MANUAL` → 同一事务内所有 `AUTO_PLANNED`/`AUTO_GRACE` 任务回 `READY`,audit `AUTO_ABORTED{reason="mode_changed"}`。
+
+### 项目级(裁决 5)
+
+- `projects` 表 `_ensure_column` 三列:
+  - `supervised_auto_allowed INTEGER NOT NULL DEFAULT 0`
+  - `unattended_allowed INTEGER NOT NULL DEFAULT 0`
+  - `grace_seconds INTEGER NOT NULL DEFAULT 120`
+- `SafetyKernelStore.set_project_settings(project_id, *, ...)` 写入。
+- `PUT /v1/projects/{id}/settings`(沿用 PUT 模式)。
+- `ProjectView` 加三字段(`supervised_auto_allowed` / `unattended_allowed` / `grace_seconds`)。
+- 关闭 `supervised_auto_allowed` → 该项目 `AUTO_*` 任务回 `READY`。
+
+### 生效条件(AND)
+
+- `mode == SUPERVISED_AUTO`
+- 项目 `supervised_auto_allowed == true`
+- `owner_initiated_execution_enabled == true`(默认值不动)
+
+## 3. 3.2 任务状态(只增)
+
+`TaskState` 追加两个值:`AUTO_PLANNED`、`AUTO_GRACE`。`_ALLOWED_TRANSITIONS` 追加:
+
+```
+READY → AUTO_PLANNED
+AUTO_PLANNED → AUTO_GRACE | READY
+AUTO_GRACE → RUNNING | READY
+```
+
+`start_dispatched_worker` 加参数 `expected_state: TaskState = READY`,AUTO 路径传 `AUTO_GRACE`(保持原子事务,**不经** READY 中转,避免被下一 tick 重新规划)。
+
+`tasks` 表 `_ensure_column` 四列:
+
+- `auto_decision_id TEXT`
+- `auto_grace_deadline_at TEXT`
+- `auto_acked_at TEXT`
+- `auto_reason TEXT`
+
+`TaskView` 同名四个可选字段(默认 `None`);Swift `TaskView` 四个 `decodeIfPresent` + 正向/向后测试。**WP5a 只加 model,不做 UI**(UI 属 WP5b)。
+
+## 4. 3.3 派发入口抽取(裁决 14)
+
+把 `POST /v1/tasks/{id}/dispatch` handler 里"创建 dispatch 记录 → `dispatch_executor.execute(request_id)` 起线程"那段抽为:
+
+```python
+initiate_owner_dispatch(
+    store, executor, *,
+    task_id, execution_target_id, authority, actor, expected_state
+)
+```
+
+handler 与 tick 都调它。AUTO 路径传 `authority="SUPERVISED_AUTO"`、`actor="supervised_auto"`。**不**直接调 `start_dispatched_worker`(会绕过 `_admit_quota` 与 dispatch 记录)。
+
+同理,`control_api._collect_dispatch_candidates` + `recommend_owner_dispatch` 的组合抽到 `dispatch_recommendation_service.py`,handler 与 tick 共用,返回 `DispatchRecommendation` + 候选 `DispatchCandidateInput` 列表。
+
+## 5. 3.4 tick step `supervised_auto_step(now)`
+
+注册进 `DaemonSupervisor`(`--control-only` 不注册)。每 tick 步骤:
+
+1. **扫 READY**(且 `scheduling_policy != MANUAL`、项目生效条件满足、`task.min_tier` 合法)→ 调推荐服务。硬条件全部 AND,任一不满足 → 保持 `READY`,`auto_reason` 写原因,audit `AUTO_SKIPPED{reason}`(**同任务同原因去重**,避免每 5 秒一条):
+   - top-1 `admitted == true`
+   - `quota_state ∈ {AVAILABLE_OBSERVED, AVAILABLE_UNMETERED}`(UNKNOWN / UNCERTAIN_LOCKED / COOLDOWN 一律不自动派发)
+   - `evidence_fresh == true`
+   - tier ≥ min_tier(推荐器已保证)
+   - 执行分支不在受保护列表(复用 execution-repo 现有策略)
+   - `SwitchLeaseAuthority.has_active_lease(task_id) == False`(新增公开助手,inline 那条 SQL)
+
+2. 通过 → 事务内:
+   - `READY → AUTO_PLANNED`
+   - `auto_decision_id` 写入
+   - 冻结一条 `RoutingDecision` 到 `/v1/tasks/{id}/routing` 读取的那个存储
+     - `authority="SUPERVISED_AUTO"`
+     - **只填现有字段**,不改 Gate-R schema
+     - **开工前必须核实 `RoutingDecision` 必填字段能否在规划阶段全部给出**,不能则报告
+   - `ShadowEvidenceJournal.append_pending(...)`(裁决 15)
+   - audit `AUTO_PLANNED{decision_id, target}`
+   - 随即 `AUTO_PLANNED → AUTO_GRACE`
+
+3. **倒计时**:
+   - `unattended_allowed == true` → 进 `AUTO_GRACE` 时**即写** `auto_grace_deadline_at = now + grace_seconds`
+   - `unattended_allowed == false` → `deadline` 留空,等 `POST /v1/tasks/{id}/auto/ack` 时写 `auto_acked_at` 与 `deadline = ack_time + grace_seconds`
+   - 未 ack 的任务无限期停在 `AUTO_GRACE`(app 出现即 ack)
+   - **但**超过 24h 未 ack → 回 `READY`,audit `AUTO_ABORTED{reason="unacked_timeout"}`
+
+4. **到期**:`now >= deadline` →
+   - **重新**调 `_admit_quota`(不用规划时的旧数据)
+   - 通过则 `initiate_owner_dispatch(..., expected_state=AUTO_GRACE)`,audit `AUTO_DISPATCHED{decision_id, trigger="grace_expired"}`
+   - 失败则回 `READY`,删除 pending shadow,audit `AUTO_ABORTED{reason="admission_failed"}`
+
+5. **幂等**:同一 `now` 调用两次不重复派发、不重复写 pending;所有状态判断以 SQLite 事务为准,不依赖内存。
+
+## 6. 3.5 端点
+
+| 路径 | 行为 | 状态码 |
+|---|---|---|
+| `POST /v1/tasks/{id}/auto/ack` | `AUTO_GRACE` 且未 ack → 写 ack + deadline;已 ack → 200 幂等;非 `AUTO_GRACE` → 409 | 200 / 409 |
+| `POST /v1/tasks/{id}/auto/veto` | `AUTO_PLANNED`/`AUTO_GRACE` → `READY`,`scheduling_policy` 强制置 `MANUAL`,删除 pending shadow,audit `AUTO_VETOED{decision_id, target}` | 200 |
+| `POST /v1/tasks/{id}/auto/dispatch-now` | `AUTO_GRACE` → 立即执行 §5 步骤 4,`trigger="dispatch_now"` | 200 / 409 |
+
+`/v1/tasks/{id}/cancel` 对 `AUTO_*` 状态等同 veto(**不**新语义)。
+
+## 7. 3.6 shadow 闭环(裁决 15)
+
+pending 在 worker 跑完后由 `execution_controller.apply_verification_result` 的现有 `shadow_*` 路径 `finalize_pending`——**SUPERVISED_AUTO 每次派发自然产生一条真实 shadow observation**。
+
+**开工前核实**:
+1. `PendingShadowObservation` 必填字段能否在规划阶段给全?
+2. `apply_verification_result` 如何拿到 `pending_id`?建议存 `auto_decision_id` 同值。
+
+## 8. 3.7 测试(必须全覆盖)
+
+- **状态机**:每条边(含非法边被 `transition_task` 拒绝);`start_dispatched_worker(expected_state=AUTO_GRACE)`。
+- **tick**:生效条件三者缺一不动;六个硬条件各一例 SKIPPED 且 reason 正确;`unattended=false` 无 ack 不倒计时、ack 后倒计时;`unattended=true` 立即倒计时;到期复检失败回 READY;到期成功走 `initiate_owner_dispatch` 且 `authority/actor` 正确;幂等;24h 未 ack 超时。
+- **mode 切 MANUAL / 项目关闭**:全部回 READY,RUNNING 不受影响。
+- **veto 后**:policy 锁 MANUAL 且下一 tick 不再规划。
+- **推荐服务抽取后**:`POST /dispatch/recommendation` 现有测试零改动通过。
+- **`/v1/tasks/{id}/routing`** 能读到 `SUPERVISED_AUTO` 决策;Gate-R 9 fixture 不动。
+- **pending shadow**:规划时写入、veto 时删除、正常执行后 finalize 有一条 observation。
+- **控制面**:三个 auto 端点的 200/409;`PUT settings mode=ACTIVE` 409;项目 settings round-trip。
+- **Swift**:`TaskView` 四字段、`ProjectView` 三字段、`SchedulingSettingsView.mode/selectableModes` 解码正向/向后;TestDaemon canned body。
+
+## 9. 3.8 不动(白名单)
+
+- `activation_authority` 与 6 gate(裁决 8 的门禁不动)
+- `owner_initiated_execution_enabled` 默认值
+- Gate-R 已有字段
+- admission 语义
+- Backlog(WP6)
+- 任何 UI(WP5b)
+
+## 10. 3.9 commit 切分建议(7 个,零行为变化 commit 1 优先)
+
+1. `refactor(m1-wp5a): extract initiate_owner_dispatch and dispatch_recommendation_service`(**零行为变化**,所有现有测试不改一行即通过)
+2. `feat(m1-wp5a): add SchedulingMode setting and project-level supervised-auto settings`
+3. `feat(m1-wp5a): add AUTO_PLANNED / AUTO_GRACE task states and auto columns`
+4. `feat(m1-wp5a): supervised_auto_step tick with hard-gated planning, ack-gated grace, and re-admission`
+5. `feat(m1-wp5a): auto ack / veto / dispatch-now endpoints and mode-change abort`
+6. `feat(m1-wp5a): Swift models for auto task fields, project settings, scheduling mode`
+7. `docs(m1-wp5a): ...`
+
+**清单纪律**:
+- 开工前先交**改动文件清单**(每条标小节,含 §3 / §7 两项核实结果)。
+- 预计 **22–28 个文件**。
+- 若估到 ≥ 28,**按 commit 1–3 / 4–7 拆成 WP5a-1 / WP5a-2 两个工作包**各自交清单,**不要等超了再报**。
+
+## 11. 已知裁决引用
+
+- **裁决 5**:项目级设置三列 `supervised_auto_allowed` / `unattended_allowed` / `grace_seconds`。
+- **裁决 8**:`activation_authority` 与 6 gate 不动。
+- **裁决 14**:派发入口抽取(`initiate_owner_dispatch` + `dispatch_recommendation_service`)。
+- **裁决 15**:pending shadow 写入与 finalize,`auto_decision_id` 与 `pending_id` 同值。
+- **裁决 §6.6**:单工作包改动 > 30 文件必须停下报告;**本工作包预计 22–28 文件,接近上限,清单必须先交**。
+- **裁决 §6.7**:任何 outbound 网络调用必须先问属主,不得 agent 自跑。
+
+## 12. 自检清单(开工前逐条 √)
+
+- [ ] §7 第 1 项核实完成(`PendingShadowObservation` 必填字段能否在规划阶段给全)
+- [ ] §7 第 2 项核实完成(`apply_verification_result` 如何拿到 `pending_id`)
+- [ ] §5 步骤 2 `RoutingDecision` 必填字段核实完成
+- [ ] 改动文件清单已交(每条标 §3.x)
+- [ ] 若清单 ≥ 28 文件,已按 WP5a-1 / WP5a-2 拆分
+- [ ] WP5a 不动 §9 白名单任一项
+- [ ] 测试覆盖 §8 全部小节
+
+---
+
+**文档维护**:M1 后续工作包开工前,把对应裁决全文纳入本目录(`/docs/M1_WP{xx}_SPEC.md`),避免新会话丢上下文。
+## 13. WP5a-2 implementation clarifications (recorded post-implementation)
+
+These notes pin how the frozen contract above was realized in
+`feat/m1-wp5a2-auto-tick`. They clarify naming/derivation details the
+spec left open; **no safety semantics were weakened**:
+
+1. **§3.4 step 1 "执行分支不在受保护列表"** is realized by reusing
+   `validate_execution_target_launch` (enabled + runtime-verified +
+   runtime available) as the planning-time launchability gate — the
+   same host policy the owner-dispatch path enforces. No new protected
+   list was invented.
+2. **`auto_decision_id`** is `f"auto-{task_id}-v{state_version}"` —
+   the READY state version at planning. Stable across the cycle's
+   ticks; a veto / abort / unacked timeout bumps the version so the
+   next cycle derives a fresh id. The frozen RoutingDecision's own
+   `decision_id` (hash-derived) is recorded alongside it in the audit
+   trail.
+3. **裁决 15 "pending_id 与 auto_decision_id 同值"** is literal: the
+   pending shadow's `pending_id` IS the task row's
+   `auto_decision_id` (the `pending-{decision_id}` prefix convention
+   stays specific to the SHADOW routing path).
+4. **§3.4 step 2 "随即 AUTO_PLANNED → AUTO_GRACE"** is two durable
+   transactions; a crash between them leaves AUTO_PLANNED, and the
+   next tick completes the promotion from the frozen decision
+   (crash-boundary recovery, idempotent).
+5. **§3.1 "切回 MANUAL → 同一事务内 abort"**: the settings handler
+   aborts AUTO_* lifecycles immediately after persisting the mode
+   (two stores — JSON settings + SQLite — cannot share one literal
+   transaction). The tick's revocation sweep is the crash backstop,
+   and the executor's exact-expected-state RUNNING guard closes the
+   reserve→start race. Every interleaving fails closed.
+6. **§3.4 step 4's "重新调 _admit_quota"** happens inside the
+   executor at worker-start time (unchanged owner-path discipline);
+   a pre-worker admission failure leaves a BLOCKED dispatch which the
+   next tick reconciles to READY + `AUTO_ABORTED{admission_failed:*}`
+   + pending discard.
+7. **§3.5 veto "删除 pending shadow"**: veto/abort exits *discard*
+   the pending (no truthful observation exists to finalize); real
+   runs *finalize* through `apply_verification_result` with the
+   verifier's verdict.
+8. **Tick registration**: the supervised-auto step registers on the
+   non-control-only daemon only (`build_default_supervisor`
+   `supervised_auto_step=` + daemon wiring). The product daemon is
+   `--control-only` today and therefore performs zero autonomous tick
+   execution until the owner opts into the non-control-only runtime.
+
+## 14. WP5a-2 crash-consistency closeout (post-review repair)
+
+Independent review found the AUTO lifecycle exits were multi-stage
+writes (transition → audit → filesystem discard → metadata clear, plus
+a separate policy force for veto): a crash between the durable commits
+left `READY` + active-looking auto metadata and possibly an orphan
+pending shadow. The repair (same PR, follow-up commits):
+
+### 14.1 Atomic lifecycle close
+
+`SafetyKernelStore.abort_auto_lifecycle(task_id, *, expected_version,
+reason, event_type="AUTO_ABORTED", request_id=None, target=None,
+force_manual=False, allow_blocked=False)` — ONE `BEGIN IMMEDIATE`:
+
+1. re-read + exact version check;
+2. source gate: `AUTO_PLANNED` / `AUTO_GRACE`; `BLOCKED` only with
+   `allow_blocked` **and** non-NULL `auto_decision_id` (a plain owner
+   BLOCKED task can never take the path);
+3. `READY` + all four auto columns NULL + optional MANUAL lock;
+4. exactly ONE `state_version` increment for the whole logical close;
+5. one durable audit event (`AUTO_ABORTED` / `AUTO_VETOED`) with the
+   previous decision id, reason, request id, target, resulting version;
+6. one durable shadow-cleanup intent (outbox row) — same transaction.
+
+Veto (endpoint + cancel-as-veto), mode-change abort, project-disable
+abort, unacked-timeout abort, frozen-decision aborts and the pre-worker
+BLOCKED reconciliation all route through this helper: one abort → one
+authoritative audit event, no transition-then-clear flow.
+
+### 14.2 Durable shadow-cleanup outbox
+
+`auto_shadow_cleanup_outbox(pending_id PRIMARY KEY, task_id, reason,
+created_at, completed_at)`. The pending discard is *promised* inside
+the abort transaction and *fulfilled* after COMMIT by
+`drain_auto_shadow_cleanup_outbox` (idempotent, bounded 64/attempt):
+crash after COMMIT before discard → retry; crash after discard before
+the completed marker → re-discard (absent file = success) + mark;
+nonexistent pending = successful cleanup; an unavailable/malformed
+journal leaves the row open for the next drain and NEVER rolls back
+the already-safe SQLite truth. `clear_auto_state_metadata` enqueues
+the same intent, so the terminal sweep and the executor close-out get
+the guarantee for free. No ACID pretence across the SQLite authority
+and the filesystem journal.
+
+### 14.3 Tick ordering + READY stale-metadata recovery
+
+Tick order: (1) drain outbox, (2) recover stale READY metadata,
+(3) mode revocation, (4) project revocation, (5) planning, (6) AUTO
+advancement, (7) dispatch reconciliation, (8) terminal sweep,
+(9) second lightweight drain. Old-lifecycle cleanup always precedes
+new planning.
+
+`recover_ready_auto_metadata`: a `READY` row carrying lifecycle
+metadata (`auto_decision_id` / `auto_grace_deadline_at` /
+`auto_acked_at`) is stale (old-build crash residue), never an active
+lifecycle — recovered atomically (clear + one bump +
+`AUTO_METADATA_RECOVERED{reason="ready_state_stale_auto_metadata"}` +
+cleanup enqueue). `auto_reason` alone on a READY row is the tick's
+legal deduped skip hint and is deliberately NOT treated as stale.
+A `READY` row with only a routing-decision row is the legal
+frozen-decision crash boundary (§13 item 4) and stays untouched.
+
+### 14.4 ACK contract (frozen wording)
+
+- FIRST ACK: requires the exact `task_state_version` (409
+  `stale_task_state_version` on mismatch).
+- ALREADY-ACKED retry: idempotent 200 with the current task; the
+  deadline keeps its original value — a retry can never extend it.
+- VETO: exact version before the first mutation; a replay of the same
+  durable `request_id` is idempotent.
+- DISPATCH-NOW: exact version execution-admission guard.
+
+Do NOT describe the three endpoints as "all always enforce exact
+task_state_version" — the ACK already-acked replay is deliberately
+idempotent without a version check (extending the wire schema with a
+durable ACK request id was considered and rejected for this round).
+
+### 14.5 Current-cycle dispatch reconciliation (review round 2)
+
+`_reconcile_supervised_auto_dispatches` correlates terminal
+(`BLOCKED`/`CANCELLED`) SUPERVISED_AUTO dispatch rows to the task's
+**current** auto cycle only, in four gated layers:
+
+1. **Current cycle source** — `task.auto_decision_id` must be live
+   (non-NULL). A task without current auto metadata is never touched
+   by reconciliation: a historical SUPERVISED_AUTO row alone proves
+   nothing about the current lifecycle (fail closed — a BLOCKED task
+   stays BLOCKED; the legacy `BLOCKED + no metadata → READY` fallback
+   was removed for exactly this reason).
+2. **Current dispatch request id** — the row participates only when
+   `row.request_id ==
+   supervised_auto_dispatch_request_id(task.auto_decision_id)`.
+   Rows from older cycles are ignored — no cross-cycle mutation.
+3. **State gate** — `AUTO_GRACE` or `BLOCKED` only.
+4. **Dispatch-scoped run correlation** — "this dispatch produced a
+   run" is decided by the exact `run-{dispatch_id}` row
+   (`runs.run_id` is the PK; the executor always registers the run
+   with that id). A run row for the same task under any other id —
+   including a real run from an older cycle — does NOT count. A
+   dispatch whose exact run exists keeps its outcome (executor +
+   verifier own that truth); one without it takes the crash-atomic
+   `abort_auto_lifecycle` close (reason
+   `admission_failed:{failure_code|status}`).
+
+The task-scoped `SELECT 1 FROM runs WHERE task_id=?` lookup is gone
+from this path entirely. Owner-initiated dispatches are unaffected
+(the query stays filtered on `authority = 'SUPERVISED_AUTO'`).
+
+### 14.6 Post-worker shadow finalization outbox (review round 3)
+
+A REAL worker execution whose authoritative verdict is durable in
+SQLite must produce a truthful finalized shadow observation — never a
+silent discard. Round 3 closed the last crash window (terminal COMMIT
+before the filesystem finalize):
+
+- **`auto_shadow_finalize_outbox`** — durable finalization intent with
+  an IMMUTABLE payload (`ShadowFinalizationIntent`): every
+  `finalize_pending` input, the observation identity keys (the
+  pending's routing request id + frozen decision id) and an
+  `observed_at` PINNED at enqueue (observation ids are content digests
+  that exclude the verdict and `observed_at`, so replays must reuse
+  the exact stored value to stay byte-identical).
+- **One authoritative transaction (OPTION A)** —
+  `apply_verification_outcome` commits the VERIFYING → VERIFIED /
+  BLOCKED transition, its audit and the finalize intent in ONE
+  `BEGIN IMMEDIATE`; the filesystem finalize is replayed post-COMMIT
+  by the idempotent `drain_auto_shadow_finalize_outbox` (bounded 64).
+- **Collision semantics** — same payload → idempotent; different
+  payload for the same `finalization_id` → `RuntimeError` (first
+  durable intent owns the truth). `shadow-finalize-{pending_id}` is
+  the stable id.
+- **Finalize outranks discard** — enqueueing a finalize intent closes
+  any open cleanup intent for the pending in the same transaction, and
+  cleanup-intent inserts are structurally suppressed while ANY
+  finalize intent exists; the cleanup drain also skips pendings with
+  an open finalize intent.
+- **Drain recovery matrix** — pending present → exact replay +
+  discard + completed marker; pending missing → completed ONLY when
+  the finalized observation is proven present (identity + verdict
+  match), otherwise the intent stays open with a sanitized
+  `AUTO_SHADOW_FINALIZE_RETRY_FAILED` system event (evidence loss is
+  never success); journal `None` → intents stay OPEN (this also fixed
+  the round-3 P1: the cleanup drain previously marked intents
+  completed without a journal).
+- **Terminal sweep classification** — a terminal lifecycle whose
+  current dispatch has an exact `run-{dispatch_id}` row is REAL
+  EXECUTION: finalize/reconstruct (existing observations replay
+  byte-identically; residue reconstructed from the task + run truth),
+  fail closed when reconstruction is impossible. Without an exact run
+  row the pre-worker discard path applies unchanged.
+- **Tick order** — finalize drain BEFORE cleanup drain (evidence
+  outranks discard), both again at tick end; metadata clears only
+  after the recovery information is durable (the outbox alone
+  suffices at restart).
+
+### 14.7 Final outcome ordering + recovery guard (review round 4)
+
+The shadow observation must represent the FINAL HOST-AUTHORITATIVE
+execution outcome — never the intermediate verifier verdict:
+
+- **Composition before the terminal commit** — the executor runs the
+  deterministic verifier WITHOUT committing anything terminal, computes
+  the main-repo fingerprint, and only then commits ONE final outcome:
+  `apply_verification_result(shadow_main_repo_unchanged=...)` requires
+  verifier-authoritative PASS **AND** main repo unchanged for VERIFIED.
+  Verifier PASS + main repo mutated ⇒ BLOCKED with a truthful shadow
+  (`verified=False`, `execution_success=True`,
+  `verification_success=True`, taxonomy `INFRA_FAILURE` /
+  `INFRASTRUCTURE` / `OPERATIONAL_FAILED` — the host safety
+  composition failed while the worker and verifier both succeeded).
+  There is no normal `VERIFYING → VERIFIED → BLOCKED` two-step
+  downgrade; the first immutable intent already freezes the final
+  verdict.
+- **Hard metadata-clear recovery guard** —
+  `real_execution_recovery_proof()`: a lifecycle whose current dispatch
+  has an exact `run-{dispatch_id}` row (REAL EXECUTION) may clear
+  `auto_decision_id` only when a durable finalize intent exists OR a
+  finalized observation is proven for the exact lifecycle identity;
+  otherwise the clear is refused (`AUTO_SHADOW_RECOVERY_GUARD_HELD`),
+  no discard is promised and the row stays fail-closed recoverable.
+  Pre-worker aborts keep the original abort/cleanup path.
+- **Self-sufficient intents + exact proof** — the finalize outbox
+  freezes the pending's full immutable identity (`identity_json`,
+  schema-migrated). Completion proof REBUILDS the exact expected
+  `ShadowObservation` (verdict columns + frozen identity + pinned
+  `observed_at`) and demands exact model equality: `observation_id`
+  alone proves nothing about the verdict (it digests identity only), so
+  divergent `failure_class`, `verification_success`, `observed_at`,
+  `quota_after_snapshot_ids` or burn data fail closed.
+
+### 14.8 Reserved dispatch namespace + pending identity (review round 5)
+
+- **Reserved internal namespace** — the deterministic
+  `supervised-auto-dispatch-{auto_decision_id}` request-id namespace
+  belongs exclusively to the SUPERVISED_AUTO authority
+  (`SUPERVISED_AUTO_DISPATCH_REQUEST_PREFIX` /
+  `is_reserved_auto_dispatch_request_id`). An OWNER_INITIATED_EXECUTION
+  request carrying a reserved request id is rejected at the shared
+  `initiate_owner_dispatch` boundary BEFORE any durable reservation —
+  HTTP 400 `reserved_dispatch_request_id_namespace`, no
+  `owner_dispatches` row, no worker, no task mutation. Normal owner
+  request ids are unchanged.
+- **Exact existing-row recovery identity** — AUTO crash recovery may
+  re-admit an existing row for the deterministic request id ONLY on an
+  exact identity match: request id, dispatch id, task id,
+  `task_state_version`, frozen `execution_target_id` AND authority —
+  the single shared comparison `owner_dispatch_matches_expected`
+  (also used by `reserve_owner_dispatch`, so the two rules can never
+  drift). A legacy/polluted/foreign row (any dimension mismatch) is
+  never executed, adopted or mutated: the CURRENT lifecycle aborts
+  fail-closed (`dispatch_namespace_conflict`, atomic READY + metadata
+  clear + cleanup outbox) and the foreign row remains untouched
+  historical truth; a new planning cycle derives a fresh
+  state_version → fresh `auto_decision_id` → fresh request id.
+- **Present-pending frozen-identity validation** — after the finalize
+  intent is enqueued, the durable row (not mutable filesystem state) is
+  the authority. The finalize drain proves a PRESENT pending equals the
+  frozen intent (four correlation columns + canonical-JSON
+  `shadow_identity_payload(pending) == identity_json`; legacy `{}`
+  intents fail closed) BEFORE finalizing; a stale/replaced/tampered
+  pending is never finalized, discarded or completed
+  (`AUTO_SHADOW_FINALIZE_RETRY_FAILED` /
+  `PendingIdentityMismatch`). Success additionally requires the exact
+  expected observation to be durably present after `finalize_pending`
+  — a plain function return is not proof
+  (`PostFinalizeObservationUnproven` leaves the intent OPEN and the
+  pending in place).
+- **Observation-only recovery proof** — correlates on the REAL durable
+  `RoutingDecision.decision_id` (`route-*`, loaded from
+  `routing_decisions` by `supervised-auto-{auto_decision_id}`), never
+  the `auto-*` pending id; requires exactly ONE matching observation
+  and terminal task/shadow verdict consistency (VERIFIED ⇔
+  verified=True; other terminal states ⇔ verified=False;
+  non-terminal states never prove). Priority unchanged: pre-worker →
+  True; durable finalize intent → True; otherwise observation-only.
+
+### 14.9 Authority-bound source state + terminal correlation (review round 6)
+
+- **Authority owns the legal worker source state** —
+  `expected_source_state_for_dispatch_authority` (safety_kernel, the
+  single low-level definition): `OWNER_INITIATED_EXECUTION` → READY,
+  `SUPERVISED_AUTO` → AUTO_GRACE, any other authority → `ValueError`
+  (fail closed). The executor entry derives the expected state from
+  the DURABLE dispatch row's authority — never from whatever state the
+  task happens to be in — so a stale SUPERVISED_AUTO reservation whose
+  task was vetoed / mode-aborted back to READY can never start (it is
+  not "reinterpreted" as an owner dispatch), and an unknown authority
+  marks the dispatch BLOCKED (`UNKNOWN_DISPATCH_AUTHORITY`) with no
+  worker. `start_dispatched_worker` re-derives the same mapping inside
+  its `BEGIN IMMEDIATE` transaction; a caller-supplied
+  `expected_state` is only a consistency assertion — a value that
+  disagrees with the authority-derived state raises before any
+  mutation, so no caller can weaken the SQL `WHERE state=?` guard.
+- **Authority-aware pre-worker failure** — `_fail_pre_worker` moves
+  the task to BLOCKED only from the dispatch authority's OWN legal
+  source state (OWNER → READY, SUPERVISED_AUTO → AUTO_GRACE). A stale
+  AUTO reservation failing after a veto leaves the owner-controlled
+  READY task untouched; the dispatch row alone carries the failure.
+- **Canonical exact AUTO execution correlation** —
+  `current_supervised_auto_dispatch` / `correlate_supervised_auto_execution`
+  prove the EXACT current SUPERVISED_AUTO reservation before any run
+  classification: frozen routing decision (task-gated, pins the
+  target), deterministic request id + dispatch id, exact task id,
+  authority SUPERVISED_AUTO (an OWNER row is NEVER AUTO evidence) and
+  the reservation-cycle version contract — at admission the live
+  AUTO_GRACE version (exact equality); at terminal recovery the
+  ordering invariant (reservation version strictly below the terminal
+  version — the terminal chain necessarily advanced it; the two are
+  never compared for equality). Classification:
+  `NO_DISPATCH` / `EXACT_PREWORKER` (genuine pre-worker → ordinary
+  cleanup), `EXACT_REAL_RUN` (exact `run-{dispatch_id}` proven →
+  finalize evidence owed), `CONFLICT` (namespace occupied by a
+  non-exact row → fail closed: no discard, no reconstruction, no
+  metadata clear, sanitized `AUTO_EXECUTION_CORRELATION_CONFLICT`
+  event). Every AUTO run-classification path (dispatch admission,
+  terminal sweep, metadata-clear recovery proof, finalize
+  reconstruction) uses this ONE proof.
+- **Thread contract (documentation truth)** — the tick never sleeps,
+  never reads credentials, never executes shell commands; its
+  dispatch/recovery hand-off re-enters the existing DispatchExecutor
+  boundary and may spawn an executor thread for an already-durable
+  reservation. No worker execution happens inside the tick itself.
+
+### 14.10 Canonical reconciliation correlation (review round 7)
+
+- **Reconciliation is task-driven and classifier-gated** —
+  `_reconcile_supervised_auto_dispatches` iterates CURRENT task truth
+  (AUTO_GRACE / BLOCKED tasks with a live `auto_decision_id`), never
+  historical dispatch rows. A raw `owner_dispatches` row is not proof:
+  every mutation is gated on the Round-6 canonical classifier
+  `correlate_supervised_auto_execution` (frozen routing target,
+  deterministic request/dispatch ids, task, authority
+  SUPERVISED_AUTO, reservation-cycle version contract):
+  - **CONFLICT** (wrong authority / task / target / dispatch id /
+    reservation version) → fail closed: metadata + pending preserved,
+    no abort, no discard, no finalize intent, sanitized
+    `AUTO_EXECUTION_CORRELATION_CONFLICT` event.
+  - **EXACT_REAL_RUN** → executor / terminal recovery owns the
+    outcome; never a pre-worker abort.
+  - **NO_DISPATCH** → no current-cycle dispatch exists; unrelated
+    historical SUPERVISED_AUTO rows for the same task can never drive
+    a mutation.
+  - **EXACT_PREWORKER** → only a BLOCKED/CANCELLED exact current
+    reservation is a legitimate pre-worker admission failure and may
+    use the existing crash-atomic abort path (AUTO_GRACE → READY;
+    terminal BLOCKED → READY via `allow_blocked`).
+- **Version semantics** — while the task is AUTO_GRACE the reservation
+  version must exactly equal the live `state_version` (V±1 ⇒ CONFLICT);
+  a terminal BLOCKED task uses the recovery ordering contract
+  (reservation version strictly below the terminal version) — equal or
+  future versions are CONFLICT. The two are never compared for
+  equality.
+- **Conflict-event dedupe** — reconciliation and the terminal sweep
+  share a per-tick dedupe: one `AUTO_EXECUTION_CORRELATION_CONFLICT`
+  event per (task, lifecycle) per tick, payload
+  task_id / auto_decision_id / reason only.
+- **Identifier contract (documentation fix)** — `auto_decision_id` is
+  the lifecycle/cycle id `auto-{task_id}-v{state_version-at-planning}`;
+  it is NOT the `RoutingDecision.decision_id` (independent durable id
+  `route-{digest}`). Chain: auto_decision_id → routing request id
+  `supervised-auto-{auto_decision_id}` → RoutingDecision (`route-*`,
+  looked up by request id). A `PendingShadowObservation` carries
+  `pending_id == auto_decision_id` and
+  `decision_id == RoutingDecision.decision_id`.

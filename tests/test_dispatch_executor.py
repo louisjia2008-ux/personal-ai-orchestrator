@@ -27,6 +27,7 @@ from personal_ai_orchestrator.control_api import (
 )
 from personal_ai_orchestrator.control_client import ControlPlaneClient
 from personal_ai_orchestrator.dispatch_executor import (
+    WORKER_TRANSCRIPT_TAIL_BYTES,
     DispatchExecutorConfig,
     OwnerDispatchExecutor,
     build_worker_env,
@@ -595,6 +596,251 @@ def test_quota_journal_exhausted_blocks_even_without_collector(tmp_path: Path) -
         _close(snapshot)
 
 
+def test_quota_uncertain_locked_blocks_after_three_consecutive_failures(
+    tmp_path: Path,
+) -> None:
+    """A target whose journal has UNCERTAIN_LOCKED must be rejected.
+
+    The lock fires after three consecutive failed quota collections
+    (no collector → unknown_availability with previous=previous), so this
+    test simulates that exact journal state and confirms admission rejects
+    with QUOTA_UNKNOWN regardless of `` ``require_quota_certainty``.
+    """
+
+    from personal_ai_orchestrator.quota_availability import (
+        QuotaAvailabilityState,
+        unknown_availability,
+    )
+
+    harness = ExecutorHarness(tmp_path)
+    journal = QuotaAvailabilityJournal(harness.runtime_root)
+    streak = None
+    for index in range(3):
+        streak = unknown_availability(
+            execution_target_id="zai-coding-plan-glm-5.3",
+            provider_id="zai-coding-plan",
+            quota_pool_id="zai-coding-plan",
+            observed_at=datetime.now(UTC) + timedelta(seconds=index + 1),
+            previous=streak,
+        )
+        journal.save(streak)
+    assert streak.state_at(now=datetime.now(UTC)) is (
+        QuotaAvailabilityState.UNCERTAIN_LOCKED
+    )
+
+    request_id = harness.reserve()
+    harness.run(request_id)
+
+    snapshot = harness.snapshot()
+    try:
+        assert snapshot["task"].state is TaskState.BLOCKED
+        assert snapshot["dispatch_failure_code"] == "QUOTA_UNKNOWN"
+    finally:
+        _close(snapshot)
+
+
+def test_quota_require_quota_certainty_false_does_not_relax_uncertain_locked(
+    tmp_path: Path,
+) -> None:
+    """``require_quota_certainty=False`` must not unlock UNCERTAIN_LOCKED.
+
+    The lock fires for *the lack of evidence* (consecutive UNKNOWNs), not for
+    the lack of certainty after evidence. With ``require_quota_certainty``
+    at its default (``False``), a collector that keeps returning UNKNOWN
+    must still drive the streak and trip the lock on the third dispatch.
+    The rejection reason must carry the failure count so the owner can
+    distinguish "host could not probe" from "probe said quota unknown".
+    """
+
+    from personal_ai_orchestrator.quota_availability import (
+        UNCERTAIN_LOCKED_THRESHOLD,
+        QuotaAvailabilityState,
+    )
+
+    harness = ExecutorHarness(tmp_path)
+    # Force the default (False) explicitly so the test cannot silently
+    # drift if the config default changes.
+    assert harness.executor.config.require_quota_certainty is False
+    harness.executor._quota_collectors["zai-coding-plan"] = FakeCollector(
+        QuotaCollectionResult(status=QuotaCollectionStatus.UNKNOWN)
+    )
+    journal = QuotaAvailabilityJournal(harness.runtime_root)
+
+    outcomes = []
+    for index in range(UNCERTAIN_LOCKED_THRESHOLD):
+        request_id = f"dispatch-uncert-{index}"
+        harness.reserve(task_id=f"task-uncert-{index}", request_id=request_id)
+        harness.run(request_id)
+        snapshot = harness.snapshot(task_id=f"task-uncert-{index}")
+        try:
+            outcomes.append(
+                {
+                    "state": snapshot["task"].state,
+                    "failure_code": snapshot["dispatch_failure_code"],
+                }
+            )
+        finally:
+            _close(snapshot)
+
+    # First two dispatches admit even though the underlying state is UNKNOWN
+    # (require_quota_certainty=False), but each one bumps the streak.
+    assert outcomes[0]["state"] is TaskState.VERIFIED
+    assert outcomes[0]["failure_code"] is None
+    assert outcomes[1]["state"] is TaskState.VERIFIED
+    assert outcomes[1]["failure_code"] is None
+
+    # Third dispatch trips the lock; the rejection reason must carry the
+    # failure count so the owner can read the streak directly off the
+    # QuotaAdmission.evidence rather than only via the failure_code.
+    assert outcomes[2]["state"] is TaskState.BLOCKED
+    assert outcomes[2]["failure_code"] == "QUOTA_UNKNOWN"
+
+    evidence = journal.load("zai-coding-plan-glm-5.3")
+    assert evidence is not None
+    assert evidence.consecutive_failures >= UNCERTAIN_LOCKED_THRESHOLD
+    assert evidence.state_at(now=datetime.now(UTC)) is (
+        QuotaAvailabilityState.UNCERTAIN_LOCKED
+    )
+
+
+def test_quota_unknown_collector_growth_stays_locked_without_relaxation(
+    tmp_path: Path,
+) -> None:
+    """No-collector branch (branch A) must keep the lock, not bypass it.
+
+    When the provider has no registered collector, ``_admit_quota`` falls
+    through to ``unknown_availability(previous=...)`` on every call. The
+    streak therefore grows exactly as it would for a real UNKNOWN-collecting
+    provider, and the lock must fire after ``UNCERTAIN_LOCKED_THRESHOLD``
+    consecutive calls. The lack of a collector must never be mistaken for
+    a clean billable launch — the host must NOT relax the lock just
+    because it has no probe.
+    """
+
+    from personal_ai_orchestrator.quota_availability import (
+        UNCERTAIN_LOCKED_THRESHOLD,
+        QuotaAvailabilityState,
+    )
+
+    harness = ExecutorHarness(tmp_path)
+    # No collector registered for this provider — exercises the
+    # ``collector is None`` branch of ``_admit_quota``.
+    assert "zai-coding-plan" not in harness.executor._quota_collectors
+    journal = QuotaAvailabilityJournal(harness.runtime_root)
+
+    for index in range(UNCERTAIN_LOCKED_THRESHOLD):
+        request_id = f"dispatch-no-collector-{index}"
+        harness.reserve(task_id=f"task-no-collector-{index}", request_id=request_id)
+        harness.run(request_id)
+
+    # The third call's evidence must be UNCERTAIN_LOCKED and the task
+    # must be BLOCKED, not silently admitted.
+    final = harness.snapshot(task_id="task-no-collector-2")
+    try:
+        assert final["task"].state is TaskState.BLOCKED
+        assert final["dispatch_failure_code"] == "QUOTA_UNKNOWN"
+    finally:
+        _close(final)
+
+    # The journal must record consecutive_failures == threshold, NOT be
+    # silently cleared because the provider has no collector.
+    evidence = journal.load("zai-coding-plan-glm-5.3")
+    assert evidence is not None
+    assert evidence.consecutive_failures == UNCERTAIN_LOCKED_THRESHOLD
+    assert evidence.state_at(now=datetime.now(UTC)) is (
+        QuotaAvailabilityState.UNCERTAIN_LOCKED
+    )
+    assert evidence.confidence is EvidenceConfidence.UNKNOWN
+
+
+def test_quota_uncertain_locked_clears_after_successful_collector_run(
+    tmp_path: Path,
+) -> None:
+    """A single successful observation resets the streak and admits.
+
+    Once the collector produces an AVAILABLE outcome the lock should
+    release on the next dispatch, not stay sticky. The host must never
+    need an owner action to clear it.
+    """
+
+    from personal_ai_orchestrator.quota_availability import (
+        QuotaAvailabilityState,
+        unknown_availability,
+    )
+
+    harness = ExecutorHarness(tmp_path)
+    journal = QuotaAvailabilityJournal(harness.runtime_root)
+    streak = None
+    for index in range(3):
+        streak = unknown_availability(
+            execution_target_id="zai-coding-plan-glm-5.3",
+            provider_id="zai-coding-plan",
+            quota_pool_id="zai-coding-plan",
+            observed_at=datetime.now(UTC) + timedelta(seconds=index + 1),
+            previous=streak,
+        )
+        journal.save(streak)
+    # A successful collector produces observe_success() which writes a
+    # 0-streak AVAILABLE row and drops the lock.
+    harness.executor._quota_collectors["zai-coding-plan"] = FakeCollector(
+        available_result()
+    )
+    request_id = harness.reserve()
+    harness.run(request_id)
+
+    snapshot = harness.snapshot()
+    try:
+        assert snapshot["task"].state is TaskState.VERIFIED
+        assert snapshot["dispatch_failure_code"] is None
+    finally:
+        _close(snapshot)
+    evidence = journal.load("zai-coding-plan-glm-5.3")
+    assert evidence is not None
+    assert evidence.consecutive_failures == 0
+    assert evidence.state_at(now=datetime.now(UTC)) is (
+        QuotaAvailabilityState.AVAILABLE_OBSERVED
+    )
+
+
+def test_quota_two_failures_still_admits_below_threshold(tmp_path: Path) -> None:
+    """Two consecutive UNKNOWNs is still below the threshold.
+
+    Admission MUST allow the dispatch — the lock only fires after the third
+    consecutive failure, not on the second.
+    """
+
+    from personal_ai_orchestrator.quota_availability import (
+        QuotaAvailabilityState,
+        unknown_availability,
+    )
+
+    harness = ExecutorHarness(tmp_path)
+    journal = QuotaAvailabilityJournal(harness.runtime_root)
+    streak = None
+    for index in range(2):
+        streak = unknown_availability(
+            execution_target_id="zai-coding-plan-glm-5.3",
+            provider_id="zai-coding-plan",
+            quota_pool_id="zai-coding-plan",
+            observed_at=datetime.now(UTC) + timedelta(seconds=index + 1),
+            previous=streak,
+        )
+        journal.save(streak)
+    assert streak.state_at(now=datetime.now(UTC)) is QuotaAvailabilityState.UNKNOWN
+
+    harness.executor._quota_collectors["zai-coding-plan"] = FakeCollector(
+        available_result()
+    )
+    request_id = harness.reserve()
+    harness.run(request_id)
+
+    snapshot = harness.snapshot()
+    try:
+        assert snapshot["task"].state is TaskState.VERIFIED
+    finally:
+        _close(snapshot)
+
+
 def test_quota_available_collector_admits_and_is_journaled(tmp_path: Path) -> None:
     harness = ExecutorHarness(tmp_path)
     harness.executor._quota_collectors["zai-coding-plan"] = FakeCollector(
@@ -706,6 +952,59 @@ def test_internal_executor_error_after_running_emergency_repairs_state(
     assert harness.executor._supervisor.owned_pids() == ()
     assert harness.executor.execution_supervisor.owned_task_ids() == ()
     assert harness.main_unchanged()
+
+
+def test_emergency_repair_persists_signal_in_run_result_json(tmp_path: Path) -> None:
+    """SIGKILL emergency repair must produce a self-describing run result.
+
+    Previously the run row was finished with ``{"emergency_repair": True}``,
+    which gave the owner nothing actionable. The post-A3 path records the
+    signal that killed the worker (SIGKILL == 9) plus the emergency_repair
+    sentinel, so the UI can render a meaningful diagnosis.
+    """
+
+    harness = ExecutorHarness(
+        tmp_path,
+        worker_bin=write_worker_script(
+            tmp_path / "bin", name="signal-worker", sleep_seconds=30.0
+        ),
+    )
+    request_id = harness.reserve()
+
+    async def broken_wait(_supervised):
+        raise RuntimeError("injected post-running failure")
+
+    harness.executor._wait_for_worker = broken_wait  # type: ignore[method-assign]
+    harness.run(request_id)
+
+    store = SafetyKernelStore(harness.state_db)
+    try:
+        run = store.connection.execute(
+            "SELECT status, result_json FROM runs WHERE task_id='task-1'"
+        ).fetchone()
+        assert run is not None
+        assert run["status"] == "FAILED"
+        payload = json.loads(run["result_json"])
+        # Signal is SIGKILL (the supervisor always uses killpg(SIGKILL)).
+        assert payload["signal"] == 9
+        assert payload["emergency_repair"] is True
+        # Tails were never captured (supervisor does not drain in emergency),
+        # but the field names are guaranteed for cross-path consistency.
+        assert "stdout_tail" not in payload
+        assert "stderr_tail" not in payload
+
+        dispatch = store.connection.execute(
+            "SELECT failure_reason FROM owner_dispatches "
+            "WHERE task_id='task-1' ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+        assert dispatch is not None
+        # The owner-facing reason names the signal so the dashboard banner
+        # can show "executor emergency repair: worker exited unexpectedly
+        # (signal 9)" without reaching into the run row.
+        assert "signal 9" in dispatch["failure_reason"]
+        assert "RuntimeError" in dispatch["failure_reason"]
+    finally:
+        store.close()
 
 
 def test_dispatch_blocks_task_without_registered_project(tmp_path: Path) -> None:
@@ -993,3 +1292,37 @@ def test_launch_gate_rejects_stale_execution_evidence(tmp_path: Path) -> None:
             runtime_available=True,
             execution_evidence_journal=journal,
         )
+
+
+def test_host_result_envelope_carries_sanitized_transcript_tails() -> None:
+    """The owner can finally see what the worker did, safely.
+
+    Tails are bounded, ANSI-free, control-character-free; hashes still
+    cover the full bytes. Worker text remains display evidence only.
+    """
+
+    executor = OwnerDispatchExecutor.__new__(OwnerDispatchExecutor)
+    noisy = (
+        "\x1b[93m\x1b[1m! \x1b[0mpermission requested: edit (README.md)"
+        "；auto-rejecting\n→ Read README.md\n✗ Edit README.md failed\n"
+        "Error: rejected\x00\x07\n"
+    ).encode()
+    big = b"x" * (WORKER_TRANSCRIPT_TAIL_BYTES + 4096) + b"|TAIL-MARK|"
+
+    envelope = executor._host_result_envelope(
+        0, stdout=b"", stderr=big + noisy, truncated=True
+    )
+
+    assert envelope["stdout_bytes"] == 0
+    assert envelope["stderr_bytes"] == len(big) + len(noisy)
+    assert envelope["output_truncated"] is True
+    # ANSI and control characters are gone; the narration survives.
+    assert "\x1b" not in envelope["stderr_tail"]
+    assert "\x00" not in envelope["stderr_tail"]
+    assert "permission requested: edit (README.md)" in envelope["stderr_tail"]
+    assert "auto-rejecting" in envelope["stderr_tail"]
+    # The narration lands at the end of the window and the tail stays
+    # bounded by the transcript cap (bytes, not characters).
+    assert envelope["stderr_tail"].endswith("Error: rejected\n")
+    assert len(envelope["stderr_tail"].encode("utf-8")) <= WORKER_TRANSCRIPT_TAIL_BYTES
+    assert envelope["stdout_tail"] == ""

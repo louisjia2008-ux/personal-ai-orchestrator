@@ -64,6 +64,8 @@
 "dashboard.verification" = "Verification";
 "dashboard.history" = "History";
 "dashboard.settings" = "Settings";
+"dashboard.resources" = "Resources";
+"dashboard.activity" = "Activity";
 "label.connection" = "Connection";
 "label.systemHealth" = "System health";
 "label.blockers" = "Blockers";
@@ -143,6 +145,14 @@
 "label.workerRun" = "Worker run";
 "label.noVerifiedTargets" = "No execution-verified target available.";
 "label.ownerDispatchFooter" = "Worker runs inside the task worktree; the main repository stays untouched. Only deterministic host verification can produce VERIFIED.";
+"label.workerLogTruncated" = "Output was capped by the host; only the final 8 KB is kept.";
+"scheduling.policyManualLinked" = "MANUAL policy: this target was recorded at submit time and is preselected here.";
+"scheduling.policyArchived" = "This policy is archived with the task. Automatic target selection starts when Production ACTIVE routing is enabled; until then you dispatch by hand.";
+"taskCompletion.title" = "Task finished: %@";
+"taskCompletion.view" = "View";
+"taskCompletion.dismiss" = "Dismiss";
+"run.processExited" = "Exited";
+"run.processAlive" = "Running";
 "label.taskNotDispatchable" = "Task state %@ is not dispatchable.";
 "label.observedState" = "Observed state";
 "label.measurementSource" = "Measurement source";
@@ -370,6 +380,9 @@
 
 /* P4.2.6.4 providers and models */
 "providers.pickerTitle" = "Models & Providers";
+"resources.pickerTitle" = "Resource view";
+"settings.pickerTitle" = "Settings view";
+"settings.tab.general" = "General";
 "providers.notConnected" = "Not Connected";
 "providers.surface" = "Surface";
 "providers.providerId" = "Provider ID";
@@ -518,3 +531,278 @@
 "quota.reason.codingScopeUnreadable" = "The coding/text scope carried a remaining figure that could not be read, so nothing is shown for it.";
 "quota.reason.codingWindowSemanticsUnknown" = "One window of the coding/text scope is readable; the other window could not be identified in this response and is not guessed at.";
 "quota.reason.codingScopeDisagree" = "Several coding/text scopes report different values for the same window, so no single figure can be derived from them.";
+
+/* B1 evidence levels: OBSERVED / DERIVED / FORECAST must never read alike */
+"evidence.observed" = "Observed";
+"evidence.derived" = "Derived";
+"evidence.forecast" = "Projected";
+"evidence.unavailable" = "Not enough data";
+"timestamp.justNow" = "just now";
+
+/* B1: Task Detail was the one screen left unlocalized */
+"detail.panel.summary" = "Summary";
+"detail.panel.progress" = "Progress";
+"detail.panel.liveActivity" = "Live Activity";
+"detail.panel.changes" = "Changes";
+"detail.panel.verification" = "Tests / Verification";
+"phase.preparing" = "Preparing";
+"phase.routing" = "Routing";
+"phase.workspace" = "Workspace";
+"phase.quota" = "Quota";
+"phase.startingWorker" = "Starting worker";
+"phase.editing" = "Editing";
+"phase.testing" = "Testing";
+"phase.verifying" = "Verifying";
+"phase.finished" = "Finished";
+"candidate.selected" = "Selected";
+"candidate.eligible" = "Eligible";
+"candidate.ineligible" = "Ineligible";
+"candidate.unknownModel" = "Unknown model";
+"value.none" = "none";
+"value.unknown" = "unknown";
+"value.automatic" = "Automatic";
+"value.notVerifiedYet" = "not verified yet";
+"value.stagePassed" = "passed";
+"value.stageFailed" = "failed";
+"value.notShadowMode" = "not shadow mode";
+"label.task" = "Task";
+"label.updatedRelative" = "Updated %@";
+
+
+/* B3 task workspace */
+"taskGroup.queued" = "Queued";
+"taskGroup.active" = "Active";
+"taskGroup.needsAttention" = "Needs attention";
+"taskGroup.completed" = "Completed";
+"taskGroup.cancelled" = "Cancelled";
+"tasks.filterMenu" = "Filter";
+"tasks.filter.allTasks" = "All tasks";
+"tasks.filter.groups" = "Groups";
+"tasks.filter.states" = "States";
+"tasks.filter.project" = "Project";
+"tasks.filter.allProjects" = "All projects";
+"tasks.filter.clear" = "Clear filters";
+"tasks.searchPrompt" = "Search tasks";
+"tasks.visibleCount" = "%1$d of %2$d";
+"tasks.truncated" = "Showing the %1$d most recent tasks of %2$d.";
+"tasks.truncatedHelp" = "The daemon serves at most %d tasks per request, so older tasks are not in this list.";
+"tasks.noProject" = "No project";
+"empty.tasks.none.title" = "No tasks yet";
+"empty.tasks.none.message" = "Submitted tasks appear here with their routing, changes and verification.";
+"empty.tasks.search.title" = "No matching tasks";
+"empty.tasks.search.message" = "No task in the loaded collection matches “%@”.";
+"empty.tasks.search.hint" = "Search covers the tasks loaded from the daemon, not the whole store.";
+"empty.tasks.filter.title" = "No tasks in this filter";
+"empty.tasks.filter.message" = "Tasks exist, but none match the current state or project filter.";
+"empty.tasks.loading" = "Loading tasks…";
+"empty.tasks.noSelection.title" = "No task selected";
+"empty.tasks.noSelection.message" = "Select a task to see its status, routing, changes and verification.";
+"taskDetail.section.overview" = "Status";
+"taskDetail.section.lifecycle" = "Lifecycle";
+"taskDetail.section.execution" = "Execution";
+"taskDetail.section.attention" = "Needs attention";
+"taskDetail.openTaskFailed" = "This task could not be loaded.";
+"taskLifecycle.submitted" = "Submitted";
+"taskLifecycle.routing" = "Routing";
+"taskLifecycle.workspace" = "Workspace";
+"taskLifecycle.execution" = "Execution";
+"taskLifecycle.verification" = "Verification";
+"taskLifecycle.completion" = "Completion";
+"taskLifecycle.status.reached" = "Done";
+"taskLifecycle.status.inProgress" = "In progress";
+"taskLifecycle.status.notReached" = "Not yet";
+"taskLifecycle.status.failed" = "Failed";
+"taskLifecycle.status.stopped" = "Stopped";
+"taskLifecycle.status.unknown" = "Unknown";
+"taskLifecycle.footer" = "The daemon reports stage transitions, not progress within a stage.";
+"taskAttention.verificationFailed" = "Verification rejected this task";
+"taskAttention.failed" = "This task failed";
+"taskAttention.blocked" = "This task is blocked";
+"taskAttention.unknownState" = "Unrecognized task state";
+"taskAttention.verificationEvidenceUnavailable" = "Verification evidence is unavailable";
+"taskAttention.unexpectedChanges" = "Files changed outside the allowed paths";
+"taskAttention.awaitingApproval" = "Waiting for an approval";
+"taskAttention.noDetail" = "The daemon recorded no reason.";
+"routing.role.primary" = "Primary";
+"routing.role.reviewer" = "Reviewer";
+"routing.role.finalAuditor" = "Final auditor";
+"routing.roleStatus.unassigned" = "Not yet assigned";
+"routing.roleStatus.assigned" = "Assigned";
+"routing.roleStatus.running" = "Running";
+"routing.roleStatus.completed" = "Completed";
+"routing.roleStatus.cancelled" = "Cancelled";
+"routing.outcome.pass" = "Passed";
+"routing.outcome.fail" = "Rejected the work";
+"routing.outcome.error" = "Could not run";
+"routing.outcome.none" = "No result yet";
+"routing.plan" = "Plan";
+"routing.planRevision" = "Revision %d";
+"routing.superseded" = "A newer plan revision has replaced this one.";
+"routing.legacySynthesized" = "Reconstructed from a pre-plan daemon record.";
+"routing.declaredRoles" = "Declared roles";
+"routing.rerouteCount" = "Rerouted %d time(s)";
+"routing.rerouteReason" = "Reroute reason";
+"routing.previousDecisions" = "Previous decisions";
+"routing.decidedAtLabel" = "Decided";
+"routing.noDetails" = "This task has no routing details.";
+"changes.title" = "Changed files";
+"changes.count" = "%d file(s)";
+"changes.none" = "The verifier measured no changed files.";
+"changes.notMeasured.verificationNotRun" = "Changed files are recorded when verification runs.";
+"changes.notMeasured.noWorkspace" = "This task has no worktree.";
+"changes.unexpected" = "Outside allowed paths";
+"changes.unexpectedCount" = "%d outside allowed paths";
+"changes.footer" = "The daemon reports paths only; it records no per-file change kind or line counts.";
+"changes.revealWorktree" = "Reveal worktree in Finder";
+"verification.status.verified" = "Verified";
+"verification.status.evidenceMissing" = "Verified, evidence never recorded";
+"verification.status.evidenceUnavailable" = "Verified, evidence unavailable";
+"verification.status.failed" = "Verification failed";
+"verification.status.inProgress" = "Verifying";
+"verification.status.notVerified" = "Not verified";
+"verification.checks" = "Checks";
+"verification.checkExit" = "exit %d";
+"verification.noResult" = "No verifier result is attached to this task.";
+"verification.notRunYet" = "Verification has not run for this task yet.";
+"verification.overall" = "Verifier verdict";
+"verification.approvals" = "Approvals";
+"verification.evidenceProblemFooter" = "The work was verified, but its evidence record cannot be produced.";
+"verification.stageFooter" = "A check reports its exit code; the daemon does not classify why it failed.";
+"inspector.title" = "Details";
+"inspector.toggle" = "Details inspector";
+"inspector.identity" = "Identity";
+"inspector.timestamps" = "Timestamps";
+"inspector.workspaceSection" = "Workspace";
+"inspector.runsSection" = "Runs";
+"inspector.routingProvenance" = "Routing provenance";
+"inspector.empty" = "Select a task to see its technical details.";
+"label.createdAt" = "Created";
+"label.updatedAt" = "Updated";
+"label.stateVersion" = "State version";
+"label.repositoryPath" = "Repository";
+"label.projectId" = "Project ID";
+"label.currentWorker" = "Current worker";
+"label.noWorkerYet" = "No worker assigned yet";
+"routing.planRevisionLabel" = "Revision";
+
+/* ---------------------------------------------------------------- B4 Resources */
+
+"resources.searchPrompt" = "Search resources";
+"resources.visibleCount" = "%1$d of %2$d";
+"resources.kind.connected" = "Connected";
+"resources.kind.available" = "Available to add";
+"resources.kind.discovered" = "Discovered";
+"resources.filter.all" = "All resources";
+"resources.filter.kind" = "Kind";
+
+"empty.resources.none.title" = "No resources yet";
+"empty.resources.none.message" = "Nothing has been discovered or connected. Refresh providers to run discovery, or add a provider you already use.";
+"empty.resources.loading" = "Loading resources…";
+"empty.resources.search.title" = "No resource matches";
+"empty.resources.search.message" = "Nothing matches “%@”.";
+"empty.resources.noSelection.title" = "Select a resource";
+"empty.resources.noSelection.message" = "Choose a provider to see its availability, quota, usage and execution targets.";
+"resources.disconnectedHint" = "Resources are unknown while the daemon is unreachable. Nothing here is empty — it is simply unread.";
+
+"resource.section.availability" = "Availability";
+"resource.section.quota" = "Quota";
+"resource.section.usage" = "Usage";
+"resource.section.projection" = "Projection";
+"resource.section.executionTargets" = "Execution targets";
+"resource.section.observability" = "Observability";
+"resource.section.models" = "Models";
+
+"resource.noQuotaTelemetry" = "This provider reports no quota. It is still a usable resource — only its remaining balance is unknown.";
+"resource.noExecutionTargets" = "Discovery found no execution target for this provider.";
+"resource.notConnected" = "Not connected. Connect it to read quota and schedule work on it.";
+"resource.connectAction" = "Connect";
+"resource.severalBindings" = "%d quota bindings";
+"resource.bindingLimiting" = "Limiting window";
+"resource.quotaObservable" = "Quota observed";
+"resource.quotaNotObservable" = "Quota not observable";
+"resource.freshnessUnknown" = "Never read";
+"resource.observedAge" = "read %@ ago";
+"resource.staleWarning" = "This reading is older than the window it describes; treat it as stale, not current.";
+"resource.targetsSummary" = "%1$d of %2$d verified";
+"resource.modelsSummary" = "%d models";
+"resource.refreshQuota" = "Refresh quota";
+"resource.refreshProviders" = "Refresh discovery";
+"resource.refreshQuotaHelp" = "Reads each connected provider's documented read-only quota endpoint. No model generation is issued.";
+"resource.refreshProvidersHelp" = "Re-runs catalog and credential discovery. It reads no quota.";
+"resource.refreshFailed" = "Last refresh failed: %@";
+
+"quota.rate.perHour" = "%@ / hour";
+"quota.rate.belowThreshold" = "under %@ / hour";
+"quota.horizon.daysHours" = "%1$dd %2$dh";
+"quota.horizon.hoursMinutes" = "%1$dh %2$dm";
+"quota.horizon.minutes" = "%dm";
+
+"quota.burnRate.title" = "Burn rate";
+"quota.burnRate.basis" = "from %1$d readings over %2$@";
+"quota.burnRate.flat" = "No consumption measured in this window.";
+
+"quota.projection.title" = "At this rate";
+"quota.projection.remainingAtReset" = "Remaining at reset";
+"quota.projection.exhaustionAt" = "Expected to run out";
+"quota.projection.likelyUnused" = "Likely unused at reset";
+"quota.projection.noExhaustion" = "Not expected to run out before reset.";
+"quota.projection.footer" = "A projection, not a reading. It extends the measured burn rate straight to the reset and assumes nothing else changes.";
+
+// M1 WP1 burn pressure chips. STARVED's label is "Expiring unused" —
+// the verdict means a window with lots of remaining quota about to
+// reset, not "almost empty".
+"quota.pressure.unmetered" = "Unmetered";
+"quota.pressure.stale" = "Stale";
+"quota.pressure.exhausted" = "Exhausted";
+"quota.pressure.starved" = "Expiring unused";
+"quota.pressure.ahead" = "Using too fast";
+"quota.pressure.behind" = "Using too slow";
+"quota.pressure.onTrack" = "On track";
+
+"quota.projection.unavailable.NO_HISTORY" = "No usable quota observation has been recorded for this window.";
+"quota.projection.unavailable.INSUFFICIENT_OBSERVATIONS" = "Only one reading in this reset window. A rate needs two.";
+"quota.projection.unavailable.NO_ELAPSED_TIME" = "Every reading in this window carries the same timestamp, so no rate can be measured.";
+"quota.projection.unavailable.REMAINING_INCREASED" = "The remaining balance rose during this window. A rising balance is not extrapolated.";
+"quota.projection.unavailable.RESET_UNKNOWN" = "No reset time reported, so there is no horizon to project to.";
+"quota.projection.unavailable.RESET_ALREADY_PASSED" = "The reported reset has already passed. These readings describe a window that has ended.";
+
+"quota.scarcity.unavailable" = "The daemon does not publish its scarcity classification over the control API, so none is shown. The readings, reset horizon and burn rate above are the evidence it would be derived from.";
+
+"quota.history.axisTime" = "Observed at";
+"quota.history.axisRemaining" = "Remaining";
+"quota.history.seriesLegend" = "Series";
+"quota.history.resetBoundary" = "Reset";
+"quota.history.gapNote" = "Each mark is one observation, placed at the time it was taken. A gap means nothing was observed, not that nothing was used. Lines never cross a reset.";
+"quota.history.singleObservation" = "One observation. A trend needs at least two in the same reset window.";
+"quota.history.observationCount" = "%d observations";
+"quota.history.accessibleSummary" = "%1$@: %2$d observations, latest %3$@ remaining, over %4$@.";
+
+"quota.resetsIn" = "resets in %@";
+"quota.resetPassed" = "reset time has passed";
+"quota.observedAge" = "observed %@ ago";
+"quota.equivalentCapacity.explanation" = "Equivalent capacity estimates how many more tasks of one class fit in the limiting window's remaining units. It is a task count, not a percentage, and cannot be combined with the balances above.";
+"label.recommendDispatch" = "Recommend by policy";
+"label.recommendDispatchHelp" = "Ask the daemon to rank dispatchable targets by the task's archived scheduling policy and quota state.";
+"label.recommendationDismiss" = "Dismiss";
+"recommendation.panelTitle" = "Ranking under policy: %@";
+"recommendation.score" = "score %.1f · headroom %.0f%% · evidence %@";
+"recommendation.quotaState" = "quota state: %@";
+// M1 WP2 — tier picker + chip labels.
+"newTask.minTier" = "Minimum tier";
+"newTask.minTierHelp" = "Hard requirement on model tier; targets below this tier are not recommended.";
+"tier.t0" = "Flagship";
+"tier.t1" = "Workhorse";
+"tier.t2" = "Fast";
+"tier.t3" = "Free";
+"tier.unknown" = "Unknown";
+// WP5b (brought forward) — stale-verification chip on target rows.
+"target.verifiedStale" = "Stale verification";
+// M1 WP3 — BURN_DOWN objective (pressure-first preset).
+"policy.burnDown" = "Burn down quota";
+"policy.burnDown.detail" = "Prefer targets whose quota is expiring unused";
+"resource.group.unmetered" = "Free / unmetered";
+"quota.windowKind.unmetered" = "Unmetered";
+"quota.unmetered.errorRate" = "1-hour error rate";
+"quota.unmetered.rpm" = "Runs in the last minute";
+"quota.unmetered.cooldownUntil" = "Cooldown until";
+"quota.unmetered.noWindow" = "No quota window — usage is limited only by rate";

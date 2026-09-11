@@ -138,21 +138,27 @@ final class BuildIdentityTests: XCTestCase {
 /// Contracts the P4.2.6 dashboard must keep, pinned so a stale binary can never
 /// be mistaken for a regression in the source.
 final class DashboardContractTests: XCTestCase {
-    /// The standalone Agents destination was merged into Models & Providers.
-    func testAgentsIsNotANormalSidebarItem() {
-        XCTAssertFalse(DashboardSection.allCases.contains(.agents))
-    }
-
-    func testSidebarExposesProjectsAndProviders() {
-        XCTAssertTrue(DashboardSection.allCases.contains(.projects))
-        XCTAssertTrue(DashboardSection.allCases.contains(.providers))
-    }
-
-    func testSidebarOrderMatchesGroupedNavigation() {
+    /// B2 froze the product information architecture at five destinations.
+    /// A running binary that still offers nine is stale, not a regression here.
+    func testSidebarOffersExactlyTheFiveProductDestinations() {
+        XCTAssertEqual(DashboardSection.allCases.count, 5)
         XCTAssertEqual(
             DashboardSection.allCases,
-            [.overview, .projects, .tasks, .providers, .quota, .routing, .verification, .history, .settings]
+            [.overview, .tasks, .resources, .activity, .settings]
         )
+    }
+
+    /// The legacy `agents` case is gone entirely rather than merely excluded from
+    /// `allCases`; execution targets are a surface inside Resources.
+    func testLegacyAgentsCaseNoLongerExists() {
+        XCTAssertNil(DashboardSection(rawValue: "agents"))
+        XCTAssertEqual(DashboardSectionMigration.section(forStoredValue: "agents"), .resources)
+    }
+
+    /// Projects and providers were not deleted from the product, only relocated.
+    func testRelocatedCapabilitiesResolveToTheirNewHome() {
+        XCTAssertEqual(DashboardSectionMigration.section(forStoredValue: "projects"), .settings)
+        XCTAssertEqual(DashboardSectionMigration.section(forStoredValue: "providers"), .resources)
     }
 
     /// KPI tiles are localized; an English label in a Chinese catalog means the

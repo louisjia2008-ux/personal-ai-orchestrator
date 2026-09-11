@@ -64,6 +64,8 @@
 "dashboard.verification" = "验证";
 "dashboard.history" = "历史";
 "dashboard.settings" = "设置";
+"dashboard.resources" = "资源";
+"dashboard.activity" = "活动";
 "label.connection" = "连接";
 "label.systemHealth" = "系统健康";
 "label.blockers" = "阻塞项";
@@ -143,6 +145,14 @@
 "label.workerRun" = "工作进程";
 "label.noVerifiedTargets" = "没有已验证执行能力的执行目标。";
 "label.ownerDispatchFooter" = "工作进程仅在任务工作树内运行；主仓库保持不变。只有确定性宿主验证才能产生 VERIFIED。";
+"label.workerLogTruncated" = "输出已按宿主上限截断，仅保留末尾 8 KB。";
+"scheduling.policyManualLinked" = "MANUAL 策略：该目标在提交任务时已记录，此处已自动预选。";
+"scheduling.policyArchived" = "此策略随任务存档。自动目标选择将在 Production ACTIVE 路由启用后接管；现阶段由你手动派发。";
+"taskCompletion.title" = "任务结束：%@";
+"taskCompletion.view" = "查看";
+"taskCompletion.dismiss" = "关闭";
+"run.processExited" = "已退出";
+"run.processAlive" = "运行中";
 "label.taskNotDispatchable" = "任务状态 %@ 不可派发。";
 "label.observedState" = "观察状态";
 "label.measurementSource" = "测量来源";
@@ -370,6 +380,9 @@
 
 /* P4.2.6.4 providers and models */
 "providers.pickerTitle" = "模型与服务";
+"resources.pickerTitle" = "资源视图";
+"settings.pickerTitle" = "设置视图";
+"settings.tab.general" = "通用";
 "providers.notConnected" = "未连接";
 "providers.surface" = "服务形态";
 "providers.providerId" = "提供商 ID";
@@ -518,3 +531,277 @@
 "quota.reason.codingScopeUnreadable" = "编码 / 文本范围返回了无法解析的剩余额度，因此不予展示。";
 "quota.reason.codingWindowSemanticsUnknown" = "编码 / 文本范围中有一个窗口可读，另一个窗口在本次响应中无法识别，因此不作推测。";
 "quota.reason.codingScopeDisagree" = "多个编码 / 文本范围对同一窗口给出了不同数值，因此无法推导出唯一数值。";
+
+/* B1 evidence levels: OBSERVED / DERIVED / FORECAST must never read alike */
+"evidence.observed" = "实测";
+"evidence.derived" = "推算";
+"evidence.forecast" = "预计";
+"evidence.unavailable" = "数据不足";
+"timestamp.justNow" = "刚刚";
+
+/* B1: Task Detail was the one screen left unlocalized */
+"detail.panel.summary" = "摘要";
+"detail.panel.progress" = "进度";
+"detail.panel.liveActivity" = "实时活动";
+"detail.panel.changes" = "变更";
+"detail.panel.verification" = "测试与验证";
+"phase.preparing" = "准备中";
+"phase.routing" = "路由";
+"phase.workspace" = "工作区";
+"phase.quota" = "额度";
+"phase.startingWorker" = "启动工作器";
+"phase.editing" = "编辑中";
+"phase.testing" = "测试中";
+"phase.verifying" = "验证中";
+"phase.finished" = "已完成";
+"candidate.selected" = "已选";
+"candidate.eligible" = "合格";
+"candidate.ineligible" = "不合格";
+"candidate.unknownModel" = "未知模型";
+"value.none" = "无";
+"value.unknown" = "未知";
+"value.automatic" = "自动";
+"value.notVerifiedYet" = "尚未验证";
+"value.stagePassed" = "通过";
+"value.stageFailed" = "未通过";
+"value.notShadowMode" = "非影子模式";
+"label.task" = "任务";
+"label.updatedRelative" = "更新于 %@";
+
+
+/* B3 task workspace */
+"taskGroup.queued" = "排队中";
+"taskGroup.active" = "进行中";
+"taskGroup.needsAttention" = "需要处理";
+"taskGroup.completed" = "已完成";
+"taskGroup.cancelled" = "已取消";
+"tasks.filterMenu" = "筛选";
+"tasks.filter.allTasks" = "全部任务";
+"tasks.filter.groups" = "分组";
+"tasks.filter.states" = "状态";
+"tasks.filter.project" = "项目";
+"tasks.filter.allProjects" = "全部项目";
+"tasks.filter.clear" = "清除筛选";
+"tasks.searchPrompt" = "搜索任务";
+"tasks.visibleCount" = "%1$d / %2$d";
+"tasks.truncated" = "仅显示最近 %1$d 个任务，共 %2$d 个。";
+"tasks.truncatedHelp" = "守护进程每次请求最多返回 %d 个任务，更早的任务不在此列表中。";
+"tasks.noProject" = "无项目";
+"empty.tasks.none.title" = "暂无任务";
+"empty.tasks.none.message" = "提交的任务会连同其路由、变更与验证结果显示在这里。";
+"empty.tasks.search.title" = "没有匹配的任务";
+"empty.tasks.search.message" = "已加载的任务中没有与“%@”匹配的项。";
+"empty.tasks.search.hint" = "搜索范围是已从守护进程加载的任务，而非全部存储。";
+"empty.tasks.filter.title" = "该筛选下没有任务";
+"empty.tasks.filter.message" = "存在任务，但没有符合当前状态或项目筛选的任务。";
+"empty.tasks.loading" = "正在加载任务…";
+"empty.tasks.noSelection.title" = "未选择任务";
+"empty.tasks.noSelection.message" = "选择一个任务，查看其状态、路由、变更与验证。";
+"taskDetail.section.overview" = "状态";
+"taskDetail.section.lifecycle" = "生命周期";
+"taskDetail.section.execution" = "执行";
+"taskDetail.section.attention" = "需要处理";
+"taskDetail.openTaskFailed" = "无法加载该任务。";
+"taskLifecycle.submitted" = "已提交";
+"taskLifecycle.routing" = "路由";
+"taskLifecycle.workspace" = "工作区";
+"taskLifecycle.execution" = "执行";
+"taskLifecycle.verification" = "验证";
+"taskLifecycle.completion" = "完成";
+"taskLifecycle.status.reached" = "已完成";
+"taskLifecycle.status.inProgress" = "进行中";
+"taskLifecycle.status.notReached" = "尚未开始";
+"taskLifecycle.status.failed" = "失败";
+"taskLifecycle.status.stopped" = "已停止";
+"taskLifecycle.status.unknown" = "未知";
+"taskLifecycle.footer" = "守护进程只报告阶段之间的转换，不报告阶段内的进度。";
+"taskAttention.verificationFailed" = "验证未通过";
+"taskAttention.failed" = "任务失败";
+"taskAttention.blocked" = "任务被阻塞";
+"taskAttention.unknownState" = "无法识别的任务状态";
+"taskAttention.verificationEvidenceUnavailable" = "验证证据不可用";
+"taskAttention.unexpectedChanges" = "有文件改动超出了允许的路径";
+"taskAttention.awaitingApproval" = "等待审批";
+"taskAttention.noDetail" = "守护进程未记录原因。";
+"routing.role.primary" = "主执行";
+"routing.role.reviewer" = "评审";
+"routing.role.finalAuditor" = "终审";
+"routing.roleStatus.unassigned" = "尚未分配";
+"routing.roleStatus.assigned" = "已分配";
+"routing.roleStatus.running" = "运行中";
+"routing.roleStatus.completed" = "已完成";
+"routing.roleStatus.cancelled" = "已取消";
+"routing.outcome.pass" = "通过";
+"routing.outcome.fail" = "判定不通过";
+"routing.outcome.error" = "无法执行";
+"routing.outcome.none" = "尚无结果";
+"routing.plan" = "计划";
+"routing.planRevision" = "第 %d 版";
+"routing.superseded" = "已被更新的计划版本取代。";
+"routing.legacySynthesized" = "根据早期守护进程的记录重建。";
+"routing.declaredRoles" = "已声明角色";
+"routing.rerouteCount" = "已改派 %d 次";
+"routing.rerouteReason" = "改派原因";
+"routing.previousDecisions" = "历史决策";
+"routing.decidedAtLabel" = "决策时间";
+"routing.noDetails" = "该任务没有路由信息。";
+"changes.title" = "变更文件";
+"changes.count" = "%d 个文件";
+"changes.none" = "验证器未发现文件变更。";
+"changes.notMeasured.verificationNotRun" = "文件变更会在验证运行时记录。";
+"changes.notMeasured.noWorkspace" = "该任务没有工作树。";
+"changes.unexpected" = "超出允许路径";
+"changes.unexpectedCount" = "%d 个超出允许路径";
+"changes.footer" = "守护进程只报告路径，不记录每个文件的变更类型或行数。";
+"changes.revealWorktree" = "在访达中显示工作树";
+"verification.status.verified" = "已验证";
+"verification.status.evidenceMissing" = "已验证，但未记录证据";
+"verification.status.evidenceUnavailable" = "已验证，但证据不可用";
+"verification.status.failed" = "验证未通过";
+"verification.status.inProgress" = "验证中";
+"verification.status.notVerified" = "未验证";
+"verification.checks" = "检查项";
+"verification.checkExit" = "退出码 %d";
+"verification.noResult" = "该任务没有附带验证器结果。";
+"verification.notRunYet" = "该任务尚未运行验证。";
+"verification.overall" = "验证器判定";
+"verification.approvals" = "审批";
+"verification.evidenceProblemFooter" = "工作已通过验证，但无法取得对应的证据记录。";
+"verification.stageFooter" = "检查项只报告退出码，守护进程不区分失败原因。";
+"inspector.title" = "详细信息";
+"inspector.toggle" = "详细信息面板";
+"inspector.identity" = "标识";
+"inspector.timestamps" = "时间戳";
+"inspector.workspaceSection" = "工作区";
+"inspector.runsSection" = "运行";
+"inspector.routingProvenance" = "路由来源";
+"inspector.empty" = "选择一个任务以查看其技术细节。";
+"label.createdAt" = "创建时间";
+"label.updatedAt" = "更新时间";
+"label.stateVersion" = "状态版本";
+"label.repositoryPath" = "仓库";
+"label.projectId" = "项目 ID";
+"label.currentWorker" = "当前执行方";
+"label.noWorkerYet" = "尚未分配执行方";
+"routing.planRevisionLabel" = "版本";
+
+/* ---------------------------------------------------------------- B4 资源 */
+
+"resources.searchPrompt" = "搜索资源";
+"resources.visibleCount" = "%1$d / %2$d";
+"resources.kind.connected" = "已连接";
+"resources.kind.available" = "可添加";
+"resources.kind.discovered" = "已发现";
+"resources.filter.all" = "全部资源";
+"resources.filter.kind" = "类型";
+
+"empty.resources.none.title" = "尚无资源";
+"empty.resources.none.message" = "尚未发现或连接任何资源。可刷新发现流程，或添加你已在使用的提供商。";
+"empty.resources.loading" = "正在加载资源……";
+"empty.resources.search.title" = "没有匹配的资源";
+"empty.resources.search.message" = "没有与“%@”匹配的资源。";
+"empty.resources.noSelection.title" = "选择一项资源";
+"empty.resources.noSelection.message" = "选择一个提供商，查看其可用性、额度、用量与执行目标。";
+"resources.disconnectedHint" = "守护进程不可达时，资源状态属于未知而非为空——只是尚未读取。";
+
+"resource.section.availability" = "可用性";
+"resource.section.quota" = "额度";
+"resource.section.usage" = "用量";
+"resource.section.projection" = "预测";
+"resource.section.executionTargets" = "执行目标";
+"resource.section.observability" = "可观测性";
+"resource.section.models" = "模型";
+
+"resource.noQuotaTelemetry" = "该提供商未上报额度。它依然是可用资源，只是剩余额度未知。";
+"resource.noExecutionTargets" = "发现流程未找到该提供商的执行目标。";
+"resource.notConnected" = "尚未连接。连接后才能读取额度并向其调度任务。";
+"resource.connectAction" = "连接";
+"resource.severalBindings" = "%d 个额度绑定";
+"resource.bindingLimiting" = "当前受限窗口";
+"resource.quotaObservable" = "额度已观测";
+"resource.quotaNotObservable" = "额度不可观测";
+"resource.freshnessUnknown" = "从未读取";
+"resource.observedAge" = "%@前读取";
+"resource.staleWarning" = "该读数比它所描述的窗口更旧，应视为过期数据，而非当前数据。";
+"resource.targetsSummary" = "已验证 %1$d / %2$d";
+"resource.modelsSummary" = "%d 个模型";
+"resource.refreshQuota" = "刷新额度";
+"resource.refreshProviders" = "刷新发现";
+"resource.refreshQuotaHelp" = "读取每个已连接提供商的官方只读额度接口，不会发起任何模型生成。";
+"resource.refreshProvidersHelp" = "重新执行目录与凭据发现，不读取额度。";
+"resource.refreshFailed" = "上次刷新失败：%@";
+
+"quota.rate.perHour" = "%@ / 小时";
+"quota.rate.belowThreshold" = "低于 %@ / 小时";
+"quota.horizon.daysHours" = "%1$d 天 %2$d 小时";
+"quota.horizon.hoursMinutes" = "%1$d 小时 %2$d 分";
+"quota.horizon.minutes" = "%d 分";
+
+"quota.burnRate.title" = "消耗速率";
+"quota.burnRate.basis" = "基于 %2$@ 内的 %1$d 次读数";
+"quota.burnRate.flat" = "本窗口内未测得消耗。";
+
+"quota.projection.title" = "按此速率推算";
+"quota.projection.remainingAtReset" = "重置时预计剩余";
+"quota.projection.exhaustionAt" = "预计耗尽于";
+"quota.projection.likelyUnused" = "预计到重置时未用完";
+"quota.projection.noExhaustion" = "预计在重置前不会耗尽。";
+"quota.projection.footer" = "这是预测，不是读数。它把测得的消耗速率直线外推到重置时刻，并假设其余条件不变。";
+
+// M1 WP1 burn pressure chips. STARVED 译为"将过期未用"：判定含义是
+// 窗口里还剩很多额度但即将重置，并非"快耗尽"。
+"quota.pressure.unmetered" = "未计量";
+"quota.pressure.stale" = "数据过期";
+"quota.pressure.exhausted" = "已耗尽";
+"quota.pressure.starved" = "将过期未用";
+"quota.pressure.ahead" = "消耗偏快";
+"quota.pressure.behind" = "消耗偏慢";
+"quota.pressure.onTrack" = "按计划";
+
+"quota.projection.unavailable.NO_HISTORY" = "该窗口尚无可用的额度观测记录。";
+"quota.projection.unavailable.INSUFFICIENT_OBSERVATIONS" = "本重置窗口内仅有一次读数，测算速率至少需要两次。";
+"quota.projection.unavailable.NO_ELAPSED_TIME" = "本窗口内各次读数的时间戳相同，无法测算速率。";
+"quota.projection.unavailable.REMAINING_INCREASED" = "本窗口内剩余额度出现回升，对回升的余额不作外推。";
+"quota.projection.unavailable.RESET_UNKNOWN" = "未上报重置时间，缺少可推算的时间终点。";
+"quota.projection.unavailable.RESET_ALREADY_PASSED" = "上报的重置时刻已过，这些读数描述的是一个已经结束的窗口。";
+
+"quota.scarcity.unavailable" = "守护进程未通过控制 API 公开其稀缺度分级，因此此处不作显示。上方的读数、重置时限与消耗速率，正是该分级本应依据的证据。";
+
+"quota.history.axisTime" = "观测时间";
+"quota.history.axisRemaining" = "剩余";
+"quota.history.seriesLegend" = "序列";
+"quota.history.resetBoundary" = "重置";
+"quota.history.gapNote" = "每个标记都是一次真实观测，按其发生时刻定位。空缺表示未观测，而非未使用；连线也不会跨越重置。";
+"quota.history.singleObservation" = "仅有一次观测。要看出趋势，同一重置窗口内至少需要两次。";
+"quota.history.observationCount" = "%d 次观测";
+"quota.history.accessibleSummary" = "%1$@：%2$d 次观测，最近一次剩余 %3$@，跨度 %4$@。";
+
+"quota.resetsIn" = "%@后重置";
+"quota.resetPassed" = "重置时刻已过";
+"quota.observedAge" = "%@前观测";
+"quota.equivalentCapacity.explanation" = "等效容量估算的是受限窗口的剩余单位还能容纳多少个同类任务。它是任务数量，不是百分比，不能与上方的余额合并计算。";
+"label.recommendDispatch" = "按策略推荐";
+"label.recommendDispatchHelp" = "请后台按任务存档的调度策略与实时配额，对所有可派发目标排序。";
+"label.recommendationDismiss" = "关闭";
+"recommendation.panelTitle" = "策略 %@ 下的候选排序";
+"recommendation.score" = "分数 %.1f · 剩余 %.0f%% · 证据 %@";
+"recommendation.quotaState" = "配额状态：%@";
+// M1 WP2 — tier picker + chip labels.
+"newTask.minTier" = "最低档位";
+"newTask.minTierHelp" = "任务要求的模型档位下限；低于该档位的 target 不会被推荐。";
+"tier.t0" = "旗舰";
+"tier.t1" = "主力";
+"tier.t2" = "快速";
+"tier.t3" = "免费";
+"tier.unknown" = "未知";
+// WP5b (brought forward) — stale-verification chip on target rows.
+"target.verifiedStale" = "验证已过时";
+// M1 WP3 — BURN_DOWN objective (pressure-first preset).
+"policy.burnDown" = "用尽额度";
+"policy.burnDown.detail" = "优先使用即将过期未用的额度";
+"resource.group.unmetered" = "免费 / 未计量";
+"quota.windowKind.unmetered" = "未计量";
+"quota.unmetered.errorRate" = "过去一小时的错误率";
+"quota.unmetered.rpm" = "过去一分钟运行数";
+"quota.unmetered.cooldownUntil" = "冷却至";
+"quota.unmetered.noWindow" = "无配额窗口——仅受速率限制";

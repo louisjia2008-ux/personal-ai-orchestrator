@@ -94,12 +94,45 @@ public final class DaemonLifecycleController: ObservableObject {
                     await MainActor.run { self.status = .alreadyRunning }
                     return
                 }
+                if self.preexistingDaemonWasRefusedForBuild() {
+                    await self.terminateStaleHelpers()
+                }
                 try await self.launchBundledDaemon()
             }
         } catch {
             status = .failed(reason: sanitizedReason(error))
         }
         startupTask = nil
+    }
+
+    /// A daemon is alive and speaking our API, but came from a different
+    /// build: it was refused, so it is a leftover from an earlier app
+    /// generation rather than a daemon the owner runs deliberately.
+    private func preexistingDaemonWasRefusedForBuild() -> Bool {
+        if case .buildMismatch = status { return true }
+        return false
+    }
+
+    /// Terminate daemon helpers left behind by an earlier app generation.
+    ///
+    /// Without this, every app rebuild strands the old helper: it keeps
+    /// serving from the unlinked socket inode while the new helper binds
+    /// the path — two processes writing one state database. Only this
+    /// bundle's own absolute helper path is ever signaled, so nothing
+    /// outside this app's product can be matched.
+    private func terminateStaleHelpers() async {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        process.arguments = ["-f", configuration.helperURL.path]
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            // Best effort: a failed cleanup must not block launching ours.
+        }
+        // Give the exited helpers a moment to release the socket and
+        // sqlite handles before the new daemon binds the same path.
+        try? await Task.sleep(for: .milliseconds(500))
     }
 
     private func healthIsCompatible() async -> Bool {
@@ -156,6 +189,12 @@ public final class DaemonLifecycleController: ObservableObject {
         process.executableURL = configuration.helperURL
         process.arguments = configuration.arguments
         process.currentDirectoryURL = URL(fileURLWithPath: configuration.layout.appSupportRoot)
+        // opencode's auth.json holds the API keys the owner has already
+        // provisioned. Pass them through as environment variables so the
+        // bundled daemon's quota collectors register against the live
+        // provider endpoints instead of returning AUTH_REQUIRED for every
+        // token plan the owner is paying for.
+        process.environment = daemonEnvironment()
         let stderr = Pipe()
         process.standardError = stderr
         process.terminationHandler = { [weak self] process in
@@ -182,6 +221,19 @@ public final class DaemonLifecycleController: ObservableObject {
         }
         let stderrData = stderr.fileHandleForReading.availableData
         throw LifecycleError.startupTimeout(stderrData.isEmpty ? nil : stderrData)
+    }
+
+    /// The environment for the bundled daemon. The host environment is the
+    /// source of truth for system values (PATH, locale, etc.); opencode's
+    /// auth.json contributes the provider API keys the GUI launch context
+    /// otherwise strips out. Whatever the parent app has not set explicitly
+    /// is preserved, so toolchain and locale carry through.
+    private func daemonEnvironment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        for entry in OpencodeAuthSource.read() {
+            env[entry.environmentName] = entry.key
+        }
+        return env
     }
 
     private func withExclusiveLock<T>(

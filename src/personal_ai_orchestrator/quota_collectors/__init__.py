@@ -6,6 +6,7 @@ from personal_ai_orchestrator.quota_collectors.base import (
     QuotaCollector,
 )
 from personal_ai_orchestrator.quota_collectors.minimax import MiniMaxQuotaCollector
+from personal_ai_orchestrator.quota_collectors.unmetered import UnmeteredQuotaCollector
 from personal_ai_orchestrator.quota_collectors.zai import ZAIQuotaCollector
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "QuotaCollectionResult",
     "QuotaCollectionStatus",
     "QuotaCollector",
+    "UnmeteredQuotaCollector",
     "ZAIQuotaCollector",
 ]

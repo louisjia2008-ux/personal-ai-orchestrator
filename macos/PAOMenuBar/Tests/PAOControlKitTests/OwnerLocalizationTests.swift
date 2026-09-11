@@ -80,24 +80,55 @@ final class OwnerLocalizationTests: XCTestCase {
         }
     }
 
-    func testSidebarSectionTitlesAreLocalized() {
+    /// The five first-level destinations, and only those, title the sidebar.
+    func testSidebarDestinationTitlesAreLocalized() {
         let expected = [
             "overview": "总览",
-            "projects": "项目",
             "tasks": "任务",
-            "providers": "模型与服务",
-            "quota": "额度",
-            "routing": "调度决策",
-            "verification": "验证",
-            "history": "历史",
+            "resources": "资源",
+            "activity": "活动",
             "settings": "设置",
         ]
+        XCTAssertEqual(Set(expected.keys), Set(DashboardSection.allCases.map(\.rawValue)))
         for (raw, chinese) in expected {
             XCTAssertEqual(
                 L10n.catalogString(key: "dashboard.\(raw)", language: "zh-Hans"),
                 chinese,
                 raw
             )
+            XCTAssertEqual(L10n.dashboardSection(raw).isEmpty, false, raw)
+        }
+    }
+
+    /// Titles for surfaces that stopped being destinations but still title a tab
+    /// or a panel inside one. They must stay localized, or the relocation would
+    /// quietly reintroduce English inside Resources / Settings / Task Detail.
+    func testRelocatedSurfaceTitlesStayLocalized() {
+        let expected = [
+            "dashboard.projects": "项目",
+            "dashboard.providers": "模型与服务",
+            "dashboard.agents": "执行目标",
+            "dashboard.quota": "额度",
+            "dashboard.routing": "调度决策",
+            "dashboard.verification": "验证",
+            "dashboard.history": "历史",
+        ]
+        for (key, chinese) in expected {
+            XCTAssertEqual(L10n.catalogString(key: key, language: "zh-Hans"), chinese, key)
+        }
+    }
+
+    /// The grouped destinations introduce owner-facing pickers; both catalogs
+    /// must carry them in the same change.
+    func testGroupedDestinationPickersAreLocalized() {
+        let expected: [(String, String, String)] = [
+            ("resources.pickerTitle", "Resource view", "资源视图"),
+            ("settings.pickerTitle", "Settings view", "设置视图"),
+            ("settings.tab.general", "General", "通用"),
+        ]
+        for (key, english, chinese) in expected {
+            XCTAssertEqual(L10n.catalogString(key: key, language: "en"), english, key)
+            XCTAssertEqual(L10n.catalogString(key: key, language: "zh-Hans"), chinese, key)
         }
     }
 
@@ -427,6 +458,17 @@ final class OwnerLocalizationTests: XCTestCase {
         return swift.sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
+    /// Owner-facing copy introduced by the B2 navigation architecture. Listed
+    /// explicitly rather than by prefix: `settings.activeGate.*` are raw gate
+    /// states that must stay verbatim in both catalogs.
+    private static let b2NavigationKeys: Set<String> = [
+        "dashboard.resources",
+        "dashboard.activity",
+        "resources.pickerTitle",
+        "settings.pickerTitle",
+        "settings.tab.general",
+    ]
+
     /// Keys introduced or repaired by the P4.2.6.4 sweep.
     private static let sweptKeys: [String] = L10n.requiredKeys.filter { key in
         key.hasPrefix("sidebar.group.")
@@ -435,6 +477,7 @@ final class OwnerLocalizationTests: XCTestCase {
             || key.hasPrefix("providers.")
             || key.hasPrefix("models.")
             || key.hasPrefix("quota.")
+            || OwnerLocalizationTests.b2NavigationKeys.contains(key)
             || key.hasPrefix("risk.")
             || key.hasPrefix("auth.")
             || key.hasPrefix("connectionState.")

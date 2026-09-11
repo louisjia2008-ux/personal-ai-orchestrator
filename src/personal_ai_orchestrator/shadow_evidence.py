@@ -537,6 +537,24 @@ class ShadowEvidenceJournal:
             self.pending_path_for(pending_id).read_text(encoding="utf-8")
         )
 
+    def discard_pending(self, pending_id: str) -> bool:
+        """M1 WP5a-2: remove a pending-shadow record whose lifecycle aborted.
+
+        Used by the supervised-auto lifecycle exits that never reach a real
+        execution (veto, mode-change abort, project disable, 24h unacked
+        timeout, pre-worker admission failure). Those exits have no truthful
+        verified/failed observation to finalize, so the pending row is
+        discarded — the authoritative history lives in the audit trail.
+        Idempotent: returns ``False`` when the pending id was already absent.
+        """
+
+        target = self.pending_path_for(pending_id)
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
     def load_pending_all(self) -> tuple[PendingShadowObservation, ...]:
         if not self.pending_directory.exists():
             return ()

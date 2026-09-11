@@ -1,0 +1,21 @@
+┌  Credentials [90m~/.local/share/opencode/auth.json
+│
+●  MiniMax Token Plan (minimaxi.com) [90mapi
+│
+●  Z.AI Coding Plan [90mapi
+│
+└  2 credentials
+
+┌  Environment
+│
+●  MiniMax Token Plan (minimaxi.com) [90mMINIMAX_API_KEY
+│
+●  MiniMax (minimax.io) [90mMINIMAX_API_KEY
+│
+●  MiniMax Token Plan (minimax.io) [90mMINIMAX_API_KEY
+│
+●  DeepSeek [90mDEEPSEEK_API_KEY
+│
+●  MiniMax (minimaxi.com) [90mMINIMAX_API_KEY
+│
+└  5 environment variables

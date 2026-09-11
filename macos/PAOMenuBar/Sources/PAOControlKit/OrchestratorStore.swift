@@ -55,11 +55,23 @@ public final class OrchestratorStore: ObservableObject {
     /// connected provider must stay visible here even with zero quota evidence.
     @Published public private(set) var quota: QuotaOverviewView?
     @Published public private(set) var isRefreshingQuota: Bool = false
+    /// Why the last quota refresh failed, or nil when it succeeded (or has not
+    /// run). A failed refresh keeps the previous projection on screen; without
+    /// this the failure would be indistinguishable from "nothing happened".
+    @Published public private(set) var lastQuotaRefreshError: String?
     @Published public private(set) var activeStatus: ActiveStatusView?
     @Published public private(set) var ownerExecutionSettings: OwnerExecutionSettingsView?
     @Published public private(set) var schedulingSettings: SchedulingSettingsView?
     @Published public private(set) var lastDispatch: DispatchTaskView?
     @Published public private(set) var dispatchNotice: DispatchNotice?
+    /// The latest ranking produced by /v1/tasks/{id}/dispatch/recommendation.
+    /// Cleared when a new task is selected, when a dispatch is launched
+    /// off the recommendation, or when the owner dismisses the panel.
+    @Published public private(set) var dispatchRecommendation: DispatchRecommendationView?
+    /// A task that just reached a terminal state, for the completion banner
+    /// and the system notification. Owner-initiated cancellations are not
+    /// completion events: the owner already knows, they caused it.
+    @Published public private(set) var taskCompletionNotice: TaskCompletionNotice?
     @Published public private(set) var daemonBuild: BuildView?
     @Published public private(set) var lastError: PAOClientError?
     @Published public private(set) var lastSubmittedTaskId: String?
@@ -73,6 +85,11 @@ public final class OrchestratorStore: ObservableObject {
     @Published public var selectedProjectId: String?
     @Published public var selectedSchedulingPolicy: String = "BALANCED"
     @Published public var selectedManualExecutionTargetId: String?
+    /// M1 WP2: tier floor for new submits. Defaults to ``"T1"`` so
+    /// existing tasks and pre-WP2 storage read cleanly. Picker
+    /// changes flow into ``SubmitRequest.minTier``; the daemon
+    /// normalises to "T1" on None.
+    @Published public var selectedMinTier: String = "T1"
 
     /// Whether the dashboard binary and the connected daemon came from the same
     /// commit. Surfaced in Settings so stale-stack truth is never presented as live.
@@ -86,15 +103,37 @@ public final class OrchestratorStore: ObservableObject {
     public let widgetSnapshotWriter: WidgetSnapshotWriter
     private let client: PAOControlClient
     private var refreshTask: Task<Void, Never>?
+    private var quotaAutoRefreshTask: Task<Void, Never>?
     private var backoffSeconds: Double = 2.0
+    private var previousTaskStates: [String: String] = [:]
     private var lastSubmit: (intent: String, at: Date)?
     private let idFactory: () -> String
+
+    /// How many tasks the dashboard asks for.
+    ///
+    /// Matches the daemon's MAX_LIST_LIMIT. The daemon clamps anything larger, so
+    /// this is the most a single request can return; beyond it the collection is
+    /// genuinely truncated and `taskCollectionIsTruncated` says so rather than the
+    /// UI quietly showing a subset.
+    public static let taskListLimit: Int = 200
 
     public static let menuOpenInterval: TimeInterval = 2.0
     public static let activeTaskInterval: TimeInterval = 1.0
     public static let backgroundInterval: TimeInterval = 15.0
     public static let maximumBackoff: TimeInterval = 60.0
     public static let duplicateSubmitWindow: TimeInterval = 5.0
+
+    /// How often the client asks the daemon to re-collect quota from the
+    /// providers' own read-only endpoints. The projection is re-read on every
+    /// dashboard refresh, but daemon-side collection only happens when
+    /// something asks for it; ten minutes keeps readings current without
+    /// hammering provider APIs.
+    public static let quotaAutoRefreshInterval: TimeInterval = 600
+
+    /// The quota-refresh endpoint answers only after reading every connected
+    /// provider sequentially, so it gets a budget of its own rather than the
+    /// 10-second default every other call shares.
+    private static let quotaRefreshTimeoutSeconds: Double = 30
 
     public init(socketPath: String,
                 daemonConfiguration: DaemonLaunchConfiguration? = nil,
@@ -119,14 +158,26 @@ public final class OrchestratorStore: ObservableObject {
             daemonLifecycle.ensureStarted()
         }
         startRefreshing()
+        startQuotaAutoRefresh()
     }
 
     deinit {
         refreshTask?.cancel()
+        quotaAutoRefreshTask?.cancel()
     }
 
     public var statusSummary: StatusSummary {
         StatusSummary.derive(connection: connection, tasks: tasks?.tasks ?? [], providers: providers)
+    }
+
+    /// True when the daemon holds more tasks than this client fetched.
+    ///
+    /// Task counts are computed over the whole store while the list is bounded, so
+    /// a truncated collection must be visible rather than inferred: a filter that
+    /// silently searches a subset is indistinguishable from one that found nothing.
+    public var taskCollectionIsTruncated: Bool {
+        guard let tasks else { return false }
+        return tasks.tasks.count < tasks.total
     }
 
     public func taskCounts() -> (running: Int, ready: Int, blocked: Int, verified: Int) {
@@ -137,6 +188,45 @@ public final class OrchestratorStore: ObservableObject {
             blocked: states.filter { $0 == "BLOCKED" }.count,
             verified: states.filter { $0 == "VERIFIED" || $0 == "COMPLETED" }.count
         )
+    }
+
+    /// Terminal states a task never leaves. A transition into one of these
+    /// from a live state is the completion event the dashboard announces.
+    private static let terminalTaskStates: Set<String> = [
+        "VERIFIED", "COMPLETED", "FAILED", "BLOCKED", "CANCELLED"
+    ]
+
+    /// States worth interrupting the owner for. Cancellation is excluded:
+    /// it is owner-initiated feedback, not news.
+    private static let announcedTaskStates: Set<String> = [
+        "VERIFIED", "COMPLETED", "FAILED", "BLOCKED"
+    ]
+
+    private func detectTaskCompletions(in tasks: [TaskView]) {
+        var next: [String: String] = [:]
+        for task in tasks {
+            next[task.taskId] = task.state
+            guard let previous = previousTaskStates[task.taskId],
+                  Self.terminalTaskStates.contains(task.state),
+                  !Self.terminalTaskStates.contains(previous),
+                  Self.announcedTaskStates.contains(task.state)
+            else { continue }
+            taskCompletionNotice = TaskCompletionNotice(
+                taskId: task.taskId,
+                state: task.state,
+                intent: task.intent
+            )
+            ClientLog.operation(
+                "task_completed",
+                outcome: "\(task.taskId)=\(task.state)"
+            )
+        }
+        previousTaskStates = next
+    }
+
+    /// Dismiss the completion banner. The underlying task stays selectable.
+    public func clearTaskCompletionNotice() {
+        taskCompletionNotice = nil
     }
 
     // MARK: - Refresh policy
@@ -206,7 +296,22 @@ public final class OrchestratorStore: ObservableObject {
             self.daemonBuild = try? await client.build()
             let dashboard = try await client.dashboard()
             self.dashboard = dashboard
-            self.tasks = TaskListView(tasks: dashboard.recentTasks, total: dashboard.counts.total)
+            // The task collection comes from the authoritative list endpoint, not
+            // from the dashboard's ten-item recent_tasks preview. The dashboard
+            // counts every task in the store, so driving the list from that preview
+            // made search, filtering and every count-to-list navigation operate on
+            // a silently truncated subset.
+            if let listed = try? await client.listTasks(limit: Self.taskListLimit) {
+                self.tasks = listed
+                detectTaskCompletions(in: listed.tasks)
+            } else if self.tasks == nil {
+                // First load with the list endpoint unavailable: the preview is
+                // better than nothing, and `total` keeps the shortfall detectable.
+                self.tasks = TaskListView(
+                    tasks: dashboard.recentTasks,
+                    total: dashboard.counts.total
+                )
+            }
             self.projects = dashboard.projects
             if selectedProjectId == nil {
                 selectedProjectId = dashboard.projects.projects.first(where: \.isOnline)?.projectId
@@ -330,6 +435,36 @@ public final class OrchestratorStore: ObservableObject {
         }
     }
 
+    /// Ask the daemon to rank dispatchable targets by the task's archived
+    /// policy (or ``policy`` override). Pure read: nothing launches, the
+    /// owner still has to click "派发到该目标".
+    public func recommendDispatch(taskId: String, policy: String? = nil) async {
+        do {
+            dispatchRecommendation = try await client.recommendDispatch(
+                taskId: taskId,
+                policy: policy
+            )
+            ClientLog.operation(
+                "recommend_dispatch",
+                outcome: "ok policy=\(dispatchRecommendation?.schedulingPolicy ?? "?")"
+            )
+        } catch let error as PAOClientError {
+            dispatchRecommendation = nil
+            dispatchNotice = .blocked(taskId: taskId, code: error.displayDetail)
+            ClientLog.operation("recommend_dispatch", outcome: error.logCode)
+        } catch {
+            dispatchRecommendation = nil
+            dispatchNotice = .malformedResponse
+            ClientLog.operation("recommend_dispatch", outcome: "malformed")
+        }
+    }
+
+    /// Drop the current ranking. The owner can dismiss the panel or pick a
+    /// different task; either path calls this so a stale view never lingers.
+    public func clearDispatchRecommendation() {
+        dispatchRecommendation = nil
+    }
+
     /// Toggle the persisted Owner-Initiated Execution setting. This is a
     /// separate concept from Production ACTIVE (disabled by design).
     public func setOwnerExecution(enabled: Bool) async {
@@ -444,7 +579,8 @@ public final class OrchestratorStore: ObservableObject {
             projectId: projectId,
             intent: trimmed,
             schedulingPolicy: policy,
-            manualExecutionTargetId: manualTarget
+            manualExecutionTargetId: manualTarget,
+            minTier: selectedMinTier
         )
         do {
             let task = try await client.submit(request)
@@ -482,6 +618,15 @@ public final class OrchestratorStore: ObservableObject {
             cancellationNotice = .malformedResponse
             ClientLog.operation("cancel", outcome: "malformed")
         }
+    }
+
+    /// Drop the ephemeral cancellation result.
+    ///
+    /// The notice describes one interaction. Its `failed` and `malformedResponse`
+    /// cases carry no task identity, so a notice left standing would attach a
+    /// failure the owner caused on one task to whichever task they look at next.
+    public func clearCancellationNotice() {
+        cancellationNotice = nil
     }
 
     public func loadTaskDetail(taskId: String) async {
@@ -563,17 +708,40 @@ public final class OrchestratorStore: ObservableObject {
         isRefreshingQuota = true
         defer { isRefreshingQuota = false }
         do {
-            let result = try await client.refreshQuota(providerId: providerId)
+            let result = try await client.refreshQuota(
+                providerId: providerId,
+                timeoutSeconds: Self.quotaRefreshTimeoutSeconds
+            )
             self.quota = result.overview
+            self.lastQuotaRefreshError = nil
             ClientLog.operation("refresh_quota", outcome: result.overview.state.lowercased())
         } catch let error as PAOClientError {
             self.lastError = error
+            self.lastQuotaRefreshError = error.logCode
             // A failed refresh must not blank the page: keep the last
             // projection and let the card report the failure.
             self.quota = try? await client.quota()
             ClientLog.operation("refresh_quota", outcome: error.logCode)
         } catch {
+            self.lastQuotaRefreshError = "malformed"
             ClientLog.operation("refresh_quota", outcome: "malformed")
+        }
+    }
+
+    /// Daemon-side quota collection on a fixed cadence, so readings stay
+    /// current without the owner clicking anything. Reuses
+    /// ``refreshQuota()`` — and therefore its coalescing guard — so an
+    /// automatic cycle never races a manual click, and stays quiet while the
+    /// daemon is unreachable.
+    private func startQuotaAutoRefresh() {
+        quotaAutoRefreshTask?.cancel()
+        quotaAutoRefreshTask = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.quotaAutoRefreshInterval))
+                guard !Task.isCancelled else { break }
+                guard self.connection.isConnected else { continue }
+                await self.refreshQuota()
+            }
         }
     }
 
@@ -685,5 +853,18 @@ extension PAOClientError {
         case .invalidSocketPath: return "invalid_socket_path"
         case .transportFailure: return "transport_failure"
         }
+    }
+}
+
+/// A task that reached a terminal state while the dashboard was watching.
+public struct TaskCompletionNotice: Equatable, Sendable {
+    public let taskId: String
+    public let state: String
+    public let intent: String
+
+    public init(taskId: String, state: String, intent: String) {
+        self.taskId = taskId
+        self.state = state
+        self.intent = intent
     }
 }

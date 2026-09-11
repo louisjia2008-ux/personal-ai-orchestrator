@@ -187,12 +187,12 @@ A spike may exercise session-scoped `ACTIVE` switching in disposable fixtures; t
 
 ## P4 — Clients / macOS Control Plane
 
-Status: `P4_2_PROVIDER_REGISTRY_IMPLEMENTED_DISPATCH_PENDING` (2026-09-01);
+Status: `P4_2_4_B_OWNER_DISPATCH_DELIVERED_WITH_TRANSPARENCY_AND_POLICY_RECOMMENDER` (2026-09-04);
 P4.0 accepted 2026-08-31 and P4.1 merged. A native dashboard, app-owned bundled daemon
 lifecycle, PyInstaller helper packaging, and WidgetKit source/snapshot bridge now exist.
 P4.2.3 polished Tasks master/detail shell consistency. P4.2.4-A added the unified
-dashboard shell and the real GLM / MiniMax provider registry; owner-initiated
-execution and OpenCode dispatch remain in P4.2.4-B.
+dashboard shell and the real GLM / MiniMax provider registry; P4.2.4-B closed owner-
+initiated execution and OpenCode dispatch on `fix/p4-final-ui-repair` (HEAD `63a524b`).
 
 ### Objective
 Expose the same orchestrator state safely to multiple front ends while keeping the core headless.
@@ -271,8 +271,99 @@ Remaining before full P4.2 acceptance:
 
 - installable WidgetKit `.appex` packaging/signing from an Xcode app-extension target or
   equivalent project migration;
-- Finder/Open launch, real Widget display, and human visual acceptance on the target Mac;
-- P4.2.4-B: owner-initiated execution, OpenCode dispatch, host verifier integration.
+- Finder/Open launch, real Widget display, and human visual acceptance on the target Mac.
+
+### P4.2.4-B owner-initiated execution + OpenCode dispatch (DONE 2026-09-04)
+
+Closed on `fix/p4-final-ui-repair`:
+
+- `POST /v1/tasks/{id}/dispatch` creates the `owner_dispatches` row, atomically
+  transitions `READY → RUNNING` via
+  `SafetyKernelStore.start_dispatched_worker`, and spawns a daemon thread
+  that supervises the worker;
+- host-owned sandbox `worker-opencode.json` (allow edit, deny bash / webfetch)
+  is seeded by `product_daemon.ensure_execution_policies()` and is idempotent;
+- bounded sanitized `stdout_tail` and `stderr_tail` (8 KiB, ANSI / control
+  free) are persisted on the run row so the owner can finally see what the
+  worker did;
+- `POST /v1/tasks/{id}/cancel` cancels the exact supervised process and
+  cannot deadlock behind an active switch lease;
+- `POST /v1/tasks/{id}/dispatch/recommendation` ranks every dispatchable
+  target by the task's archived policy and returns the top pick + per-row
+  score / headroom / evidence_fresh / quota_state / reasons;
+- the macOS app renders the manual dispatch, the recommendation panel and a
+  completion banner with macOS local notifications on the dashboard.
+
+---
+
+## M0 — Display trust hardening (DONE 2026-09-05 on `fix/m0-trust`)
+
+Closed work that turns the displayed state into authoritative state:
+
+- **A1 evidence demote fallback.** `ExecutionEvidenceJournal.latest_verified_for_target`
+  returns `(verified_evidence, stale_since)`. `ExecutionTargetHealthView`
+  and `DispatchRecommendationCandidate` expose `execution_verified_stale`.
+- **A2 UNCERTAIN_LOCKED admission.** `QuotaAvailabilityState.UNCERTAIN_LOCKED`
+  fires after `UNCERTAIN_LOCKED_THRESHOLD` (=3) consecutive failed quota
+  collections for the same target. A single `observe_success()` resets the
+  streak and releases the lock atomically. Admission rejects with
+  `QUOTA_UNKNOWN` so the UI can surface "host has been unable to probe"
+  rather than the wrong "quota exhausted" story.
+- **A3 emergency path diagnostics.** `_emergency_repair` persists a
+  self-describing payload (`signal: 9` for SIGKILL, plus
+  `emergency_repair: true`) and a human-readable reason
+  ("worker exited unexpectedly (signal 9)"). The new
+  `_failure_result_payload()` is the single helper used by both the normal
+  failure path and the emergency-repair path.
+- **A4 pid alive.** `RunView.pid_alive` is computed by `os.kill(pid, 0)`
+  against RUNNING rows; the Swift inspector renders "已退出" instead of
+  the stale "running pid N" the moment the OS confirms the worker is gone.
+- **A5 flaky test retry.** `pytest-rerunfailures` added to the dev extras;
+  the daemon SIGINT shutdown test is decorated with
+  `@pytest.mark.flaky(reruns=3, reruns_delay=1)`.
+
+Known limitation inherited by M1:
+
+- `_admit_quota` collapses quota state per provider rather than per binding
+  window; UNCERTAIN_LOCKED fires per-target, not per-pool-per-window.
+
+---
+
+## M1 — 额度压力驱动调度 (WP0 + WP1 + WP2 + WP3 + WP4 + WP5a-1 + WP5a-2 DELIVERED 2026-09-09 on `feat/m1-wp0-daemon-tick` + `feat/m1-wp1-burn` + `feat/m1-wp2-tiers` + `feat/m1-wp3-pressure-scoring` + `feat/m1-wp4-unlimited-pool` + `feat/m1-wp5a1-auto-foundations` + `feat/m1-wp5a2-auto-tick`; WP5b next)
+
+> **开工纪律**:WP5a / WP5b / WP6 / WP7 开工前必须先读对应 spec(`docs/M1_WP5_SPEC.md` / `docs/M1_WP6_SPEC.md` / `docs/M1_WP7_SPEC.md`)。WP 序列由裁决固定,禁止重排;PAID_USAGE 是 M3,不许在 M1 提。
+
+Goal: turn the existing scheduler into one that burns subscription quota
+before it expires, drops simple tasks to free / low-tier models, and adds
+a `SUPERVISED_AUTO` middle ground between manual dispatch and full
+automatic routing.
+
+Working order (each WP ships as its own branch from `fix/m0-trust`):
+
+| WP  | Branch | Deliverable |
+| --- | ------ | ----------- |
+| WP0 | `feat/m1-wp0-daemon-tick` | real daemon tick (`DaemonSupervisor`) so periodic steps have a host; `/v1/health` exposes `last_tick_at` and `tick_interval_seconds` |
+| WP1 | `feat/m1-wp1-burn` | DONE — `quota_burn.py` (pure functions) + `CandidateWindowInput` + per-window `burn` sub-object + provider-card / candidate `source_pressure` |
+| WP2 | `feat/m1-wp2-tiers` | DONE — `model_tiers.py` + `runtime-state/policies/model-tiers.json` + `TaskRecord.min_tier` (TEXT NOT NULL DEFAULT 'T1') + tier-aware `_hard_eligibility` / `_score` + Swift picker + tier chip on Resources + DispatchRecommendation |
+| WP3 | `feat/m1-wp3-pressure-scoring` | DONE — `ScoreWeights` dataclass + `BURN_DOWN` objective + five-term score (`quality / pressure / headroom / latency / cost`) shared by scheduler + recommender + 5h smoothing gate (both paths) + MANUAL short-circuit on scheduler + BALANCED fallback reason on recommender + `headroom_min` field + `score_components[].weight` + Swift picker / ideal-pace tick / explainable score rows |
+| WP4 | `feat/m1-wp4-unlimited-pool` | DONE — OpenCode Zen free-model family (auth=none, pool_kind=unmetered) + `QuotaWindowKind.UNMETERED` + `QuotaAvailabilityState.AVAILABLE_UNMETERED` + `observe_rate_limited` + local `UnmeteredQuotaCollector` + `worker_outcome_classifier` (conservative stderr markers, no bare "quota") + `ExecutionVerificationOutcome.QUOTA_BLOCKED` evidence with demote-fallback + `pool_kind` / `unmetered` read-time view + macOS Resources page "Free / unmetered" section + 6 L10n keys (en + zh-Hans) |
+| WP3 | `feat/m1-wp3-pressure-scoring` | `ScoreWeights` (scheduler + recommender share it); pressure + headroom weights; `RoutingObjective.BURN_DOWN` for the BURN_DOWN preset; smoothing / STARVED branches |
+| WP4 | `feat/m1-wp4-unlimited-pool` | `QuotaWindowKind.UNMETERED` + `UnlimitedPool`; opencode-free entry on `ProviderFamilySpec`; discovery reads real `opencode models` output (fixture-driven) |
+| WP5a | `feat/m1-wp5a-supervised-auto-core` | state machine additions (`AUTO_PLANNED`, `AUTO_GRACE`), `scheduling_settings.mode`, project-level three-field settings (`supervised_auto_allowed`, `unattended_allowed`, `grace_seconds`), `POST /v1/tasks/{id}/auto/{ack,veto,dispatch-now}`, scheduler-side tick `supervised_auto_step(now)` — split into WP5a-1 (foundations, DONE) and WP5a-2 (tick + endpoints + mode-change abort, DONE — `feat/m1-wp5a2-auto-tick`: six hard gates, frozen decision + stable request ids, ack/veto/dispatch-now, fail-closed mode/project aborts, 24h unacked timeout, pending-shadow lifecycle, verifier-authoritative autonomous dispatch; control-only daemons never tick) |
+| WP5b | `feat/m1-wp5b-supervised-auto-ui` | auto-grace banner + countdown + VETO / DISPATCH_NOW buttons; menu-bar "急停" item; Settings mode picker; project settings UI; `TestDaemon` canned routes |
+| WP6 | `feat/m1-wp6-backlog` | `backlog_items` SQL table; `GET/POST/DELETE /v1/projects/{id}/backlog`; `backlog_filler_step(now)` (STARVED → notify or auto-create) |
+| WP7 | `feat/m1-wp7-weekly-report` | `weekly_report.py` aggregator over `audit`, `QuotaSnapshotJournal`, `backlog`, `ExecutionEvidenceJournal`; three KPI tiles on Overview |
+
+Forbidden across every WP:
+
+- no wall-clock reads inside deterministic scoring — pass `now` through;
+- no new dependency without owner approval (this round is stdlib-only);
+- no widening of any existing fail-closed gate;
+- no behavioral change to `activation_authority`'s six gates or
+  `owner_initiated_execution_enabled` default (`false`);
+- Gate-R frozen contract grows only by backward-compatible optional fields;
+- no merge without 0 TODO/FIXME/HACK/NotImplementedError in the touched tree;
+- each WP delivers its own delivery report before the next opens.
 
 ---
 

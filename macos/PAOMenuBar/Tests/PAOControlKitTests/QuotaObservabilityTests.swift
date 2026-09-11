@@ -223,4 +223,254 @@ final class QuotaObservabilityTests: XCTestCase {
         XCTAssertEqual(view.pageState, .connectedButQuotaUnknown)
         XCTAssertEqual(view.providers.count, 1)
     }
+
+    // MARK: - §M1 WP1 burn sub-object + sourcePressure
+
+    func testQuotaPlanWindowDecodesBurnSubObject() throws {
+        let view = try JSONDecoder().decode(
+            QuotaOverviewView.self, from: Data(quotaObservedWithBurnBody.utf8)
+        )
+        let card = try XCTUnwrap(view.providers.first)
+        let plan = try XCTUnwrap(card.plan)
+        let window = try XCTUnwrap(plan.windows.first)
+        let burn = try XCTUnwrap(window.burn)
+        XCTAssertEqual(burn.pressure, "ON_TRACK")
+        XCTAssertFalse(burn.windowStartInferred)
+        XCTAssertEqual(burn.expectedUsedFraction ?? 0, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(burn.actualUsedFraction ?? 0, 0.58, accuracy: 1e-9)
+        XCTAssertEqual(burn.deviation ?? 0, 0.08, accuracy: 1e-9)
+        XCTAssertEqual(burn.remainingFraction ?? 0, 0.42, accuracy: 1e-9)
+        XCTAssertEqual(burn.secondsToReset ?? 0, 3600.0, accuracy: 1e-9)
+        XCTAssertEqual(burn.pressureScore, 0.13, accuracy: 1e-9)
+    }
+
+    func testQuotaPlanWindowDecodesWithoutBurnSubObject() throws {
+        // Pre-WP1 daemons do not emit ``burn`` — decode must succeed with
+        // ``burn == nil`` so an upgrade does not blank the Quota page.
+        // We hand-build a minimal plan-window payload here because the
+        // shared canned bodies only exercise ``quota_pools`` (which is a
+        // different view-model that does not carry burn at all).
+        let payload = """
+        {
+          "state": "CONNECTED_WITH_QUOTA_OBSERVATIONS",
+          "summary": {"connected_provider_count": 1, "quota_observable_provider_count": 1, "quota_unknown_provider_count": 0, "quota_warning_count": 0, "quota_exhausted_count": 0},
+          "providers": [{
+            "provider_id": "p", "display_name": "P", "connection_state": "CONNECTED",
+            "auth_state": null, "plan_surface": null, "region": null,
+            "quota_state": "OBSERVED", "confidence": "EXACT",
+            "measurement_source": "PROVIDER_API", "observed_at": "2026-08-31T00:00:00Z",
+            "readonly_source_available": true, "collector_available": true,
+            "last_refresh_status": null, "last_refresh_at": null, "failure_reason": null,
+            "credential_source": "ENV_VAR",
+            "quota_pools": [],
+            "plan": {
+              "provider_id": "p", "plan_id": "plan", "display_name": "P",
+              "quota_semantics": "SHARED_POOL",
+              "pool_id": "pool", "resource_kind": "TOKEN_PLAN_INCLUDED_QUOTA",
+              "shared_across_models": true, "unit_kind": "TOKENS",
+              "covered_model_ids": [],
+              "state": "AVAILABLE", "confidence": "EXACT",
+              "observed_at": null, "unknown_reason": null,
+              "active_workload_scope": "UNKNOWN", "workload_scope_notes": [],
+              "binding_window": {"window_id": null, "window_kind": null, "remaining_fraction": null, "reset_at": null, "seconds_until_reset": null, "reason": "NO_KNOWN_REMAINING", "confidence": "UNKNOWN"},
+              "model_consumption": [], "model_equivalents": [], "equivalent_capacity": [],
+              "windows": [{"window_id": "5h", "window_kind": "FIVE_HOUR", "state": "AVAILABLE", "confidence": "EXACT", "remaining_fraction": 0.5, "reset_at": "2026-08-31T05:00:00Z"}]
+            }
+          }],
+          "history": {"observations": [], "retention_limit": 500}
+        }
+        """
+        let view = try JSONDecoder().decode(
+            QuotaOverviewView.self, from: Data(payload.utf8)
+        )
+        let plan = try XCTUnwrap(view.providers.first?.plan)
+        let window = try XCTUnwrap(plan.windows.first)
+        XCTAssertNil(window.burn)
+    }
+
+    func testQuotaProviderCardDecodesSourcePressure() throws {
+        let view = try JSONDecoder().decode(
+            QuotaOverviewView.self, from: Data(quotaObservedWithBurnBody.utf8)
+        )
+        let card = try XCTUnwrap(view.providers.first)
+        XCTAssertEqual(card.sourcePressure, "ON_TRACK")
+    }
+
+    func testQuotaProviderCardDecodesWithoutSourcePressure() throws {
+        // Pre-WP1 daemons omit ``source_pressure`` — decode must succeed
+        // with ``sourcePressure == nil``.
+        let view = try JSONDecoder().decode(
+            QuotaOverviewView.self, from: Data(quotaUnknownBody.utf8)
+        )
+        let card = try XCTUnwrap(view.providers.first)
+        XCTAssertNil(card.sourcePressure)
+    }
+
+    // M1 WP3 fix (F5): the per-provider ``collection_failure_streak``
+    // rides on the card view so the owner can spot a host that has
+    // been unable to probe the provider without drilling into a
+    // target row. Pre-F5 daemons omit the field — decode must
+    // succeed with ``collectionFailureStreak == 0``.
+    func testQuotaProviderCardDecodesCollectionFailureStreak() throws {
+        let body = """
+        {
+          "state": "CONNECTED_WITH_QUOTA_OBSERVATIONS",
+          "summary": {
+            "connected_provider_count": 1,
+            "quota_observable_provider_count": 1,
+            "quota_unknown_provider_count": 0,
+            "quota_warning_count": 0,
+            "quota_exhausted_count": 0
+          },
+          "providers": [
+            {
+              "provider_id": "minimax-cn-coding-plan",
+              "display_name": "MiniMax CN Coding Plan",
+              "connection_state": "CONNECTED",
+              "auth_state": "AUTH_FROM_ENV_PRESENCE",
+              "quota_state": "OBSERVED",
+              "confidence": "ESTIMATED",
+              "readonly_source_available": true,
+              "collector_available": true,
+              "credential_source": "ENV",
+              "quota_pools": [],
+              "collection_failure_streak": 2
+            }
+          ],
+          "history": {"observations": [], "retention_limit": 0}
+        }
+        """
+        let view = try JSONDecoder().decode(
+            QuotaOverviewView.self, from: Data(body.utf8)
+        )
+        let card = try XCTUnwrap(view.providers.first)
+        XCTAssertEqual(card.collectionFailureStreak, 2)
+    }
+
+    func testQuotaProviderCardDecodesWithoutCollectionFailureStreak() throws {
+        // Pre-F5 daemons do not surface the streak; ``decodeIfPresent``
+        // must leave the field at its default 0.
+        let view = try JSONDecoder().decode(
+            QuotaOverviewView.self, from: Data(quotaUnknownBody.utf8)
+        )
+        let card = try XCTUnwrap(view.providers.first)
+        XCTAssertEqual(card.collectionFailureStreak, 0)
+    }
+
+    // M1 WP4: pool_kind and unmetered block round-trip on the
+    // provider card. Lenient decode keeps pre-WP4 daemons (which
+    // omit the field) on the legacy ``windowed`` default.
+    func testQuotaProviderCardDecodesPoolKindUnmetered() throws {
+        let body = """
+        {
+          "state": "CONNECTED_WITH_QUOTA_OBSERVATIONS",
+          "summary": {
+            "connected_provider_count": 1,
+            "quota_observable_provider_count": 1,
+            "quota_unknown_provider_count": 0,
+            "quota_warning_count": 0,
+            "quota_exhausted_count": 0
+          },
+          "providers": [
+            {
+              "provider_id": "opencode",
+              "display_name": "OpenCode Free",
+              "connection_state": "CONNECTED",
+              "auth_state": "AUTH_FROM_ENV_PRESENCE",
+              "quota_state": "OBSERVED",
+              "confidence": "ESTIMATED",
+              "readonly_source_available": true,
+              "collector_available": true,
+              "credential_source": "NONE",
+              "quota_pools": [],
+              "collection_failure_streak": 0,
+              "pool_kind": "unmetered",
+              "unmetered": {
+                "rpm_observed": 12,
+                "error_rate_1h": 0.05,
+                "cooldown_until": null
+              }
+            }
+          ],
+          "history": {"observations": [], "retention_limit": 0}
+        }
+        """
+        let view = try JSONDecoder().decode(
+            QuotaOverviewView.self, from: Data(body.utf8)
+        )
+        let card = try XCTUnwrap(view.providers.first)
+        XCTAssertEqual(card.poolKind, "unmetered")
+        let unmetered = try XCTUnwrap(card.unmetered)
+        XCTAssertEqual(unmetered.rpmObserved, 12)
+        XCTAssertEqual(unmetered.errorRate1h, 0.05)
+        XCTAssertNil(unmetered.cooldownUntil)
+    }
+
+    func testQuotaProviderCardDecodesWithoutPoolKindOrUnmetered() throws {
+        // Pre-WP4 daemons omit pool_kind and unmetered. The lenient
+        // defaults preserve the legacy chrome (windowed pool, no
+        // unmetered block).
+        let view = try JSONDecoder().decode(
+            QuotaOverviewView.self, from: Data(quotaUnknownBody.utf8)
+        )
+        let card = try XCTUnwrap(view.providers.first)
+        XCTAssertEqual(card.poolKind, "windowed")
+        XCTAssertNil(card.unmetered)
+    }
+
+    func testUnmeteredObservationViewErrorRateOneHourDecodesNull() throws {
+        // V3: ``error_rate_1h`` is ``Double?`` on Swift — the
+        // daemon emits ``null`` when no evidence rows exist in the
+        // window. The Swift decoder must accept the null sentinel
+        // and surface ``nil`` so the Resources page renders the
+        // "no data" hint instead of a fabricated 0% error rate.
+        let body = """
+        {
+          "rpm_observed": 0,
+          "error_rate_1h": null,
+          "cooldown_until": null
+        }
+        """
+        let view = try JSONDecoder().decode(
+            UnmeteredObservationView.self, from: Data(body.utf8)
+        )
+        XCTAssertNil(view.errorRate1h)
+        XCTAssertEqual(view.rpmObserved, 0)
+        XCTAssertNil(view.cooldownUntil)
+    }
+
+    func testStoreFetchesQuotaOverviewWithUnmeteredProvider() async throws {
+        // V5: ``TestDaemon`` registers an unmetered canned body
+        // for ``/v1/quota`` via ``registerStandardRoutes(quotaBody:)``
+        // so the Swift store round-trip exercises the
+        // ``pool_kind == "unmetered"`` branch with the same
+        // fidelity as a real daemon.
+        let daemon = TestDaemon()
+        registerStandardRoutes(daemon, quotaBody: quotaUnmeteredBody)
+        let path = temporarySocketPath("quota-unmetered")
+        try daemon.start(socketPath: path)
+        defer { daemon.stop() }
+
+        let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
+        await store.refreshNow()
+
+        let quota = try XCTUnwrap(store.quota)
+        XCTAssertEqual(quota.pageState, .connectedWithQuotaObservations)
+        let opencode = try XCTUnwrap(
+            quota.providers.first { $0.providerId == "opencode" }
+        )
+        XCTAssertEqual(opencode.poolKind, "unmetered")
+        let unmetered = try XCTUnwrap(opencode.unmetered)
+        XCTAssertEqual(unmetered.rpmObserved, 12)
+        XCTAssertEqual(unmetered.errorRate1h, 0.05)
+        XCTAssertNil(unmetered.cooldownUntil)
+
+        // The windowed provider in the same response still carries
+        // the legacy chrome.
+        let coding = try XCTUnwrap(
+            quota.providers.first { $0.providerId == "minimax-cn-coding-plan" }
+        )
+        XCTAssertEqual(coding.poolKind, "windowed")
+        XCTAssertNil(coding.unmetered)
+    }
 }
