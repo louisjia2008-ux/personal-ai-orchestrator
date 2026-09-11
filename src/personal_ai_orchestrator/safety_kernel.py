@@ -85,6 +85,41 @@ _ALLOWED_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Round 6 §5 — authority-owned source-state contract.
+#
+# The legal source state for a worker start is a property of the DURABLE
+# DISPATCH AUTHORITY, never of whatever state the task happens to be in
+# when a (possibly stale) executor thread runs:
+#
+#     OWNER_INITIATED_EXECUTION → READY
+#     SUPERVISED_AUTO           → AUTO_GRACE
+#
+# The string values live here — the lowest-level host-owned module — so
+# ``dispatch_initiator``, the executor and the store share ONE mapping
+# with no circular imports (every layer already imports this module).
+# ---------------------------------------------------------------------------
+
+AUTHORITY_OWNER_INITIATED_EXECUTION = "OWNER_INITIATED_EXECUTION"
+AUTHORITY_SUPERVISED_AUTO = "SUPERVISED_AUTO"
+
+
+def expected_source_state_for_dispatch_authority(authority: str) -> TaskState:
+    """Round 6 §5 — the ONE authority → legal-source-state mapping.
+
+    ``OWNER_INITIATED_EXECUTION`` may only start a worker from READY;
+    ``SUPERVISED_AUTO`` may only start from AUTO_GRACE. Any other
+    authority value raises :class:`ValueError` — callers must fail
+    closed (no worker spawn) rather than guessing a default.
+    """
+
+    if authority == AUTHORITY_OWNER_INITIATED_EXECUTION:
+        return TaskState.READY
+    if authority == AUTHORITY_SUPERVISED_AUTO:
+        return TaskState.AUTO_GRACE
+    raise ValueError(f"unknown dispatch authority: {authority!r}")
+
+
 class FrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -2243,19 +2278,25 @@ class SafetyKernelStore:
         worker_id: str,
         writer_token: str,
         pid: int | None = None,
-        expected_state: TaskState = TaskState.READY,
+        expected_state: TaskState | None = None,
     ) -> TaskRecord:
         """Atomically pair the run row, the state transition and dispatch START.
 
-        M1 WP5a-2 adds ``expected_state``: the owner-dispatch path keeps the
-        ``READY`` default, while the host-owned SUPERVISED_AUTO dispatch path
-        passes ``AUTO_GRACE`` so the transition never routes through READY
-        (§3.2 — a READY intermediate would let the next planning tick
-        re-plan a task that is already being dispatched). The transition is
-        validated against the exact expected state both in Python and in the
-        SQL ``WHERE state=?`` guard, so a concurrent veto / mode-change abort
-        that moved the task out of the expected state fails closed instead of
-        racing the worker start.
+        Round 6 §8 — the legal source state is a property of the DURABLE
+        dispatch row, not of the caller: ``expected_state`` is derived
+        inside this transaction from ``dispatch.authority`` via
+        :func:`expected_source_state_for_dispatch_authority`
+        (OWNER_INITIATED_EXECUTION → READY, SUPERVISED_AUTO →
+        AUTO_GRACE). A caller-supplied ``expected_state`` is accepted
+        only as a consistency assertion — a value that disagrees with
+        the authority-derived state raises before any mutation, so no
+        caller can weaken the rule (e.g. pass ``READY`` for a
+        SUPERVISED_AUTO reservation). Unknown authority fails closed
+        with :class:`ValueError`. The transition is validated against
+        the exact expected state both in Python and in the SQL
+        ``WHERE state=?`` guard, so a concurrent veto / mode-change
+        abort that moved the task out of the expected state fails
+        closed instead of racing the worker start.
         """
 
         self.connection.execute("BEGIN IMMEDIATE")
@@ -2269,6 +2310,18 @@ class SafetyKernelStore:
                 raise ValueError("dispatch_id does not belong to task_id")
             if dispatch["status"] != OwnerDispatchStatus.RESERVED.value:
                 raise RuntimeError("owner dispatch is not reserved")
+            # Round 6 §8: the durable authority owns the source state —
+            # re-derived here inside BEGIN IMMEDIATE, never trusted
+            # from the caller alone.
+            authority_state = expected_source_state_for_dispatch_authority(
+                dispatch["authority"]
+            )
+            if expected_state is not None and expected_state is not authority_state:
+                raise ValueError(
+                    "expected_state conflicts with the dispatch authority's"
+                    f" legal source state {authority_state.value}"
+                )
+            expected_state = authority_state
             task = self.get_task(task_id)
             if task.state is not expected_state:
                 raise ValueError(

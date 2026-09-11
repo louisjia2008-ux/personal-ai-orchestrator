@@ -77,6 +77,7 @@ from personal_ai_orchestrator.safety_kernel import (
     OwnerDispatchStatus,
     SafetyKernelStore,
     TaskState,
+    expected_source_state_for_dispatch_authority,
     shadow_identity_payload,
 )
 from personal_ai_orchestrator.shadow_evidence import ShadowEvidenceJournal
@@ -292,22 +293,41 @@ class OwnerDispatchExecutor:
             return
 
         task = store.get_task(dispatch.task_id)
-        # M1 WP5a-2: SUPERVISED_AUTO dispatches arrive in AUTO_GRACE; the
-        # owner path arrives in READY (or SUBMITTED pre-transitioned by
-        # ``initiate_owner_dispatch``). The exact current state becomes the
-        # ``expected_state`` for the atomic RUNNING transition below — if a
-        # concurrent veto / mode-change abort moved the task to READY (or
-        # anything else) between reservation and worker start, the guard
-        # fails closed and no worker is spawned (TOCTOU §8).
-        if task.state not in {TaskState.READY, TaskState.AUTO_GRACE}:
+        # Round 6 §4-§7: the legal source state is a property of the
+        # DURABLE dispatch authority, never of the current task row. A
+        # stale SUPERVISED_AUTO reservation whose task was vetoed /
+        # mode-aborted back to READY must fail closed here — it may NOT
+        # be reinterpreted as an owner dispatch merely because the task
+        # happens to be READY. Unknown authority fails closed with a
+        # sanitized dispatch BLOCKED marker and no worker spawn (no
+        # quota / worktree / writer side effect can have happened yet:
+        # this is the first gate after the durable row load).
+        try:
+            expected_state = expected_source_state_for_dispatch_authority(
+                dispatch.authority
+            )
+        except ValueError:
             store.mark_owner_dispatch_blocked(
                 request_id,
-                failure_code="TASK_NOT_READY",
-                failure_reason=f"task state {task.state.value} is not dispatchable",
+                failure_code="UNKNOWN_DISPATCH_AUTHORITY",
+                failure_reason=(
+                    "dispatch authority has no legal worker source state"
+                ),
             )
             store.close()
             return
-        expected_state = task.state
+        if task.state is not expected_state:
+            store.mark_owner_dispatch_blocked(
+                request_id,
+                failure_code="TASK_NOT_READY",
+                failure_reason=(
+                    f"task state {task.state.value} is not the legal source"
+                    f" state {expected_state.value} for authority"
+                    f" {dispatch.authority}"
+                ),
+            )
+            store.close()
+            return
         ready_version = task.state_version
 
         project_root = self._project_root_or_blocked(store, dispatch, request_id)
@@ -1660,6 +1680,13 @@ class OwnerDispatchExecutor:
 
         Only a writer token acquired by THIS execution is released; a
         pre-existing foreign lock is never touched.
+
+        Round 6 §11 — the task mutation is authority-aware: only the
+        dispatch authority's OWN legal source state may transition to
+        BLOCKED (OWNER → READY, SUPERVISED_AUTO → AUTO_GRACE). A stale
+        SUPERVISED_AUTO reservation failing after a veto moved the task
+        to READY must NOT mutate the owner-controlled READY task — the
+        veto already won; the dispatch row alone carries the failure.
         """
 
         dispatch = store.get_owner_dispatch_by_request_id(request_id)
@@ -1669,7 +1696,16 @@ class OwnerDispatchExecutor:
             except Exception:
                 pass
         task = store.get_task(dispatch.task_id)
-        if task.state in {TaskState.READY, TaskState.AUTO_GRACE}:
+        try:
+            authority_source_state = (
+                expected_source_state_for_dispatch_authority(dispatch.authority)
+            )
+        except ValueError:
+            authority_source_state = None  # unknown authority: never mutate
+        if (
+            authority_source_state is not None
+            and task.state is authority_source_state
+        ):
             store.transition_task(
                 dispatch.task_id,
                 TaskState.BLOCKED,

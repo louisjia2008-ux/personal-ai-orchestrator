@@ -50,6 +50,12 @@ from personal_ai_orchestrator.execution_controller import (
     validate_execution_target_launch,
 )
 from personal_ai_orchestrator.safety_kernel import (
+    AUTHORITY_OWNER_INITIATED_EXECUTION as _AUTHORITY_OWNER_INITIATED_EXECUTION,
+)
+from personal_ai_orchestrator.safety_kernel import (
+    AUTHORITY_SUPERVISED_AUTO as _AUTHORITY_SUPERVISED_AUTO,
+)
+from personal_ai_orchestrator.safety_kernel import (
     ProjectAvailability,
     ProjectRecord,
     SafetyKernelStore,
@@ -91,9 +97,10 @@ if TYPE_CHECKING:
 
 
 #: String value forwarded to ``SafetyKernelStore.reserve_owner_dispatch``
-#: as ``authority=...``. Kept here (rather than imported from
-#: ``control_api``) so the authority value is owned by this module.
-AUTHORITY_OWNER_INITIATED_EXECUTION = "OWNER_INITIATED_EXECUTION"
+#: as ``authority=...``. The value itself is owned by
+#: ``safety_kernel`` (round 6 §5 — one source for the authority →
+#: source-state contract); this alias keeps the module's public name.
+AUTHORITY_OWNER_INITIATED_EXECUTION = _AUTHORITY_OWNER_INITIATED_EXECUTION
 
 #: M1 WP5a-2: authority value for the host-owned supervised-auto dispatch
 #: path. Deliberately distinct from ``OWNER_INITIATED_EXECUTION`` — nobody
@@ -101,7 +108,7 @@ AUTHORITY_OWNER_INITIATED_EXECUTION = "OWNER_INITIATED_EXECUTION"
 #: planning tick operating under SUPERVISED_AUTO mode + project opt-in +
 #: grace-window semantics. The two values must never be conflated because
 #: the audit trail (and the pending-shadow lifecycle) keys off them.
-AUTHORITY_SUPERVISED_AUTO_EXECUTION = "SUPERVISED_AUTO"
+AUTHORITY_SUPERVISED_AUTO_EXECUTION = _AUTHORITY_SUPERVISED_AUTO
 
 
 def initiate_owner_dispatch(
