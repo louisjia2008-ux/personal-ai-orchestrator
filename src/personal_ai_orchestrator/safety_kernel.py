@@ -143,9 +143,18 @@ class TaskRecord(FrozenModel):
     min_tier: str = "T1"
     # M1 WP5a-1: AUTO_PLANNED / AUTO_GRACE bookkeeping. All four
     # fields default to ``None`` so a pre-WP5a-1 task reads cleanly.
-    # ``auto_decision_id`` is the frozen ``RoutingDecision.decision_id``
-    # written by the tick (one per task, never recreated across
-    # ticks — same decision, same request_id, idempotent on replay).
+    # Round 7 §21 — identifier contract (do not conflate):
+    # ``auto_decision_id`` is the lifecycle/cycle id derived by the
+    # planning tick as ``auto-{task_id}-v{state_version-at-planning}``
+    # (one per cycle, fresh per state_version, idempotent on replay).
+    # It is NOT the ``RoutingDecision.decision_id`` — that is an
+    # independent durable routing-decision id (``route-{digest}``).
+    # The chain is: auto_decision_id → routing request id
+    # ``supervised-auto-{auto_decision_id}`` → the durable
+    # RoutingDecision (``route-{digest}``, looked up by request id).
+    # A ``PendingShadowObservation`` carries ``pending_id ==
+    # auto_decision_id`` and ``decision_id ==
+    # RoutingDecision.decision_id``.
     # ``auto_grace_deadline_at`` is the ISO timestamp at which the
     # grace window expires (set on entry to AUTO_GRACE for
     # ``unattended_allowed`` projects, or on owner ack otherwise).

@@ -75,6 +75,7 @@ from personal_ai_orchestrator.quota_availability import QuotaAvailabilityState
 from personal_ai_orchestrator.quota_collectors.base import QuotaCollectionStatus
 from personal_ai_orchestrator.routing_bridge import build_routing_decision
 from personal_ai_orchestrator.safety_kernel import (
+    OwnerDispatchStatus,
     ProjectRecord,
     SafetyKernelStore,
     ShadowFinalizationIntent,
@@ -724,6 +725,10 @@ class SupervisedAutoStep:
         self._shadow_journal = shadow_journal
         self._catalog_snapshot_id = catalog_snapshot_id
         self._lease_authority = SwitchLeaseAuthority(store)
+        #: Round 7 §11 — per-tick dedupe of correlation-conflict events
+        #: so reconciliation and the terminal sweep never both emit for
+        #: the same task within one tick. Reset at every tick entry.
+        self._tick_conflict_events: set[tuple[str, str]] = set()
 
     # ------------------------------------------------------------------
     # entrypoint
@@ -740,6 +745,7 @@ class SupervisedAutoStep:
         discard promises), again at tick end.
         """
 
+        self._tick_conflict_events = set()
         try:
             self._drain_shadow_finalize_outbox()
             self._drain_shadow_cleanup_outbox()
@@ -1198,37 +1204,43 @@ class SupervisedAutoStep:
     # ------------------------------------------------------------------
 
     def _reconcile_supervised_auto_dispatches(self, now: datetime) -> None:
-        """Reconcile the CURRENT cycle's dispatch row, pre-worker only.
+        """Reconcile the CURRENT cycle's dispatch, pre-worker only.
 
-        Correlation is strictly current-cycle: a terminal SUPERVISED_AUTO
-        dispatch row participates only when its ``request_id`` equals
-        ``supervised_auto_dispatch_request_id(task.auto_decision_id)``
-        (§3.4 step 4's fail branch for THIS cycle). Rows from older
-        auto cycles — and historical task runs — can never mutate the
-        current lifecycle.
+        Round 7 §4-§6: reconciliation is TASK-driven — the current task
+        row is the authoritative lifecycle truth; a raw owner_dispatches
+        row is only ever a candidate hint, never proof. Every mutation
+        is gated on the ONE canonical Round-6 classifier
+        (:func:`correlate_supervised_auto_execution`):
 
-        "This dispatch produced a run" is dispatch-scoped: the executor
-        always registers the run as ``run-{dispatch_id}``, so an exact
-        ``run_id`` lookup decides whether the worker truly launched.
-        A dispatch that did launch keeps its outcome — the verifier +
-        executor path owns that truth.
+        - CONFLICT — the deterministic namespace is occupied by a row
+          that is not the exact current SUPERVISED_AUTO reservation
+          (wrong authority / task / frozen target / dispatch id /
+          reservation version). Fail closed: preserve the task's auto
+          metadata and pending shadow, no abort, no discard, no
+          finalize intent, sanitized deduped
+          ``AUTO_EXECUTION_CORRELATION_CONFLICT`` event.
+        - EXACT_REAL_RUN — the exact dispatch truly launched its
+          worker: the executor / terminal recovery owns the outcome;
+          never a pre-worker abort.
+        - NO_DISPATCH — no durable dispatch exists for THIS cycle;
+          unrelated historical SUPERVISED_AUTO rows for the same task
+          prove nothing and can never drive a mutation.
+        - EXACT_PREWORKER — the exact current reservation exists with
+          no exact run; a BLOCKED/CANCELLED reservation is then a
+          legitimate pre-worker admission failure and the existing
+          crash-atomic abort path closes the lifecycle.
 
-        A task without a current ``auto_decision_id`` is never touched:
-        a historical SUPERVISED_AUTO row alone proves nothing about the
-        current lifecycle, so reconciliation fails closed (BLOCKED
-        stays BLOCKED; owner-controlled recovery owns it).
+        Version semantics (§7/§8): while the task is still AUTO_GRACE
+        the reservation version must exactly equal the live
+        ``state_version``; a terminal BLOCKED task uses the recovery
+        ordering contract (reservation version strictly below the
+        terminal version) — the two are never compared for equality.
         """
 
         rows = self._store.connection.execute(
-            """
-            SELECT d.dispatch_id, d.request_id, d.task_id, d.status,
-                   d.failure_code
-            FROM owner_dispatches d
-            WHERE d.authority = ?
-              AND d.status IN ('BLOCKED', 'CANCELLED')
-            ORDER BY d.created_at
-            """,
-            (AUTHORITY_SUPERVISED_AUTO_EXECUTION,),
+            "SELECT task_id FROM tasks WHERE auto_decision_id IS NOT NULL "
+            "AND state IN (?,?)",
+            (TaskState.AUTO_GRACE.value, TaskState.BLOCKED.value),
         ).fetchall()
         for row in rows:
             try:
@@ -1237,35 +1249,61 @@ class SupervisedAutoStep:
                 continue
             # Current-cycle gate BEFORE any mutation: without a live
             # auto decision id there is no current lifecycle to close.
-            if task.auto_decision_id is None:
+            if task.auto_decision_id is None:  # pragma: no cover — raced clear
                 continue
-            if (
-                row["request_id"]
-                != supervised_auto_dispatch_request_id(task.auto_decision_id)
-            ):
-                continue  # stale dispatch from an older auto cycle
-            if task.state not in {TaskState.BLOCKED, TaskState.AUTO_GRACE}:
+            expected_version = (
+                task.state_version
+                if task.state is TaskState.AUTO_GRACE
+                else None
+            )
+            correlation = correlate_supervised_auto_execution(
+                self._store,
+                task_id=task.task_id,
+                auto_decision_id=task.auto_decision_id,
+                expected_task_state_version=expected_version,
+            )
+            if correlation is AutoExecutionCorrelation.CONFLICT:
+                # §5: never treat a conflicting reservation as a
+                # legitimate pre-worker failure — preserve everything.
+                self._record_correlation_conflict(
+                    task.task_id,
+                    task.auto_decision_id,
+                    "dispatch namespace occupied by a non-exact reservation",
+                )
                 continue
-            # Dispatch-scoped run correlation: the executor's durable
-            # run row for this exact dispatch is always run-{dispatch_id}.
-            expected_run_id = f"run-{row['dispatch_id']}"
-            current_dispatch_has_run = self._store.connection.execute(
-                "SELECT run_id FROM runs WHERE run_id=? LIMIT 1",
-                (expected_run_id,),
-            ).fetchone()
-            if current_dispatch_has_run is not None:
-                continue  # this dispatch truly launched a worker
-            reason = f"admission_failed:{row['failure_code'] or row['status']}"
+            if correlation is not AutoExecutionCorrelation.EXACT_PREWORKER:
+                # EXACT_REAL_RUN → real-execution recovery owns it;
+                # NO_DISPATCH → no current-cycle dispatch to reconcile
+                # (§18: historical rows must not mutate this cycle).
+                continue
+            # EXACT_PREWORKER: only a BLOCKED/CANCELLED exact current
+            # reservation is a terminal pre-worker admission failure.
+            # (RESERVED is crash-boundary-C recovery's concern; STARTED
+            # implies the atomic run row exists.)
+            dispatch = current_supervised_auto_dispatch(
+                self._store,
+                task_id=task.task_id,
+                auto_decision_id=task.auto_decision_id,
+                expected_task_state_version=expected_version,
+            )
+            if dispatch is None:  # pragma: no cover — raced mutation
+                continue
+            if dispatch.status not in {
+                OwnerDispatchStatus.BLOCKED,
+                OwnerDispatchStatus.CANCELLED,
+            }:
+                continue
+            reason = f"admission_failed:{dispatch.failure_code or dispatch.status.value}"
             if task.state is TaskState.AUTO_GRACE:
                 # The reservation was rejected before the executor ever
                 # moved the task (e.g. initiate_owner_dispatch validation).
                 self._abort_auto_task(task, now, reason=reason)
                 continue
             # Pre-worker supervised-auto BLOCKED for the CURRENT cycle:
-            # the same crash-atomic close. The request-id match above is
-            # the durable proof this BLOCKED task belongs to this
-            # supervised-auto dispatch, so allow_blocked cannot be
-            # reached by a plain owner BLOCKED task.
+            # the exact-reservation proof above is the durable evidence
+            # this BLOCKED task belongs to this supervised-auto
+            # dispatch, so allow_blocked cannot be reached by a plain
+            # owner BLOCKED task.
             self._abort_auto_task(task, now, reason=reason, allow_blocked=True)
 
     # ------------------------------------------------------------------
@@ -1315,15 +1353,12 @@ class SupervisedAutoStep:
                 # reservation. This is NOT ordinary pre-worker — never
                 # discard the pending, never reconstruct finalize truth
                 # from a foreign run, never clear the metadata. Fail
-                # closed with a sanitized event; every trace is kept.
-                self._safe_system_event(
-                    AUTO_EXECUTION_CORRELATION_CONFLICT_EVENT,
-                    {
-                        "task_id": task.task_id,
-                        "auto_decision_id": pending_id,
-                        "reason": "dispatch namespace occupied by a"
-                        " non-exact reservation",
-                    },
+                # closed with a sanitized (per-tick deduped) event; every
+                # trace is kept.
+                self._record_correlation_conflict(
+                    task.task_id,
+                    pending_id,
+                    "dispatch namespace occupied by a non-exact reservation",
                 )
                 continue
             if correlation is AutoExecutionCorrelation.EXACT_REAL_RUN:
@@ -1723,6 +1758,30 @@ class SupervisedAutoStep:
             self._store.record_system_event(event_type, payload)
         except Exception:
             pass
+
+    def _record_correlation_conflict(
+        self, task_id: str, auto_decision_id: str, reason: str
+    ) -> None:
+        """Round 7 §11 — sanitized + per-tick-deduped conflict event.
+
+        Payload carries task_id / auto_decision_id / reason only — no
+        raw row contents. Reconciliation and the terminal sweep share
+        this helper, so one tick emits at most one event per
+        (task, lifecycle) even when both stages see the conflict.
+        """
+
+        key = (task_id, auto_decision_id)
+        if key in self._tick_conflict_events:
+            return
+        self._tick_conflict_events.add(key)
+        self._safe_system_event(
+            AUTO_EXECUTION_CORRELATION_CONFLICT_EVENT,
+            {
+                "task_id": task_id,
+                "auto_decision_id": auto_decision_id,
+                "reason": reason,
+            },
+        )
 
 
 __all__ = [
