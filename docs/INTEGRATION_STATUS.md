@@ -1444,3 +1444,27 @@ stays READY, no run row), stale pre-worker failure never blocks READY,
 and the terminal CORRELATION matrix (foreign OWNER / wrong target /
 wrong task rows with runs are CONFLICTs; exact run still recovers with
 exactly one observation; exact no-run stays pre-worker cleanup).
+
+### WP5a-2 reconciliation correlation repair (review round 7)
+
+The pre-worker reconciliation still used its historical partial
+current-cycle logic (raw row + request-id equality + own run lookup)
+instead of the Round-6 canonical classifier, so a conflicting
+SUPERVISED_AUTO row (wrong target / dispatch id / reservation version)
+with no run could be treated as an ordinary pre-worker failure and
+clear lifecycle metadata + pending before the terminal sweep saw the
+conflict. Reconciliation is now task-driven and gates every mutation
+on correlate_supervised_auto_execution: CONFLICT preserves everything
+(sanitized, per-tick-deduped AUTO_EXECUTION_CORRELATION_CONFLICT event
+shared with the terminal sweep); EXACT_REAL_RUN is left to the
+executor/terminal recovery; NO_DISPATCH ignores unrelated historical
+rows; only EXACT_PREWORKER with a BLOCKED/CANCELLED exact reservation
+may abort (crash-atomic, incl. allow_blocked for terminal BLOCKED).
+The auto_decision_id documentation no longer conflates it with
+RoutingDecision.decision_id. Deterministic tests:
+tests/test_auto_reconciliation.py round-7 matrix (9) — wrong
+target / dispatch id / live version (V±1) / terminal version ordering
+conflicts preserve metadata, pending, and emit exactly one deduped
+event; exact pre-worker failures (AUTO_GRACE and terminal BLOCKED)
+still abort safely; an exact real run is never pre-worker-aborted;
+NO_DISPATCH ignores historical rows.
