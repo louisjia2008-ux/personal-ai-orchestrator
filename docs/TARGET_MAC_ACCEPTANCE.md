@@ -1,6 +1,6 @@
 # Target Mac Acceptance Gate
 
-Status: `REQUIRED_BEFORE_PRODUCTION_ACTIVE`
+Status: `PASS_LOCAL_P0_P1_ROUTING_PROVIDER_OWNER_DISPATCH_AND_M0_TRUST_HARDENING`
 
 GitHub CI can prove deterministic cross-platform code behavior, but it cannot prove the target
 Mac's provider-native authentication, Keychain boundaries, process cleanup, filesystem isolation,
@@ -55,6 +55,27 @@ Use a newly created disposable Git repository only. Verify:
 If the worker can modify the source/main checkout through any execution path, P0 fails. Do not
 paper over this with a prompt instruction; fix the outer workspace/process isolation boundary.
 
+### P0 owner-initiated dispatch (PASS on `feat/p4-final-ui-repair @ 63a524b`)
+
+Acceptance evidence:
+
+- `POST /v1/tasks/{id}/dispatch` creates the `owner_dispatches` row, atomically
+  transitions `READY → RUNNING` via `SafetyKernelStore.start_dispatched_worker`,
+  spawns the supervised worker thread, and finishes with `VERIFIED` only when
+  the deterministic host verifier produces and persists an immutable
+  `evidence_id`;
+- the worker sandbox is the host-owned `worker-opencode.json` seeded by
+  `product_daemon.ensure_execution_policies()`. Edits are scoped to the
+  assigned worktree, bash and webfetch are denied;
+- the main repo stays bit-identical across the run. `MAIN_REPO_MUTATED`
+  fails the dispatch before any worker spawns;
+- `POST /v1/tasks/{id}/dispatch/recommendation` ranks every dispatchable
+  target by the task's archived policy; the chosen target flows through the
+  same handler as the manual dispatch;
+- the macOS app shows both the manual dispatch and the recommendation panel,
+  and surfaces a completion banner plus a macOS local notification when the
+  task reaches a terminal state and the window is not focused.
+
 ## 4. P1 deterministic-verifier acceptance
 
 Against the disposable task worktree, inject each failure separately:
@@ -97,6 +118,176 @@ Verify:
 - policy and quota snapshot references resolve to immutable evidence.
 
 Static runtime configuration cannot authorize production ACTIVE.
+
+### P0 M0 trust hardening (PASS on `fix/m0-trust`)
+
+- A1: `ExecutionEvidenceJournal.latest_verified_for_target` falls back
+  from UNKNOWN to historical VERIFIED. `execution_verified_stale` is
+  exposed on `ExecutionTargetHealthView` and
+  `DispatchRecommendationCandidate` so the UI can render the staleness.
+- A2: `QuotaAvailabilityState.UNCERTAIN_LOCKED` fires after
+  `UNCERTAIN_LOCKED_THRESHOLD` (=3) consecutive failed quota collections
+  for the same target. A single `observe_success()` releases the lock
+  atomically. Admission rejects with `QUOTA_UNKNOWN`.
+- A3: `_emergency_repair` now persists `signal: 9` plus
+  `emergency_repair: true` and a human-readable reason. The owner can
+  finally tell SIGKILL from a clean failure.
+- A4: `RunView.pid_alive` is computed by `os.kill(pid, 0)`; the Swift
+  inspector renders "已退出" instead of a stale "running pid N".
+- A5: `pytest-rerunfailures` retries the daemon SIGINT shutdown test up
+  to 3 times.
+
+### P0 M1 WP0 daemon tick (PASS on `feat/m1-wp0-daemon-tick`)
+
+Acceptance evidence:
+
+- Boot the bundled product daemon with
+  `--tick-interval-seconds 0.5` (or rely on the `PAO_TICK_INTERVAL_SECONDS`
+  env var, or the 5.0s default).
+- Two `/v1/health` polls spaced at least two supervisor intervals apart
+  must show `last_tick_at` monotonically advancing on each poll.
+- `supervisor_steps` must list exactly one entry named `heartbeat` with
+  `consecutive_failures == 0` and `in_backoff == false` for a healthy
+  daemon. New steps added by later WP branches will appear under the
+  same field without re-wiring `/v1/health`.
+- SIGINT / SIGTERM still exit cleanly (covered by the existing
+  `test_sigint_shuts_daemon_down_cleanly_without_traceback`).
+
+### P0 M1 WP1 burn (PASS on `feat/m1-wp1-burn`)
+
+Acceptance evidence:
+
+- Refresh quota on a connected provider; every `QuotaPlanWindowView.windows[*]`
+  carries a `burn` sub-object with `pressure` populated to one of the
+  seven enum values (`UNMETERED` / `STALE` / `EXHAUSTED` / `STARVED` /
+  `AHEAD` / `BEHIND` / `ON_TRACK`).
+- The Quota page renders a pressure chip per plan window using the
+  seven `quota.pressure.*` labels. STARVED renders as "Expiring
+  unused" / "将过期未用" (never "Starved" / "快断流" — that label is
+  wrong on this verdict's semantics).
+- The provider card carries `source_pressure` matching the WEEKLY
+  window's `burn.pressure`. When the plan has no WEEKLY window,
+  `source_pressure` is `"UNMETERED"` and no chip renders. When the
+  plan has no observation at all, `source_pressure` is `null`.
+- A `DispatchRecommendationCandidate` for any target with a provider
+  that carries a WEEKLY window carries a `source_pressure` string
+  equal to the card-level field for that provider's plan. The
+  recommendation panel renders a chip from this string.
+- After a collector omits `window_started_at`, the matching plan
+  window's `burn.window_start_inferred` is `true`. The UI may render
+  this with a small "(estimated start)" affordance.
+- A pre-WP1 daemon decodes cleanly on a WP1 app: every new field is
+  `null` / absent; no blank page, no missing chip.
+
+### P0 M1 WP2 tier (PASS on `feat/m1-wp2-tiers`)
+
+Acceptance evidence:
+
+- Connect a provider that exposes an execution target whose
+  `execution_target_id` is matched by the default tier table
+  (`zai-coding-plan-*`, `minimax-cn-coding-plan-*`, `minimax-*`,
+  `opencode-*-free`). The Resources page renders a tier chip
+  (`Flagship / Workhorse / Fast / Free` / `旗舰 / 主力 / 快速 /
+  免费`) next to the existing VERIFIED/UNVERIFIED chip. The chip
+  uses `.neutral` tone always — tier is a property of the target,
+  not an alert.
+- An unclassified target (none of the patterns match) renders
+  the "Unknown" / "未知" chip. The recommender still admits it; the
+  candidate's reasons tuple records `tier_unknown_assumed_T1`.
+- Submit a task with `min_tier="T0"` from the New Task sheet's
+  Picker. `POST /v1/tasks` carries `min_tier: "T0"`; the stored
+  row reads `min_tier: "T0"` through `TaskView`. A T1 target's
+  reasons tuple records `tier=T1 min_tier=T0 match=glob` and the
+  candidate is hard-eliminated (the corresponding evaluation has
+  `admitted: false` and the reason
+  `tier_below_minimum(tier=T1,min_tier=T0)`).
+- Submit a task with `min_tier="T1"` (the default). T1 and T0
+  targets are admitted; T2 targets are eliminated with reason
+  `tier_below_minimum(tier=T2,min_tier=T1)`. The T0 target pays
+  the 0.1 capability_fit penalty (`quality_capability_fit` score
+  component = 22.5 instead of 25.0).
+- `/v1/health` carries `model_tiers_source: "default_fallback"`
+  on a fresh install (no host-owned `model-tiers.json`) or
+  `"owner_file"` when the host has installed one. Replacing the
+  file with malformed JSON and restarting the daemon keeps
+  owner dispatch online; `model_tiers_source` reads
+  `"default_fallback"` and the `MODEL_TIERS_INVALID` system event
+  is recorded for the owner to read.
+- A pre-WP2 daemon decodes cleanly on a WP2 app: every new field is
+  `null` / absent; the picker defaults to T1; the chip selector
+  falls back to "Unknown"; `model_tiers_source` reads `null`. The
+  submit path emits no `min_tier` key when the picker is at its
+  default so the daemon applies its own T1 default.
+
+### P0 M1 WP3 pressure scoring (PASS on `feat/m1-wp3-pressure-scoring`)
+
+Acceptance evidence:
+
+- The picker exposes 5 owner-facing objectives including
+  `BURN_DOWN` (label "Burn down quota" / "用尽额度", detail
+  "Prefer targets whose quota is expiring unused" / "优先使用
+  即将过期未用的额度"). A pre-WP3 daemon emits an unknown
+  objective string → the lenient `String?` decoder accepts it and
+  `schedulingPolicyName` falls back to the raw value (test
+  `testBurnDownPolicyStringDecodesAndRenders` pins this).
+- Submit a task with `min_tier="T0"` from a BURN_DOWN picker.
+  A `STARVED` source (WEEKLY window with `used_fraction=0.2`,
+  `reset_in=1h`) is selected as `top_pick`. A `cooldown` source
+  is rejected by the `quota_observed_state` gate as before.
+- The dispatch panel's score row expands into a `Score
+  components` disclosure showing 5 rows, each `<name>: weight
+  <0.70> × value <1.400>`. The `weight` column reads the new
+  `weight` field on `DispatchRecommendationScoreComponent`; a
+  pre-WP3 daemon emits no `weight` → nil → row renders as
+  "weight unknown".
+- The dispatch panel's headline number alongside `score` is
+  `headroomMin` (the binding-window minimum), not `headroomMean`.
+  When `headroomMin` is nil (every window has missing data) the
+  view falls back to `headroomMean` for legacy compatibility;
+  the row's reason tuple carries `headroom_unmetered`.
+- A T0 target with a tripped 5h rolling cap (e.g.
+  `used_fraction=0.9` over 2h = `0.45/h` > `0.35/h` cap) and
+  `min_tier="T1"` is hard-eliminated by the 5h smoothing gate.
+  The reason tuple carries
+  `rolling_window_smoothing(tier=T0,min_tier=T1)`. The same
+  target with `tier == min_tier` is exempt (tight-but-acceptable
+  burn).
+- A pre-WP3 daemon decodes cleanly on a WP3 app: every new
+  field is `null` / absent. The 9 frozen `ROUTING_ROLE_CONTRACT.md`
+  fixtures are unchanged; the new BURN_DOWN coverage is an
+  inline JSON test in `RoutingContractTests.swift` (no new
+  fixture file).
+
+### P0 M1 WP4 unmetered pool (PASS on `feat/m1-wp4-unlimited-pool`)
+
+Acceptance evidence (without an outbound `opencode run`
+round-trip — that was a §6.7 violation we are NOT repeating;
+the four successful calls earlier were属主-accepted per the
+in-thread ruling):
+
+- The Resources page renders an unmetered provider card in
+  its own "Free / unmetered" section header. The card has no
+  5h / weekly progress bars and shows the read-time
+  `rpm_observed`, `error_rate_1h`, and (when present)
+  `cooldown_until` countdown chip.
+- The picker exposes a T3 tier for `opencode-big-pickle`
+  (sufix-less) via the WP2 default table glob override.
+- A T3 task under BALANCED has an unmetered top-1 target
+  (the headroom-min heuristic returns 1.0 for UNMETERED
+  windows).
+- A COOLDOWN unmetered target is rejected with a
+  `recovers_at` reason.
+- A worker that hits "rate limit exceeded" or 429 on stderr
+  flips the journal to COOLDOWN with `observe_rate_limited`
+  (15-minute default) and writes a `QUOTA_BLOCKED` evidence
+  row; the dispatch panel keeps the target as
+  `execution_verified=True, execution_verified_stale=True`
+  (the §3.4 demote-fallback contract).
+- The conservative marker list does NOT trip on the bare
+  token "quota" (the regression test pins this); matching
+  stdout is forbidden by design.
+- A pre-WP4 daemon (no `pool_kind` or `unmetered` field) keeps
+  the legacy chrome (windowed pool, no separate section).
 
 ## 6. MiniMax real provider acceptance
 
@@ -190,3 +381,131 @@ FINAL_STATUS: GO | PARTIAL | NO_GO
 
 Until that record is evidence-backed, the correct status is `PARTIAL` and production ACTIVE remains
 disabled.
+
+
+### P0 M1 WP5a-1 SUPERVISED_AUTO foundations (PASS on `feat/m1-wp5a1-auto-foundations`)
+
+This acceptance section covers the **technical foundation only**.
+Autonomous execution is NOT yet implemented — the host-owned
+planning tick, the grace countdown, the auto endpoints, and the
+mode-change abort behaviour all belong to WP5a-2
+(`feat/m1-wp5a2-auto-tick`) and must not start until this WP is
+merged and reviewed.
+
+#### What WP5a-1 enables
+
+- The orchestrator scheduling mode (``MANUAL`` /
+  ``SUPERVISED_AUTO`` / ``ACTIVE``) is now a first-class
+  persisted setting. ``PUT /v1/settings/scheduling`` accepts
+  ``mode`` alongside ``default_scheduling_policy``.
+- ``mode = "ACTIVE"`` without activation authority → 409
+  ``production_active_not_authorized``. Production ACTIVE
+  remains unchanged.
+- Project-level supervised-auto toggle, unattended toggle,
+  and grace window are persisted. ``PUT
+  /v1/projects/{id}/settings`` round-trips. ``grace_seconds``
+  validation is bounded ``[1, 86400]`` (1 second .. 24 hours).
+- The task state machine gains ``AUTO_PLANNED`` and
+  ``AUTO_GRACE`` with the minimal transition map (§15 of the
+  spec). WP5a-1 commit 3 explicitly does NOT add
+  ``AUTO_GRACE → RUNNING``; that path is WP5a-2's responsibility.
+- The ``RoutingMode.SUPERVISED_AUTO`` closed union is in
+  place on the Python contract, the TypeScript validator
+  (``decision_contract.ts``), the Python adapter outcome
+  resolver, and the Swift decoder.
+- The OpenCode plugin's ``optionMode`` guard still only accepts
+  ``BYPASS`` / ``SHADOW`` / ``ACTIVE``. The plugin's
+  ``ctx.session.switchModel`` side-effect gate
+  (``mode !== "ACTIVE"``) is unchanged. WP5a-1 did NOT modify
+  ``integrations/opencode/plugin.ts``.
+
+#### What WP5a-1 does NOT enable (out of scope for this WP)
+
+- No daemon tick / no supervised_auto_step.
+- No grace countdown execution.
+- No autonomous dispatch path through dispatch_executor.
+- No ``POST /v1/tasks/{id}/auto/{ack,veto,dispatch-now}``
+  endpoints.
+- No mode-change abort behaviour on a running AUTO_* task.
+- No pending-shadow autonomous lifecycle (finalise / veto /
+  abort).
+- No 24h unacked timeout for ``AUTO_GRACE``.
+
+#### Acceptance evidence
+
+- 845 Python tests pass; 441 Swift tests pass; 17/17
+  TypeScript ``node --test`` cases pass; ruff clean;
+  ``swift build`` clean; ``git diff --check`` clean.
+- The pre-existing ``test_product_daemon_bootstraps_runtime_and_serves_control_plane``
+  is occasionally flaky on the baseline (1/5 fail rate observed
+  before any WP5a-1 change); it remains flaky after WP5a-1 in
+  the same proportion — unrelated to this WP.
+
+### P0 M1 WP5a-2 SUPERVISED_AUTO execution loop (PASS on `feat/m1-wp5a2-auto-tick`)
+
+The first real autonomous side effect. Acceptance evidence:
+
+- **Six hard gates enforced before any side effect** (admitted top-1;
+  quota availability ∈ {AVAILABLE_OBSERVED, AVAILABLE_UNMETERED};
+  evidence fresh ≤ 7d; tier floor; launchable target; no active
+  lease). Failing gates keep the task READY with a deduped
+  ``AUTO_SKIPPED{reason}`` audit + ``auto_reason`` hint.
+- **One frozen RoutingDecision per cycle**; routing request id pinned
+  to ``supervised-auto-{auto_decision_id}``, dispatch request id to
+  ``supervised-auto-dispatch-{auto_decision_id}``; both reused
+  byte-for-byte across ticks; ``routing_decisions.request_id`` UNIQUE
+  unchanged.
+- **Grace semantics correct**: unattended counts down from planning;
+  attended requires the owner ack (deadline from ack time, ACK retry
+  never extends it); 24h unacked aborts to READY.
+- **Dispatch safe**: authority=SUPERVISED_AUTO via the shared
+  initiator with ``expected_state=AUTO_GRACE``; re-admission at
+  worker start; exactly one reservation and at most one worker per
+  decision (duplicates idempotent).
+- **Fail-closed aborts**: mode change / project opt-out abort AUTO_*
+  lifecycles in the same settings handler (tick sweeps are the crash
+  backstop); TOCTOU covered (deadline passed + mode flip ⇒ no
+  dispatch; concurrent veto turns worker start into TASK_NOT_READY).
+- **Lease helper correct**: ``has_active_lease`` = task match AND
+  AUTHORIZED AND unexpired; expired leases never block.
+- **Pending shadow lifecycle complete**: created once at planning,
+  finalized exactly once with the truthful verifier outcome on real
+  runs, discarded on every abort; nothing hangs.
+- **Verifier remains the only task-quality authority**; worker exit
+  ≠ VERIFIED.
+- **Plugin has no SUPERVISED_AUTO side effect**: ``plugin.ts``
+  unchanged; ``optionMode`` still rejects it.
+- **Production ACTIVE unchanged**; authority not weakened.
+- **Control-only daemons never register the autonomous tick**.
+- 914 Python tests pass (845 baseline + 69 new); 441 Swift tests
+  pass; 17/17 TypeScript cases pass; ruff zero findings;
+  ``git diff --check`` clean.
+
+### P0 M1 WP5a-2 crash-consistency closeout (PASS on `feat/m1-wp5a2-auto-tick`, follow-up commits)
+
+Independent review merge blocker closed with deterministic
+crash-injection evidence (no sleep, no wall-clock races):
+
+- **AUTO abort / veto SQLite-atomic**: one `BEGIN IMMEDIATE` per
+  logical close — source gate, version check, READY, four-column
+  clear, optional MANUAL lock, one audit event, one cleanup intent;
+  exactly ONE `state_version` bump (pinned by test).
+- **Veto**: READY + MANUAL + clean metadata commit together; a store
+  reopen right after COMMIT (discard "lost") shows the owner-safe row.
+- **Durable outbox**: pending discard promised in-transaction,
+  fulfilled post-COMMIT idempotently; crash-after-commit /
+  crash-after-discard / duplicate drain / nonexistent pending /
+  unavailable-journal interleavings all pinned; completed rows never
+  reprocessed.
+- **READY stale metadata recovered** (`AUTO_METADATA_RECOVERED`),
+  while the legal frozen-decision boundary (READY + routing row only)
+  and the legal `auto_reason` skip hint are provably untouched.
+- **Mode-change / project-disable / unacked-timeout / pre-worker
+  BLOCKED crash windows** all recover on the restart tick: READY,
+  metadata clean, pending drained, no dispatch, no worker; a fresh
+  cycle after timeout derives a NEW `auto_decision_id` (old id never
+  reused).
+- 929 Python tests pass (914 + 15 crash-recovery); ruff zero
+  findings; `git diff --check` clean; plugin.ts /
+  decision_contract.ts byte-identical to the WP5a-1 baseline;
+  Production ACTIVE unchanged.

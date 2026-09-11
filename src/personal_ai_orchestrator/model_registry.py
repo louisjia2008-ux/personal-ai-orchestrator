@@ -17,6 +17,17 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from personal_ai_orchestrator.quota_burn import (
+    BurnAssessment,
+    BurnPressure,
+)
+from personal_ai_orchestrator.quota_burn import (
+    assess as _assess,
+)
+from personal_ai_orchestrator.quota_burn import (
+    infer_window_started_at as _infer_window_started_at,
+)
+
 
 class QuotaState(StrEnum):
     AVAILABLE = "AVAILABLE"
@@ -64,6 +75,37 @@ class QuotaWindowKind(StrEnum):
     DAILY = "DAILY"
     CUSTOM = "CUSTOM"
     UNKNOWN = "UNKNOWN"
+    #: M1 WP4: a window that is *not* metered by the upstream provider.
+    #: ``duration_seconds()`` returns ``None`` for this kind — there is
+    #: no reset cycle to time. ``quota_burn.assess`` short-circuits to
+    #: ``BurnPressure.UNMETERED`` when a window carries ``used_fraction=None``,
+    #: so a target with one UNMETERED window is admitted without any
+    #: weekly pressure math. The recommender / scheduler skip the
+    #: 5-hour smoothing gate (no FIVE_HOUR window to read from).
+    UNMETERED = "UNMETERED"
+
+    def duration_seconds(self) -> float | None:
+        """Return the canonical reset-cycle duration for this kind.
+
+        ``UNKNOWN``, ``CUSTOM``, and ``UNMETERED`` are intentionally
+        absent — the daemon treats them as "no inferable start instant"
+        and surfaces the window as ``UNMETERED`` rather than guessing
+        one. ``infer_window_started_at`` consults this table; the
+        control plane consults it before calling that helper.
+        """
+
+        return _QUOTA_WINDOW_KIND_DURATION_SECONDS.get(self.value)
+
+
+# Module-level table because ``StrEnum`` rejects class-level mutable
+# attributes during member construction. ``UNKNOWN``, ``CUSTOM``, and
+# ``UNMETERED`` are intentionally absent.
+_QUOTA_WINDOW_KIND_DURATION_SECONDS: dict[str, float] = {
+    "FIVE_HOUR": 5 * 60 * 60.0,
+    "WEEKLY": 7 * 24 * 60 * 60.0,
+    "MONTHLY": 30 * 24 * 60 * 60.0,
+    "DAILY": 24 * 60 * 60.0,
+}
 
 
 class RegistryModel(BaseModel):
@@ -228,6 +270,58 @@ class QuotaWindowSnapshot(RegistryModel):
             return None
         value = self.remaining_fraction / remaining_time_fraction
         return value if isfinite(value) else None
+
+    def burn(self, *, now: datetime) -> tuple[BurnAssessment, bool]:
+        """Classify this window's burn curve at ``now``.
+
+        Returns ``(assessment, window_start_inferred)``. The second flag
+        is ``True`` iff the caller did not provide ``window_started_at``
+        and we inferred it from the window kind's canonical duration. A
+        view-model that drops the flag would silently hide the signal
+        the dashboard needs to label the bar with "(estimated start)".
+
+        The snapshot-level short-circuits (no ``reset_at``, no canonical
+        duration for the kind, ``used_fraction`` is ``None``) all surface
+        as ``BurnPressure.UNMETERED`` rather than raising, so the quota
+        handler never crashes on a partial observation.
+        """
+
+        if self.reset_at is None or self.window_kind.duration_seconds() is None:
+            return (
+                BurnAssessment(
+                    expected_used_fraction=None,
+                    actual_used_fraction=None,
+                    deviation=None,
+                    remaining_fraction=None,
+                    seconds_to_reset=None,
+                    pressure=BurnPressure.UNMETERED,
+                    pressure_score=0.0,
+                ),
+                False,
+            )
+
+        inferred = False
+        started_at = self.window_started_at
+        if started_at is None:
+            # Short-circuit above guarantees ``duration_seconds() is not None``
+            # and the table only stores positive durations, so the cast is safe.
+            duration = self.window_kind.duration_seconds()
+            assert duration is not None and duration > 0.0
+            started_at = _infer_window_started_at(
+                reset_at=self.reset_at,
+                duration_seconds=duration,
+            )
+            inferred = True
+
+        return (
+            _assess(
+                window_started_at=started_at,
+                reset_at=self.reset_at,
+                used_fraction=self.used_fraction,
+                now=now,
+            ),
+            inferred,
+        )
 
 
 class QuotaSnapshot(RegistryModel):

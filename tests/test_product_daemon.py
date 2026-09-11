@@ -135,6 +135,95 @@ def test_product_daemon_builds_control_only_daemon_argv() -> None:
     ]
 
 
+def test_product_daemon_argv_enables_owner_dispatch_when_policies_exist() -> None:
+    layout = default_application_support_layout(Path("/Users/example"))
+    policies = layout.runtime_state_root / "policies"
+    repo = policies / "execution-repo"
+    profile = policies / "verifier-profile.json"
+    worker = policies / "worker-opencode.json"
+    argv = build_daemon_argv(
+        layout,
+        host="127.0.0.1",
+        port=8765,
+        execution_repo=repo,
+        verifier_profile=profile,
+        worker_permission_config=worker,
+    )
+    assert argv[argv.index("--execution-repo") + 1] == str(repo)
+    assert argv[argv.index("--verifier-profile") + 1] == str(profile)
+    assert argv[argv.index("--worker-permission-config") + 1] == str(worker)
+
+
+def test_ensure_execution_policies_seeds_once_and_is_idempotent() -> None:
+    from personal_ai_orchestrator.product_daemon import (
+        DEFAULT_VERIFIER_PROFILE,
+        DEFAULT_WORKER_PERMISSION_CONFIG,
+        ensure_execution_policies,
+    )
+    from personal_ai_orchestrator.verifier import VerifierProfile
+
+    layout = default_application_support_layout(_short_home("pao-policies-"))
+    seeded = ensure_execution_policies(layout)
+    assert seeded is not None
+    repo, profile_path, worker_path, tiers_path = seeded
+
+    assert (repo / ".git").is_dir()
+    on_disk = json.loads(profile_path.read_text(encoding="utf-8"))
+    assert on_disk == DEFAULT_VERIFIER_PROFILE
+    # The seeded profile must satisfy the deterministic verifier schema.
+    VerifierProfile.model_validate(on_disk)
+    # The worker sandbox allows edits inside the worktree, denies shell/web.
+    worker = json.loads(worker_path.read_text(encoding="utf-8"))
+    assert worker == DEFAULT_WORKER_PERMISSION_CONFIG
+    assert worker["permission"] == {"edit": "allow", "bash": "deny", "webfetch": "deny"}
+    # The model tiers table is the M1 WP2 fourth artifact. The seeded
+    # JSON parses cleanly and contains the shipped defaults.
+    tiers = json.loads(tiers_path.read_text(encoding="utf-8"))
+    assert tiers["version"] == 1
+    assert "zai-coding-plan-*" in tiers["tiers"]
+    assert "opencode-*-free" in tiers["tiers"]
+
+    # Re-running never mutates an owner-edited profile or re-inits the repo.
+    profile_path.write_text(
+        json.dumps({"name": "owner-custom", "commands": [], "allowed_paths": []}),
+        encoding="utf-8",
+    )
+    tiers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tiers": {
+                    "owner-flagship-model": {"tier": "T0", "caps": []},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    again = ensure_execution_policies(layout)
+    assert again == seeded
+    assert json.loads(profile_path.read_text(encoding="utf-8"))["name"] == "owner-custom"
+    again_tiers = json.loads(tiers_path.read_text(encoding="utf-8"))
+    assert "owner-flagship-model" in again_tiers["tiers"]
+    assert "zai-coding-plan-*" not in again_tiers["tiers"]
+
+
+def test_ensure_execution_policies_model_tiers_default_loads_cleanly() -> None:
+    """The seeded model-tiers.json must parse with ``parse_tier_table``.
+
+    Catches a regression where the on-disk default drifts from
+    ``DEFAULT_TIER_TABLE_JSON``.
+    """
+
+    from personal_ai_orchestrator.model_tiers import parse_tier_table
+    from personal_ai_orchestrator.product_daemon import ensure_execution_policies
+
+    layout = default_application_support_layout(_short_home("pao-policies-tier-"))
+    seeded = ensure_execution_policies(layout)
+    assert seeded is not None
+    _, _, _, tiers_path = seeded
+    parse_tier_table(json.loads(tiers_path.read_text(encoding="utf-8")))  # raises on bad JSON
+
+
 def test_product_daemon_first_boot_success_discovers_exactly_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -267,6 +356,7 @@ def test_product_daemon_explicit_refresh_discovers_exactly_once(
     assert manager.discovery_cycle_count() == 1
 
 
+@pytest.mark.flaky(reruns=3, reruns_delay=1)
 def test_product_daemon_bootstraps_runtime_and_serves_control_plane() -> None:
     home = _short_home("pao-product-")
     layout = default_application_support_layout(home)

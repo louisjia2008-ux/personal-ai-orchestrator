@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -27,11 +28,33 @@ class TaskState(StrEnum):
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
     COMPLETED = "COMPLETED"
+    #: M1 WP5a-1: host-owned planning tick wrote a frozen
+    #: ``RoutingDecision`` for this task. The task is now sitting in
+    #: ``AUTO_GRACE`` (or — for ``unattended_allowed`` projects —
+    #: holding an explicit ``auto_grace_deadline_at``).
+    AUTO_PLANNED = "AUTO_PLANNED"
+    #: M1 WP5a-1: grace window. Owner can veto (→ READY), explicit
+    #: ack (``POST /v1/tasks/{id}/auto/ack``) starts the countdown,
+    #: or expiry dispatches (WP5a-2). No autonomous
+    #: ``AUTO_GRACE → RUNNING`` transition in WP5a-1 — the tick
+    #: lands in WP5a-2.
+    AUTO_GRACE = "AUTO_GRACE"
 
 
 _ALLOWED_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
     TaskState.SUBMITTED: frozenset({TaskState.READY, TaskState.BLOCKED, TaskState.CANCELLED}),
-    TaskState.READY: frozenset({TaskState.RUNNING, TaskState.BLOCKED, TaskState.CANCELLED}),
+    TaskState.READY: frozenset(
+        {
+            TaskState.RUNNING,
+            TaskState.BLOCKED,
+            TaskState.CANCELLED,
+            # M1 WP5a-1: the host-owned tick can promote READY →
+            # AUTO_PLANNED when the project's supervised-auto toggle
+            # is on and the recommendations pass the six hard
+            # gates (frozen in docs/M1_WP5_SPEC.md).
+            TaskState.AUTO_PLANNED,
+        }
+    ),
     TaskState.RUNNING: frozenset(
         {TaskState.WORKER_FINISHED, TaskState.BLOCKED, TaskState.FAILED, TaskState.CANCELLED}
     ),
@@ -46,7 +69,55 @@ _ALLOWED_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
     TaskState.FAILED: frozenset(),
     TaskState.CANCELLED: frozenset(),
     TaskState.COMPLETED: frozenset(),
+    # M1 WP5a-1: AUTO_PLANNED is the planning-tick's terminal state
+    # until the task is vetoed back to READY or promoted into
+    # AUTO_GRACE. M1 WP5a-2 adds the autonomous execution edge:
+    # AUTO_GRACE → RUNNING is legal ONLY through the host dispatch
+    # pathway (``start_dispatched_worker(expected_state=AUTO_GRACE)``);
+    # there is no public "set state RUNNING" API, and every caller
+    # must hold a durable dispatch reservation first.
+    TaskState.AUTO_PLANNED: frozenset(
+        {TaskState.AUTO_GRACE, TaskState.READY, TaskState.BLOCKED, TaskState.CANCELLED}
+    ),
+    TaskState.AUTO_GRACE: frozenset(
+        {TaskState.RUNNING, TaskState.READY, TaskState.BLOCKED, TaskState.CANCELLED}
+    ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Round 6 §5 — authority-owned source-state contract.
+#
+# The legal source state for a worker start is a property of the DURABLE
+# DISPATCH AUTHORITY, never of whatever state the task happens to be in
+# when a (possibly stale) executor thread runs:
+#
+#     OWNER_INITIATED_EXECUTION → READY
+#     SUPERVISED_AUTO           → AUTO_GRACE
+#
+# The string values live here — the lowest-level host-owned module — so
+# ``dispatch_initiator``, the executor and the store share ONE mapping
+# with no circular imports (every layer already imports this module).
+# ---------------------------------------------------------------------------
+
+AUTHORITY_OWNER_INITIATED_EXECUTION = "OWNER_INITIATED_EXECUTION"
+AUTHORITY_SUPERVISED_AUTO = "SUPERVISED_AUTO"
+
+
+def expected_source_state_for_dispatch_authority(authority: str) -> TaskState:
+    """Round 6 §5 — the ONE authority → legal-source-state mapping.
+
+    ``OWNER_INITIATED_EXECUTION`` may only start a worker from READY;
+    ``SUPERVISED_AUTO`` may only start from AUTO_GRACE. Any other
+    authority value raises :class:`ValueError` — callers must fail
+    closed (no worker spawn) rather than guessing a default.
+    """
+
+    if authority == AUTHORITY_OWNER_INITIATED_EXECUTION:
+        return TaskState.READY
+    if authority == AUTHORITY_SUPERVISED_AUTO:
+        return TaskState.AUTO_GRACE
+    raise ValueError(f"unknown dispatch authority: {authority!r}")
 
 
 class FrozenModel(BaseModel):
@@ -66,6 +137,36 @@ class TaskRecord(FrozenModel):
     updated_at: datetime
     scheduling_policy: str | None = None
     manual_execution_target_id: str | None = None
+    # M1 WP2: minimum capability tier required for the dispatch target.
+    # Always a valid ModelTier string; the storage layer normalises
+    # None → "T1" on insert so old rows still type-check.
+    min_tier: str = "T1"
+    # M1 WP5a-1: AUTO_PLANNED / AUTO_GRACE bookkeeping. All four
+    # fields default to ``None`` so a pre-WP5a-1 task reads cleanly.
+    # Round 7 §21 — identifier contract (do not conflate):
+    # ``auto_decision_id`` is the lifecycle/cycle id derived by the
+    # planning tick as ``auto-{task_id}-v{state_version-at-planning}``
+    # (one per cycle, fresh per state_version, idempotent on replay).
+    # It is NOT the ``RoutingDecision.decision_id`` — that is an
+    # independent durable routing-decision id (``route-{digest}``).
+    # The chain is: auto_decision_id → routing request id
+    # ``supervised-auto-{auto_decision_id}`` → the durable
+    # RoutingDecision (``route-{digest}``, looked up by request id).
+    # A ``PendingShadowObservation`` carries ``pending_id ==
+    # auto_decision_id`` and ``decision_id ==
+    # RoutingDecision.decision_id``.
+    # ``auto_grace_deadline_at`` is the ISO timestamp at which the
+    # grace window expires (set on entry to AUTO_GRACE for
+    # ``unattended_allowed`` projects, or on owner ack otherwise).
+    # ``auto_acked_at`` is the ISO timestamp the owner acknowledged
+    # the planning decision (the deadline is then
+    # ``acked_at + grace_seconds``). ``auto_reason`` is the
+    # ``AUTO_SKIPPED{reason}`` / ``AUTO_PLANNED{decision_id,target}``
+    # audit summary text exposed back to the panel.
+    auto_decision_id: str | None = None
+    auto_grace_deadline_at: str | None = None
+    auto_acked_at: str | None = None
+    auto_reason: str | None = None
 
 
 class ProjectAvailability(StrEnum):
@@ -91,6 +192,22 @@ class ProjectRecord(FrozenModel):
     security_bookmark_b64: str | None = None
     scheduling_policy: str | None = None
     manual_execution_target_id: str | None = None
+    #: M1 WP5a-1: project-level supervised-auto toggle. When ``True``,
+    #: tasks in this project are eligible for ``SUPERVISED_AUTO``
+    #: planning (host-owned tick path). Owned by the project so the
+    #: owner can opt-in per project; default ``False`` keeps the
+    #: pre-WP5a-1 manual-only behavior.
+    supervised_auto_allowed: bool = False
+    #: M1 WP5a-1: project-level unattended toggle. When ``True``, the
+    #: ``AUTO_GRACE`` countdown starts immediately on planning.
+    #: ``False`` means the grace countdown waits for an explicit
+    #: owner ack via ``POST /v1/tasks/{id}/auto/ack``.
+    unattended_allowed: bool = False
+    #: M1 WP5a-1: project-level grace window in seconds (default 120).
+    #: Bounds how long ``AUTO_GRACE`` may sit before ``AUTO_DISPATCHED``
+    #: or ``AUTO_ABORTED`` fires. Owner can lower it per project but
+    #: never raise it past the safety kernel default.
+    grace_seconds: int = 120
 
 
 class OwnerDispatchStatus(StrEnum):
@@ -116,6 +233,38 @@ class OwnerDispatchRecord(FrozenModel):
     failure_reason: str | None = None
 
 
+def owner_dispatch_matches_expected(
+    record: OwnerDispatchRecord,
+    *,
+    dispatch_id: str,
+    request_id: str,
+    task_id: str,
+    task_state_version: int,
+    execution_target_id: str,
+    authority: str,
+) -> bool:
+    """Round 5 §7 — the ONE definition of an exact dispatch reservation.
+
+    A durable ``owner_dispatches`` row is the reservation expected for a
+    request id only when EVERY identity dimension matches exactly —
+    ``request_id``, ``dispatch_id``, ``task_id``, ``task_state_version``,
+    ``execution_target_id`` and ``authority``. Both
+    :meth:`SafetyKernelStore.reserve_owner_dispatch` (duplicate
+    idempotency) and the SUPERVISED_AUTO crash-recovery path (existing
+    row re-admission) must use THIS comparison so the two can never
+    drift into different equality rules. No partial match exists.
+    """
+
+    return (
+        record.dispatch_id == dispatch_id
+        and record.request_id == request_id
+        and record.task_id == task_id
+        and record.task_state_version == task_state_version
+        and record.execution_target_id == execution_target_id
+        and record.authority == authority
+    )
+
+
 class WorkspaceRecord(FrozenModel):
     task_id: str
     repo_path: str
@@ -133,6 +282,120 @@ def _now() -> str:
 
 def _json(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+
+
+@dataclass(frozen=True)
+class ShadowFinalizationIntent:
+    """Immutable durable payload for a post-worker shadow finalization.
+
+    Every input ``finalize_pending`` needs must be reconstructable from
+    this intent alone (round 3 crash-consistency): no executor process
+    state, no transient Python objects and no re-derived wall clock.
+    ``observed_at`` is pinned at enqueue time — replays reuse the exact
+    stored value so the deterministic ``observation_id`` byte-content
+    stays identical. ``request_id`` / ``decision_id`` are the PENDING's
+    routing identity (the observation's identity keys), not the
+    dispatch request id.
+
+    Round 4 (§17): ``identity_json`` freezes the pending's remaining
+    immutable identity (execution targets, snapshot ids, provider /
+    pool, task family, quota confidence, collector status, predicted
+    burn). With it the intent is SELF-SUFFICIENT — a restart can build
+    the exact expected :class:`ShadowObservation` and prove an existing
+    observation byte-for-byte even after the pending file is gone.
+    """
+
+    pending_id: str
+    task_id: str
+    request_id: str
+    decision_id: str
+    dispatch_id: str = ""
+    verified: bool = False
+    execution_success: bool = False
+    verification_success: bool | None = None
+    quality_outcome: str | None = None
+    failure_class: str | None = None
+    failure_stage: str | None = None
+    regression_detected: bool = False
+    attempts_to_green: int | None = None
+    time_to_green_seconds: float | None = None
+    handoff_count: int = 0
+    reset_cycle_ids: tuple[str, ...] = ()
+    quota_after_snapshot_ids: tuple[str, ...] = ()
+    observed_burn_fraction: float | None = None
+    observed_at: str = ""
+    identity_json: str = "{}"
+
+    @property
+    def finalization_id(self) -> str:
+        return f"shadow-finalize-{self.pending_id}"
+
+    def payload_json(self) -> str:
+        return _json(
+            {
+                "pending_id": self.pending_id,
+                "task_id": self.task_id,
+                "dispatch_id": self.dispatch_id,
+                "request_id": self.request_id,
+                "decision_id": self.decision_id,
+                "verified": self.verified,
+                "execution_success": self.execution_success,
+                "verification_success": self.verification_success,
+                "quality_outcome": self.quality_outcome,
+                "failure_class": self.failure_class,
+                "failure_stage": self.failure_stage,
+                "regression_detected": self.regression_detected,
+                "attempts_to_green": self.attempts_to_green,
+                "time_to_green_seconds": self.time_to_green_seconds,
+                "handoff_count": self.handoff_count,
+                "reset_cycle_ids": list(self.reset_cycle_ids),
+                "quota_after_snapshot_ids": list(self.quota_after_snapshot_ids),
+                "observed_burn_fraction": self.observed_burn_fraction,
+                "observed_at": self.observed_at,
+                "identity_json": self.identity_json,
+            }
+        )
+
+
+def shadow_identity_payload(pending: Any) -> str:
+    """Freeze a pending shadow's immutable identity for an intent.
+
+    Duck-typed against ``PendingShadowObservation`` so this module stays
+    decoupled from ``shadow_evidence``. Enums are stored by value,
+    tuples as lists — canonical JSON makes the payload immutable
+    conflict-detection material (round 4 §17).
+    """
+
+    collector_status = getattr(pending, "collector_status", None)
+    quota_confidence = getattr(pending, "quota_confidence", None)
+    return _json(
+        {
+            "manual_execution_target_id": pending.manual_execution_target_id,
+            "scheduler_execution_target_id": pending.scheduler_execution_target_id,
+            "catalog_snapshot_id": pending.catalog_snapshot_id,
+            "policy_snapshot_id": pending.policy_snapshot_id,
+            "quota_snapshot_ids": list(pending.quota_snapshot_ids),
+            "provider_id": pending.provider_id,
+            "quota_pool_id": pending.quota_pool_id,
+            "task_family": pending.task_family,
+            "quota_confidence": (
+                None if quota_confidence is None else quota_confidence.value
+            ),
+            "collector_status": (
+                None if collector_status is None else collector_status.value
+            ),
+            "predicted_burn_fraction": pending.predicted_burn_fraction,
+        }
+    )
+
+
+#: M1 WP2: the set of min_tier values the schema accepts. Mirrors
+#: :class:`personal_ai_orchestrator.model_tiers.ModelTier`; we
+#: deliberately inline the four strings here so this module does not
+#: import model_tiers (which is fine to import but not required at
+#: the storage layer — the recompute happens in
+#: dispatch_recommender).
+_VALID_TIER_VALUES = frozenset({"T0", "T1", "T2", "T3"})
 
 
 class SafetyKernelStore:
@@ -251,6 +514,47 @@ class SafetyKernelStore:
                 reset_at TEXT,
                 state TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS auto_shadow_cleanup_outbox (
+                pending_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                completed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS auto_shadow_cleanup_outbox_open
+                ON auto_shadow_cleanup_outbox(created_at)
+                WHERE completed_at IS NULL;
+            CREATE TABLE IF NOT EXISTS auto_shadow_finalize_outbox (
+                finalization_id TEXT PRIMARY KEY,
+                pending_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                dispatch_id TEXT NOT NULL DEFAULT '',
+                request_id TEXT NOT NULL,
+                decision_id TEXT NOT NULL,
+                verified INTEGER NOT NULL,
+                execution_success INTEGER NOT NULL,
+                verification_success INTEGER,
+                quality_outcome TEXT,
+                failure_class TEXT,
+                failure_stage TEXT,
+                regression_detected INTEGER NOT NULL DEFAULT 0,
+                attempts_to_green INTEGER,
+                time_to_green_seconds REAL,
+                handoff_count INTEGER NOT NULL DEFAULT 0,
+                reset_cycle_ids TEXT NOT NULL DEFAULT '[]',
+                quota_after_snapshot_ids TEXT NOT NULL DEFAULT '[]',
+                observed_burn_fraction REAL,
+                observed_at TEXT NOT NULL,
+                identity_json TEXT NOT NULL DEFAULT '{}',
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                completed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS auto_shadow_finalize_outbox_open
+                ON auto_shadow_finalize_outbox(created_at)
+                WHERE completed_at IS NULL;
+            CREATE INDEX IF NOT EXISTS auto_shadow_finalize_outbox_pending
+                ON auto_shadow_finalize_outbox(pending_id);
             """
         )
         self._ensure_column("tasks", "project_id", "TEXT")
@@ -258,8 +562,48 @@ class SafetyKernelStore:
         self._ensure_column("tasks", "working_subpath", "TEXT")
         self._ensure_column("tasks", "scheduling_policy", "TEXT")
         self._ensure_column("tasks", "manual_execution_target_id", "TEXT")
+        # M1 WP2: tier floor for the dispatch target. Default "T1" so
+        # every existing row satisfies the new constraint without a
+        # migration script. New submits may pass any of T0/T1/T2/T3.
+        self._ensure_column(
+            "tasks", "min_tier", "TEXT NOT NULL DEFAULT 'T1'"
+        )
+        # M1 WP5a-1: AUTO_PLANNED / AUTO_GRACE bookkeeping. All four
+        # columns default to NULL so a pre-WP5a-1 task row reads
+        # cleanly and ``AUTO_*`` state machines never trip on legacy
+        # data. WP5a-1 commit 3 does NOT add an ``AUTO_* → RUNNING``
+        # transition — that lives in WP5a-2's tick.
+        self._ensure_column("tasks", "auto_decision_id", "TEXT")
+        self._ensure_column("tasks", "auto_grace_deadline_at", "TEXT")
+        self._ensure_column("tasks", "auto_acked_at", "TEXT")
+        self._ensure_column("tasks", "auto_reason", "TEXT")
+        # Round 4 §17: the finalize outbox freezes the pending's full
+        # immutable identity so restarts can prove observations without
+        # the pending file.
+        self._ensure_column(
+            "auto_shadow_finalize_outbox", "identity_json", "TEXT NOT NULL DEFAULT '{}'"
+        )
         self._ensure_column("projects", "scheduling_policy", "TEXT")
         self._ensure_column("projects", "manual_execution_target_id", "TEXT")
+        # M1 WP5a-1: project-level supervised-auto settings. The
+        # defaults mirror the dataclass defaults (False / False / 120)
+        # so an existing project keeps the pre-WP5a-1 manual-only
+        # behavior. Old DBs migrate silently via the column defaults.
+        self._ensure_column(
+            "projects",
+            "supervised_auto_allowed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        self._ensure_column(
+            "projects",
+            "unattended_allowed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        self._ensure_column(
+            "projects",
+            "grace_seconds",
+            "INTEGER NOT NULL DEFAULT 120",
+        )
         self._ensure_column("workspaces", "project_id", "TEXT")
         self._ensure_column("workspaces", "working_subpath", "TEXT")
 
@@ -277,6 +621,17 @@ class SafetyKernelStore:
             "INSERT INTO audit_events(task_id,event_type,payload_json,created_at) VALUES(?,?,?,?)",
             (task_id, event_type, _json(payload), _now()),
         )
+
+    def record_system_event(self, event_type: str, payload: Any) -> None:
+        """Public entry for non-task host events (daemon supervisor, etc.).
+
+        The audit_events table accepts ``task_id = NULL`` for events that
+        do not belong to any one task (e.g. supervisor step failures, backoff
+        transitions, periodic reconciliation sweeps). Cross-module callers
+        must use this wrapper instead of reaching into the private
+        ``_audit`` directly so the system-event contract stays in one place.
+        """
+        self._audit(task_id=None, event_type=event_type, payload=payload)
 
     def register_project(
         self,
@@ -440,6 +795,63 @@ class SafetyKernelStore:
             raise
         return self.get_project(project_id)
 
+    def set_project_settings(
+        self,
+        project_id: str,
+        *,
+        supervised_auto_allowed: bool,
+        unattended_allowed: bool,
+        grace_seconds: int,
+    ) -> ProjectRecord:
+        """M1 WP5a-1: persist the project-level supervised-auto settings.
+
+        Validates ``grace_seconds`` (1 ≤ grace_seconds ≤ 86_400, i.e.
+        between 1 second and 24 hours) so a malformed payload fails
+        closed with ``ValueError`` — the caller (the control-plane
+        facade) maps it to 400.
+
+        Returns the updated ``ProjectRecord``.
+        """
+
+        if not isinstance(grace_seconds, int) or grace_seconds < 1 or grace_seconds > 86_400:
+            raise ValueError(
+                "grace_seconds must be an integer between 1 and 86400 (24h)"
+            )
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            self.get_project(project_id)
+            stamp = _now()
+            self.connection.execute(
+                """
+                UPDATE projects
+                SET supervised_auto_allowed=?, unattended_allowed=?,
+                    grace_seconds=?, updated_at=?
+                WHERE project_id=?
+                """,
+                (
+                    1 if supervised_auto_allowed else 0,
+                    1 if unattended_allowed else 0,
+                    int(grace_seconds),
+                    stamp,
+                    project_id,
+                ),
+            )
+            self._audit(
+                None,
+                "PROJECT_SUPERVISED_AUTO_SETTINGS_SET",
+                {
+                    "project_id": project_id,
+                    "supervised_auto_allowed": supervised_auto_allowed,
+                    "unattended_allowed": unattended_allowed,
+                    "grace_seconds": int(grace_seconds),
+                },
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_project(project_id)
+
     def update_project_availability(
         self,
         project_id: str,
@@ -534,6 +946,10 @@ class SafetyKernelStore:
             security_bookmark_b64=row["security_bookmark_b64"],
             scheduling_policy=row["scheduling_policy"],
             manual_execution_target_id=row["manual_execution_target_id"],
+            # SQLite stores booleans as integers; ``bool(int)`` round-trips.
+            supervised_auto_allowed=bool(row["supervised_auto_allowed"]),
+            unattended_allowed=bool(row["unattended_allowed"]),
+            grace_seconds=int(row["grace_seconds"]),
         )
 
     def task_count_for_project(self, project_id: str) -> int:
@@ -637,11 +1053,20 @@ class SafetyKernelStore:
         working_subpath: str | None = None,
         scheduling_policy: str | None = None,
         manual_execution_target_id: str | None = None,
+        min_tier: str = "T1",
     ) -> TaskRecord:
         if project_id is not None:
             self.get_project(project_id)
             if base_sha is None:
                 raise ValueError("base_sha is required for registered project tasks")
+        # Storage-level validation: the schema allows any TEXT but
+        # the dispatch recommender expects one of the four known
+        # ModelTier values. Failing here is cheaper than failing
+        # later inside the recommender with a KeyError.
+        if min_tier not in _VALID_TIER_VALUES:
+            raise ValueError(
+                f"min_tier must be one of {sorted(_VALID_TIER_VALUES)}, got {min_tier!r}"
+            )
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             existing = self.connection.execute(
@@ -657,6 +1082,7 @@ class SafetyKernelStore:
                     or record.working_subpath != working_subpath
                     or record.scheduling_policy != scheduling_policy
                     or record.manual_execution_target_id != manual_execution_target_id
+                    or record.min_tier != min_tier
                 ):
                     raise ValueError("request_id already belongs to a different task submission")
                 self.connection.execute("COMMIT")
@@ -668,8 +1094,8 @@ class SafetyKernelStore:
                 INSERT INTO tasks(
                     task_id,request_id,intent,project_id,base_sha,working_subpath,
                     state,state_version,created_at,updated_at,
-                    scheduling_policy,manual_execution_target_id
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                    scheduling_policy,manual_execution_target_id,min_tier
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     task_id,
@@ -684,6 +1110,7 @@ class SafetyKernelStore:
                     stamp,
                     scheduling_policy,
                     manual_execution_target_id,
+                    min_tier,
                 ),
             )
             self._audit(
@@ -713,6 +1140,15 @@ class SafetyKernelStore:
 
     @staticmethod
     def _task_from_row(row: sqlite3.Row) -> TaskRecord:
+        # ``min_tier`` column was added in M1 WP2; older SQLite files
+        # may predate the schema bump. ``dict.get`` lets the loader
+        # fall back to "T1" on legacy stores; new stores have the
+        # column with the DEFAULT clause.
+        min_tier = row["min_tier"] if "min_tier" in row.keys() else "T1"
+        # M1 WP5a-1: AUTO_PLANNED / AUTO_GRACE columns are nullable
+        # so a pre-WP5a-1 task row reads cleanly. ``row[]`` returns
+        # ``None`` for missing keys on SQLite's default cursor (no
+        # ``row.keys()`` gate needed once ``_ensure_column`` has run).
         return TaskRecord(
             task_id=row["task_id"],
             request_id=row["request_id"],
@@ -726,6 +1162,11 @@ class SafetyKernelStore:
             updated_at=datetime.fromisoformat(row["updated_at"]),
             scheduling_policy=row["scheduling_policy"],
             manual_execution_target_id=row["manual_execution_target_id"],
+            min_tier=min_tier,
+            auto_decision_id=row["auto_decision_id"],
+            auto_grace_deadline_at=row["auto_grace_deadline_at"],
+            auto_acked_at=row["auto_acked_at"],
+            auto_reason=row["auto_reason"],
         )
 
     def transition_task(
@@ -735,32 +1176,218 @@ class SafetyKernelStore:
         *,
         expected_version: int | None = None,
         reason: str | None = None,
+        # M1 WP5a-1: AUTO_PLANNED / AUTO_GRACE bookkeeping fields.
+        # All four are optional so the pre-WP5a-1 call sites (which
+        # do not pass them) keep working unchanged. The fields are
+        # written only when the call site supplies them, so a
+        # AUTO_PLANNED transition that does not pass
+        # ``auto_decision_id`` still reads ``None`` on the row
+        # (the WP5a-1 contract pins that the tick writes a real
+        # ``auto_decision_id``; this default-to-None behaviour is
+        # the safety net).
+        auto_decision_id: str | None = None,
+        auto_grace_deadline_at: str | None = None,
+        auto_acked_at: str | None = None,
+        auto_reason: str | None = None,
     ) -> TaskRecord:
         self.connection.execute("BEGIN IMMEDIATE")
         try:
+            self._transition_task_tx(
+                task_id,
+                new_state,
+                expected_version=expected_version,
+                reason=reason,
+                auto_decision_id=auto_decision_id,
+                auto_grace_deadline_at=auto_grace_deadline_at,
+                auto_acked_at=auto_acked_at,
+                auto_reason=auto_reason,
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_task(task_id)
+
+    def _transition_task_tx(
+        self,
+        task_id: str,
+        new_state: TaskState,
+        *,
+        expected_version: int | None,
+        reason: str | None,
+        auto_decision_id: str | None = None,
+        auto_grace_deadline_at: str | None = None,
+        auto_acked_at: str | None = None,
+        auto_reason: str | None = None,
+    ) -> None:
+        """Transition internals for an ALREADY-OPEN transaction."""
+
+        current = self.get_task(task_id)
+        if expected_version is not None and current.state_version != expected_version:
+            raise RuntimeError("stale task state_version")
+        if new_state not in _ALLOWED_TRANSITIONS[current.state]:
+            raise ValueError(f"invalid task transition {current.state} -> {new_state}")
+        stamp = _now()
+        next_version = current.state_version + 1
+        # Build the UPDATE column list dynamically so a pre-WP5a-1
+        # call that does not pass the new fields stays byte-equivalent
+        # (the SQL only touches the columns the call site touched).
+        update_columns = (
+            "state=?, state_version=?, updated_at=?"
+        )
+        update_values: list[object] = [
+            new_state.value, next_version, stamp,
+        ]
+        if auto_decision_id is not None:
+            update_columns += ", auto_decision_id=?"
+            update_values.append(auto_decision_id)
+        if auto_grace_deadline_at is not None:
+            update_columns += ", auto_grace_deadline_at=?"
+            update_values.append(auto_grace_deadline_at)
+        if auto_acked_at is not None:
+            update_columns += ", auto_acked_at=?"
+            update_values.append(auto_acked_at)
+        if auto_reason is not None:
+            update_columns += ", auto_reason=?"
+            update_values.append(auto_reason)
+        update_values.extend([task_id, current.state_version])
+        updated = self.connection.execute(
+            f"""
+            UPDATE tasks SET {update_columns}
+            WHERE task_id=? AND state_version=?
+            """,
+            update_values,
+        )
+        if updated.rowcount != 1:
+            raise RuntimeError("task transition lost optimistic concurrency race")
+        audit_payload: dict[str, object] = {
+            "from": current.state.value,
+            "to": new_state.value,
+            "state_version": next_version,
+            "reason": reason,
+        }
+        if auto_decision_id is not None:
+            audit_payload["auto_decision_id"] = auto_decision_id
+        if auto_grace_deadline_at is not None:
+            audit_payload["auto_grace_deadline_at"] = auto_grace_deadline_at
+        if auto_acked_at is not None:
+            audit_payload["auto_acked_at"] = auto_acked_at
+        if auto_reason is not None:
+            audit_payload["auto_reason"] = auto_reason
+        self._audit(
+            task_id,
+            "TASK_STATE_CHANGED",
+            audit_payload,
+        )
+
+    def apply_verification_outcome(
+        self,
+        task_id: str,
+        *,
+        expected_version: int,
+        target: TaskState,
+        reason: str,
+        finalize: ShadowFinalizationIntent | None = None,
+    ) -> TaskState:
+        """OPTION A (round 3): terminal truth + shadow-intent in ONE tx.
+
+        The authoritative VERIFYING → VERIFIED/BLOCKED transition and the
+        durable shadow-finalization intent commit atomically: a crash can
+        never leave terminal SQLite truth whose pending observation is
+        only reachable through a lost filesystem side effect. The
+        filesystem finalize itself happens post-COMMIT via the idempotent
+        finalize-outbox drain.
+        """
+
+        if target not in (TaskState.VERIFIED, TaskState.BLOCKED):
+            raise ValueError("verification outcome target must be VERIFIED or BLOCKED")
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
             current = self.get_task(task_id)
-            if expected_version is not None and current.state_version != expected_version:
+            if current.state is not TaskState.VERIFYING:
+                raise ValueError("verification result requires VERIFYING state")
+            self._transition_task_tx(
+                task_id,
+                target,
+                expected_version=expected_version,
+                reason=reason,
+            )
+            if finalize is not None:
+                self._insert_shadow_finalize_locked(finalize)
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_task(task_id).state
+
+    # ------------------------------------------------------------------
+    # M1 WP5a-2: AUTO lifecycle metadata helpers.
+    #
+    # ``transition_task``'s ``auto_*`` parameters treat ``None`` as
+    # "do not modify the column", which made it impossible for an
+    # ``AUTO_* → READY`` transition to clear stale metadata (the
+    # WP5a-1 debt). The helpers below own explicit clear / ack /
+    # reason semantics with optimistic concurrency so the active task
+    # row never carries misleading active-auto control state after a
+    # lifecycle terminal exit (§32).
+    # ------------------------------------------------------------------
+
+    def clear_auto_state_metadata(
+        self,
+        task_id: str,
+        *,
+        expected_version: int,
+        reason: str | None = None,
+    ) -> TaskRecord:
+        """Atomically NULL all four ``auto_*`` columns with a version bump.
+
+        Idempotent: when the columns are already NULL the row is returned
+        unchanged (no version bump, no audit) so crash-recovery replays and
+        duplicate veto/abort calls stay cheap. Raises ``RuntimeError`` when
+        ``expected_version`` does not match the authoritative row — the
+        caller must re-read and re-decide, never clobber.
+        """
+
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get_task(task_id)
+            if current.state_version != expected_version:
                 raise RuntimeError("stale task state_version")
-            if new_state not in _ALLOWED_TRANSITIONS[current.state]:
-                raise ValueError(f"invalid task transition {current.state} -> {new_state}")
+            if (
+                current.auto_decision_id is None
+                and current.auto_grace_deadline_at is None
+                and current.auto_acked_at is None
+                and current.auto_reason is None
+            ):
+                self.connection.execute("COMMIT")
+                return current
             stamp = _now()
             next_version = current.state_version + 1
             updated = self.connection.execute(
                 """
-                UPDATE tasks SET state=?, state_version=?, updated_at=?
+                UPDATE tasks
+                SET auto_decision_id=NULL, auto_grace_deadline_at=NULL,
+                    auto_acked_at=NULL, auto_reason=NULL,
+                    state_version=?, updated_at=?
                 WHERE task_id=? AND state_version=?
                 """,
-                (new_state.value, next_version, stamp, task_id, current.state_version),
+                (next_version, stamp, task_id, current.state_version),
             )
             if updated.rowcount != 1:
-                raise RuntimeError("task transition lost optimistic concurrency race")
+                raise RuntimeError("auto metadata clear lost optimistic concurrency race")
+            if current.auto_decision_id is not None:
+                # Durable cleanup intent: the pending shadow whose id equals
+                # the cleared decision id (裁决 15) must eventually be
+                # discarded even if this process dies right after COMMIT.
+                self._enqueue_cleanup_intent_locked(
+                    current.auto_decision_id, task_id, reason or "metadata_cleared", stamp
+                )
             self._audit(
                 task_id,
-                "TASK_STATE_CHANGED",
+                "AUTO_METADATA_CLEARED",
                 {
-                    "from": current.state.value,
-                    "to": new_state.value,
                     "state_version": next_version,
+                    "cleared_decision_id": current.auto_decision_id,
                     "reason": reason,
                 },
             )
@@ -769,6 +1396,500 @@ class SafetyKernelStore:
             self.connection.execute("ROLLBACK")
             raise
         return self.get_task(task_id)
+
+    def ack_auto_grace(
+        self,
+        task_id: str,
+        *,
+        acked_at: str,
+        grace_deadline: str,
+        expected_version: int,
+    ) -> TaskRecord:
+        """Record the owner's one-time acknowledgement of an ``AUTO_GRACE`` task.
+
+        Fail-closed contract (§22):
+
+        - the task must currently be ``AUTO_GRACE``;
+        - ``expected_version`` must match exactly (stale clients get
+          ``RuntimeError`` and must re-read);
+        - a task that is already acked is returned **unchanged** — an ACK
+          retry never rewrites ``auto_acked_at`` and never extends the
+          deadline (``auto_grace_deadline_at`` keeps its original value).
+        """
+
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get_task(task_id)
+            if current.state is not TaskState.AUTO_GRACE:
+                raise ValueError(
+                    f"auto ack requires AUTO_GRACE, task is {current.state.value}"
+                )
+            if current.auto_acked_at is not None:
+                self.connection.execute("COMMIT")
+                return current
+            if current.state_version != expected_version:
+                raise RuntimeError("stale task state_version")
+            stamp = _now()
+            next_version = current.state_version + 1
+            updated = self.connection.execute(
+                """
+                UPDATE tasks
+                SET auto_acked_at=?, auto_grace_deadline_at=?,
+                    state_version=?, updated_at=?
+                WHERE task_id=? AND state_version=?
+                """,
+                (acked_at, grace_deadline, next_version, stamp, task_id, expected_version),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("auto ack lost optimistic concurrency race")
+            self._audit(
+                task_id,
+                "AUTO_ACKED",
+                {
+                    "auto_decision_id": current.auto_decision_id,
+                    "acked_at": acked_at,
+                    "auto_grace_deadline_at": grace_deadline,
+                    "state_version": next_version,
+                },
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_task(task_id)
+
+    def set_auto_reason(self, task_id: str, *, reason: str) -> None:
+        """Write the ``AUTO_SKIPPED`` reason hint with per-(task, reason) dedup.
+
+        ``auto_reason`` is a display hint, never authority. The write (and the
+        matching ``AUTO_SKIPPED`` audit event) fires only when the reason
+        actually changed, so a failing gate evaluated every tick does not
+        produce one audit row per tick (§3.4 step 1 dedup). Bumps
+        ``state_version`` so clients holding a stale version re-read.
+        """
+
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get_task(task_id)
+            if current.auto_reason == reason:
+                self.connection.execute("COMMIT")
+                return
+            stamp = _now()
+            next_version = current.state_version + 1
+            updated = self.connection.execute(
+                """
+                UPDATE tasks SET auto_reason=?, state_version=?, updated_at=?
+                WHERE task_id=? AND state_version=?
+                """,
+                (reason, next_version, stamp, task_id, current.state_version),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("auto reason write lost optimistic concurrency race")
+            self._audit(
+                task_id,
+                "AUTO_SKIPPED",
+                {"reason": reason, "state_version": next_version},
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+
+    def force_task_scheduling_policy(self, task_id: str, *, scheduling_policy: str) -> None:
+        """Force a task's scheduling policy (veto locks the task to MANUAL)."""
+
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get_task(task_id)
+            if current.scheduling_policy == scheduling_policy:
+                self.connection.execute("COMMIT")
+                return
+            stamp = _now()
+            next_version = current.state_version + 1
+            updated = self.connection.execute(
+                """
+                UPDATE tasks SET scheduling_policy=?, state_version=?, updated_at=?
+                WHERE task_id=? AND state_version=?
+                """,
+                (scheduling_policy, next_version, stamp, task_id, current.state_version),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("task policy force lost optimistic concurrency race")
+            self._audit(
+                task_id,
+                "TASK_SCHEDULING_POLICY_FORCED",
+                {
+                    "scheduling_policy": scheduling_policy,
+                    "state_version": next_version,
+                },
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+
+    def abort_auto_lifecycle(
+        self,
+        task_id: str,
+        *,
+        expected_version: int | None = None,
+        reason: str,
+        event_type: str = "AUTO_ABORTED",
+        request_id: str | None = None,
+        target: str | None = None,
+        force_manual: bool = False,
+        allow_blocked: bool = False,
+    ) -> TaskRecord:
+        """Crash-atomic fail-closed close of one AUTO lifecycle.
+
+        ONE ``BEGIN IMMEDIATE`` transaction performs every authoritative
+        SQLite mutation of the close (§ crash-consistency closeout):
+
+        - re-read + exact ``expected_version`` check;
+        - source-state gate: ``AUTO_PLANNED`` / ``AUTO_GRACE`` always;
+          ``BLOCKED`` only with ``allow_blocked`` **and** a non-NULL
+          ``auto_decision_id`` (pre-worker supervised-auto recovery — a
+          plain owner BLOCKED task can never take this path);
+        - state → ``READY`` + all four ``auto_*`` columns → NULL +
+          optional ``scheduling_policy = MANUAL`` (veto lock);
+        - exactly ONE ``state_version`` increment for the whole logical
+          close (no transition bump + policy bump + clear bump);
+        - one durable audit event (``AUTO_ABORTED`` / ``AUTO_VETOED``)
+          in the same transaction;
+        - one durable shadow-cleanup intent row in the same transaction.
+
+        The pending-shadow journal is a separate filesystem store and can
+        never share this SQLite transaction — the outbox row is the
+        durable promise that the discard will eventually happen; the
+        supervised-auto tick drains it idempotently on every sweep.
+        """
+
+        if event_type not in {"AUTO_ABORTED", "AUTO_VETOED"}:
+            raise ValueError(f"unsupported auto lifecycle event {event_type}")
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get_task(task_id)
+            if expected_version is not None and current.state_version != expected_version:
+                raise RuntimeError("stale task state_version")
+            allowed_source = current.state in {
+                TaskState.AUTO_PLANNED,
+                TaskState.AUTO_GRACE,
+            }
+            if not allowed_source and allow_blocked:
+                allowed_source = (
+                    current.state is TaskState.BLOCKED
+                    and current.auto_decision_id is not None
+                )
+            if not allowed_source:
+                raise ValueError(
+                    "auto lifecycle abort requires AUTO_PLANNED/AUTO_GRACE"
+                    f" (or supervised-auto BLOCKED), task is {current.state.value}"
+                )
+            previous_decision_id = current.auto_decision_id
+            stamp = _now()
+            next_version = current.state_version + 1
+            update_columns = (
+                "state=?, auto_decision_id=NULL, auto_grace_deadline_at=NULL,"
+                " auto_acked_at=NULL, auto_reason=NULL, state_version=?,"
+                " updated_at=?"
+            )
+            update_values: list[object] = [TaskState.READY.value, next_version, stamp]
+            if force_manual:
+                update_columns += ", scheduling_policy='MANUAL'"
+            update_values.extend([task_id, current.state_version])
+            updated = self.connection.execute(
+                f"UPDATE tasks SET {update_columns} WHERE task_id=? AND state_version=?",
+                update_values,
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("auto lifecycle abort lost optimistic concurrency race")
+            payload: dict[str, object] = {
+                "from": current.state.value,
+                "to": TaskState.READY.value,
+                "state_version": next_version,
+                "reason": reason,
+                "auto_decision_id": previous_decision_id,
+                "target": target,
+                "request_id": request_id,
+                "force_manual": force_manual,
+            }
+            self._audit(task_id, event_type, payload)
+            if previous_decision_id is not None:
+                self._enqueue_cleanup_intent_locked(
+                    previous_decision_id, task_id, reason, stamp
+                )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_task(task_id)
+
+    def recover_ready_auto_metadata(self, task_id: str) -> TaskRecord | None:
+        """Atomic recovery of a ``READY`` row that still carries auto metadata.
+
+        An old build's multi-stage abort (or a torn downgrade) can leave
+        ``state == READY`` with ``auto_*`` columns set — that is stale,
+        active-looking control state no runtime path may interpret as a
+        live lifecycle. This closeout detects the inconsistency and, in
+        ONE transaction: captures the stale decision id, NULLs all four
+        columns, bumps the version exactly once, audits
+        ``AUTO_METADATA_RECOVERED`` and enqueues the stale pending
+        shadow for durable cleanup. The state stays ``READY``; no worker
+        side effect ever runs. Returns ``None`` when the row raced out
+        of READY (a concurrent writer owns it) — never clobbers.
+        """
+
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.get_task(task_id)
+            if current.state is not TaskState.READY:
+                self.connection.execute("COMMIT")
+                return None
+            if (
+                current.auto_decision_id is None
+                and current.auto_grace_deadline_at is None
+                and current.auto_acked_at is None
+            ):
+                # ``auto_reason`` alone is the tick's legal skip hint on a
+                # READY row — not lifecycle metadata, never recovered.
+                self.connection.execute("COMMIT")
+                return current
+            stale_decision_id = current.auto_decision_id
+            stamp = _now()
+            next_version = current.state_version + 1
+            updated = self.connection.execute(
+                """
+                UPDATE tasks
+                SET auto_decision_id=NULL, auto_grace_deadline_at=NULL,
+                    auto_acked_at=NULL, auto_reason=NULL,
+                    state_version=?, updated_at=?
+                WHERE task_id=? AND state_version=?
+                """,
+                (next_version, stamp, task_id, current.state_version),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("auto metadata recovery lost optimistic concurrency race")
+            self._audit(
+                task_id,
+                "AUTO_METADATA_RECOVERED",
+                {
+                    "reason": "ready_state_stale_auto_metadata",
+                    "cleared_decision_id": stale_decision_id,
+                    "state_version": next_version,
+                },
+            )
+            if stale_decision_id is not None:
+                self._enqueue_cleanup_intent_locked(
+                    stale_decision_id,
+                    task_id,
+                    "ready_state_stale_auto_metadata",
+                    stamp,
+                )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_task(task_id)
+
+    def pending_shadow_cleanups(self, *, limit: int = 64) -> tuple[sqlite3.Row, ...]:
+        """Open (not yet completed) shadow-cleanup intents, oldest first."""
+
+        return tuple(
+            self.connection.execute(
+                """
+                SELECT pending_id, task_id, reason, created_at
+                FROM auto_shadow_cleanup_outbox
+                WHERE completed_at IS NULL
+                ORDER BY created_at, pending_id
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        )
+
+    def complete_shadow_cleanup(self, pending_id: str) -> None:
+        """Mark one shadow-cleanup intent completed (idempotent)."""
+
+        self.connection.execute(
+            "UPDATE auto_shadow_cleanup_outbox SET completed_at=? "
+            "WHERE pending_id=? AND completed_at IS NULL",
+            (_now(), pending_id),
+        )
+
+    def _enqueue_cleanup_intent_locked(
+        self, pending_id: str, task_id: str, reason: str, stamp: str
+    ) -> None:
+        """Insert a cleanup intent INSIDE an open transaction (§16 guard).
+
+        Round-3 conflict rule: a pending with a real-execution
+        finalization intent (open OR completed — a completed intent
+        already discarded the pending) is never promised to the discard
+        path — finalize outranks discard, so the insert is suppressed
+        (no-op) whenever a finalize intent exists for the same pending
+        id.
+        """
+
+        self.connection.execute(
+            """
+            INSERT OR IGNORE INTO auto_shadow_cleanup_outbox
+                (pending_id, task_id, reason, created_at)
+            SELECT ?,?,?,?
+            WHERE NOT EXISTS (
+                SELECT 1 FROM auto_shadow_finalize_outbox
+                WHERE pending_id=?
+            )
+            """,
+            (pending_id, task_id, reason, stamp, pending_id),
+        )
+
+    def _insert_shadow_finalize_locked(self, intent: ShadowFinalizationIntent) -> None:
+        """Insert a finalize intent INSIDE an open transaction.
+
+        Collision semantics (§9): a second enqueue with an IDENTICAL
+        payload is idempotent; a different payload for the same
+        finalization id fails closed — the first durable intent owns the
+        truth. A still-open cleanup intent for the same pending is
+        superseded (completed) in the same transaction: real execution
+        evidence outranks a discard promise.
+        """
+
+        stamp = _now()
+        existing = self.connection.execute(
+            "SELECT payload_json FROM auto_shadow_finalize_outbox "
+            "WHERE finalization_id=?",
+            (intent.finalization_id,),
+        ).fetchone()
+        if existing is not None:
+            if existing["payload_json"] != intent.payload_json():
+                raise RuntimeError(
+                    "shadow finalization id reused with different payload: "
+                    f"{intent.finalization_id}"
+                )
+        else:
+            self.connection.execute(
+                """
+                INSERT INTO auto_shadow_finalize_outbox (
+                    finalization_id, pending_id, task_id, dispatch_id,
+                    request_id, decision_id, verified, execution_success,
+                    verification_success, quality_outcome, failure_class,
+                    failure_stage, regression_detected, attempts_to_green,
+                    time_to_green_seconds, handoff_count, reset_cycle_ids,
+                    quota_after_snapshot_ids, observed_burn_fraction,
+                    observed_at, identity_json, payload_json, created_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    intent.finalization_id,
+                    intent.pending_id,
+                    intent.task_id,
+                    intent.dispatch_id,
+                    intent.request_id,
+                    intent.decision_id,
+                    int(intent.verified),
+                    int(intent.execution_success),
+                    None
+                    if intent.verification_success is None
+                    else int(intent.verification_success),
+                    intent.quality_outcome,
+                    intent.failure_class,
+                    intent.failure_stage,
+                    int(intent.regression_detected),
+                    intent.attempts_to_green,
+                    intent.time_to_green_seconds,
+                    intent.handoff_count,
+                    _json(list(intent.reset_cycle_ids)),
+                    _json(list(intent.quota_after_snapshot_ids)),
+                    intent.observed_burn_fraction,
+                    intent.observed_at,
+                    intent.identity_json,
+                    intent.payload_json(),
+                    stamp,
+                ),
+            )
+        # Finalize outranks discard: close any open cleanup intent for
+        # the same pending in this same transaction.
+        self.connection.execute(
+            "UPDATE auto_shadow_cleanup_outbox SET completed_at=? "
+            "WHERE pending_id=? AND completed_at IS NULL",
+            (stamp, intent.pending_id),
+        )
+
+    def enqueue_shadow_finalization(self, intent: ShadowFinalizationIntent) -> None:
+        """Durably record a post-worker shadow finalization intent."""
+
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._insert_shadow_finalize_locked(intent)
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+
+    def pending_shadow_finalizations(self, *, limit: int = 64) -> tuple[sqlite3.Row, ...]:
+        """Open (not yet completed) shadow-finalize intents, oldest first."""
+
+        return tuple(
+            self.connection.execute(
+                """
+                SELECT finalization_id, pending_id, task_id, dispatch_id,
+                       request_id, decision_id, verified, execution_success,
+                       verification_success, quality_outcome, failure_class,
+                       failure_stage, regression_detected, attempts_to_green,
+                       time_to_green_seconds, handoff_count, reset_cycle_ids,
+                       quota_after_snapshot_ids, observed_burn_fraction,
+                       observed_at, identity_json, created_at
+                FROM auto_shadow_finalize_outbox
+                WHERE completed_at IS NULL
+                ORDER BY created_at, finalization_id
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        )
+
+    def complete_shadow_finalization(self, finalization_id: str) -> None:
+        """Mark one shadow-finalize intent completed (idempotent)."""
+
+        self.connection.execute(
+            "UPDATE auto_shadow_finalize_outbox SET completed_at=? "
+            "WHERE finalization_id=? AND completed_at IS NULL",
+            (_now(), finalization_id),
+        )
+
+    def open_shadow_finalize_intent(self, pending_id: str) -> bool:
+        """True when an OPEN finalize intent exists for the pending."""
+
+        row = self.connection.execute(
+            "SELECT 1 FROM auto_shadow_finalize_outbox "
+            "WHERE pending_id=? AND completed_at IS NULL LIMIT 1",
+            (pending_id,),
+        ).fetchone()
+        return row is not None
+
+    def shadow_finalize_intent_exists(self, pending_id: str) -> bool:
+        """True when ANY finalize intent (open or completed) exists."""
+
+        row = self.connection.execute(
+            "SELECT 1 FROM auto_shadow_finalize_outbox "
+            "WHERE pending_id=? LIMIT 1",
+            (pending_id,),
+        ).fetchone()
+        return row is not None
+
+    def routing_decision_by_request_id(self, request_id: str) -> Any | None:
+        """Return the raw durable routing-decision row for a request id.
+
+        WP5a-2's tick uses this to prove a frozen decision already exists
+        before re-planning (crash recovery: decision persisted, task not yet
+        transitioned). Returns ``None`` when no decision exists.
+        """
+
+        row = self.connection.execute(
+            "SELECT decision_id,request_id,task_id,payload_json FROM routing_decisions "
+            "WHERE request_id=?",
+            (request_id,),
+        ).fetchone()
+        return row
 
     def register_workspace(
         self,
@@ -945,12 +2066,14 @@ class SafetyKernelStore:
             ).fetchone()
             if existing is not None:
                 record = self._owner_dispatch_from_row(existing)
-                same = (
-                    record.dispatch_id == dispatch_id
-                    and record.task_id == task_id
-                    and record.task_state_version == task_state_version
-                    and record.execution_target_id == execution_target_id
-                    and record.authority == authority
+                same = owner_dispatch_matches_expected(
+                    record,
+                    dispatch_id=dispatch_id,
+                    request_id=request_id,
+                    task_id=task_id,
+                    task_state_version=task_state_version,
+                    execution_target_id=execution_target_id,
+                    authority=authority,
                 )
                 if not same:
                     raise ValueError("request_id already has a conflicting owner dispatch")
@@ -1164,7 +2287,27 @@ class SafetyKernelStore:
         worker_id: str,
         writer_token: str,
         pid: int | None = None,
+        expected_state: TaskState | None = None,
     ) -> TaskRecord:
+        """Atomically pair the run row, the state transition and dispatch START.
+
+        Round 6 §8 — the legal source state is a property of the DURABLE
+        dispatch row, not of the caller: ``expected_state`` is derived
+        inside this transaction from ``dispatch.authority`` via
+        :func:`expected_source_state_for_dispatch_authority`
+        (OWNER_INITIATED_EXECUTION → READY, SUPERVISED_AUTO →
+        AUTO_GRACE). A caller-supplied ``expected_state`` is accepted
+        only as a consistency assertion — a value that disagrees with
+        the authority-derived state raises before any mutation, so no
+        caller can weaken the rule (e.g. pass ``READY`` for a
+        SUPERVISED_AUTO reservation). Unknown authority fails closed
+        with :class:`ValueError`. The transition is validated against
+        the exact expected state both in Python and in the SQL
+        ``WHERE state=?`` guard, so a concurrent veto / mode-change
+        abort that moved the task out of the expected state fails
+        closed instead of racing the worker start.
+        """
+
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             dispatch = self.connection.execute(
@@ -1176,9 +2319,23 @@ class SafetyKernelStore:
                 raise ValueError("dispatch_id does not belong to task_id")
             if dispatch["status"] != OwnerDispatchStatus.RESERVED.value:
                 raise RuntimeError("owner dispatch is not reserved")
+            # Round 6 §8: the durable authority owns the source state —
+            # re-derived here inside BEGIN IMMEDIATE, never trusted
+            # from the caller alone.
+            authority_state = expected_source_state_for_dispatch_authority(
+                dispatch["authority"]
+            )
+            if expected_state is not None and expected_state is not authority_state:
+                raise ValueError(
+                    "expected_state conflicts with the dispatch authority's"
+                    f" legal source state {authority_state.value}"
+                )
+            expected_state = authority_state
             task = self.get_task(task_id)
-            if task.state is not TaskState.READY:
-                raise ValueError("dispatched worker can only start from READY")
+            if task.state is not expected_state:
+                raise ValueError(
+                    f"dispatched worker can only start from {expected_state.value}"
+                )
             if task.state_version != expected_task_version:
                 raise RuntimeError("stale task state_version")
             workspace = self.get_workspace(task_id)
@@ -1208,7 +2365,7 @@ class SafetyKernelStore:
                     stamp,
                     task_id,
                     task.state_version,
-                    TaskState.READY.value,
+                    expected_state.value,
                 ),
             )
             if updated_task.rowcount != 1:
@@ -1236,7 +2393,7 @@ class SafetyKernelStore:
                 task_id,
                 "TASK_STATE_CHANGED",
                 {
-                    "from": TaskState.READY.value,
+                    "from": expected_state.value,
                     "to": TaskState.RUNNING.value,
                     "state_version": next_version,
                     "reason": "host-supervised owner dispatch worker started",

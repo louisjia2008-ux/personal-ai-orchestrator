@@ -130,6 +130,28 @@ let healthBody = """
 {"status":"ok","api_version":"v1"}
 """
 
+/// Build a /v1/health canned body that surfaces the WP0 supervisor fields.
+/// Pass ``lastTickAt`` and ``intervalSeconds`` to assert ordering / cadence;
+/// leave them empty when the test only needs the supervisor step list.
+func supervisorHealthBody(
+    lastTickAt: String = "2026-09-05T00:00:00Z",
+    intervalSeconds: Double = 5.0,
+    steps: [(name: String, lastRunAt: String, lastDurationMs: Double, consecutiveFailures: Int, inBackoff: Bool)] = [
+        ("heartbeat", "2026-09-05T00:00:00Z", 0.3, 0, false)
+    ]
+) -> String {
+    let stepJSON = steps
+        .map { step in
+            """
+            {"name":"\(step.name)","last_run_at":"\(step.lastRunAt)","last_duration_ms":\(step.lastDurationMs),"consecutive_failures":\(step.consecutiveFailures),"in_backoff":\(step.inBackoff ? "true" : "false")}
+            """
+        }
+        .joined(separator: ",")
+    return """
+    {"status":"ok","api_version":"v1","last_tick_at":"\(lastTickAt)","tick_interval_seconds":\(intervalSeconds),"supervisor_steps":[\(stepJSON)]}
+    """
+}
+
 let tasksBody = """
 {"tasks":[{"task_id":"t-1","request_id":"r-1","intent":"fix bug","state":"RUNNING","state_version":2,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:01:00Z"},{"task_id":"t-2","request_id":"r-2","intent":"add test","state":"BLOCKED","state_version":3,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:02:00Z"}],"total":2}
 """
@@ -242,17 +264,109 @@ let quotaRefreshBody = """
 {"refreshed_provider_ids": ["zai-coding-plan"], "overview": \(quotaUnknownBody)}
 """
 
-func registerStandardRoutes(_ daemon: TestDaemon) {
+let quotaUnmeteredBody = """
+{
+  "state": "CONNECTED_WITH_QUOTA_OBSERVATIONS",
+  "summary": {"connected_provider_count": 2, "quota_observable_provider_count": 2, "quota_unknown_provider_count": 0, "quota_warning_count": 0, "quota_exhausted_count": 0},
+  "providers": [
+    {"provider_id": "minimax-cn-coding-plan", "display_name": "MiniMax CN Coding Plan", "connection_state": "CONNECTED", "auth_state": "AUTHENTICATED", "plan_surface": "Coding Plan", "region": "cn", "quota_state": "OBSERVED", "confidence": "EXACT", "measurement_source": "PROVIDER_API", "observed_at": "2026-08-31T00:00:00Z", "readonly_source_available": true, "collector_available": true, "last_refresh_status": "SUCCESS", "last_refresh_at": "2026-08-31T00:00:00Z", "failure_reason": null, "quota_pools": [{"quota_pool_id": "minimax-coding-plan-cn", "name": "minimax-coding-plan-cn", "plan_id": "coding-plan", "state": "AVAILABLE", "confidence": "EXACT", "measurement_source_type": "PROVIDER_API", "observed_at": "2026-08-31T00:00:00Z", "windows": [{"window_id": "5h", "window_kind": "FIVE_HOUR", "state": "AVAILABLE", "confidence": "EXACT", "remaining_fraction": 0.42, "reset_at": "2026-08-31T05:00:00Z"}]}]},
+    {"provider_id": "opencode", "display_name": "OpenCode Free", "connection_state": "CONNECTED", "auth_state": "AUTH_FROM_ENV_PRESENCE", "plan_surface": "Free tier", "region": null, "quota_state": "OBSERVED", "confidence": "ESTIMATED", "measurement_source": "PROVIDER_API", "observed_at": "2026-09-07T00:00:00Z", "readonly_source_available": true, "collector_available": true, "last_refresh_status": "SUCCESS", "last_refresh_at": "2026-09-07T00:00:00Z", "failure_reason": null, "quota_pools": [], "pool_kind": "unmetered", "unmetered": {"rpm_observed": 12, "error_rate_1h": 0.05, "cooldown_until": null}}
+  ],
+  "history": {"observations": [], "retention_limit": 500}
+}
+"""
+
+let schedulingSettingsBody = """
+{
+  "default_scheduling_policy": "BALANCED",
+  "selectable_policies": ["BALANCED", "QUALITY_FIRST", "QUOTA_SAVER", "SPEED_FIRST", "BURN_DOWN"],
+  "mode": "MANUAL",
+  "selectable_modes": ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"]
+}
+"""
+
+/// M1 WP1 — observed quota body that carries the burn sub-object on the
+/// 5h window and a ``source_pressure`` on the provider card. Used by
+/// the new decoder tests and any UI smoke that needs a populated chip.
+let quotaObservedWithBurnBody = """
+{
+  "state": "CONNECTED_WITH_QUOTA_OBSERVATIONS",
+  "summary": {"connected_provider_count": 1, "quota_observable_provider_count": 1, "quota_unknown_provider_count": 0, "quota_warning_count": 0, "quota_exhausted_count": 0},
+  "providers": [
+    {
+      "provider_id": "minimax-cn-coding-plan",
+      "display_name": "MiniMax CN Coding Plan",
+      "connection_state": "CONNECTED",
+      "auth_state": "AUTHENTICATED",
+      "plan_surface": "Coding Plan",
+      "region": "cn",
+      "quota_state": "OBSERVED",
+      "confidence": "EXACT",
+      "measurement_source": "PROVIDER_API",
+      "observed_at": "2026-08-31T00:00:00Z",
+      "readonly_source_available": true,
+      "collector_available": true,
+      "last_refresh_status": "SUCCESS",
+      "last_refresh_at": "2026-08-31T00:00:00Z",
+      "failure_reason": null,
+      "credential_source": "ENV_VAR",
+      "quota_pools": [],
+      "source_pressure": "ON_TRACK",
+      "plan": {
+        "provider_id": "minimax-cn-coding-plan",
+        "plan_id": "coding-plan",
+        "display_name": "MiniMax CN Coding Plan",
+        "quota_semantics": "SHARED_POOL",
+        "pool_id": "minimax-coding-plan-cn",
+        "resource_kind": "TOKEN_PLAN_INCLUDED_QUOTA",
+        "shared_across_models": true,
+        "unit_kind": "TOKENS",
+        "covered_model_ids": ["minimax-m2"],
+        "state": "AVAILABLE",
+        "confidence": "EXACT",
+        "observed_at": "2026-08-31T00:00:00Z",
+        "unknown_reason": null,
+        "active_workload_scope": "CODING_TEXT",
+        "workload_scope_notes": [],
+        "binding_window": {"window_id": null, "window_kind": null, "remaining_fraction": null, "reset_at": null, "seconds_until_reset": null, "reason": "NO_KNOWN_REMAINING", "confidence": "UNKNOWN"},
+        "model_consumption": [],
+        "model_equivalents": [],
+        "equivalent_capacity": [],
+        "windows": [
+          {"window_id": "5h", "window_kind": "FIVE_HOUR", "state": "AVAILABLE", "confidence": "EXACT", "remaining_fraction": 0.42, "remaining_units": null, "total_units": null, "unit": null, "reset_at": "2026-08-31T05:00:00Z", "burn": {"expected_used_fraction": 0.5, "actual_used_fraction": 0.58, "deviation": 0.08, "remaining_fraction": 0.42, "seconds_to_reset": 3600.0, "pressure": "ON_TRACK", "pressure_score": 0.13, "window_start_inferred": false}}
+        ]
+      }
+    }
+  ],
+  "history": {"observations": [], "retention_limit": 500}
+}
+"""
+
+func registerStandardRoutes(
+    _ daemon: TestDaemon,
+    quotaBody: String = quotaUnknownBody,
+    schedulingBody: String = schedulingSettingsBody
+) {
     daemon.route("GET", "/v1/health", body: healthBody)
     daemon.route("GET", "/v1/dashboard", body: dashboardBody)
     daemon.route("GET", "/v1/tasks?limit=20", body: tasksBody)
+    // The dashboard fetches the authoritative collection at the daemon's list
+    // limit; without this route the store would silently exercise its fallback.
+    daemon.route(
+        "GET", "/v1/tasks?limit=\(OrchestratorStore.taskListLimit)", body: tasksBody
+    )
     daemon.route("GET", "/v1/tasks", body: tasksBody)
     daemon.route("GET", "/v1/projects", body: projectsBody)
     daemon.route("GET", "/v1/tasks/t-1/detail", body: taskDetailBody)
     daemon.route("GET", "/v1/providers", body: providersBody)
     daemon.route("GET", "/v1/providers/status", body: providerDiscoveryStatusBody)
     daemon.route("POST", "/v1/providers/refresh", body: providerDiscoveryStatusBody)
-    daemon.route("GET", "/v1/quota", body: quotaUnknownBody)
+    daemon.route("GET", "/v1/quota", body: quotaBody)
     daemon.route("POST", "/v1/quota/refresh", body: quotaRefreshBody)
+    // M1 WP5a-1: scheduling settings wire body. Tests can pass an
+    // alternative body via the ``schedulingBody`` parameter; the
+    // default surfaces ``mode`` + ``selectable_modes`` for the
+    // picker.
+    daemon.route("GET", "/v1/settings/scheduling", body: schedulingBody)
     daemon.route("GET", "/v1/active-status", body: activeStatusBody)
 }

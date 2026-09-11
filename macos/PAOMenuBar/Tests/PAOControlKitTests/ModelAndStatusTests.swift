@@ -4,6 +4,7 @@ import XCTest
 
 @testable import PAOControlKit
 
+@MainActor
 final class ModelAndStatusTests: XCTestCase {
     func testTaskListDecoding() throws {
         let view = try JSONDecoder().decode(TaskListView.self, from: Data(tasksBody.utf8))
@@ -385,5 +386,702 @@ final class ModelAndStatusTests: XCTestCase {
         XCTAssertTrue(conflict.isRunningCancelConflict)
         XCTAssertFalse(PAOClientError.httpError(status: 409, code: "task_state_is_terminal").isRunningCancelConflict)
         XCTAssertFalse(PAOClientError.daemonNotRunning.isRunningCancelConflict)
+    }
+
+    func testTaskViewDecodesSchedulingPolicyFieldsWhenPresent() throws {
+        let json = """
+        {"task_id":"t-9","request_id":"r-9","intent":"manual target","project_id":"p-1","base_sha":"abc","working_subpath":null,"state":"SUBMITTED","state_version":0,"created_at":"2026-09-04T00:00:00Z","updated_at":"2026-09-04T00:00:00Z","scheduling_policy":"MANUAL","manual_execution_target_id":"zai-coding-plan-glm-5.3"}
+        """
+        let task = try JSONDecoder().decode(TaskView.self, from: Data(json.utf8))
+        XCTAssertEqual(task.schedulingPolicy, "MANUAL")
+        XCTAssertEqual(task.manualExecutionTargetId, "zai-coding-plan-glm-5.3")
+    }
+
+    func testTaskViewDecodesWithoutSchedulingPolicyFields() throws {
+        // Older daemons (and many test fixtures) omit the new fields.
+        let json = """
+        {"task_id":"t-9","request_id":"r-9","intent":"legacy","state":"SUBMITTED","state_version":0,"created_at":"2026-09-04T00:00:00Z","updated_at":"2026-09-04T00:00:00Z"}
+        """
+        let task = try JSONDecoder().decode(TaskView.self, from: Data(json.utf8))
+        XCTAssertNil(task.schedulingPolicy)
+        XCTAssertNil(task.manualExecutionTargetId)
+    }
+
+    func testExecutionTargetHealthViewDecodesExecutionVerifiedStaleWhenPresent() throws {
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "runtime_id":"opencode",
+          "enabled":true,
+          "execution_verified":true,
+          "execution_verified_stale":true
+        }
+        """
+        let view = try JSONDecoder().decode(
+            ExecutionTargetHealthView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.executionVerified, true)
+        XCTAssertEqual(view.executionVerifiedStale, true)
+        XCTAssertTrue(view.isExecutionVerified)
+        XCTAssertTrue(view.isExecutionVerifiedStale)
+    }
+
+    func testExecutionTargetHealthViewDecodesWithoutExecutionVerifiedStale() throws {
+        // Older daemons never emit the new flag — the lenient decoder must
+        // leave it nil rather than failing the whole provider view.
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "runtime_id":"opencode",
+          "enabled":true,
+          "execution_verified":true
+        }
+        """
+        let view = try JSONDecoder().decode(
+            ExecutionTargetHealthView.self, from: Data(json.utf8)
+        )
+        XCTAssertNil(view.executionVerifiedStale)
+        XCTAssertFalse(view.isExecutionVerifiedStale)
+    }
+
+    func testDispatchRecommendationCandidateDecodesExecutionVerifiedStaleWhenPresent() throws {
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "eligible":true,
+          "admitted":true,
+          "score":1.0,
+          "evidence_fresh":true,
+          "runtime_available":true,
+          "verified":true,
+          "execution_verified_stale":true,
+          "quota_state":"AVAILABLE_OBSERVED",
+          "score_components":[],
+          "reasons":["policy=BALANCED"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationCandidate.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.verified, true)
+        XCTAssertEqual(view.executionVerifiedStale, true)
+        XCTAssertTrue(view.isExecutionVerifiedStale)
+    }
+
+    func testDispatchRecommendationCandidateDecodesWithoutExecutionVerifiedStale() throws {
+        // Older daemons do not emit the new flag — the lenient decoder must
+        // leave it nil rather than failing the recommendation view.
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "eligible":true,
+          "admitted":true,
+          "score":1.0,
+          "evidence_fresh":true,
+          "runtime_available":true,
+          "verified":true,
+          "quota_state":"AVAILABLE_OBSERVED",
+          "score_components":[],
+          "reasons":["policy=BALANCED"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationCandidate.self, from: Data(json.utf8)
+        )
+        XCTAssertNil(view.executionVerifiedStale)
+        XCTAssertFalse(view.isExecutionVerifiedStale)
+    }
+
+    // MARK: - §M1 WP1 sourcePressure on the dispatch candidate
+
+    func testDispatchRecommendationCandidateDecodesSourcePressureWhenPresent() throws {
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "eligible":true,
+          "admitted":true,
+          "score":1.0,
+          "evidence_fresh":true,
+          "runtime_available":true,
+          "verified":true,
+          "quota_state":"AVAILABLE_OBSERVED",
+          "source_pressure":"STARVED",
+          "score_components":[],
+          "reasons":["policy=BALANCED"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationCandidate.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.sourcePressure, "STARVED")
+    }
+
+    func testDispatchRecommendationCandidateDecodesWithoutSourcePressure() throws {
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "eligible":true,
+          "admitted":true,
+          "score":1.0,
+          "evidence_fresh":true,
+          "runtime_available":true,
+          "verified":true,
+          "quota_state":"AVAILABLE_OBSERVED",
+          "score_components":[],
+          "reasons":["policy=BALANCED"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationCandidate.self, from: Data(json.utf8)
+        )
+        XCTAssertNil(view.sourcePressure)
+    }
+
+    // MARK: - §M1 WP2 — min_tier / tier / tier_match_reason / modelTiersSource
+
+    func testTaskViewDecodesMinTierWhenPresent() throws {
+        let json = """
+        {"task_id":"t-9","request_id":"r-9","intent":"flagship only","state":"SUBMITTED","state_version":0,"created_at":"2026-09-04T00:00:00Z","updated_at":"2026-09-04T00:00:00Z","min_tier":"T0"}
+        """
+        let task = try JSONDecoder().decode(TaskView.self, from: Data(json.utf8))
+        XCTAssertEqual(task.minTier, "T0")
+    }
+
+    func testTaskViewDecodesWithoutMinTier() throws {
+        // Pre-WP2 daemons / older fixtures omit the field; the decoder
+        // must leave ``minTier`` nil rather than failing the request.
+        let json = """
+        {"task_id":"t-9","request_id":"r-9","intent":"legacy","state":"SUBMITTED","state_version":0,"created_at":"2026-09-04T00:00:00Z","updated_at":"2026-09-04T00:00:00Z"}
+        """
+        let task = try JSONDecoder().decode(TaskView.self, from: Data(json.utf8))
+        XCTAssertNil(task.minTier)
+    }
+
+    func testSubmitRequestEncodesMinTierWhenProvided() throws {
+        // ``SubmitRequest`` is Encodable — the SwiftUI picker in
+        // commit 5 passes the chosen tier here. JSON keys must match
+        // the daemon's snake_case schema.
+        let request = SubmitRequest(
+            taskId: "menubar-abc",
+            requestId: "menubar-req-abc",
+            projectId: "project-fixture",
+            intent: "flagship only",
+            schedulingPolicy: "BALANCED",
+            manualExecutionTargetId: nil,
+            minTier: "T0"
+        )
+        let data = try JSONEncoder().encode(request)
+        let payload = String(data: data, encoding: .utf8) ?? ""
+        XCTAssertTrue(payload.contains("\"min_tier\":\"T0\""))
+    }
+
+    func testSubmitRequestEncodesWithoutMinTier() throws {
+        // The picker default leaves ``minTier`` nil; the encoder must
+        // emit no ``min_tier`` key so the daemon applies its own
+        // T1 default rather than seeing ``null``.
+        let request = SubmitRequest(
+            taskId: "menubar-abc",
+            requestId: "menubar-req-abc",
+            projectId: "project-fixture",
+            intent: "default"
+        )
+        let data = try JSONEncoder().encode(request)
+        let payload = String(data: data, encoding: .utf8) ?? ""
+        XCTAssertFalse(payload.contains("min_tier"))
+    }
+
+    func testExecutionTargetHealthViewDecodesTierFieldsWhenPresent() throws {
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "runtime_id":"opencode",
+          "enabled":true,
+          "execution_verified":true,
+          "runtime_available":true,
+          "observed_availability":null,
+          "tier":"T1",
+          "tier_match_reason":"glob"
+        }
+        """
+        let view = try JSONDecoder().decode(
+            ExecutionTargetHealthView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.tier, "T1")
+        XCTAssertEqual(view.tierMatchReason, "glob")
+    }
+
+    func testExecutionTargetHealthViewDecodesWithoutTierFields() throws {
+        // Pre-WP2 daemons (and fixtures that predate commit 4) omit
+        // ``tier`` and ``tier_match_reason``. The decoder must leave
+        // them nil rather than failing the request.
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "runtime_id":"opencode",
+          "enabled":true,
+          "execution_verified":true,
+          "runtime_available":true,
+          "observed_availability":null
+        }
+        """
+        let view = try JSONDecoder().decode(
+            ExecutionTargetHealthView.self, from: Data(json.utf8)
+        )
+        XCTAssertNil(view.tier)
+        XCTAssertNil(view.tierMatchReason)
+    }
+
+    func testDispatchRecommendationCandidateDecodesTierFieldsWhenPresent() throws {
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "eligible":true,
+          "admitted":true,
+          "score":22.5,
+          "evidence_fresh":true,
+          "runtime_available":true,
+          "verified":true,
+          "quota_state":"AVAILABLE_OBSERVED",
+          "source_pressure":"ON_TRACK",
+          "tier":"T0",
+          "tier_match_reason":"exact",
+          "score_components":[],
+          "reasons":["tier=T0 min_tier=T1 match=exact"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationCandidate.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.tier, "T0")
+        XCTAssertEqual(view.tierMatchReason, "exact")
+    }
+
+    func testDispatchRecommendationCandidateDecodesWithoutTierFields() throws {
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "eligible":true,
+          "admitted":true,
+          "score":22.5,
+          "evidence_fresh":true,
+          "runtime_available":true,
+          "verified":true,
+          "quota_state":"AVAILABLE_OBSERVED",
+          "score_components":[],
+          "reasons":["policy=BALANCED"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationCandidate.self, from: Data(json.utf8)
+        )
+        XCTAssertNil(view.tier)
+        XCTAssertNil(view.tierMatchReason)
+    }
+
+    func testHealthViewDecodesModelTiersSourceWhenPresent() throws {
+        let json = """
+        {"status":"ok","api_version":"v1","last_tick_at":"2026-09-05T00:00:00Z","tick_interval_seconds":5.0,"supervisor_steps":[],"model_tiers_source":"owner_file"}
+        """
+        let view = try JSONDecoder().decode(HealthView.self, from: Data(json.utf8))
+        XCTAssertEqual(view.modelTiersSource, "owner_file")
+    }
+
+    func testHealthViewDecodesWithoutModelTiersSource() throws {
+        // Pre-WP2 daemons omit ``model_tiers_source``; the Swift
+        // dashboard renders the absence as "Tier table: not wired".
+        let json = """
+        {"status":"ok","api_version":"v1","last_tick_at":"2026-09-05T00:00:00Z","tick_interval_seconds":5.0,"supervisor_steps":[]}
+        """
+        let view = try JSONDecoder().decode(HealthView.self, from: Data(json.utf8))
+        XCTAssertNil(view.modelTiersSource)
+    }
+
+    func testRunViewDecodesPidAliveWhenPresent() throws {
+        let json = """
+        {
+          "run_id":"r-1",
+          "task_id":"t-1",
+          "worker_id":"glm",
+          "pid":40618,
+          "pid_alive":false,
+          "status":"RUNNING",
+          "started_at":"2026-09-04T00:00:00Z"
+        }
+        """
+        let view = try JSONDecoder().decode(RunView.self, from: Data(json.utf8))
+        XCTAssertEqual(view.pid, 40618)
+        XCTAssertEqual(view.pidAlive, false)
+        XCTAssertFalse(view.isProcessAlive)
+    }
+
+    func testRunViewDecodesWithoutPidAlive() throws {
+        // Older daemons do not emit pid_alive — the lenient decoder must
+        // leave it nil so the UI can fall back to "running pid N" until
+        // the new daemon reaches the dashboard.
+        let json = """
+        {
+          "run_id":"r-1",
+          "task_id":"t-1",
+          "worker_id":"glm",
+          "pid":40618,
+          "status":"RUNNING",
+          "started_at":"2026-09-04T00:00:00Z"
+        }
+        """
+        let view = try JSONDecoder().decode(RunView.self, from: Data(json.utf8))
+        XCTAssertNil(view.pidAlive)
+        XCTAssertFalse(view.isProcessAlive)
+    }
+
+    func testHealthViewDecodesSupervisorFieldsWhenPresent() throws {
+        let json = """
+        {
+          "status":"ok",
+          "api_version":"v1",
+          "last_tick_at":"2026-09-05T00:00:00Z",
+          "tick_interval_seconds":5.0,
+          "supervisor_steps":[
+            {"name":"heartbeat","last_run_at":"2026-09-05T00:00:00Z","last_duration_ms":0.3,"consecutive_failures":0,"in_backoff":false}
+          ]
+        }
+        """
+        let view = try JSONDecoder().decode(HealthView.self, from: Data(json.utf8))
+        XCTAssertEqual(view.status, "ok")
+        XCTAssertEqual(view.tickIntervalSeconds, 5.0)
+        XCTAssertNotNil(view.lastTickAt)
+        XCTAssertNotNil(view.lastTickDate)
+        XCTAssertEqual(view.supervisorSteps.count, 1)
+        XCTAssertEqual(view.supervisorSteps[0].name, "heartbeat")
+        XCTAssertEqual(view.supervisorSteps[0].consecutiveFailures, 0)
+        XCTAssertFalse(view.supervisorSteps[0].inBackoff)
+        XCTAssertNotNil(view.step(named: "heartbeat"))
+        XCTAssertNil(view.step(named: "unknown"))
+    }
+
+    func testHealthViewDecodesWithoutSupervisorFields() throws {
+        // Older (pre-WP0) daemons never emit last_tick_at / supervisor_steps;
+        // the lenient decoder must leave the new ones nil / empty rather
+        // than rejecting the whole /v1/health response.
+        let json = """
+        {"status":"ok","api_version":"v1"}
+        """
+        let view = try JSONDecoder().decode(HealthView.self, from: Data(json.utf8))
+        XCTAssertEqual(view.status, "ok")
+        XCTAssertTrue(view.isCompatible)
+        XCTAssertNil(view.lastTickAt)
+        XCTAssertNil(view.lastTickDate)
+        XCTAssertNil(view.tickIntervalSeconds)
+        XCTAssertTrue(view.supervisorSteps.isEmpty)
+    }
+
+    func testSupervisorStepViewDecodesWithoutOptionalFields() throws {
+        // The minimum payload (name only) must still decode so the future
+        // can register steps that just confirm a heartbeat. Other
+        // optional fields default to zero/false when missing.
+        let json = """
+        {"name":"heartbeat"}
+        """
+        let view = try JSONDecoder().decode(SupervisorStepView.self, from: Data(json.utf8))
+        XCTAssertEqual(view.name, "heartbeat")
+        XCTAssertNil(view.lastRunAt)
+        XCTAssertNil(view.lastRunDate)
+        XCTAssertNil(view.lastDurationMs)
+        XCTAssertEqual(view.consecutiveFailures, 0)
+        XCTAssertFalse(view.inBackoff)
+    }
+    // MARK: - §M1 WP3 — headroomMin + score-component weight + BURN_DOWN
+
+    func testDispatchRecommendationCandidateDecodesHeadroomMinWhenPresent() throws {
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "eligible":true,
+          "admitted":true,
+          "score":1.0,
+          "headroom_mean":0.7,
+          "headroom_min":0.6,
+          "evidence_fresh":true,
+          "runtime_available":true,
+          "verified":true,
+          "quota_state":"AVAILABLE_OBSERVED",
+          "score_components":[],
+          "reasons":["policy=BALANCED"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationCandidate.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.headroomMin, 0.6)
+        XCTAssertEqual(view.headroomMean, 0.7)
+    }
+
+    func testDispatchRecommendationCandidateDecodesWithoutHeadroomMin() throws {
+        // Pre-WP3 daemons do not emit ``headroom_min``; the decoder
+        // must leave the field nil rather than failing the request.
+        let json = """
+        {
+          "execution_target_id":"provider-x/model-a",
+          "model_sku_id":"model-a",
+          "eligible":true,
+          "admitted":true,
+          "score":1.0,
+          "headroom_mean":0.7,
+          "evidence_fresh":true,
+          "runtime_available":true,
+          "verified":true,
+          "quota_state":"AVAILABLE_OBSERVED",
+          "score_components":[],
+          "reasons":["policy=BALANCED"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            DispatchRecommendationCandidate.self, from: Data(json.utf8)
+        )
+        XCTAssertNil(view.headroomMin)
+        XCTAssertEqual(view.headroomMean, 0.7)
+    }
+
+    func testDispatchRecommendationScoreComponentDecodesWeightWhenPresent() throws {
+        // M1 WP3 fix (F4): wire shape carries the **raw value**
+        // and the per-row ``weight``; the UI multiplies them at
+        // display time (``contribution`` is a computed
+        // ``weight × value``).
+        let json = """
+        {"name":"quality_capability_fit","value":2.0,"weight":0.7}
+        """
+        let c = try JSONDecoder().decode(
+            DispatchRecommendationScoreComponent.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(c.name, "quality_capability_fit")
+        XCTAssertEqual(c.value, 2.0)
+        XCTAssertEqual(c.weight, 0.7)
+        XCTAssertEqual(c.contribution, 1.4, accuracy: 1e-9)
+    }
+
+    func testDispatchRecommendationScoreComponentDecodesWithoutWeight() throws {
+        // Pre-WP2 daemons / fixtures omit ``weight``; the decoder
+        // must leave the field nil and the contribution reads
+        // as 0 (no multiplier to apply).
+        let json = """
+        {"name":"quality_capability_fit","value":2.0}
+        """
+        let c = try JSONDecoder().decode(
+            DispatchRecommendationScoreComponent.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(c.name, "quality_capability_fit")
+        XCTAssertEqual(c.value, 2.0)
+        XCTAssertNil(c.weight)
+        XCTAssertEqual(c.contribution, 0.0)
+    }
+
+    func testL10nBurnDownPolicyNameAndDetail() {
+        // M1 WP3: BURN_DOWN is the new pressure-first preset. The
+        // picker reads this label; the detail line explains the bias.
+        XCTAssertEqual(L10n.schedulingPolicyName("BURN_DOWN"), L10n.policyBurnDown)
+        XCTAssertEqual(
+            L10n.schedulingPolicyDetail("BURN_DOWN"), L10n.policyBurnDownDetail
+        )
+        XCTAssertNotEqual(L10n.policyBurnDown, L10n.policyBurnDownDetail)
+    }
+
+    // M1 WP3 fix (F2): ``freshness`` is the sixth weight-named
+    // score component. ``value`` carries the raw freshness
+    // reading (``-5.0`` for missing / stale evidence,
+    // ``_EVIDENCE_FRESH_DAYS - age_days`` otherwise) and ``weight``
+    // is the constant ``FRESHNESS_WEIGHT`` the daemon applies.
+    // The contribution is the computed ``weight × value``.
+    func testDispatchRecommendationScoreComponentDecodesFreshness() throws {
+        let json = """
+        {"name":"freshness","value":-5.0,"weight":0.2}
+        """
+        let c = try JSONDecoder().decode(
+            DispatchRecommendationScoreComponent.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(c.name, "freshness")
+        XCTAssertEqual(c.value, -5.0)
+        XCTAssertEqual(c.weight, 0.2)
+        XCTAssertEqual(c.contribution, -1.0, accuracy: 1e-9)
+    }
+
+    // MARK: - M1 WP5a-1 commit 2 — scheduling settings + project view
+
+    // The new ``mode`` and ``selectable_modes`` fields on
+    // ``SchedulingSettingsView`` decode correctly from the
+    // WP5a-1 daemon's wire shape. Lenient defaults preserve the
+    // pre-WP5a-1 behaviour for older daemons.
+    func testSchedulingSettingsViewDecodesModeAndSelectableModes() throws {
+        let json = """
+        {
+          "default_scheduling_policy": "BALANCED",
+          "selectable_policies": ["BALANCED", "QUALITY_FIRST", "BURN_DOWN"],
+          "mode": "SUPERVISED_AUTO",
+          "selectable_modes": ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            SchedulingSettingsView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.defaultSchedulingPolicy, "BALANCED")
+        XCTAssertEqual(view.mode, "SUPERVISED_AUTO")
+        XCTAssertEqual(view.selectableModes, ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"])
+    }
+
+    // A pre-WP5a-1 daemon omits the new fields. The lenient
+    // decoder surfaces MANUAL / the full selectable set so the
+    // picker renders the same UI without a hard refresh.
+    func testSchedulingSettingsViewLenientDecodePreWP5a1Payload() throws {
+        let json = """
+        {
+          "default_scheduling_policy": "BALANCED",
+          "selectable_policies": ["BALANCED", "QUALITY_FIRST"]
+        }
+        """
+        let view = try JSONDecoder().decode(
+            SchedulingSettingsView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.mode, "MANUAL")
+        XCTAssertEqual(view.selectableModes, ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"])
+    }
+
+    // The new project-level supervised-auto fields decode
+    // correctly when present.
+    func testProjectViewDecodesSupervisedAutoFields() throws {
+        let json = """
+        {
+          "project_id": "p1",
+          "display_name": "Fixture",
+          "canonical_repo_root": "/tmp/p1",
+          "git_root": "/tmp/p1",
+          "default_branch": "main",
+          "last_known_head": "abc",
+          "created_at": "2026-09-07T00:00:00Z",
+          "updated_at": "2026-09-07T00:00:00Z",
+          "storage_availability": "ONLINE",
+          "recent_task_count": 0,
+          "current_branch": "main",
+          "supervised_auto_allowed": true,
+          "unattended_allowed": false,
+          "grace_seconds": 600
+        }
+        """
+        let view = try JSONDecoder().decode(
+            ProjectView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.supervisedAutoAllowed, true)
+        XCTAssertEqual(view.unattendedAllowed, false)
+        XCTAssertEqual(view.graceSeconds, 600)
+    }
+
+    // A pre-WP5a-1 daemon omits the new fields. The lenient
+    // decoder surfaces the dataclass defaults (False / False /
+    // 120) so the picker renders the same opt-out chip.
+    func testProjectViewLenientDecodePreWP5a1Payload() throws {
+        let json = """
+        {
+          "project_id": "p1",
+          "display_name": "Fixture",
+          "canonical_repo_root": "/tmp/p1",
+          "git_root": "/tmp/p1",
+          "default_branch": "main",
+          "last_known_head": "abc",
+          "created_at": "2026-09-07T00:00:00Z",
+          "updated_at": "2026-09-07T00:00:00Z",
+          "storage_availability": "ONLINE",
+          "recent_task_count": 0,
+          "current_branch": "main"
+        }
+        """
+        let view = try JSONDecoder().decode(
+            ProjectView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.supervisedAutoAllowed, false)
+        XCTAssertEqual(view.unattendedAllowed, false)
+        XCTAssertEqual(view.graceSeconds, 120)
+    }
+
+    // End-to-end store round-trip: ``OrchestratorStore`` reads the
+    // canned ``schedulingSettingsBody`` and surfaces the
+    // ``mode`` / ``selectableModes`` on the new view-model.
+    func testStoreFetchesSchedulingSettingsViewWithMode() async throws {
+        let daemon = TestDaemon()
+        registerStandardRoutes(daemon)
+        let path = temporarySocketPath("scheduling-mode")
+        try daemon.start(socketPath: path)
+        defer { daemon.stop() }
+
+        let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
+        await store.refreshNow()
+
+        let settings = try XCTUnwrap(store.schedulingSettings)
+        XCTAssertEqual(settings.mode, "MANUAL")
+        XCTAssertEqual(settings.selectableModes, ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"])
+    }
+
+    // MARK: - M1 WP5a-1 commit 3 — AUTO_PLANNED / AUTO_GRACE bookkeeping
+
+    // ``TaskView`` surfaces the four new AUTO_* fields when the
+    // daemon sends them.
+    func testTaskViewDecodesAutoFields() throws {
+        let json = """
+        {
+          "task_id": "t-1",
+          "request_id": "r-1",
+          "intent": "fix bug",
+          "project_id": "p1",
+          "base_sha": "abc",
+          "state": "AUTO_GRACE",
+          "state_version": 4,
+          "created_at": "2026-09-07T00:00:00Z",
+          "updated_at": "2026-09-07T00:00:05Z",
+          "auto_decision_id": "auto-dec-1",
+          "auto_grace_deadline_at": "2026-09-07T00:02:05Z",
+          "auto_acked_at": "2026-09-07T00:00:05Z",
+          "auto_reason": "AUTO_PLANNED{target=m3-sub}"
+        }
+        """
+        let view = try JSONDecoder().decode(
+            TaskView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.state, "AUTO_GRACE")
+        XCTAssertEqual(view.autoDecisionId, "auto-dec-1")
+        XCTAssertEqual(view.autoGraceDeadlineAt, "2026-09-07T00:02:05Z")
+        XCTAssertEqual(view.autoAckedAt, "2026-09-07T00:00:05Z")
+        XCTAssertEqual(view.autoReason, "AUTO_PLANNED{target=m3-sub}")
+    }
+
+    // A pre-WP5a-1 daemon omits the new fields. The lenient
+    // decoder surfaces ``nil`` for every AUTO_* field so the picker
+    // renders the same MANUAL-only chrome.
+    func testTaskViewLenientDecodePreWP5a1Payload() throws {
+        let json = """
+        {
+          "task_id": "t-1",
+          "request_id": "r-1",
+          "intent": "fix bug",
+          "state": "READY",
+          "state_version": 0,
+          "created_at": "2026-09-07T00:00:00Z",
+          "updated_at": "2026-09-07T00:00:00Z"
+        }
+        """
+        let view = try JSONDecoder().decode(
+            TaskView.self, from: Data(json.utf8)
+        )
+        XCTAssertEqual(view.state, "READY")
+        XCTAssertNil(view.autoDecisionId)
+        XCTAssertNil(view.autoGraceDeadlineAt)
+        XCTAssertNil(view.autoAckedAt)
+        XCTAssertNil(view.autoReason)
     }
 }

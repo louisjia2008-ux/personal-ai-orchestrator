@@ -11,12 +11,135 @@ import XCTest
 final class InteractiveDashboardTests: XCTestCase {
     func testDashboardSectionsAreCompleteAndStable() {
         XCTAssertEqual(DashboardSection.allCases.map(\.rawValue), [
-            "overview", "projects", "tasks", "providers", "quota",
-            "routing", "verification", "history", "settings",
+            "overview", "tasks", "resources", "activity", "settings",
         ])
         for section in DashboardSection.allCases {
             XCTAssertEqual(section.id, section.rawValue)
             XCTAssertFalse(section.title.isEmpty, "section title must localize: \(section.rawValue)")
+            XCTAssertFalse(section.symbol.isEmpty, "section symbol must exist: \(section.rawValue)")
+        }
+    }
+
+    /// Every destination must be reachable from the sidebar. A case outside
+    /// `allCases` is a phantom: storable, renderable, but never navigable.
+    func testEveryDestinationCaseIsReachable() {
+        XCTAssertEqual(
+            Set(DashboardSection.allCases),
+            Set([.overview, .tasks, .resources, .activity, .settings])
+        )
+    }
+
+    /// The backend-shaped destinations were reorganized, not deleted; none of
+    /// them may reappear as a first-level raw value.
+    func testRemovedFirstLevelDestinationsAreGone() {
+        let removed = ["projects", "agents", "providers", "quota", "routing", "verification", "history"]
+        let present = Set(DashboardSection.allCases.map(\.rawValue))
+        for raw in removed {
+            XCTAssertNil(DashboardSection(rawValue: raw), "\(raw) must not decode as a destination")
+            XCTAssertFalse(present.contains(raw), "\(raw) must not be a first-level destination")
+        }
+    }
+
+    // MARK: - Stored-selection migration
+
+    func testLegacyStoredValuesMigrateToTheDestinationThatAbsorbedThem() {
+        let expected: [String: DashboardSection] = [
+            "overview": .overview,
+            "projects": .settings,
+            "tasks": .tasks,
+            "providers": .resources,
+            "agents": .resources,
+            "quota": .resources,
+            "routing": .tasks,
+            "verification": .activity,
+            "history": .activity,
+            "settings": .settings,
+        ]
+        // The table must cover every value the pre-B2 enum could persist.
+        XCTAssertEqual(Set(expected.keys), Set(DashboardSectionMigration.legacyStoredValues))
+        for (stored, section) in expected {
+            XCTAssertEqual(
+                DashboardSectionMigration.section(forStoredValue: stored),
+                section,
+                "legacy value \(stored) migrated wrong"
+            )
+        }
+    }
+
+    func testCanonicalStoredValuesRoundTripUnchanged() {
+        for section in DashboardSection.allCases {
+            XCTAssertEqual(
+                DashboardSectionMigration.section(forStoredValue: section.rawValue),
+                section
+            )
+        }
+    }
+
+    func testUnknownAndEmptyStoredValuesFallBackToOverview() {
+        for stored in ["", " ", "Overview", "nope", "dashboard.tasks", "🙂"] {
+            XCTAssertEqual(
+                DashboardSectionMigration.section(forStoredValue: stored),
+                .overview,
+                "unrecognized value \(stored) must be safe"
+            )
+        }
+    }
+
+    func testMigrationIsDeterministic() {
+        for stored in DashboardSectionMigration.legacyStoredValues + ["", "unknown"] {
+            let first = DashboardSectionMigration.section(forStoredValue: stored)
+            for _ in 0..<5 {
+                XCTAssertEqual(DashboardSectionMigration.section(forStoredValue: stored), first)
+            }
+        }
+    }
+
+    // MARK: - Risk destination translation
+
+    /// The daemon's semantic destinations stay decoupled from the sidebar enum:
+    /// these are the exact strings control_api emits.
+    func testRiskDestinationsResolveToProductDestinations() {
+        XCTAssertEqual(
+            RiskDestination.intent(for: "projects"),
+            NavigationIntent(section: .settings, context: .projects)
+        )
+        XCTAssertEqual(
+            RiskDestination.intent(for: "models_providers"),
+            NavigationIntent(section: .resources, context: .providers)
+        )
+        XCTAssertEqual(
+            RiskDestination.intent(for: "quota"),
+            NavigationIntent(section: .resources, context: .quota)
+        )
+        XCTAssertEqual(
+            RiskDestination.intent(for: "settings"),
+            NavigationIntent(section: .settings, context: .clientSettings)
+        )
+    }
+
+    /// Without authoritative task identity a verification risk must not invent a
+    /// selection; it falls back to the non-task-specific Activity surface.
+    func testVerificationRiskFallsBackToActivityWithoutTaskIdentity() {
+        XCTAssertEqual(
+            RiskDestination.intent(for: "verification"),
+            NavigationIntent(section: .activity)
+        )
+        XCTAssertEqual(
+            RiskDestination.intent(for: "verification", taskId: ""),
+            NavigationIntent(section: .activity)
+        )
+    }
+
+    func testVerificationRiskSelectsTheTaskWhenIdentityIsAuthoritative() {
+        XCTAssertEqual(
+            RiskDestination.intent(for: "verification", taskId: "T-1"),
+            NavigationIntent(section: .tasks, context: .verification, taskId: "T-1")
+        )
+    }
+
+    func testUnknownRiskDestinationOffersNoNavigation() {
+        for destination in ["", "history", "routing", "unknown_surface"] {
+            XCTAssertNil(RiskDestination.intent(for: destination), destination)
         }
     }
 

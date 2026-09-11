@@ -228,6 +228,11 @@ Baseline
    creates an authoritative task, task clicks load detail, routing/verification
    offer task pickers, quota cards explain themselves, settings are labeled
    honestly, refresh works.
+   > **Superseded in part by B2.** "Routing/verification offer task pickers"
+   > no longer describes the product: Routing and Verification stopped being
+   > first-level destinations, and task selection happens in the Tasks browser.
+   > See "B2 Navigation Architecture" at the end of this document for the
+   > current navigation contract. Every other item in this list still holds.
 3. Owner adds the widget in Notification Center and performs visual acceptance.
 
 ---
@@ -332,3 +337,96 @@ first launch of an existing installation. No manual deletion of
   Tasks-shell consistency blocker; the provider registry now displays
   real content from `opencode models`).
 - P4.2.4-B: owner-initiated execution, OpenCode dispatch, host verifier.
+
+---
+
+# B2 Navigation Architecture (2026-09-03)
+
+This section is a **contract**, not acceptance evidence. No screenshot or owner
+pass recorded above showed this information architecture; every P4.2.x pass
+above exercised the nine-destination sidebar and remains valid as a historical
+record of that build.
+
+## Superseded by B2
+
+The first-level navigation asserted throughout this document —
+
+```
+Overview · Projects · Tasks · Providers · Quota · Routing · Verification · History · Settings
+```
+
+— no longer exists, and neither does the legacy `.agents` case that was
+storable but excluded from `allCases`.
+
+## Expected navigation contract
+
+Exactly five first-level destinations, in this order:
+
+```
+Overview · Tasks · Resources · Activity · Settings
+```
+
+Nothing was deleted from the product; capabilities were relocated:
+
+| Was a destination | Now reached through |
+| --- | --- |
+| Projects | Settings → Projects |
+| Providers | Resources → Models & Providers |
+| `agents` (legacy, unreachable) | Resources → Execution targets |
+| Quota | Resources → Quota |
+| Routing | Task Detail (routing explanation panel) |
+| Verification | Task Detail (verification panel) and Activity |
+| History | Activity |
+
+## Persisted-selection migration
+
+A navigation value stored by any earlier build resolves deterministically:
+`projects → settings`; `agents`, `providers`, `quota` → `resources`;
+`routing → tasks`; `verification`, `history` → `activity`; canonical values
+pass through; anything unrecognized or empty falls back to Overview. Decoding
+failure is never used as the migration mechanism.
+
+## Risk / attention deep links
+
+The daemon's semantic risk destinations stay decoupled from the sidebar enum
+and are translated `RiskDestination → NavigationIntent → DashboardSection`:
+
+| Daemon destination | Intent |
+| --- | --- |
+| `projects` | Settings, Projects context |
+| `models_providers` | Resources, providers context |
+| `quota` | Resources, quota context |
+| `settings` | Settings, general context |
+| `verification` | Activity |
+
+**Documented fallback:** `verification` prefers task-specific navigation
+(Tasks → selected task → verification context), but `RiskItemView` carries no
+task identity today, so it always resolves to Activity. Task identity is never
+invented to satisfy the preferred route.
+
+## What B2 is not
+
+B2 is navigation architecture only. It does not redesign Task Detail (B3),
+Resources (B4), Activity (B6), or perform the Projects capability migration
+into Settings (B7). Routing, quota, task, verification and daemon execution
+semantics are unchanged.
+
+The two D7 execution-layer questions — which component writes `declared_roles`,
+and whether a new `RoutingPlan` revision carries completed role state forward or
+resets it — stay open and unchanged in `docs/ROUTING_ROLE_CONTRACT.md`. B2
+deliberately did not resolve them inside navigation work; they remain inputs for
+B3 / the execution layer.
+
+## Carried debt
+
+- `sidebar.group.*` and the routing/verification task-picker strings
+  (`label.taskContext`, `picker.*`, `routing.noSelection`, `verification.*`)
+  remain in both catalogs but no longer have a call site. Kept, not deleted, so
+  zh-Hans/en parity and the existing sweep tests stay meaningful; B3/B4/B6 should
+  either reuse or retire them.
+- Settings → General shows both the default-policy picker and the richer active-
+  policy card that moved out of the Routing destination. Both are preserved
+  because either alone would lose capability; B7 merges them.
+- Projects moved location only. Security-scoped bookmark authorization and the
+  `resolveProject` preview/confirm flow are untouched and unverified beyond the
+  existing tests; B7 owns the capability-by-capability acceptance.

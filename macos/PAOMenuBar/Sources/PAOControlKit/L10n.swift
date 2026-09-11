@@ -31,6 +31,8 @@ public enum L10n {
         "app.dashboard", "action.openDashboard", "dashboard.overview", "dashboard.projects", "dashboard.tasks",
         "dashboard.agents", "dashboard.providers", "dashboard.quota", "dashboard.routing",
         "dashboard.verification", "dashboard.history", "dashboard.settings",
+        "dashboard.resources", "dashboard.activity",
+        "resources.pickerTitle", "settings.pickerTitle", "settings.tab.general",
         "label.connection", "label.systemHealth", "label.blockers", "label.events",
         "label.search", "label.stateFilter", "label.allStates", "label.taskDetail",
         "label.routingExplanation", "label.actualExecutionTarget", "label.wouldSelect",
@@ -71,6 +73,20 @@ public enum L10n {
         "label.workerRun",
         "label.noVerifiedTargets",
         "label.ownerDispatchFooter",
+        "label.workerLogTruncated",
+        "label.recommendDispatch",
+        "label.recommendDispatchHelp",
+        "label.recommendationDismiss",
+        "recommendation.panelTitle",
+        "recommendation.score",
+        "recommendation.quotaState",
+        "scheduling.policyManualLinked",
+        "scheduling.policyArchived",
+        "taskCompletion.title",
+        "taskCompletion.view",
+        "taskCompletion.dismiss",
+        "run.processExited",
+        "run.processAlive",
         "label.taskNotDispatchable",
         "label.observedState", "label.measurementSource", "label.confidence",
         "label.observedAt", "label.reasonCode", "empty.availabilityUnknown",
@@ -105,13 +121,19 @@ public enum L10n {
         "kpi.running", "kpi.ready", "kpi.blocked", "kpi.verification", "kpi.completed",
         "kpi.verificationDetail",
         "policy.balanced", "policy.qualityFirst", "policy.quotaSaver",
-        "policy.speedFirst", "policy.manual",
+        "policy.speedFirst", "policy.burnDown", "policy.manual",
         "policy.balanced.detail", "policy.qualityFirst.detail",
-        "policy.quotaSaver.detail", "policy.speedFirst.detail", "policy.manual.detail",
+        "policy.quotaSaver.detail", "policy.speedFirst.detail",
+        "policy.burnDown.detail", "policy.manual.detail",
         "policy.title", "policy.change", "policy.useGlobalDefault",
         "policy.globalDefault", "policy.resolutionSource",
         "policy.source.task", "policy.source.project", "policy.source.global",
         "providers.tab.connected", "providers.tab.available",
+        // M1 WP4: free / unmetered resource group + per-card
+        // metrics (rpm, error rate, cooldown, no-window affordance).
+        "resource.group.unmetered", "quota.windowKind.unmetered",
+        "quota.unmetered.errorRate", "quota.unmetered.rpm",
+        "quota.unmetered.cooldownUntil", "quota.unmetered.noWindow",
         "providers.connectedEmpty.title", "providers.connectedEmpty.message",
         "providers.addProvider", "providers.importExisting", "providers.disconnect",
         "providers.importTitle", "providers.importFooter",
@@ -177,8 +199,113 @@ public enum L10n {
         "detail.verifierProfile", "detail.noWorkerRun", "detail.rawWorkerOutput",
         "detail.taskId", "detail.requestId", "detail.routingDecision", "detail.routingRequest",
         "detail.baseSha", "detail.runId", "detail.runStatus", "detail.quotaEvidence",
+        "detail.panel.summary", "detail.panel.progress", "detail.panel.liveActivity",
+        "detail.panel.changes", "detail.panel.verification", "phase.preparing",
+        "phase.routing", "phase.workspace", "phase.quota",
+        "phase.startingWorker", "phase.editing", "phase.testing",
+        "phase.verifying", "phase.finished", "candidate.selected",
+        "candidate.eligible", "candidate.ineligible", "candidate.unknownModel",
+        "value.none", "value.unknown", "value.automatic",
+        "value.notVerifiedYet", "value.stagePassed", "value.stageFailed",
+        "value.notShadowMode", "label.task", "label.updatedRelative",
+        "evidence.observed", "evidence.derived", "evidence.forecast",
+        "evidence.unavailable", "timestamp.justNow",
         "command.focusSearch", "command.previousTask", "command.nextTask",
-        "command.copyTaskId", "command.reloadDetail"
+        "command.copyTaskId", "command.reloadDetail",
+        // B3 task workspace
+        "taskGroup.queued", "taskGroup.active", "taskGroup.needsAttention",
+        "taskGroup.completed", "taskGroup.cancelled", "tasks.filterMenu",
+        "tasks.filter.allTasks", "tasks.filter.groups", "tasks.filter.states",
+        "tasks.filter.project", "tasks.filter.allProjects", "tasks.filter.clear",
+        "tasks.searchPrompt", "tasks.visibleCount", "tasks.truncated",
+        "tasks.truncatedHelp", "tasks.noProject", "empty.tasks.none.title",
+        "empty.tasks.none.message", "empty.tasks.search.title", "empty.tasks.search.message",
+        "empty.tasks.search.hint", "empty.tasks.filter.title", "empty.tasks.filter.message",
+        "empty.tasks.loading", "empty.tasks.noSelection.title", "empty.tasks.noSelection.message",
+        "taskDetail.section.overview", "taskDetail.section.lifecycle", "taskDetail.section.execution",
+        "taskDetail.section.attention", "taskDetail.openTaskFailed", "taskLifecycle.submitted",
+        "taskLifecycle.routing", "taskLifecycle.workspace", "taskLifecycle.execution",
+        "taskLifecycle.verification", "taskLifecycle.completion", "taskLifecycle.status.reached",
+        "taskLifecycle.status.inProgress", "taskLifecycle.status.notReached", "taskLifecycle.status.failed",
+        "taskLifecycle.status.stopped", "taskLifecycle.status.unknown", "taskLifecycle.footer",
+        "taskAttention.verificationFailed", "taskAttention.failed", "taskAttention.blocked",
+        "taskAttention.unknownState", "taskAttention.verificationEvidenceUnavailable", "taskAttention.unexpectedChanges",
+        "taskAttention.awaitingApproval", "taskAttention.noDetail", "routing.role.primary",
+        "routing.role.reviewer", "routing.role.finalAuditor", "routing.roleStatus.unassigned",
+        "routing.roleStatus.assigned", "routing.roleStatus.running", "routing.roleStatus.completed",
+        "routing.roleStatus.cancelled", "routing.outcome.pass", "routing.outcome.fail",
+        "routing.outcome.error", "routing.outcome.none", "routing.plan",
+        "routing.planRevision", "routing.superseded", "routing.legacySynthesized",
+        "routing.declaredRoles", "routing.rerouteCount", "routing.rerouteReason",
+        "routing.previousDecisions", "routing.decidedAtLabel", "routing.noDetails",
+        "changes.title", "changes.count", "changes.none",
+        "changes.notMeasured.verificationNotRun", "changes.notMeasured.noWorkspace", "changes.unexpected",
+        "changes.unexpectedCount", "changes.footer", "changes.revealWorktree",
+        "verification.status.verified", "verification.status.evidenceMissing", "verification.status.evidenceUnavailable",
+        "verification.status.failed", "verification.status.inProgress", "verification.status.notVerified",
+        "verification.checks", "verification.checkExit", "verification.noResult",
+        "verification.notRunYet", "verification.overall", "verification.approvals",
+        "verification.evidenceProblemFooter", "verification.stageFooter", "inspector.title",
+        "inspector.toggle", "inspector.identity", "inspector.timestamps",
+        "inspector.workspaceSection", "inspector.runsSection", "inspector.routingProvenance",
+        "inspector.empty", "label.createdAt", "label.updatedAt",
+        "label.stateVersion", "label.repositoryPath", "label.projectId",
+        "label.currentWorker", "label.noWorkerYet", "routing.planRevisionLabel",
+        // B4 resources + quota workspace
+        "resources.searchPrompt", "resources.visibleCount",
+        "resources.kind.connected", "resources.kind.available", "resources.kind.discovered",
+        "resources.filter.all", "resources.filter.kind",
+        "empty.resources.none.title", "empty.resources.none.message",
+        "empty.resources.loading", "empty.resources.search.title",
+        "empty.resources.search.message", "empty.resources.noSelection.title",
+        "empty.resources.noSelection.message", "resources.disconnectedHint",
+        "resource.section.availability", "resource.section.quota",
+        "resource.section.usage", "resource.section.projection",
+        "resource.section.executionTargets", "resource.section.observability",
+        "resource.section.models",
+        "resource.noQuotaTelemetry", "resource.noExecutionTargets",
+        "resource.notConnected", "resource.connectAction",
+        "resource.severalBindings", "resource.bindingLimiting",
+        "resource.quotaObservable", "resource.quotaNotObservable",
+        "resource.freshnessUnknown", "resource.observedAge", "resource.staleWarning",
+        "resource.targetsSummary", "resource.modelsSummary",
+        "resource.refreshQuota", "resource.refreshProviders",
+        "resource.refreshQuotaHelp", "resource.refreshProvidersHelp",
+        "resource.refreshFailed",
+        "quota.rate.perHour", "quota.rate.belowThreshold",
+        "quota.horizon.daysHours", "quota.horizon.hoursMinutes", "quota.horizon.minutes",
+        "quota.burnRate.title", "quota.burnRate.basis", "quota.burnRate.flat",
+        "quota.projection.title", "quota.projection.remainingAtReset",
+        "quota.projection.exhaustionAt", "quota.projection.likelyUnused",
+        "quota.projection.noExhaustion", "quota.projection.footer",
+        // M1 WP1 burn pressure chips (UNMETERED / STALE / EXHAUSTED /
+        // STARVED / AHEAD / BEHIND / ON_TRACK). STARVED's label is
+        // "Expiring unused" / "将过期未用" — the verdict means a window
+        // with lots of remaining quota about to reset, not "almost
+        // empty". AHEAD / BEHIND use "消耗偏快" / "消耗偏慢" rather than
+        // "快于/慢于计划" to avoid ambiguity between pace and direction.
+        "quota.pressure.unmetered", "quota.pressure.stale",
+        "quota.pressure.exhausted", "quota.pressure.starved",
+        "quota.pressure.ahead", "quota.pressure.behind",
+        "quota.pressure.onTrack",
+        // M1 WP2: tier picker + chip labels.
+        "newTask.minTier", "newTask.minTierHelp",
+        "tier.t0", "tier.t1", "tier.t2", "tier.t3", "tier.unknown",
+        // WP5b (brought forward): stale-verification chip.
+        "target.verifiedStale",
+        "quota.projection.unavailable.NO_HISTORY",
+        "quota.projection.unavailable.INSUFFICIENT_OBSERVATIONS",
+        "quota.projection.unavailable.NO_ELAPSED_TIME",
+        "quota.projection.unavailable.REMAINING_INCREASED",
+        "quota.projection.unavailable.RESET_UNKNOWN",
+        "quota.projection.unavailable.RESET_ALREADY_PASSED",
+        "quota.scarcity.unavailable",
+        "quota.history.axisTime", "quota.history.axisRemaining",
+        "quota.history.seriesLegend", "quota.history.resetBoundary",
+        "quota.history.gapNote", "quota.history.accessibleSummary",
+        "quota.history.singleObservation", "quota.history.observationCount",
+        "quota.resetsIn", "quota.resetPassed", "quota.observedAge",
+        "quota.equivalentCapacity.explanation"
     ]
 
     /// English is the guaranteed fallback (`defaultLocalization` in Package.swift).
@@ -271,6 +398,27 @@ public enum L10n {
         return value == key ? nil : value
     }
 
+    /// Every key defined in one catalog (tests).
+    ///
+    /// Reads the `.strings` file directly rather than through `Bundle`, because a
+    /// bundle lookup can only answer "does this key resolve" — it cannot enumerate
+    /// what a catalog defines, which is what a drift check needs.
+    public static func catalogKeys(language: String) -> Set<String> {
+        guard let entry = lprojDirectories[language.lowercased()] else { return [] }
+        let url = URL(fileURLWithPath: entry.path)
+            .appendingPathComponent("Localizable.strings")
+        guard let contents = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        var keys: Set<String> = []
+        for line in contents.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("\"") else { continue }
+            let afterOpening = trimmed.dropFirst()
+            guard let closing = afterOpening.firstIndex(of: "\"") else { continue }
+            keys.insert(String(afterOpening[..<closing]))
+        }
+        return keys
+    }
+
     // MARK: - Status summary
 
     public static func statusTitle(_ summary: StatusSummary) -> String {
@@ -338,6 +486,23 @@ public enum L10n {
     public static func dashboardSection(_ rawValue: String) -> String {
         tr("dashboard.\(rawValue)")
     }
+
+    // MARK: - Sub-surface titles
+    //
+    // These titles no longer belong to a first-level destination. They title a
+    // surface *inside* one (Resources tabs, Settings tabs, Task Detail panels),
+    // so they are reached by name rather than through a navigation raw value.
+
+    public static var sectionProjects: String { tr("dashboard.projects") }
+    public static var sectionProviders: String { tr("dashboard.providers") }
+    public static var sectionExecutionTargets: String { tr("dashboard.agents") }
+    public static var sectionQuota: String { tr("dashboard.quota") }
+    public static var sectionRouting: String { tr("dashboard.routing") }
+    public static var sectionVerification: String { tr("dashboard.verification") }
+    public static var sectionHistory: String { tr("dashboard.history") }
+    public static var resourcesPickerTitle: String { tr("resources.pickerTitle") }
+    public static var settingsPickerTitle: String { tr("settings.pickerTitle") }
+    public static var settingsTabGeneral: String { tr("settings.tab.general") }
 
     public static func authoritativeTaskId(_ taskId: String) -> String {
         tr("submit.authoritativeId", [taskId])
@@ -426,6 +591,7 @@ public enum L10n {
         case "QUALITY_FIRST": return tr("policy.qualityFirst")
         case "QUOTA_SAVER": return tr("policy.quotaSaver")
         case "SPEED_FIRST": return tr("policy.speedFirst")
+        case "BURN_DOWN": return tr("policy.burnDown")
         case "MANUAL": return tr("policy.manual")
         default: return policy
         }
@@ -437,6 +603,7 @@ public enum L10n {
         case "QUALITY_FIRST": return tr("policy.qualityFirst.detail")
         case "QUOTA_SAVER": return tr("policy.quotaSaver.detail")
         case "SPEED_FIRST": return tr("policy.speedFirst.detail")
+        case "BURN_DOWN": return tr("policy.burnDown.detail")
         case "MANUAL": return tr("policy.manual.detail")
         default: return policy
         }
@@ -558,6 +725,40 @@ public enum L10n {
     public static var workerRun: String { tr("label.workerRun") }
     public static var noVerifiedTargets: String { tr("label.noVerifiedTargets") }
     public static var ownerDispatchFooter: String { tr("label.ownerDispatchFooter") }
+
+    /// Caption under a truncated worker log tail.
+    public static var workerLogTruncated: String { tr("label.workerLogTruncated") }
+
+    /// Policy-driven dispatch recommender.
+    public static var recommendDispatch: String { tr("label.recommendDispatch") }
+    public static var recommendDispatchHelp: String { tr("label.recommendDispatchHelp") }
+    public static var recommendationDismiss: String { tr("label.recommendationDismiss") }
+    public static func recommendationPanelTitle(_ policy: String) -> String {
+        String(format: tr("recommendation.panelTitle"), policy)
+    }
+    public static func recommendationScore(
+        _ score: Double, _ headroom: Double, _ fresh: Bool
+    ) -> String {
+        String(
+            format: tr("recommendation.score"),
+            score, headroom, fresh ? "✓" : "—"
+        )
+    }
+    public static func recommendationQuotaState(_ state: String) -> String {
+        String(format: tr("recommendation.quotaState"), state)
+    }
+
+    /// Honest scheduling-policy semantics in the dispatch area.
+    public static var schedulingPolicyManualLinked: String { tr("scheduling.policyManualLinked") }
+    public static var schedulingPolicyArchived: String { tr("scheduling.policyArchived") }
+
+    /// Completion banner and notification.
+    public static func taskCompletionTitle(_ state: String) -> String {
+        String(format: tr("taskCompletion.title"), state)
+    }
+
+    public static var taskCompletionView: String { tr("taskCompletion.view") }
+    public static var taskCompletionDismiss: String { tr("taskCompletion.dismiss") }
 
     public static func taskNotDispatchable(_ state: String) -> String {
         String(format: tr("label.taskNotDispatchable"), state)
@@ -999,6 +1200,49 @@ public enum L10n {
     public static var detailRunId: String { tr("detail.runId") }
     public static var detailRunStatus: String { tr("detail.runStatus") }
     public static var detailQuotaEvidence: String { tr("detail.quotaEvidence") }
+    public static var runProcessExited: String { tr("run.processExited") }
+    public static var runProcessAlive: String { tr("run.processAlive") }
+
+    // Task detail panels, lifecycle phases, and inline values (B1 l10n)
+    public static var detailPanelSummary: String { tr("detail.panel.summary") }
+    public static var detailPanelProgress: String { tr("detail.panel.progress") }
+    public static var detailPanelLiveActivity: String { tr("detail.panel.liveActivity") }
+    public static var detailPanelChanges: String { tr("detail.panel.changes") }
+    public static var detailPanelVerification: String { tr("detail.panel.verification") }
+    public static var phasePreparing: String { tr("phase.preparing") }
+    public static var phaseRouting: String { tr("phase.routing") }
+    public static var phaseWorkspace: String { tr("phase.workspace") }
+    public static var phaseQuota: String { tr("phase.quota") }
+    public static var phaseStartingWorker: String { tr("phase.startingWorker") }
+    public static var phaseEditing: String { tr("phase.editing") }
+    public static var phaseTesting: String { tr("phase.testing") }
+    public static var phaseVerifying: String { tr("phase.verifying") }
+    public static var phaseFinished: String { tr("phase.finished") }
+    public static var candidateSelected: String { tr("candidate.selected") }
+    public static var candidateEligible: String { tr("candidate.eligible") }
+    public static var candidateIneligible: String { tr("candidate.ineligible") }
+    public static var candidateUnknownModel: String { tr("candidate.unknownModel") }
+    public static var valueNone: String { tr("value.none") }
+    public static var valueUnknown: String { tr("value.unknown") }
+    public static var valueAutomatic: String { tr("value.automatic") }
+    public static var valueNotVerifiedYet: String { tr("value.notVerifiedYet") }
+    public static var valueStagePassed: String { tr("value.stagePassed") }
+    public static var valueStageFailed: String { tr("value.stageFailed") }
+    public static var valueNotShadowMode: String { tr("value.notShadowMode") }
+    public static var labelTask: String { tr("label.task") }
+
+    /// Relative "updated" line for a task row. The instant is formatted by
+    /// `Timestamps`, which follows the locale; this only supplies the frame.
+    public static func updatedRelative(_ relative: String) -> String {
+        String(format: tr("label.updatedRelative"), relative)
+    }
+
+    // Evidence levels (OBSERVED / DERIVED / FORECAST) and timestamps
+    public static var evidenceObserved: String { tr("evidence.observed") }
+    public static var evidenceDerived: String { tr("evidence.derived") }
+    public static var evidenceForecast: String { tr("evidence.forecast") }
+    public static var evidenceUnavailable: String { tr("evidence.unavailable") }
+    public static var timestampJustNow: String { tr("timestamp.justNow") }
 
     // Keyboard commands (hidden buttons; still owner-visible to VoiceOver)
     public static var commandFocusSearch: String { tr("command.focusSearch") }
@@ -1006,4 +1250,492 @@ public enum L10n {
     public static var commandNextTask: String { tr("command.nextTask") }
     public static var commandCopyTaskId: String { tr("command.copyTaskId") }
     public static var commandReloadDetail: String { tr("command.reloadDetail") }
+
+    // MARK: - B3 task workspace
+
+    /// Product groupings over authoritative task states.
+    public static func taskStateGroup(_ rawValue: String) -> String {
+        tr("taskGroup.\(rawValue)")
+    }
+
+    public static var tasksFilterMenu: String { tr("tasks.filterMenu") }
+    public static var tasksFilterAllTasks: String { tr("tasks.filter.allTasks") }
+    public static var tasksFilterGroups: String { tr("tasks.filter.groups") }
+    public static var tasksFilterStates: String { tr("tasks.filter.states") }
+    public static var tasksFilterProject: String { tr("tasks.filter.project") }
+    public static var tasksFilterAllProjects: String { tr("tasks.filter.allProjects") }
+    public static var tasksFilterClear: String { tr("tasks.filter.clear") }
+    public static var tasksSearchPrompt: String { tr("tasks.searchPrompt") }
+    public static var tasksNoProject: String { tr("tasks.noProject") }
+
+    public static func tasksVisibleCount(shown: Int, total: Int) -> String {
+        tr("tasks.visibleCount", [shown, total])
+    }
+
+    /// The honest scope line for a collection the daemon could not serve whole.
+    /// Both numbers are authoritative: what arrived, and what the store holds.
+    public static func tasksTruncated(shown: Int, total: Int) -> String {
+        tr("tasks.truncated", [shown, total])
+    }
+
+    public static func tasksTruncatedHelp(limit: Int) -> String {
+        tr("tasks.truncatedHelp", [limit])
+    }
+
+    // Task collection empty states. Each names its own cause, because "no tasks
+    // exist" and "your search matched nothing" need different next actions.
+    public static var emptyTasksNoneTitle: String { tr("empty.tasks.none.title") }
+    public static var emptyTasksNoneMessage: String { tr("empty.tasks.none.message") }
+    public static var emptyTasksSearchTitle: String { tr("empty.tasks.search.title") }
+    public static func emptyTasksSearchMessage(_ query: String) -> String {
+        tr("empty.tasks.search.message", [query])
+    }
+    public static var emptyTasksSearchHint: String { tr("empty.tasks.search.hint") }
+    public static var emptyTasksFilterTitle: String { tr("empty.tasks.filter.title") }
+    public static var emptyTasksFilterMessage: String { tr("empty.tasks.filter.message") }
+    public static var emptyTasksLoading: String { tr("empty.tasks.loading") }
+    public static var emptyTasksNoSelectionTitle: String { tr("empty.tasks.noSelection.title") }
+    public static var emptyTasksNoSelectionMessage: String {
+        tr("empty.tasks.noSelection.message")
+    }
+
+    // Task Detail sections
+    public static var taskDetailSectionOverview: String { tr("taskDetail.section.overview") }
+    public static var taskDetailSectionLifecycle: String { tr("taskDetail.section.lifecycle") }
+    public static var taskDetailSectionExecution: String { tr("taskDetail.section.execution") }
+    public static var taskDetailSectionAttention: String { tr("taskDetail.section.attention") }
+    public static var taskDetailOpenFailed: String { tr("taskDetail.openTaskFailed") }
+
+    public static func taskLifecycleStage(_ rawValue: String) -> String {
+        tr("taskLifecycle.\(rawValue)")
+    }
+
+    public static func taskLifecycleStatus(_ status: TaskLifecycleStatus) -> String {
+        tr("taskLifecycle.status.\(status.rawValue)")
+    }
+
+    public static var taskLifecycleFooter: String { tr("taskLifecycle.footer") }
+
+    public static func taskAttentionTitle(_ rawValue: String) -> String {
+        tr("taskAttention.\(rawValue)")
+    }
+
+    public static var taskAttentionNoDetail: String { tr("taskAttention.noDetail") }
+
+    /// Localized role name. An unrecognized role keeps its machine value: a
+    /// label this build invented would claim knowledge it does not have.
+    public static func routingRoleName(_ role: RoutingRole) -> String {
+        switch role {
+        case .primary: return tr("routing.role.primary")
+        case .reviewer: return tr("routing.role.reviewer")
+        case .finalAuditor: return tr("routing.role.finalAuditor")
+        case .other(let raw): return raw
+        }
+    }
+
+    public static func routingRoleStatusName(_ status: RoutingRoleStatus) -> String {
+        switch status {
+        case .unassigned: return tr("routing.roleStatus.unassigned")
+        case .assigned: return tr("routing.roleStatus.assigned")
+        case .running: return tr("routing.roleStatus.running")
+        case .completed: return tr("routing.roleStatus.completed")
+        case .cancelled: return tr("routing.roleStatus.cancelled")
+        case .unknown(let raw): return raw
+        }
+    }
+
+    public static func routingOutcomeName(_ outcome: RoutingOutcome) -> String {
+        switch outcome {
+        case .pass: return tr("routing.outcome.pass")
+        case .fail: return tr("routing.outcome.fail")
+        case .error: return tr("routing.outcome.error")
+        case .none: return tr("routing.outcome.none")
+        case .unknown(let raw): return raw
+        }
+    }
+
+    public static var routingPlanLabel: String { tr("routing.plan") }
+    public static func routingPlanRevision(_ revision: Int) -> String {
+        tr("routing.planRevision", [revision])
+    }
+    public static var routingPlanRevisionLabel: String { tr("routing.planRevisionLabel") }
+    public static var routingSuperseded: String { tr("routing.superseded") }
+    public static var routingLegacySynthesized: String { tr("routing.legacySynthesized") }
+    public static var routingDeclaredRoles: String { tr("routing.declaredRoles") }
+    public static func routingRerouteCount(_ count: Int) -> String {
+        tr("routing.rerouteCount", [count])
+    }
+    public static var routingRerouteReason: String { tr("routing.rerouteReason") }
+    public static var routingPreviousDecisions: String { tr("routing.previousDecisions") }
+    public static var routingDecidedAtLabel: String { tr("routing.decidedAtLabel") }
+    public static var routingNoDetails: String { tr("routing.noDetails") }
+
+    // Changes
+    public static var changesTitle: String { tr("changes.title") }
+    public static func changesCount(_ count: Int) -> String { tr("changes.count", [count]) }
+    public static var changesNone: String { tr("changes.none") }
+    public static var changesUnexpected: String { tr("changes.unexpected") }
+    public static func changesUnexpectedCount(_ count: Int) -> String {
+        tr("changes.unexpectedCount", [count])
+    }
+    public static var changesFooter: String { tr("changes.footer") }
+    public static var changesRevealWorktree: String { tr("changes.revealWorktree") }
+
+    public static func changesUnavailable(_ reason: TaskChangesUnavailableReason) -> String {
+        switch reason {
+        case .verificationNotRun: return tr("changes.notMeasured.verificationNotRun")
+        case .noWorkspace: return tr("changes.notMeasured.noWorkspace")
+        }
+    }
+
+    /// Localized verification status. An unrecognized status shows its machine
+    /// value rather than being mapped onto a status this build understands.
+    public static func verificationStatusName(_ status: TaskVerificationStatus) -> String {
+        switch status {
+        case .verified: return tr("verification.status.verified")
+        case .verifiedEvidenceMissing: return tr("verification.status.evidenceMissing")
+        case .verifiedEvidenceUnavailable: return tr("verification.status.evidenceUnavailable")
+        case .failedVerification: return tr("verification.status.failed")
+        case .inProgress: return tr("verification.status.inProgress")
+        case .notVerified: return tr("verification.status.notVerified")
+        case .unrecognized(let raw): return raw
+        }
+    }
+
+    public static var verificationChecks: String { tr("verification.checks") }
+    public static func verificationCheckExit(_ code: Int) -> String {
+        tr("verification.checkExit", [code])
+    }
+    public static var verificationNoResult: String { tr("verification.noResult") }
+    public static var verificationNotRunYet: String { tr("verification.notRunYet") }
+    public static var verificationOverall: String { tr("verification.overall") }
+    public static var verificationApprovals: String { tr("verification.approvals") }
+    public static var verificationEvidenceProblemFooter: String {
+        tr("verification.evidenceProblemFooter")
+    }
+    public static var verificationStageFooter: String { tr("verification.stageFooter") }
+
+    // Inspector
+    public static var inspectorTitle: String { tr("inspector.title") }
+    public static var inspectorToggle: String { tr("inspector.toggle") }
+    public static var inspectorIdentity: String { tr("inspector.identity") }
+    public static var inspectorTimestamps: String { tr("inspector.timestamps") }
+    public static var inspectorWorkspaceSection: String { tr("inspector.workspaceSection") }
+    public static var inspectorRunsSection: String { tr("inspector.runsSection") }
+    public static var inspectorRoutingProvenance: String { tr("inspector.routingProvenance") }
+    public static var inspectorEmpty: String { tr("inspector.empty") }
+
+    public static var labelCreatedAt: String { tr("label.createdAt") }
+    public static var labelUpdatedAt: String { tr("label.updatedAt") }
+    public static var labelStateVersion: String { tr("label.stateVersion") }
+    public static var labelRepositoryPath: String { tr("label.repositoryPath") }
+    public static var labelProjectId: String { tr("label.projectId") }
+    public static var labelCurrentWorker: String { tr("label.currentWorker") }
+    public static var labelNoWorkerYet: String { tr("label.noWorkerYet") }
+
+    // MARK: - B4 Resources workspace
+
+    public static var resourcesSearchPrompt: String { tr("resources.searchPrompt") }
+
+    public static func resourcesVisibleCount(shown: Int, total: Int) -> String {
+        tr("resources.visibleCount", [shown, total])
+    }
+
+    public static func resourceKind(_ rawValue: String) -> String {
+        tr("resources.kind.\(rawValue)")
+    }
+
+    public static var resourcesFilterAll: String { tr("resources.filter.all") }
+    public static var resourcesFilterKind: String { tr("resources.filter.kind") }
+
+    public static var emptyResourcesNoneTitle: String { tr("empty.resources.none.title") }
+    public static var emptyResourcesNoneMessage: String { tr("empty.resources.none.message") }
+    public static var emptyResourcesLoading: String { tr("empty.resources.loading") }
+    public static var emptyResourcesSearchTitle: String { tr("empty.resources.search.title") }
+
+    public static func emptyResourcesSearchMessage(_ query: String) -> String {
+        tr("empty.resources.search.message", [query])
+    }
+
+    public static var emptyResourcesNoSelectionTitle: String {
+        tr("empty.resources.noSelection.title")
+    }
+    public static var emptyResourcesNoSelectionMessage: String {
+        tr("empty.resources.noSelection.message")
+    }
+    public static var resourcesDisconnectedHint: String { tr("resources.disconnectedHint") }
+
+    // Resource detail sections
+    public static var resourceSectionAvailability: String { tr("resource.section.availability") }
+    public static var resourceSectionQuota: String { tr("resource.section.quota") }
+    public static var resourceSectionUsage: String { tr("resource.section.usage") }
+    public static var resourceSectionProjection: String { tr("resource.section.projection") }
+    public static var resourceSectionExecutionTargets: String {
+        tr("resource.section.executionTargets")
+    }
+    public static var resourceSectionObservability: String {
+        tr("resource.section.observability")
+    }
+    public static var resourceSectionModels: String { tr("resource.section.models") }
+
+    public static var resourceNoQuotaTelemetry: String { tr("resource.noQuotaTelemetry") }
+    public static var resourceNoExecutionTargets: String { tr("resource.noExecutionTargets") }
+    public static var resourceNotConnected: String { tr("resource.notConnected") }
+    public static var resourceConnectAction: String { tr("resource.connectAction") }
+    public static var resourceBindingLimiting: String { tr("resource.bindingLimiting") }
+    public static var resourceQuotaObservable: String { tr("resource.quotaObservable") }
+    public static var resourceQuotaNotObservable: String { tr("resource.quotaNotObservable") }
+    public static var resourceFreshnessUnknown: String { tr("resource.freshnessUnknown") }
+    public static var resourceStaleWarning: String { tr("resource.staleWarning") }
+
+    /// "Several quota bindings" — the row state that replaces a fabricated
+    /// average when a resource owns more than one readable window.
+    public static func resourceSeveralBindings(_ count: Int) -> String {
+        tr("resource.severalBindings", [count])
+    }
+
+    public static func resourceObservedAge(_ age: String) -> String {
+        tr("resource.observedAge", [age])
+    }
+
+    public static func resourceTargetsSummary(verified: Int, total: Int) -> String {
+        tr("resource.targetsSummary", [verified, total])
+    }
+
+    public static func resourceModelsSummary(_ count: Int) -> String {
+        tr("resource.modelsSummary", [count])
+    }
+
+    public static var resourceRefreshQuota: String { tr("resource.refreshQuota") }
+    public static var resourceRefreshProviders: String { tr("resource.refreshProviders") }
+    public static var resourceRefreshQuotaHelp: String { tr("resource.refreshQuotaHelp") }
+    public static var resourceRefreshProvidersHelp: String {
+        tr("resource.refreshProvidersHelp")
+    }
+
+    public static func resourceRefreshFailed(_ reason: String) -> String {
+        tr("resource.refreshFailed", [reason])
+    }
+
+    // MARK: - B4 Quota formatting
+
+    public static func quotaRatePerHour(_ percent: String) -> String {
+        tr("quota.rate.perHour", [percent])
+    }
+
+    public static func quotaRateBelowThreshold(_ percent: String) -> String {
+        tr("quota.rate.belowThreshold", [percent])
+    }
+
+    public static func quotaHorizonDaysHours(_ days: Int, _ hours: Int) -> String {
+        tr("quota.horizon.daysHours", [days, hours])
+    }
+
+    public static func quotaHorizonHoursMinutes(_ hours: Int, _ minutes: Int) -> String {
+        tr("quota.horizon.hoursMinutes", [hours, minutes])
+    }
+
+    public static func quotaHorizonMinutes(_ minutes: Int) -> String {
+        tr("quota.horizon.minutes", [minutes])
+    }
+
+    // MARK: - B4 Burn rate and projection
+
+    public static var quotaBurnRateTitle: String { tr("quota.burnRate.title") }
+    public static var quotaBurnRateFlat: String { tr("quota.burnRate.flat") }
+
+    public static func quotaBurnRateBasis(samples: Int, span: String) -> String {
+        tr("quota.burnRate.basis", [samples, span])
+    }
+
+    // MARK: - M1 WP1 Burn pressure chips
+
+    /// UNMETERED — provider never reported a quota figure for this window.
+    public static var quotaPressureUnmetered: String { tr("quota.pressure.unmetered") }
+    /// STALE — cached reading older than ``reset_at``; the bar still draws
+    /// but pressure refuses to fire STARVED on expired data.
+    public static var quotaPressureStale: String { tr("quota.pressure.stale") }
+    /// EXHAUSTED — used_fraction reached or passed 100%.
+    public static var quotaPressureExhausted: String { tr("quota.pressure.exhausted") }
+    /// STARVED — lots of quota remaining but reset imminent; "expire
+    /// unused", not "almost empty".
+    public static var quotaPressureStarved: String { tr("quota.pressure.starved") }
+    /// AHEAD — used faster than the ideal line; orchestrator should
+    /// throttle. "消耗偏快" / "Using too fast".
+    public static var quotaPressureAhead: String { tr("quota.pressure.ahead") }
+    /// BEHIND — used slower than the ideal line; room to dispatch more.
+    /// "消耗偏慢" / "Using too slow".
+    public static var quotaPressureBehind: String { tr("quota.pressure.behind") }
+    /// ON_TRACK — within the band's tolerance of the ideal line.
+    public static var quotaPressureOnTrack: String { tr("quota.pressure.onTrack") }
+
+    /// Localize a burn-pressure enum value. Unknown values surface as
+    /// the raw enum string so a future pressure addition does not crash
+    /// pre-localization callers; the catalog check is what guarantees
+    /// every value reaches the client.
+    public static func quotaPressure(_ pressure: String) -> String {
+        switch pressure {
+        case "UNMETERED": return quotaPressureUnmetered
+        case "STALE": return quotaPressureStale
+        case "EXHAUSTED": return quotaPressureExhausted
+        case "STARVED": return quotaPressureStarved
+        case "AHEAD": return quotaPressureAhead
+        case "BEHIND": return quotaPressureBehind
+        case "ON_TRACK": return quotaPressureOnTrack
+        default: return pressure
+        }
+    }
+
+    // MARK: M1 WP2 — tier picker + tier chip labels
+
+    /// ``newTask.minTier`` — picker title for the task-submit sheet.
+    public static var newTaskMinTier: String { tr("newTask.minTier") }
+
+    /// ``newTask.minTierHelp`` — help text shown under the tier picker.
+    public static var newTaskMinTierHelp: String { tr("newTask.minTierHelp") }
+
+    /// ``tier.t0`` — flagship tier.
+    public static var tierT0: String { tr("tier.t0") }
+
+    /// ``tier.t1`` — workhorse tier.
+    public static var tierT1: String { tr("tier.t1") }
+
+    /// ``tier.t2`` — fast tier.
+    public static var tierT2: String { tr("tier.t2") }
+
+    /// ``tier.t3`` — free tier.
+    public static var tierT3: String { tr("tier.t3") }
+
+    /// ``tier.unknown`` — table could not classify the target.
+    public static var tierUnknown: String { tr("tier.unknown") }
+
+    /// Localize a tier enum value. ``T0..T3`` map to the canonical
+    /// names; any other string returns ``tierUnknown`` so a future tier
+    /// addition does not crash pre-localization callers.
+    public static func tierLabel(_ tier: String) -> String {
+        switch tier {
+        case "T0": return tierT0
+        case "T1": return tierT1
+        case "T2": return tierT2
+        case "T3": return tierT3
+        default: return tierUnknown
+        }
+    }
+
+    // MARK: WP5b — stale-verification chip on target rows
+
+    /// ``target.verifiedStale`` — the chip rendered when the latest
+    /// evidence for an execution target is non-VERIFIED while an older
+    /// VERIFIED row still exists (demote-fallback semantics).
+    public static var targetVerifiedStale: String { tr("target.verifiedStale") }
+
+    // MARK: M1 WP3 — BURN_DOWN objective
+
+    /// ``policy.burnDown`` — picker label for the pressure-first preset.
+    public static var policyBurnDown: String { tr("policy.burnDown") }
+
+    /// ``policy.burnDown.detail`` — picker help text for BURN_DOWN.
+    public static var policyBurnDownDetail: String { tr("policy.burnDown.detail") }
+
+    public static var quotaProjectionTitle: String { tr("quota.projection.title") }
+    public static var quotaProjectionRemainingAtReset: String {
+        tr("quota.projection.remainingAtReset")
+    }
+    public static var quotaProjectionExhaustionAt: String { tr("quota.projection.exhaustionAt") }
+
+    // MARK: M1 WP4 — free / unmetered resource group
+
+    /// ``resource.group.unmetered`` — header for the unmetered
+    /// section of the Resources page. OpenCode Zen free models and
+    /// any other auth="none" / pool_kind="unmetered" providers
+    /// render under this label.
+    public static var resourceGroupUnmetered: String {
+        tr("resource.group.unmetered")
+    }
+
+    /// ``quota.windowKind.unmetered`` — chip rendered on an
+    /// unmetered card in place of the 5h/weekly progress bar.
+    public static var quotaWindowKindUnmetered: String {
+        tr("quota.windowKind.unmetered")
+    }
+
+    /// ``quota.unmetered.errorRate`` — label for the 1-hour
+    /// non-VERIFIED ratio on the unmetered card.
+    public static var quotaUnmeteredErrorRate: String {
+        tr("quota.unmetered.errorRate")
+    }
+
+    /// ``quota.unmetered.rpm`` — label for the rolling 60s
+    /// runs-per-minute metric on the unmetered card.
+    public static var quotaUnmeteredRpm: String {
+        tr("quota.unmetered.rpm")
+    }
+
+    /// ``quota.unmetered.cooldownUntil`` — label for the cooldown
+    /// countdown chip on the unmetered card. The chip is hidden
+    /// when no target is currently in COOLDOWN.
+    public static var quotaUnmeteredCooldownUntil: String {
+        tr("quota.unmetered.cooldownUntil")
+    }
+
+    /// ``quota.unmetered.noWindow`` — no-window affordance on the
+    /// unmetered card (the "no quota window — usage is limited
+    /// only by rate" copy).
+    public static var quotaUnmeteredNoWindow: String {
+        tr("quota.unmetered.noWindow")
+    }
+    public static var quotaProjectionLikelyUnused: String { tr("quota.projection.likelyUnused") }
+    public static var quotaProjectionNoExhaustion: String {
+        tr("quota.projection.noExhaustion")
+    }
+    public static var quotaProjectionFooter: String { tr("quota.projection.footer") }
+
+    /// Why no forecast exists. Every reason is its own sentence: "never
+    /// observed" and "the window already reset" are fixed by different actions.
+    public static func quotaProjectionUnavailable(_ rawValue: String) -> String {
+        tr("quota.projection.unavailable.\(rawValue)")
+    }
+
+    /// Stated where a scarcity verdict would otherwise go.
+    ///
+    /// The daemon computes `scarcity_class` from a pace the control API does not
+    /// expose, and the client must not invent a second one. The facts are shown
+    /// instead, and this says so rather than leaving a silent gap.
+    public static var quotaScarcityUnavailable: String { tr("quota.scarcity.unavailable") }
+
+    // MARK: - B4 Quota history chart
+
+    public static var quotaHistoryAxisTime: String { tr("quota.history.axisTime") }
+    public static var quotaHistoryAxisRemaining: String { tr("quota.history.axisRemaining") }
+    public static var quotaHistorySeriesLegend: String { tr("quota.history.seriesLegend") }
+    public static var quotaHistoryResetBoundary: String { tr("quota.history.resetBoundary") }
+    public static var quotaHistoryGapNote: String { tr("quota.history.gapNote") }
+    public static var quotaHistorySingleObservation: String {
+        tr("quota.history.singleObservation")
+    }
+
+    public static func quotaHistoryObservationCount(_ count: Int) -> String {
+        tr("quota.history.observationCount", [count])
+    }
+
+    /// Spoken equivalent of one series' line, for a reader who cannot see it.
+    public static func quotaHistoryAccessibleSummary(
+        series: String, count: Int, latest: String, span: String
+    ) -> String {
+        tr("quota.history.accessibleSummary", [series, count, latest, span])
+    }
+
+    public static func quotaResetsIn(_ horizon: String) -> String {
+        tr("quota.resetsIn", [horizon])
+    }
+
+    public static var quotaResetPassed: String { tr("quota.resetPassed") }
+
+    public static func quotaObservedAge(_ age: String) -> String {
+        tr("quota.observedAge", [age])
+    }
+
+    public static var quotaEquivalentCapacityExplanation: String {
+        tr("quota.equivalentCapacity.explanation")
+    }
 }

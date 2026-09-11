@@ -1,0 +1,106 @@
+{
+  "task": {
+    "task_id": "PT-0042",
+    "request_id": "rq-0042",
+    "intent": "Fix coordinate drift",
+    "project_id": "proj-pintrace",
+    "base_sha": "4f9a21c",
+    "working_subpath": null,
+    "state": "RUNNING",
+    "state_version": 3,
+    "created_at": "2026-09-03T11:40:00Z",
+    "updated_at": "2026-09-03T11:59:00Z"
+  },
+  "runs": [
+    {
+      "run_id": "run-01",
+      "task_id": "PT-0042",
+      "worker_id": "minimax-cn-coding-plan/MiniMax-M2.7",
+      "pid": 4711,
+      "status": "RUNNING",
+      "started_at": "2026-09-03T11:41:08Z",
+      "finished_at": null,
+      "result": null
+    }
+  ],
+  "routing": null,
+  "verification": {
+    "task_id": "PT-0042",
+    "task_state": "RUNNING",
+    "status": "NOT_VERIFIED",
+    "evidence_id": null,
+    "failure_reason": null,
+    "result": null
+  },
+  "approvals": {
+    "approvals": []
+  },
+  "workspace": {
+    "task_id": "PT-0042",
+    "project_id": "proj-pintrace",
+    "repo_path": "/repo/pintrace",
+    "worktree_path": "/repo/.worktrees/PT-0042",
+    "branch": "task/PT-0042",
+    "base_sha": "4f9a21c",
+    "working_subpath": null,
+    "writer_locked": true
+  },
+  "events": [
+    {
+      "event_type": "ROUTING_DECISION_RECORDED",
+      "task_id": "PT-0042",
+      "created_at": "2026-09-03T11:41:02Z",
+      "summary": "Routed to MiniMax-M2.7"
+    }
+  ],
+  "routing_plan": {
+    "plan_id": "rp-7f21",
+    "revision": 1,
+    "task_id": "PT-0042",
+    "created_at": "2026-09-03T11:41:00Z",
+    "policy_id": "BALANCED",
+    "resolved_policy": "BALANCED",
+    "policy_resolution_source": "PROJECT_OVERRIDE",
+    "superseded_by_plan_id": null,
+    "declared_roles": [
+      "PRIMARY"
+    ],
+    "roles": [
+      {
+        "role": "PRIMARY",
+        "status": "COMPLETED",
+        "outcome": "PASS",
+        "active_decision_id": "rd-8841",
+        "decisions": [
+          {
+            "decision_id": "rd-8841",
+            "role": "PRIMARY",
+            "created_at": "2026-09-03T11:41:02Z",
+            "mode": "ACTIVE",
+            "selected_execution_target_id": "minimax-cn-coding-plan/MiniMax-M2.7",
+            "provider_id": "minimax-cn-coding-plan",
+            "model_display_name": "MiniMax-M2.7",
+            "why_selected": "Quality tier satisfied; binding window above reserve.",
+            "supersedes_decision_id": null,
+            "reroute_reason": null,
+            "quota_snapshot_id": "qs-2210",
+            "candidates": [
+              {
+                "execution_target_id": "minimax-cn-coding-plan/MiniMax-M2.7",
+                "provider_id": "minimax-cn-coding-plan",
+                "model_display_name": "MiniMax-M2.7",
+                "model_sku_id": "MiniMax-M2.7",
+                "score": 0.87,
+                "eligible": true,
+                "admitted": true,
+                "selected": true,
+                "why_not_selected": null,
+                "quota_snapshot_id": "qs-2210"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

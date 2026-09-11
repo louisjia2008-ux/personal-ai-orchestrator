@@ -17,6 +17,14 @@ class RoutingMode(StrEnum):
     BYPASS = "BYPASS"
     SHADOW = "SHADOW"
     ACTIVE = "ACTIVE"
+    #: M1 WP5a-1: host-owned planning mode. The OpenCode plugin
+    #: does NOT use this mode — the dispatch authority for
+    #: ``SUPERVISED_AUTO`` lives entirely host-side. The plugin
+    #: only initiates ACTIVE / SHADOW / BYPASS; ``SUPERVISED_AUTO``
+    #: appears in ``RoutingDecision`` JSON for the dispatch panel
+    #: to render and is rejected by ``parseRoutingDecision`` when
+    #: the plugin sends it because the plugin only sends ACTIVE.
+    SUPERVISED_AUTO = "SUPERVISED_AUTO"
 
 
 class AdapterAction(StrEnum):
@@ -119,6 +127,23 @@ def resolve_adapter_outcome(
             target_model=decision.selected_model,
             decision_id=decision.decision_id,
             reason="shadow mode records the recommendation without switching models",
+        )
+    # M1 WP5a-1: SUPERVISED_AUTO is a host-owned planning mode; the
+    # adapter (OpenCode plugin) never initiates it. When the daemon
+    # produces a SUPERVISED_AUTO decision (e.g. as a frozen record
+    # surfaced via ``/v1/tasks/{id}/routing``), the adapter must NOT
+    # call ``ctx.session.switchModel``. ``RECORD_ONLY`` is the
+    # semantically correct action — the plugin sees the daemon's
+    # recommendation for the dispatch panel but does not act on it.
+    if request.mode is RoutingMode.SUPERVISED_AUTO:
+        return AdapterOutcome(
+            action=AdapterAction.RECORD_ONLY,
+            target_model=decision.selected_model,
+            decision_id=decision.decision_id,
+            reason=(
+                "supervised-auto decision is host-executed and "
+                "cannot switch the current session"
+            ),
         )
     if not decision.switch_requested or decision.selected_model is None:
         return AdapterOutcome(

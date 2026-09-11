@@ -75,7 +75,7 @@ struct MenuBarContentView: View {
                         Spacer()
                         Text(task.state)
                             .font(.caption)
-                            .foregroundStyle(task.state == "BLOCKED" ? Color.red : Color.secondary)
+                            .foregroundStyle(StatusStyle.task(state: task.state).color)
                         Button(L10n.cancel) {
                             Task { await store.cancel(taskId: task.taskId) }
                         }
@@ -127,7 +127,7 @@ struct MenuBarContentView: View {
                                 .foregroundStyle(
                                     (target.observedAvailability?.state == "EXHAUSTED_OBSERVED"
                                       || target.observedAvailability?.state == "COOLDOWN")
-                                        ? Color.orange : Color.secondary
+                                        ? StatusTone.caution.color : StatusTone.neutral.color
                                 )
                         }
                     }
@@ -145,7 +145,7 @@ struct MenuBarContentView: View {
                 Spacer()
                 Text(store.activeStatus?.productionActive ?? "UNKNOWN")
                     .font(.callout.bold())
-                    .foregroundStyle(store.activeStatus?.authorized == true ? Color.green : Color.secondary)
+                    .foregroundStyle((store.activeStatus?.authorized == true ? StatusTone.positive : StatusTone.neutral).color)
             }
             if let blockers = store.activeStatus?.blockingReasons {
                 ForEach(blockers, id: \.self) { reason in

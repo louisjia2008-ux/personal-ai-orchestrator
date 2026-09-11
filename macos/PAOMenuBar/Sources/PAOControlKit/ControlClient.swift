@@ -108,6 +108,26 @@ public struct PAOControlClient: Sendable {
         try await post("/v1/tasks/\(taskId)/dispatch", body: request)
     }
 
+    /// Ask the daemon to rank all dispatchable targets for ``taskId`` by
+    /// the task's archived scheduling policy (or ``policy`` override).
+    /// The ranking is pure: no state mutates, no worker is launched.
+    public func recommendDispatch(
+        taskId: String,
+        policy: String? = nil
+    ) async throws -> DispatchRecommendationView {
+        struct RecommendationBody: Encodable {
+            let schedulingPolicy: String?
+
+            enum CodingKeys: String, CodingKey {
+                case schedulingPolicy = "scheduling_policy"
+            }
+        }
+        return try await post(
+            "/v1/tasks/\(taskId)/dispatch/recommendation",
+            body: RecommendationBody(schedulingPolicy: policy)
+        )
+    }
+
     public func getDispatch(requestId: String) async throws -> DispatchTaskView {
         try await get("/v1/dispatches/\(requestId)")
     }
@@ -263,10 +283,18 @@ public struct PAOControlClient: Sendable {
 
     /// Explicit read-only quota collection. Distinct from `refreshProviders()`,
     /// which only re-runs catalog/credential discovery and reads no quota.
-    public func refreshQuota(providerId: String? = nil) async throws -> QuotaRefreshResultView {
+    ///
+    /// The daemon reads every connected provider's quota API sequentially
+    /// before answering, so this one call can outlast the client's default
+    /// request timeout; `timeoutSeconds` lets the caller budget for that
+    /// without loosening every other call.
+    public func refreshQuota(
+        providerId: String? = nil,
+        timeoutSeconds: Double? = nil
+    ) async throws -> QuotaRefreshResultView {
         struct EmptyBody: Encodable {}
         let path = providerId.map { "/v1/providers/\($0)/quota/refresh" } ?? "/v1/quota/refresh"
-        return try await post(path, body: EmptyBody())
+        return try await post(path, body: EmptyBody(), timeoutSeconds: timeoutSeconds)
     }
 
     public func activeStatus() async throws -> ActiveStatusView {
@@ -283,16 +311,27 @@ public struct PAOControlClient: Sendable {
         try await perform(method: "GET", path: path, encodedBody: nil)
     }
 
-    private func post<B: Encodable, T: Decodable>(_ path: String, body: B) async throws -> T {
-        try await perform(method: "POST", path: path, encodedBody: JSONEncoder().encode(body))
+    private func post<B: Encodable, T: Decodable>(
+        _ path: String,
+        body: B,
+        timeoutSeconds: Double? = nil
+    ) async throws -> T {
+        try await perform(
+            method: "POST", path: path,
+            encodedBody: JSONEncoder().encode(body), timeoutSeconds: timeoutSeconds
+        )
     }
 
     public func perform<T: Decodable>(
         method: String,
         path: String,
-        encodedBody: Data?
+        encodedBody: Data?,
+        timeoutSeconds: Double? = nil
     ) async throws -> T {
-        let data = try await rawRequest(method: method, path: path, body: encodedBody ?? Data())
+        let data = try await rawRequest(
+            method: method, path: path, body: encodedBody ?? Data(),
+            timeoutSeconds: timeoutSeconds
+        )
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
@@ -300,10 +339,17 @@ public struct PAOControlClient: Sendable {
         }
     }
 
-    public func rawRequest(method: String, path: String, body: Data) async throws -> Data {
+    public func rawRequest(
+        method: String,
+        path: String,
+        body: Data,
+        timeoutSeconds: Double? = nil
+    ) async throws -> Data {
         let request = PAOHTTP.encodeRequest(method: method, path: path, body: body)
-        let responseData = try await PAOSocket.send(socketPath: socketPath, request: request,
-                                                    timeoutSeconds: timeoutSeconds)
+        let responseData = try await PAOSocket.send(
+            socketPath: socketPath, request: request,
+            timeoutSeconds: timeoutSeconds ?? self.timeoutSeconds
+        )
         guard let response = PAOHTTP.parseResponse(responseData) else {
             throw PAOClientError.malformedResponse
         }

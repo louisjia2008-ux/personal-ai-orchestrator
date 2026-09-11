@@ -33,7 +33,13 @@ let package = Package(
         .testTarget(
             name: "PAOControlKitTests",
             dependencies: ["PAOControlKit"],
-            path: "Tests/PAOControlKitTests"
+            path: "Tests/PAOControlKitTests",
+            resources: [
+                // The routing fixtures are the executable half of
+                // docs/ROUTING_ROLE_CONTRACT.md. .copy keeps the directory
+                // structure so they stay readable as wire examples.
+                .copy("Fixtures"),
+            ]
         ),
     ]
 )

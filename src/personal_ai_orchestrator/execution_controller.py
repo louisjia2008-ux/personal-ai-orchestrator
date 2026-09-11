@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from personal_ai_orchestrator.process_supervisor import ProcessSupervisor, SupervisedProcess
-from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
+from personal_ai_orchestrator.safety_kernel import (
+    SafetyKernelStore,
+    ShadowFinalizationIntent,
+    TaskState,
+    shadow_identity_payload,
+)
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.shadow_evidence import (
     ShadowEvidenceJournal,
@@ -32,6 +37,51 @@ EXECUTION_EVIDENCE_MAX_AGE_SECONDS = 30 * 24 * 3600.0
 
 def _render_result(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _failure_result_payload(
+    *,
+    exit_code: int | None,
+    signal: int | None,
+    worker_result: Any,
+) -> dict[str, Any]:
+    """Build a fail-closed run-result payload from the worker's sanitized narration.
+
+    Used by both the normal failure path (non-zero exit code) and the
+    emergency-repair path (process died, no envelope, possibly killed by a
+    signal). The returned dict carries only what the owner needs to make
+    sense of the death: exit code (or signal name), and the worker's own
+    ``stdout_tail`` / ``stderr_tail`` if it had a chance to write them.
+    Host-derived metadata (hashes, byte counts, ``timed_out``) is dropped
+    here on purpose — it carries zero authority and would only obscure the
+    real cause.
+    """
+
+    payload: dict[str, Any] = {}
+    if exit_code is not None:
+        payload["exit_code"] = exit_code
+    if signal is not None:
+        payload["signal"] = signal
+    if isinstance(worker_result, dict):
+        if isinstance(worker_result.get("stderr_tail"), str):
+            payload["stderr_tail"] = worker_result["stderr_tail"]
+        if isinstance(worker_result.get("stdout_tail"), str):
+            payload["stdout_tail"] = worker_result["stdout_tail"]
+    return payload
+
+
+def _human_reason_for_failure(*, exit_code: int | None, signal: int | None) -> str:
+    """One-line reason a human can read off the run-row.
+
+    Mirrors the audit-reason style so the run row's stored ``reason`` and
+    the persisted run-row's ``result_json`` agree on what happened.
+    """
+
+    if signal is not None:
+        return f"worker exited unexpectedly (signal {signal})"
+    if exit_code is not None:
+        return f"worker exited unexpectedly with code {exit_code}"
+    return "worker exited unexpectedly"
 
 
 def validate_execution_target_launch(
@@ -147,9 +197,17 @@ def record_worker_exit(
 
         if exit_code != 0:
             run_status = "FAILED"
-            persisted_result: Any = {"exit_code": exit_code}
+            # Keep the worker's own sanitized narration on failure so the
+            # owner can see WHY the worker died ("Usage limit reached for
+            # 5 hour" and similar). Drop everything else: a failed worker's
+            # host-derived metadata (hashes, byte counts) has no authority
+            # and no value, so the failure record stays fail-closed apart
+            # from the narration itself.
+            persisted_result = _failure_result_payload(
+                exit_code=exit_code, signal=None, worker_result=worker_result
+            )
             next_state = TaskState.BLOCKED
-            reason = f"worker exited unexpectedly with code {exit_code}"
+            reason = _human_reason_for_failure(exit_code=exit_code, signal=None)
         elif not isinstance(worker_result, dict):
             run_status = "INVALID_RESULT"
             persisted_result = {"exit_code": exit_code}
@@ -350,10 +408,12 @@ def apply_verification_result(
     evidence_journal: VerificationEvidenceJournal,
     shadow_journal: ShadowEvidenceJournal | None = None,
     shadow_pending_id: str | None = None,
+    shadow_dispatch_id: str = "",
     shadow_reset_cycle_ids: tuple[str, ...] = (),
     shadow_quota_after_snapshot_ids: tuple[str, ...] = (),
     shadow_observed_burn_fraction: float | None = None,
     shadow_execution_success: bool = True,
+    shadow_main_repo_unchanged: bool = True,
     shadow_verification_success: bool | None = None,
     shadow_quality_outcome: ShadowQualityOutcome | None = None,
     shadow_failure_class: ShadowFailureClass | None = None,
@@ -368,6 +428,26 @@ def apply_verification_result(
     A non-null ``evidence_id`` is only an identifier, not authority. The immutable journal must
     already contain the exact result before this transition is allowed; forged or mismatched
     in-memory results fail closed to BLOCKED.
+
+    Round 3 (crash-consistency): when a shadow pending is supplied, the
+    terminal transition and a DURABLE shadow-finalization intent commit
+    in ONE SQLite transaction (``apply_verification_outcome``); the
+    filesystem finalize is then replayed post-COMMIT through the
+    idempotent finalize-outbox drain. A crash between the terminal
+    COMMIT and the filesystem finalize can no longer lose the real
+    observation — the intent replays it byte-identically (``observed_at``
+    is pinned durably at enqueue time). The pending identity is loaded
+    BEFORE any mutation: a missing/malformed pending fails closed while
+    the task is still VERIFYING.
+
+    Round 4 (final outcome ordering): the immutable intent freezes the
+    FINAL HOST-AUTHORITATIVE outcome, not the intermediate verifier
+    verdict. The caller supplies the main-repo immutability result
+    (computed BEFORE this call) and this helper composes both facts into
+    ONE terminal commit: verifier PASS + main repo mutated ⇒ BLOCKED
+    with a truthful ``verified=False`` / ``verification_success=True``
+    shadow — there is no normal VERIFIED → BLOCKED downgrade after the
+    intent exists.
     """
 
     task = store.get_task(task_id)
@@ -376,39 +456,100 @@ def apply_verification_result(
 
     evidence_matches = _persisted_evidence_matches(evidence_journal, result)
     has_authoritative_pass = result.passed and evidence_matches
-    target = TaskState.VERIFIED if has_authoritative_pass else TaskState.BLOCKED
+    main_repo_mutated = has_authoritative_pass and not shadow_main_repo_unchanged
+    final_verified = has_authoritative_pass and not main_repo_mutated
+    target = TaskState.VERIFIED if final_verified else TaskState.BLOCKED
     if result.passed and result.evidence_id is None:
         reason = "passing verifier result is missing immutable host evidence"
     elif result.passed and not evidence_matches:
         reason = "passing verifier result is not backed by matching persisted host evidence"
+    elif main_repo_mutated:
+        reason = "main repository mutated during owner dispatch"
     elif result.passed:
         reason = f"deterministic verification passed: {result.evidence_id}"
     else:
         reason = result.failure_reason or "deterministic verification failed"
-    next_state = store.transition_task(
-        task_id,
-        target,
-        expected_version=task.state_version,
-        reason=reason,
-    ).state
+
+    finalize_intent = None
     if shadow_journal is not None and shadow_pending_id is not None:
-        shadow_journal.finalize_pending(
-            shadow_pending_id,
-            reset_cycle_ids=shadow_reset_cycle_ids,
-            quota_after_snapshot_ids=shadow_quota_after_snapshot_ids,
-            observed_burn_fraction=shadow_observed_burn_fraction,
+        # Load the pending identity BEFORE mutating: the observation's
+        # identity keys (routing request id + frozen decision id) must
+        # be captured durably, and a missing pending must fail closed
+        # while the task is still VERIFYING.
+        pending = shadow_journal.load_pending(shadow_pending_id)
+        finalize_intent = ShadowFinalizationIntent(
+            pending_id=shadow_pending_id,
+            task_id=task_id,
+            dispatch_id=shadow_dispatch_id,
+            request_id=pending.request_id,
+            decision_id=pending.decision_id,
+            verified=final_verified,
             execution_success=shadow_execution_success,
-            verification_success=shadow_verification_success,
-            quality_outcome=shadow_quality_outcome,
-            failure_class=shadow_failure_class,
-            failure_stage=shadow_failure_stage,
-            verified=has_authoritative_pass,
+            verification_success=(
+                # The verifier's OWN authoritative result — distinct
+                # from the composed final verdict: a passed verifier
+                # plus a mutated main repo keeps verification_success
+                # True while verified becomes False (round 4 §6).
+                shadow_verification_success
+                if shadow_verification_success is not None
+                else has_authoritative_pass
+            ),
+            quality_outcome=(
+                shadow_quality_outcome.value
+                if shadow_quality_outcome is not None
+                else (
+                    # Host-safety failure, not a model/verifier quality
+                    # failure: the most accurate existing taxonomy for a
+                    # mutated main repo (round 4 §6).
+                    ShadowQualityOutcome.OPERATIONAL_FAILED.value
+                    if main_repo_mutated
+                    else None
+                )
+            ),
+            failure_class=(
+                shadow_failure_class.value
+                if shadow_failure_class is not None
+                else (
+                    ShadowFailureClass.INFRA_FAILURE.value
+                    if main_repo_mutated
+                    else None
+                )
+            ),
+            failure_stage=(
+                shadow_failure_stage.value
+                if shadow_failure_stage is not None
+                else (
+                    ShadowFailureStage.INFRASTRUCTURE.value
+                    if main_repo_mutated
+                    else None
+                )
+            ),
             regression_detected=shadow_regression_detected,
             attempts_to_green=shadow_attempts_to_green,
             time_to_green_seconds=shadow_time_to_green_seconds,
             handoff_count=shadow_handoff_count,
-            observed_at=datetime.now(UTC),
+            reset_cycle_ids=shadow_reset_cycle_ids,
+            quota_after_snapshot_ids=shadow_quota_after_snapshot_ids,
+            observed_burn_fraction=shadow_observed_burn_fraction,
+            observed_at=datetime.now(UTC).isoformat(),
+            identity_json=shadow_identity_payload(pending),
         )
+    next_state = store.apply_verification_outcome(
+        task_id,
+        expected_version=task.state_version,
+        target=target,
+        reason=reason,
+        finalize=finalize_intent,
+    )
+    if finalize_intent is not None:
+        # Best-effort inline drain: replays the durable intent so the
+        # common case finalizes + discards immediately; a failure only
+        # leaves the intent open for the next drain (tick / restart).
+        from personal_ai_orchestrator.supervised_auto_step import (
+            drain_auto_shadow_finalize_outbox,
+        )
+
+        drain_auto_shadow_finalize_outbox(store, shadow_journal)
     return next_state
 
 

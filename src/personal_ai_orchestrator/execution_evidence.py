@@ -203,6 +203,64 @@ class ExecutionEvidenceJournal:
                 return False
         return True
 
+    def latest_verified_for_target(
+        self,
+        execution_target_id: str,
+    ) -> tuple[ExecutionVerificationEvidence | None, datetime | None]:
+        """Return ``(evidence, stale_since)`` with the demote-fallback semantic.
+
+        ``evidence`` is the newest VERIFIED record for ``execution_target_id``,
+        falling back from a non-VERIFIED latest (UNKNOWN, AUTH_FAILED, …) so
+        transient failures do not destroy a real verified history. ``stale_since``
+        is non-``None`` exactly when this fallback fired — i.e. the latest
+        evidence for the target is non-VERIFIED while an older VERIFIED exists.
+        Callers surface that as ``execution_verified_stale=True`` so the owner
+        can see "we have history, but the latest run did not actually succeed".
+
+        Returns ``(None, None)`` when the target has no recorded history.
+        Returns ``(evidence, None)`` when the latest record is VERIFIED.
+        """
+
+        latest_any = self.latest_for_target(execution_target_id)
+        if latest_any is None:
+            return (None, None)
+        if latest_any.establishes_verified:
+            return (latest_any, None)
+        # The latest is non-VERIFIED. Walk again for the most recent VERIFIED row.
+        verified, _ = self._latest_verified_row(execution_target_id)
+        # ``stale_since`` is set whenever the latest evidence is non-VERIFIED,
+        # whether or not a historical VERIFIED exists — the UI uses it to show
+        # "the most recent run did not actually succeed".
+        return (verified, latest_any.observed_at)
+
+    def _latest_verified_row(
+        self, execution_target_id: str
+    ) -> tuple[ExecutionVerificationEvidence | None, tuple[datetime, int] | None]:
+        if not self.directory.exists():
+            return (None, None)
+        latest: ExecutionVerificationEvidence | None = None
+        latest_key: tuple[datetime, int] | None = None
+        for path in sorted(self.directory.glob("exec-verify-*.json")):
+            try:
+                evidence = ExecutionVerificationEvidence.model_validate_json(
+                    path.read_text(encoding="utf-8")
+                )
+            except Exception:
+                continue
+            if evidence.execution_target_id != execution_target_id:
+                continue
+            if not evidence.establishes_verified:
+                continue
+            try:
+                mtime_ns = path.stat().st_mtime_ns
+            except OSError:
+                mtime_ns = 0
+            key = (evidence.observed_at, mtime_ns)
+            if latest_key is None or key > latest_key:
+                latest = evidence
+                latest_key = key
+        return (latest, latest_key)
+
 
 __all__ = [
     "ExecutionEvidenceJournal",
