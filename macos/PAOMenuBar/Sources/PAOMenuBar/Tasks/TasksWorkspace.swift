@@ -180,4 +180,3 @@ private struct SearchFocusBinding: ViewModifier {
 /// macOS 13 has no `.inspector`, and refusing to build for it is not an option:
 /// the same content is reachable there as a disclosure at the end of Task
 /// Detail, which `TaskDetailSurface` renders when the inspector is unavailable.
-
