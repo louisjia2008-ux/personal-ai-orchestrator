@@ -301,19 +301,23 @@ class DaemonSupervisor:
     def interval_seconds(self) -> float:
         return self._interval
 
-
 def build_default_supervisor(
     *,
     interval_seconds: float = 5.0,
     clock: Callable[[], datetime] | None = None,
     audit_store: SafetyKernelStore | None = None,
+    supervised_auto_step: StepFn | None = None,
 ) -> DaemonSupervisor:
-    """Build the WP0-only supervisor: heartbeat step + audit writer.
+    """Build the default supervisor: heartbeat (+ optional auto tick).
 
-    WP1+ WP branches will add the periodic quota refresh, the
-    supervised-auto grace tick and the weekly report kicker behind
-    the same registry.
+    WP5a-2 adds the optional ``supervised_auto_step`` registration under
+    the ``supervised-auto`` step name. The daemon wires it ONLY for the
+    non-control-only runtime — a ``--control-only`` daemon must never
+    execute autonomous steps (§19), so its caller simply omits the
+    parameter (the product daemon's ``--control-only`` path passes
+    nothing, which registers heartbeat only).
     """
+
     supervisor = DaemonSupervisor(
         interval_seconds=interval_seconds,
         clock=clock or (lambda: datetime.now(UTC)),
@@ -321,6 +325,12 @@ def build_default_supervisor(
         warn_threshold_seconds=interval_seconds,
     )
     supervisor.register(HEARTBEAT_STEP_NAME, _heartbeat)
+    if supervised_auto_step is not None:
+        from personal_ai_orchestrator.supervised_auto_step import (
+            SUPERVISED_AUTO_STEP_NAME,
+        )
+
+        supervisor.register(SUPERVISED_AUTO_STEP_NAME, supervised_auto_step)
     return supervisor
 
 

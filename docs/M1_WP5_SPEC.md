@@ -200,3 +200,373 @@ pending 在 worker 跑完后由 `execution_controller.apply_verification_result`
 ---
 
 **文档维护**:M1 后续工作包开工前,把对应裁决全文纳入本目录(`/docs/M1_WP{xx}_SPEC.md`),避免新会话丢上下文。
+## 13. WP5a-2 implementation clarifications (recorded post-implementation)
+
+These notes pin how the frozen contract above was realized in
+`feat/m1-wp5a2-auto-tick`. They clarify naming/derivation details the
+spec left open; **no safety semantics were weakened**:
+
+1. **§3.4 step 1 "执行分支不在受保护列表"** is realized by reusing
+   `validate_execution_target_launch` (enabled + runtime-verified +
+   runtime available) as the planning-time launchability gate — the
+   same host policy the owner-dispatch path enforces. No new protected
+   list was invented.
+2. **`auto_decision_id`** is `f"auto-{task_id}-v{state_version}"` —
+   the READY state version at planning. Stable across the cycle's
+   ticks; a veto / abort / unacked timeout bumps the version so the
+   next cycle derives a fresh id. The frozen RoutingDecision's own
+   `decision_id` (hash-derived) is recorded alongside it in the audit
+   trail.
+3. **裁决 15 "pending_id 与 auto_decision_id 同值"** is literal: the
+   pending shadow's `pending_id` IS the task row's
+   `auto_decision_id` (the `pending-{decision_id}` prefix convention
+   stays specific to the SHADOW routing path).
+4. **§3.4 step 2 "随即 AUTO_PLANNED → AUTO_GRACE"** is two durable
+   transactions; a crash between them leaves AUTO_PLANNED, and the
+   next tick completes the promotion from the frozen decision
+   (crash-boundary recovery, idempotent).
+5. **§3.1 "切回 MANUAL → 同一事务内 abort"**: the settings handler
+   aborts AUTO_* lifecycles immediately after persisting the mode
+   (two stores — JSON settings + SQLite — cannot share one literal
+   transaction). The tick's revocation sweep is the crash backstop,
+   and the executor's exact-expected-state RUNNING guard closes the
+   reserve→start race. Every interleaving fails closed.
+6. **§3.4 step 4's "重新调 _admit_quota"** happens inside the
+   executor at worker-start time (unchanged owner-path discipline);
+   a pre-worker admission failure leaves a BLOCKED dispatch which the
+   next tick reconciles to READY + `AUTO_ABORTED{admission_failed:*}`
+   + pending discard.
+7. **§3.5 veto "删除 pending shadow"**: veto/abort exits *discard*
+   the pending (no truthful observation exists to finalize); real
+   runs *finalize* through `apply_verification_result` with the
+   verifier's verdict.
+8. **Tick registration**: the supervised-auto step registers on the
+   non-control-only daemon only (`build_default_supervisor`
+   `supervised_auto_step=` + daemon wiring). The product daemon is
+   `--control-only` today and therefore performs zero autonomous tick
+   execution until the owner opts into the non-control-only runtime.
+
+## 14. WP5a-2 crash-consistency closeout (post-review repair)
+
+Independent review found the AUTO lifecycle exits were multi-stage
+writes (transition → audit → filesystem discard → metadata clear, plus
+a separate policy force for veto): a crash between the durable commits
+left `READY` + active-looking auto metadata and possibly an orphan
+pending shadow. The repair (same PR, follow-up commits):
+
+### 14.1 Atomic lifecycle close
+
+`SafetyKernelStore.abort_auto_lifecycle(task_id, *, expected_version,
+reason, event_type="AUTO_ABORTED", request_id=None, target=None,
+force_manual=False, allow_blocked=False)` — ONE `BEGIN IMMEDIATE`:
+
+1. re-read + exact version check;
+2. source gate: `AUTO_PLANNED` / `AUTO_GRACE`; `BLOCKED` only with
+   `allow_blocked` **and** non-NULL `auto_decision_id` (a plain owner
+   BLOCKED task can never take the path);
+3. `READY` + all four auto columns NULL + optional MANUAL lock;
+4. exactly ONE `state_version` increment for the whole logical close;
+5. one durable audit event (`AUTO_ABORTED` / `AUTO_VETOED`) with the
+   previous decision id, reason, request id, target, resulting version;
+6. one durable shadow-cleanup intent (outbox row) — same transaction.
+
+Veto (endpoint + cancel-as-veto), mode-change abort, project-disable
+abort, unacked-timeout abort, frozen-decision aborts and the pre-worker
+BLOCKED reconciliation all route through this helper: one abort → one
+authoritative audit event, no transition-then-clear flow.
+
+### 14.2 Durable shadow-cleanup outbox
+
+`auto_shadow_cleanup_outbox(pending_id PRIMARY KEY, task_id, reason,
+created_at, completed_at)`. The pending discard is *promised* inside
+the abort transaction and *fulfilled* after COMMIT by
+`drain_auto_shadow_cleanup_outbox` (idempotent, bounded 64/attempt):
+crash after COMMIT before discard → retry; crash after discard before
+the completed marker → re-discard (absent file = success) + mark;
+nonexistent pending = successful cleanup; an unavailable/malformed
+journal leaves the row open for the next drain and NEVER rolls back
+the already-safe SQLite truth. `clear_auto_state_metadata` enqueues
+the same intent, so the terminal sweep and the executor close-out get
+the guarantee for free. No ACID pretence across the SQLite authority
+and the filesystem journal.
+
+### 14.3 Tick ordering + READY stale-metadata recovery
+
+Tick order: (1) drain outbox, (2) recover stale READY metadata,
+(3) mode revocation, (4) project revocation, (5) planning, (6) AUTO
+advancement, (7) dispatch reconciliation, (8) terminal sweep,
+(9) second lightweight drain. Old-lifecycle cleanup always precedes
+new planning.
+
+`recover_ready_auto_metadata`: a `READY` row carrying lifecycle
+metadata (`auto_decision_id` / `auto_grace_deadline_at` /
+`auto_acked_at`) is stale (old-build crash residue), never an active
+lifecycle — recovered atomically (clear + one bump +
+`AUTO_METADATA_RECOVERED{reason="ready_state_stale_auto_metadata"}` +
+cleanup enqueue). `auto_reason` alone on a READY row is the tick's
+legal deduped skip hint and is deliberately NOT treated as stale.
+A `READY` row with only a routing-decision row is the legal
+frozen-decision crash boundary (§13 item 4) and stays untouched.
+
+### 14.4 ACK contract (frozen wording)
+
+- FIRST ACK: requires the exact `task_state_version` (409
+  `stale_task_state_version` on mismatch).
+- ALREADY-ACKED retry: idempotent 200 with the current task; the
+  deadline keeps its original value — a retry can never extend it.
+- VETO: exact version before the first mutation; a replay of the same
+  durable `request_id` is idempotent.
+- DISPATCH-NOW: exact version execution-admission guard.
+
+Do NOT describe the three endpoints as "all always enforce exact
+task_state_version" — the ACK already-acked replay is deliberately
+idempotent without a version check (extending the wire schema with a
+durable ACK request id was considered and rejected for this round).
+
+### 14.5 Current-cycle dispatch reconciliation (review round 2)
+
+`_reconcile_supervised_auto_dispatches` correlates terminal
+(`BLOCKED`/`CANCELLED`) SUPERVISED_AUTO dispatch rows to the task's
+**current** auto cycle only, in four gated layers:
+
+1. **Current cycle source** — `task.auto_decision_id` must be live
+   (non-NULL). A task without current auto metadata is never touched
+   by reconciliation: a historical SUPERVISED_AUTO row alone proves
+   nothing about the current lifecycle (fail closed — a BLOCKED task
+   stays BLOCKED; the legacy `BLOCKED + no metadata → READY` fallback
+   was removed for exactly this reason).
+2. **Current dispatch request id** — the row participates only when
+   `row.request_id ==
+   supervised_auto_dispatch_request_id(task.auto_decision_id)`.
+   Rows from older cycles are ignored — no cross-cycle mutation.
+3. **State gate** — `AUTO_GRACE` or `BLOCKED` only.
+4. **Dispatch-scoped run correlation** — "this dispatch produced a
+   run" is decided by the exact `run-{dispatch_id}` row
+   (`runs.run_id` is the PK; the executor always registers the run
+   with that id). A run row for the same task under any other id —
+   including a real run from an older cycle — does NOT count. A
+   dispatch whose exact run exists keeps its outcome (executor +
+   verifier own that truth); one without it takes the crash-atomic
+   `abort_auto_lifecycle` close (reason
+   `admission_failed:{failure_code|status}`).
+
+The task-scoped `SELECT 1 FROM runs WHERE task_id=?` lookup is gone
+from this path entirely. Owner-initiated dispatches are unaffected
+(the query stays filtered on `authority = 'SUPERVISED_AUTO'`).
+
+### 14.6 Post-worker shadow finalization outbox (review round 3)
+
+A REAL worker execution whose authoritative verdict is durable in
+SQLite must produce a truthful finalized shadow observation — never a
+silent discard. Round 3 closed the last crash window (terminal COMMIT
+before the filesystem finalize):
+
+- **`auto_shadow_finalize_outbox`** — durable finalization intent with
+  an IMMUTABLE payload (`ShadowFinalizationIntent`): every
+  `finalize_pending` input, the observation identity keys (the
+  pending's routing request id + frozen decision id) and an
+  `observed_at` PINNED at enqueue (observation ids are content digests
+  that exclude the verdict and `observed_at`, so replays must reuse
+  the exact stored value to stay byte-identical).
+- **One authoritative transaction (OPTION A)** —
+  `apply_verification_outcome` commits the VERIFYING → VERIFIED /
+  BLOCKED transition, its audit and the finalize intent in ONE
+  `BEGIN IMMEDIATE`; the filesystem finalize is replayed post-COMMIT
+  by the idempotent `drain_auto_shadow_finalize_outbox` (bounded 64).
+- **Collision semantics** — same payload → idempotent; different
+  payload for the same `finalization_id` → `RuntimeError` (first
+  durable intent owns the truth). `shadow-finalize-{pending_id}` is
+  the stable id.
+- **Finalize outranks discard** — enqueueing a finalize intent closes
+  any open cleanup intent for the pending in the same transaction, and
+  cleanup-intent inserts are structurally suppressed while ANY
+  finalize intent exists; the cleanup drain also skips pendings with
+  an open finalize intent.
+- **Drain recovery matrix** — pending present → exact replay +
+  discard + completed marker; pending missing → completed ONLY when
+  the finalized observation is proven present (identity + verdict
+  match), otherwise the intent stays open with a sanitized
+  `AUTO_SHADOW_FINALIZE_RETRY_FAILED` system event (evidence loss is
+  never success); journal `None` → intents stay OPEN (this also fixed
+  the round-3 P1: the cleanup drain previously marked intents
+  completed without a journal).
+- **Terminal sweep classification** — a terminal lifecycle whose
+  current dispatch has an exact `run-{dispatch_id}` row is REAL
+  EXECUTION: finalize/reconstruct (existing observations replay
+  byte-identically; residue reconstructed from the task + run truth),
+  fail closed when reconstruction is impossible. Without an exact run
+  row the pre-worker discard path applies unchanged.
+- **Tick order** — finalize drain BEFORE cleanup drain (evidence
+  outranks discard), both again at tick end; metadata clears only
+  after the recovery information is durable (the outbox alone
+  suffices at restart).
+
+### 14.7 Final outcome ordering + recovery guard (review round 4)
+
+The shadow observation must represent the FINAL HOST-AUTHORITATIVE
+execution outcome — never the intermediate verifier verdict:
+
+- **Composition before the terminal commit** — the executor runs the
+  deterministic verifier WITHOUT committing anything terminal, computes
+  the main-repo fingerprint, and only then commits ONE final outcome:
+  `apply_verification_result(shadow_main_repo_unchanged=...)` requires
+  verifier-authoritative PASS **AND** main repo unchanged for VERIFIED.
+  Verifier PASS + main repo mutated ⇒ BLOCKED with a truthful shadow
+  (`verified=False`, `execution_success=True`,
+  `verification_success=True`, taxonomy `INFRA_FAILURE` /
+  `INFRASTRUCTURE` / `OPERATIONAL_FAILED` — the host safety
+  composition failed while the worker and verifier both succeeded).
+  There is no normal `VERIFYING → VERIFIED → BLOCKED` two-step
+  downgrade; the first immutable intent already freezes the final
+  verdict.
+- **Hard metadata-clear recovery guard** —
+  `real_execution_recovery_proof()`: a lifecycle whose current dispatch
+  has an exact `run-{dispatch_id}` row (REAL EXECUTION) may clear
+  `auto_decision_id` only when a durable finalize intent exists OR a
+  finalized observation is proven for the exact lifecycle identity;
+  otherwise the clear is refused (`AUTO_SHADOW_RECOVERY_GUARD_HELD`),
+  no discard is promised and the row stays fail-closed recoverable.
+  Pre-worker aborts keep the original abort/cleanup path.
+- **Self-sufficient intents + exact proof** — the finalize outbox
+  freezes the pending's full immutable identity (`identity_json`,
+  schema-migrated). Completion proof REBUILDS the exact expected
+  `ShadowObservation` (verdict columns + frozen identity + pinned
+  `observed_at`) and demands exact model equality: `observation_id`
+  alone proves nothing about the verdict (it digests identity only), so
+  divergent `failure_class`, `verification_success`, `observed_at`,
+  `quota_after_snapshot_ids` or burn data fail closed.
+
+### 14.8 Reserved dispatch namespace + pending identity (review round 5)
+
+- **Reserved internal namespace** — the deterministic
+  `supervised-auto-dispatch-{auto_decision_id}` request-id namespace
+  belongs exclusively to the SUPERVISED_AUTO authority
+  (`SUPERVISED_AUTO_DISPATCH_REQUEST_PREFIX` /
+  `is_reserved_auto_dispatch_request_id`). An OWNER_INITIATED_EXECUTION
+  request carrying a reserved request id is rejected at the shared
+  `initiate_owner_dispatch` boundary BEFORE any durable reservation —
+  HTTP 400 `reserved_dispatch_request_id_namespace`, no
+  `owner_dispatches` row, no worker, no task mutation. Normal owner
+  request ids are unchanged.
+- **Exact existing-row recovery identity** — AUTO crash recovery may
+  re-admit an existing row for the deterministic request id ONLY on an
+  exact identity match: request id, dispatch id, task id,
+  `task_state_version`, frozen `execution_target_id` AND authority —
+  the single shared comparison `owner_dispatch_matches_expected`
+  (also used by `reserve_owner_dispatch`, so the two rules can never
+  drift). A legacy/polluted/foreign row (any dimension mismatch) is
+  never executed, adopted or mutated: the CURRENT lifecycle aborts
+  fail-closed (`dispatch_namespace_conflict`, atomic READY + metadata
+  clear + cleanup outbox) and the foreign row remains untouched
+  historical truth; a new planning cycle derives a fresh
+  state_version → fresh `auto_decision_id` → fresh request id.
+- **Present-pending frozen-identity validation** — after the finalize
+  intent is enqueued, the durable row (not mutable filesystem state) is
+  the authority. The finalize drain proves a PRESENT pending equals the
+  frozen intent (four correlation columns + canonical-JSON
+  `shadow_identity_payload(pending) == identity_json`; legacy `{}`
+  intents fail closed) BEFORE finalizing; a stale/replaced/tampered
+  pending is never finalized, discarded or completed
+  (`AUTO_SHADOW_FINALIZE_RETRY_FAILED` /
+  `PendingIdentityMismatch`). Success additionally requires the exact
+  expected observation to be durably present after `finalize_pending`
+  — a plain function return is not proof
+  (`PostFinalizeObservationUnproven` leaves the intent OPEN and the
+  pending in place).
+- **Observation-only recovery proof** — correlates on the REAL durable
+  `RoutingDecision.decision_id` (`route-*`, loaded from
+  `routing_decisions` by `supervised-auto-{auto_decision_id}`), never
+  the `auto-*` pending id; requires exactly ONE matching observation
+  and terminal task/shadow verdict consistency (VERIFIED ⇔
+  verified=True; other terminal states ⇔ verified=False;
+  non-terminal states never prove). Priority unchanged: pre-worker →
+  True; durable finalize intent → True; otherwise observation-only.
+
+### 14.9 Authority-bound source state + terminal correlation (review round 6)
+
+- **Authority owns the legal worker source state** —
+  `expected_source_state_for_dispatch_authority` (safety_kernel, the
+  single low-level definition): `OWNER_INITIATED_EXECUTION` → READY,
+  `SUPERVISED_AUTO` → AUTO_GRACE, any other authority → `ValueError`
+  (fail closed). The executor entry derives the expected state from
+  the DURABLE dispatch row's authority — never from whatever state the
+  task happens to be in — so a stale SUPERVISED_AUTO reservation whose
+  task was vetoed / mode-aborted back to READY can never start (it is
+  not "reinterpreted" as an owner dispatch), and an unknown authority
+  marks the dispatch BLOCKED (`UNKNOWN_DISPATCH_AUTHORITY`) with no
+  worker. `start_dispatched_worker` re-derives the same mapping inside
+  its `BEGIN IMMEDIATE` transaction; a caller-supplied
+  `expected_state` is only a consistency assertion — a value that
+  disagrees with the authority-derived state raises before any
+  mutation, so no caller can weaken the SQL `WHERE state=?` guard.
+- **Authority-aware pre-worker failure** — `_fail_pre_worker` moves
+  the task to BLOCKED only from the dispatch authority's OWN legal
+  source state (OWNER → READY, SUPERVISED_AUTO → AUTO_GRACE). A stale
+  AUTO reservation failing after a veto leaves the owner-controlled
+  READY task untouched; the dispatch row alone carries the failure.
+- **Canonical exact AUTO execution correlation** —
+  `current_supervised_auto_dispatch` / `correlate_supervised_auto_execution`
+  prove the EXACT current SUPERVISED_AUTO reservation before any run
+  classification: frozen routing decision (task-gated, pins the
+  target), deterministic request id + dispatch id, exact task id,
+  authority SUPERVISED_AUTO (an OWNER row is NEVER AUTO evidence) and
+  the reservation-cycle version contract — at admission the live
+  AUTO_GRACE version (exact equality); at terminal recovery the
+  ordering invariant (reservation version strictly below the terminal
+  version — the terminal chain necessarily advanced it; the two are
+  never compared for equality). Classification:
+  `NO_DISPATCH` / `EXACT_PREWORKER` (genuine pre-worker → ordinary
+  cleanup), `EXACT_REAL_RUN` (exact `run-{dispatch_id}` proven →
+  finalize evidence owed), `CONFLICT` (namespace occupied by a
+  non-exact row → fail closed: no discard, no reconstruction, no
+  metadata clear, sanitized `AUTO_EXECUTION_CORRELATION_CONFLICT`
+  event). Every AUTO run-classification path (dispatch admission,
+  terminal sweep, metadata-clear recovery proof, finalize
+  reconstruction) uses this ONE proof.
+- **Thread contract (documentation truth)** — the tick never sleeps,
+  never reads credentials, never executes shell commands; its
+  dispatch/recovery hand-off re-enters the existing DispatchExecutor
+  boundary and may spawn an executor thread for an already-durable
+  reservation. No worker execution happens inside the tick itself.
+
+### 14.10 Canonical reconciliation correlation (review round 7)
+
+- **Reconciliation is task-driven and classifier-gated** —
+  `_reconcile_supervised_auto_dispatches` iterates CURRENT task truth
+  (AUTO_GRACE / BLOCKED tasks with a live `auto_decision_id`), never
+  historical dispatch rows. A raw `owner_dispatches` row is not proof:
+  every mutation is gated on the Round-6 canonical classifier
+  `correlate_supervised_auto_execution` (frozen routing target,
+  deterministic request/dispatch ids, task, authority
+  SUPERVISED_AUTO, reservation-cycle version contract):
+  - **CONFLICT** (wrong authority / task / target / dispatch id /
+    reservation version) → fail closed: metadata + pending preserved,
+    no abort, no discard, no finalize intent, sanitized
+    `AUTO_EXECUTION_CORRELATION_CONFLICT` event.
+  - **EXACT_REAL_RUN** → executor / terminal recovery owns the
+    outcome; never a pre-worker abort.
+  - **NO_DISPATCH** → no current-cycle dispatch exists; unrelated
+    historical SUPERVISED_AUTO rows for the same task can never drive
+    a mutation.
+  - **EXACT_PREWORKER** → only a BLOCKED/CANCELLED exact current
+    reservation is a legitimate pre-worker admission failure and may
+    use the existing crash-atomic abort path (AUTO_GRACE → READY;
+    terminal BLOCKED → READY via `allow_blocked`).
+- **Version semantics** — while the task is AUTO_GRACE the reservation
+  version must exactly equal the live `state_version` (V±1 ⇒ CONFLICT);
+  a terminal BLOCKED task uses the recovery ordering contract
+  (reservation version strictly below the terminal version) — equal or
+  future versions are CONFLICT. The two are never compared for
+  equality.
+- **Conflict-event dedupe** — reconciliation and the terminal sweep
+  share a per-tick dedupe: one `AUTO_EXECUTION_CORRELATION_CONFLICT`
+  event per (task, lifecycle) per tick, payload
+  task_id / auto_decision_id / reason only.
+- **Identifier contract (documentation fix)** — `auto_decision_id` is
+  the lifecycle/cycle id `auto-{task_id}-v{state_version-at-planning}`;
+  it is NOT the `RoutingDecision.decision_id` (independent durable id
+  `route-{digest}`). Chain: auto_decision_id → routing request id
+  `supervised-auto-{auto_decision_id}` → RoutingDecision (`route-*`,
+  looked up by request id). A `PendingShadowObservation` carries
+  `pending_id == auto_decision_id` and
+  `decision_id == RoutingDecision.decision_id`.

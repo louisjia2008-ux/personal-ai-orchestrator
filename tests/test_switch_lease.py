@@ -133,3 +133,93 @@ def test_non_switch_decision_cannot_receive_lease(tmp_path: Path) -> None:
             task_state_version=ready.state_version,
             session_id="session-1",
         )
+
+
+# ---------------------------------------------------------------------------
+# M1 WP5a-2 — SwitchLeaseAuthority.has_active_lease
+# ---------------------------------------------------------------------------
+
+
+def _authorized_lease(
+    store: SafetyKernelStore,
+    *,
+    task_id: str = "t1",
+    decision_id: str = "decision-active",
+    request_id: str = "route-active",
+    ttl_seconds: int = 10,
+):
+    ready = store.transition_task(task_id, TaskState.READY)
+    authority = SwitchLeaseAuthority(store)
+    decision = RoutingDecision(
+        decision_id=decision_id,
+        request_id=request_id,
+        mode=RoutingMode.ACTIVE,
+        switch_requested=True,
+        selected_model=ModelRef(provider_id="minimax", model_id="m3"),
+        task_state_version=ready.state_version,
+    )
+    store.record_routing_decision(
+        decision_id=decision.decision_id,
+        request_id=decision.request_id,
+        task_id=task_id,
+        payload=decision.model_dump(mode="json"),
+    )
+    return authority.authorize(
+        decision_id=decision.decision_id,
+        request_id=decision.request_id,
+        task_id=task_id,
+        task_state_version=ready.state_version,
+        session_id="session-1",
+        ttl_seconds=ttl_seconds,
+    )
+
+
+def test_has_active_lease_true_for_matching_unexpired_authorized(tmp_path: Path) -> None:
+    store = SafetyKernelStore(tmp_path / "state.sqlite3")
+    store.submit_task(task_id="t1", request_id="task-request", intent="implement")
+    _authorized_lease(store)
+    authority = SwitchLeaseAuthority(store)
+    assert authority.has_active_lease("t1") is True
+
+
+def test_has_active_lease_false_for_expired_authorized(tmp_path: Path) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    store = SafetyKernelStore(tmp_path / "state.sqlite3")
+    store.submit_task(task_id="t1", request_id="task-request", intent="implement")
+    _authorized_lease(store, ttl_seconds=5)
+    authority = SwitchLeaseAuthority(store)
+    future = datetime.now(UTC) + timedelta(seconds=60)
+    assert authority.has_active_lease("t1", now=future) is False
+
+
+def test_has_active_lease_false_for_wrong_task(tmp_path: Path) -> None:
+    store = SafetyKernelStore(tmp_path / "state.sqlite3")
+    store.submit_task(task_id="t1", request_id="task-request", intent="implement")
+    store.submit_task(task_id="t2", request_id="task-request-2", intent="implement")
+    _authorized_lease(store, task_id="t1")
+    authority = SwitchLeaseAuthority(store)
+    assert authority.has_active_lease("t2") is False
+
+
+def test_has_active_lease_false_for_completed(tmp_path: Path) -> None:
+    store = SafetyKernelStore(tmp_path / "state.sqlite3")
+    store.submit_task(task_id="t1", request_id="task-request", intent="implement")
+    lease = _authorized_lease(store)
+    authority = SwitchLeaseAuthority(store)
+    authority.resolve(
+        lease_id=lease.lease_id,
+        decision_id=lease.decision_id,
+        session_id="session-1",
+        completed=True,
+    )
+    assert authority.has_active_lease("t1") is False
+
+
+def test_has_active_lease_false_for_aborted(tmp_path: Path) -> None:
+    store = SafetyKernelStore(tmp_path / "state.sqlite3")
+    store.submit_task(task_id="t1", request_id="task-request", intent="implement")
+    _authorized_lease(store)
+    authority = SwitchLeaseAuthority(store)
+    authority.abort_for_task("t1", reason="owner cancellation")
+    assert authority.has_active_lease("t1") is False

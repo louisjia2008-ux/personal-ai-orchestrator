@@ -79,6 +79,7 @@ from personal_ai_orchestrator.safety_kernel import (
     ProjectAvailability,
     ProjectRecord,
     SafetyKernelStore,
+    TaskRecord,
     TaskState,
 )
 from personal_ai_orchestrator.scheduler import RoutingObjective
@@ -136,6 +137,9 @@ class ControlPlaneError(Exception):
 
 class DispatchAuthority(StrEnum):
     OWNER_INITIATED_EXECUTION = "OWNER_INITIATED_EXECUTION"
+    #: M1 WP5a-2: the host-owned supervised-auto dispatch path. Distinct
+    #: from OWNER_INITIATED_EXECUTION — nobody clicked an owner button.
+    SUPERVISED_AUTO = "SUPERVISED_AUTO"
 
 
 class _ViewModel(BaseModel):
@@ -167,6 +171,33 @@ class CancelRequest(_ViewModel):
     request_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
+class AutoAckRequest(_ViewModel):
+    """M1 WP5a-2: owner ack of an AUTO_GRACE planning decision.
+
+    ``task_state_version`` pins optimistic concurrency — a stale client
+    cannot ack a state version it has not seen.
+    """
+
+    task_state_version: int = Field(ge=0)
+
+
+class AutoVetoRequest(_ViewModel):
+    """M1 WP5a-2: owner veto of an AUTO_* lifecycle.
+
+    ``request_id`` is the durable idempotency key: a replayed veto of the
+    same request returns the current task view instead of 409.
+    """
+
+    request_id: str = Field(min_length=1, max_length=128)
+    task_state_version: int = Field(ge=0)
+
+
+class AutoDispatchNowRequest(_ViewModel):
+    """M1 WP5a-2: owner explicit acceleration (skip remaining grace)."""
+
+    task_state_version: int = Field(ge=0)
+
+
 class DispatchTaskRequest(_ViewModel):
     request_id: str = Field(min_length=1, max_length=128)
     task_state_version: int = Field(ge=0)
@@ -190,6 +221,13 @@ class TaskView(_ViewModel):
     # render the picker at the same default without a separate
     # backwards-compat round-trip.
     min_tier: str = "T1"
+    # M1 WP5a-2: AUTO lifecycle control state. All four default to
+    # ``None`` so pre-WP5a payloads and non-AUTO tasks decode cleanly
+    # (the Swift ``TaskView`` already lenient-decodes them since WP5a-1).
+    auto_decision_id: str | None = None
+    auto_grace_deadline_at: str | None = None
+    auto_acked_at: str | None = None
+    auto_reason: str | None = None
 
 
 class CancelView(_ViewModel):
@@ -1174,6 +1212,10 @@ def _task_view(record) -> TaskView:
         scheduling_policy=record.scheduling_policy,
         manual_execution_target_id=record.manual_execution_target_id,
         min_tier=record.min_tier,
+        auto_decision_id=record.auto_decision_id,
+        auto_grace_deadline_at=record.auto_grace_deadline_at,
+        auto_acked_at=record.auto_acked_at,
+        auto_reason=record.auto_reason,
     )
 
 
@@ -1210,6 +1252,14 @@ class ControlPlaneService:
     #: malformed host file that fell back to the shipped defaults.
     #: ``None`` when ``tier_table`` is ``None``.
     model_tiers_source: str | None = None
+    #: M1 WP5a-2: pending-shadow journal for the SUPERVISED_AUTO
+    #: lifecycle. ``None`` keeps the pre-WP5a-2 behavior (no pending
+    #: shadows are recorded; the tick still runs gate-safe).
+    shadow_journal: Any = None
+    #: M1 WP5a-2: catalog snapshot id stamped into the frozen routing
+    #: decisions the tick creates. The daemon wires the runtime config's
+    #: value; ad-hoc services fall back to a stable local default.
+    catalog_snapshot_id: str = "control-catalog-v1"
 
     @property
     def owner_initiated_execution_enabled(self) -> bool:
@@ -1236,6 +1286,8 @@ class ControlPlaneService:
             supervisor=self.supervisor,
             tier_table=self.tier_table,
             model_tiers_source=self.model_tiers_source,
+            shadow_journal=self.shadow_journal,
+            catalog_snapshot_id=self.catalog_snapshot_id,
         )
 
     @staticmethod
@@ -1284,6 +1336,63 @@ class ControlPlaneService:
             runtime_availability=self.runtime_availability,
             runtime_availability_fallback=self._runtime_available,
         )
+
+    def _supervised_auto_step(self):
+        """Build the WP5a-2 supervised-auto tick step on demand.
+
+        The step is stateless; constructing it per call keeps ``open_request``
+        service clones correct without cache invalidation. The same factory
+        backs the periodic supervisor step and the owner abort helpers.
+        """
+
+        from personal_ai_orchestrator.supervised_auto_step import SupervisedAutoStep
+
+        return SupervisedAutoStep(
+            store=self.store,
+            scheduling_settings=self.scheduling_settings,
+            owner_execution_enabled=lambda: self.owner_initiated_execution_enabled,
+            recommendation_service_factory=self._recommendation_service,
+            project_provider=self.get_project,
+            registry_provider=self._effective_registry,
+            provider_registry_manager=self.provider_registry_manager,
+            runtime_available_provider=self._runtime_available,
+            execution_evidence_journal=self.execution_evidence_journal,
+            executor=self.dispatch_executor,
+            shadow_journal=self.shadow_journal,
+            catalog_snapshot_id=self.catalog_snapshot_id,
+        )
+
+    def supervised_auto_tick(self, now) -> None:
+        """Run one bounded SUPERVISED_AUTO sweep (supervisor step body)."""
+
+        self._supervised_auto_step().tick(now)
+
+    def build_supervised_auto_step(self):
+        """Return the supervisor-callable tick (``fn(now) -> None``).
+
+        Registered by the daemon on the ``DaemonSupervisor`` under
+        ``supervised-auto`` — but ONLY on the non-control-only daemon
+        (§19: control-only must never execute autonomous steps).
+
+        Each invocation opens a request-scoped service (fresh SQLite
+        connection) because the supervisor drives steps on its own thread
+        while the long-lived service store is bound to the constructing
+        thread — the same per-request discipline the UDS server applies.
+        ``:memory:`` services (tests, ad-hoc CLIs) share the single
+        connection instead.
+        """
+
+        def _step(now) -> None:
+            if self.store.path == ":memory:":
+                self.supervised_auto_tick(now)
+                return
+            request_service = self.open_request()
+            try:
+                request_service.supervised_auto_tick(now)
+            finally:
+                request_service.store.close()
+
+        return _step
 
     @staticmethod
     def _project_id_for(git_root: str, working_subpath: str | None) -> str:
@@ -1550,10 +1659,50 @@ class ControlPlaneService:
                     "production_active_not_authorized",
                 )
             try:
+                previous_mode = self.scheduling_settings.mode
                 self.scheduling_settings.set_mode(request.mode)
             except ValueError:
                 raise ControlPlaneError(400, "unsupported_scheduling_mode") from None
+            # M1 WP5a-2 (§3.1): leaving SUPERVISED_AUTO aborts every
+            # AUTO_PLANNED / AUTO_GRACE task in the same handler — the
+            # owner's mode change takes effect immediately, no in-flight
+            # grace window may outlive it. The tick's revocation sweep is
+            # the crash-recovery backstop for an abort write lost to a
+            # crash between these two writes.
+            if (
+                previous_mode != request.mode
+                and request.mode != SchedulingMode.SUPERVISED_AUTO.value
+            ):
+                self._abort_auto_tasks(reason="mode_changed")
         return self.scheduling_settings_view()
+
+    def _abort_auto_tasks(self, *, reason: str, project_id: str | None = None) -> None:
+        """Fail-closed owner abort of every AUTO_* lifecycle (§3.1).
+
+        AUTO_PLANNED / AUTO_GRACE → READY, pending shadows discarded, auto
+        metadata cleared and the abort audited. RUNNING tasks are never
+        touched — their worker is governed by the executor + verifier path.
+        Shared by the mode-change handler, the project-settings disable
+        handler, the veto endpoint and the cancel-as-veto path.
+        """
+
+        step = self._supervised_auto_step()
+        rows = self.store.connection.execute(
+            "SELECT task_id FROM tasks WHERE state IN (?,?) ORDER BY task_id",
+            (
+                TaskState.AUTO_PLANNED.value,
+                TaskState.AUTO_GRACE.value,
+            ),
+        ).fetchall()
+        now = datetime.now(UTC)
+        for row in rows:
+            try:
+                task = self.store.get_task(row["task_id"])
+            except KeyError:
+                continue
+            if project_id is not None and task.project_id != project_id:
+                continue
+            step._abort_auto_task(task, now, reason=reason)  # noqa: SLF001 — same-package lifecycle helper
 
     def set_project_scheduling_policy(
         self,
@@ -1592,16 +1741,23 @@ class ControlPlaneService:
         self._validate_identifier("project_id", project_id)
         request = ProjectSupervisedAutoSettingsRequest.model_validate(payload)
         try:
+            previous = self.store.get_project(project_id)
+        except KeyError:
+            raise ControlPlaneError(404, "project_not_found") from None
+        try:
             project = self.store.set_project_settings(
                 project_id,
                 supervised_auto_allowed=request.supervised_auto_allowed,
                 unattended_allowed=request.unattended_allowed,
                 grace_seconds=request.grace_seconds,
             )
-        except KeyError:
-            raise ControlPlaneError(404, "project_not_found") from None
         except ValueError as error:
             raise ControlPlaneError(400, "invalid_grace_seconds") from error
+        # M1 WP5a-2 (§3.1 裁决 5): revoking the project opt-in aborts the
+        # project's AUTO_* lifecycles immediately — same fail-closed
+        # contract as the global mode change.
+        if previous.supervised_auto_allowed and not request.supervised_auto_allowed:
+            self._abort_auto_tasks(reason="project_auto_disabled", project_id=project_id)
         return self._project_view(project)
 
     def import_provider_connections(self, payload: dict[str, Any]) -> ImportConnectionsView:
@@ -1768,6 +1924,19 @@ class ControlPlaneService:
             task = self.store.get_task(task_id)
         except KeyError:
             raise ControlPlaneError(404, "task_not_found") from None
+        # M1 WP5a-2 (§3.5): cancel on an AUTO_* task is exactly a veto —
+        # back to READY, policy locked MANUAL, pending shadow discarded,
+        # auto metadata cleared, audited. No new semantics.
+        if task.state in {TaskState.AUTO_PLANNED, TaskState.AUTO_GRACE}:
+            self._veto_auto_lifecycle(
+                task,
+                request_id=request.request_id or f"cancel-{task.task_id}",
+                audit_reason="owner_cancel",
+            )
+            return CancelView(
+                task=_task_view(self.store.get_task(task_id)),
+                cancelled_now=True,
+            )
         if task.state is TaskState.CANCELLED:
             return CancelView(task=_task_view(task), cancelled_now=False)
         if task.state is TaskState.RUNNING:
@@ -1797,6 +1966,233 @@ class ControlPlaneService:
         except (ValueError, RuntimeError) as error:
             raise ControlPlaneError(409, "task_state_cannot_be_cancelled") from error
         return CancelView(task=_task_view(updated), cancelled_now=True)
+
+    def _veto_auto_lifecycle(
+        self,
+        task: TaskRecord,
+        *,
+        request_id: str,
+        audit_reason: str,
+    ) -> None:
+        """Shared veto core (endpoint veto + cancel-as-veto, §3.5/§23).
+
+        ONE crash-atomic SQLite transaction (§10 of the closeout
+        ruling): ``AUTO_* → READY``, task policy forced MANUAL (the tick
+        will not re-plan it), all four auto columns cleared, exactly one
+        ``state_version`` bump, ``AUTO_VETOED`` audited with the durable
+        ``request_id`` and the pending-cleanup intent recorded — all
+        before COMMIT. The owner-visible truth (READY + MANUAL + clean
+        metadata) holds even if the shadow journal is unavailable; the
+        pending discard runs after COMMIT via the idempotent outbox
+        drain.
+        """
+
+        fresh = self.store.get_task(task.task_id)
+        if fresh.state not in {TaskState.AUTO_PLANNED, TaskState.AUTO_GRACE}:
+            raise ControlPlaneError(409, "task_state_not_auto")
+        target = self._auto_frozen_target(fresh)
+        try:
+            self.store.abort_auto_lifecycle(
+                task.task_id,
+                expected_version=fresh.state_version,
+                reason=audit_reason,
+                event_type="AUTO_VETOED",
+                request_id=request_id,
+                target=target,
+                force_manual=True,
+            )
+        except ValueError:
+            raise ControlPlaneError(409, "task_state_not_auto") from None
+        except RuntimeError as error:
+            raise ControlPlaneError(409, "stale_task_state_version") from error
+        # Best-effort immediate cleanup; the tick's drain is the
+        # crash-recovery backstop. A journal failure never rolls back
+        # the already-committed SQLite truth above.
+        from personal_ai_orchestrator.supervised_auto_step import (
+            drain_auto_shadow_cleanup_outbox,
+        )
+
+        drain_auto_shadow_cleanup_outbox(self.store, self.shadow_journal)
+
+    def _auto_frozen_target(self, task: TaskRecord) -> str | None:
+        from personal_ai_orchestrator.supervised_auto_step import (
+            supervised_auto_routing_request_id,
+        )
+
+        if task.auto_decision_id is None:
+            return None
+        row = self.store.routing_decision_by_request_id(
+            supervised_auto_routing_request_id(task.auto_decision_id)
+        )
+        if row is None:
+            return None
+        import json as _json
+
+        try:
+            decision = _json.loads(row["payload_json"])
+        except ValueError:
+            return None
+        return decision.get("selected_execution_target_id")
+
+    def auto_ack(self, task_id: str, payload: dict[str, Any]) -> TaskView:
+        """POST /v1/tasks/{id}/auto/ack (§22).
+
+        Only an unacked AUTO_GRACE task may be acked; the deadline is
+        computed once from the ack time; a retry returns the current
+        task unchanged (never extends the deadline). Stale versions are
+        rejected unless the task is already acked (idempotent replay).
+        """
+
+        self._validate_identifier("task_id", task_id)
+        request = AutoAckRequest.model_validate(payload)
+        try:
+            task = self.store.get_task(task_id)
+        except KeyError:
+            raise ControlPlaneError(404, "task_not_found") from None
+        if task.state is not TaskState.AUTO_GRACE:
+            raise ControlPlaneError(409, "task_state_not_auto_grace")
+        if task.auto_acked_at is not None:
+            return _task_view(task)
+        if task.state_version != request.task_state_version:
+            raise ControlPlaneError(409, "stale_task_state_version")
+        if task.project_id is None:
+            raise ControlPlaneError(409, "task_has_no_project")
+        try:
+            project = self.store.get_project(task.project_id)
+        except KeyError:
+            raise ControlPlaneError(409, "project_not_registered") from None
+        now = datetime.now(UTC)
+        try:
+            updated = self.store.ack_auto_grace(
+                task_id,
+                acked_at=now.isoformat(),
+                grace_deadline=(
+                    now + timedelta(seconds=project.grace_seconds)
+                ).isoformat(),
+                expected_version=request.task_state_version,
+            )
+        except RuntimeError as error:
+            raise ControlPlaneError(409, "stale_task_state_version") from error
+        return _task_view(updated)
+
+    def auto_veto(self, task_id: str, payload: dict[str, Any]) -> TaskView:
+        """POST /v1/tasks/{id}/auto/veto (§23).
+
+        Idempotent via the durable ``request_id``: a replay of the same
+        veto returns the current task view. A different request id on a
+        non-AUTO task is a 409 (nothing to veto).
+        """
+
+        self._validate_identifier("task_id", task_id)
+        request = AutoVetoRequest.model_validate(payload)
+        self._validate_identifier("request_id", request.request_id)
+        try:
+            task = self.store.get_task(task_id)
+        except KeyError:
+            raise ControlPlaneError(404, "task_not_found") from None
+        for event in self.store.audit_events(task_id):
+            if event["event_type"] == "AUTO_VETOED" and (
+                event["payload"].get("request_id") == request.request_id
+            ):
+                return _task_view(self.store.get_task(task_id))
+        if task.state not in {TaskState.AUTO_PLANNED, TaskState.AUTO_GRACE}:
+            raise ControlPlaneError(409, "task_state_not_auto")
+        if task.state_version != request.task_state_version:
+            raise ControlPlaneError(409, "stale_task_state_version")
+        self._veto_auto_lifecycle(task, request_id=request.request_id, audit_reason="owner_veto")
+        return _task_view(self.store.get_task(task_id))
+
+    def auto_dispatch_now(self, task_id: str, payload: dict[str, Any]) -> DispatchTaskView:
+        """POST /v1/tasks/{id}/auto/dispatch-now (§24).
+
+        Owner explicit acceleration: skips the remaining grace window
+        only. Every execution-admission gate still applies — the frozen
+        decision's exact target, mode revalidation, project opt-in,
+        lease truth, writer/quota/verifier discipline inside the shared
+        dispatch initiator. Not a Safety Kernel bypass.
+        """
+
+        self._validate_identifier("task_id", task_id)
+        request = AutoDispatchNowRequest.model_validate(payload)
+        try:
+            task = self.store.get_task(task_id)
+        except KeyError:
+            raise ControlPlaneError(404, "task_not_found") from None
+        if task.state is not TaskState.AUTO_GRACE:
+            raise ControlPlaneError(409, "task_state_not_auto_grace")
+        if task.auto_decision_id is None:
+            raise ControlPlaneError(409, "auto_decision_missing")
+        if task.state_version != request.task_state_version:
+            raise ControlPlaneError(409, "stale_task_state_version")
+        if self.scheduling_settings.mode != "SUPERVISED_AUTO":
+            raise ControlPlaneError(409, "scheduling_mode_not_supervised_auto")
+        if not self.owner_initiated_execution_enabled:
+            raise ControlPlaneError(403, "owner_initiated_execution_disabled")
+        if task.project_id is None:
+            raise ControlPlaneError(409, "task_has_no_project")
+        try:
+            project = self.store.get_project(task.project_id)
+        except KeyError:
+            raise ControlPlaneError(409, "project_not_registered") from None
+        if not project.supervised_auto_allowed:
+            raise ControlPlaneError(409, "project_supervised_auto_disabled")
+        target = self._auto_frozen_target(task)
+        if target is None:
+            raise ControlPlaneError(409, "frozen_decision_missing")
+
+        from personal_ai_orchestrator.dispatch_initiator import (
+            initiate_owner_dispatch,
+        )
+        from personal_ai_orchestrator.supervised_auto_step import (
+            supervised_auto_dispatch_request_id,
+        )
+        from personal_ai_orchestrator.switch_lease import SwitchLeaseAuthority
+
+        if SwitchLeaseAuthority(self.store).has_active_lease(task_id):
+            raise ControlPlaneError(409, "active_switch_lease")
+        active_run = self.store.connection.execute(
+            "SELECT 1 FROM runs WHERE task_id=? AND status='RUNNING' LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        if active_run is not None:
+            raise ControlPlaneError(409, "active_run")
+
+        request_id = supervised_auto_dispatch_request_id(task.auto_decision_id)
+        try:
+            dispatch, _created, _transitioned = initiate_owner_dispatch(
+                self.store,
+                self.dispatch_executor,
+                task=task,
+                request_id=request_id,
+                task_state_version=task.state_version,
+                execution_target_id=target,
+                authority=DispatchAuthority.SUPERVISED_AUTO.value,
+                project_provider=self.get_project,
+                registry_provider=self._effective_registry,
+                provider_registry_manager=self.provider_registry_manager,
+                runtime_available_provider=self._runtime_available,
+                execution_evidence_journal=self.execution_evidence_journal,
+                expected_state=TaskState.AUTO_GRACE,
+            )
+        except ValueError:
+            raise ControlPlaneError(409, "conflicting_dispatch_request_id") from None
+        self.store.connection.execute("BEGIN IMMEDIATE")
+        try:
+            self.store._audit(
+                task_id,
+                "AUTO_DISPATCHED",
+                {
+                    "auto_decision_id": task.auto_decision_id,
+                    "target": target,
+                    "trigger": "dispatch_now",
+                    "request_id": request_id,
+                },
+            )
+            self.store.connection.execute("COMMIT")
+        except Exception:
+            if self.store.connection.in_transaction:
+                self.store.connection.execute("ROLLBACK")
+        return self._dispatch_view(dispatch)
 
     def dispatch_task(self, task_id: str, payload: dict[str, Any]) -> DispatchTaskView:
         self._validate_identifier("task_id", task_id)
@@ -3753,6 +4149,28 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                     payload = self._read_json() or {}
                     self._view(200, request_service.recommend_dispatch(task_id, payload))
                     return
+                # M1 WP5a-2: supervised-auto owner controls.
+                if count == 4 and rest[2] == "auto" and method == "POST":
+                    if rest[3] == "ack":
+                        payload = self._read_json()
+                        if payload is None:
+                            return
+                        self._view(200, request_service.auto_ack(task_id, payload))
+                        return
+                    if rest[3] == "veto":
+                        payload = self._read_json()
+                        if payload is None:
+                            return
+                        self._view(200, request_service.auto_veto(task_id, payload))
+                        return
+                    if rest[3] == "dispatch-now":
+                        payload = self._read_json()
+                        if payload is None:
+                            return
+                        self._view(
+                            200, request_service.auto_dispatch_now(task_id, payload)
+                        )
+                        return
                 if count == 3 and sub == "approvals" and method == "GET":
                     self._view(200, request_service.approvals_for_task(task_id))
                     return
