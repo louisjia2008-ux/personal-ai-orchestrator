@@ -191,8 +191,8 @@ def test_terminal_sweep_missing_pending_preserves_metadata(tmp_path) -> None:
     _plan(env)
     task = env.store.get_task("task-1")
     decision = task.auto_decision_id
-    dispatch_id = f"owner-dispatch-{decision}"
     request_id = supervised_auto_dispatch_request_id(decision)
+    dispatch_id = f"owner-dispatch-{request_id}"
     env.store.reserve_owner_dispatch(
         dispatch_id=dispatch_id,
         request_id=request_id,
@@ -254,8 +254,8 @@ def test_durable_intent_allows_clear_and_outbox_alone_recovers(tmp_path) -> None
     task = env.store.get_task("task-1")
     decision = task.auto_decision_id
     pending = env.shadow.load_pending(decision)
-    dispatch_id = f"owner-dispatch-{decision}"
     request_id = supervised_auto_dispatch_request_id(decision)
+    dispatch_id = f"owner-dispatch-{request_id}"
     env.store.reserve_owner_dispatch(
         dispatch_id=dispatch_id,
         request_id=request_id,

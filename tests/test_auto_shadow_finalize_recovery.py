@@ -34,8 +34,11 @@ def _drive_to_verifying(env) -> tuple[str, str]:
 
     task = env.store.get_task("task-1")
     decision = task.auto_decision_id
-    dispatch_id = f"owner-dispatch-{decision}"
     request_id = supervised_auto_dispatch_request_id(decision)
+    # Round 6: the durable contract pins dispatch_id to
+    # owner-dispatch-{request_id} (initiate_owner_dispatch); the
+    # executor's run row is always run-{dispatch_id}.
+    dispatch_id = f"owner-dispatch-{request_id}"
     env.store.reserve_owner_dispatch(
         dispatch_id=dispatch_id,
         request_id=request_id,
@@ -286,7 +289,7 @@ def test_worker_failure_residue_is_finalized_not_discarded(tmp_path: Path) -> No
     # before ANY finalization intent existed.
     env.store.connection.execute(
         "UPDATE runs SET status='FAILED' WHERE run_id=?",
-        (f"run-owner-dispatch-{decision}",),
+        (f"run-owner-dispatch-{supervised_auto_dispatch_request_id(decision)}",),
     )
     env.store.connection.commit()
     task = env.store.get_task("task-1")
