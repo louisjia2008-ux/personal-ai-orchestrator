@@ -528,3 +528,45 @@ execution outcome — never the intermediate verifier verdict:
   dispatch/recovery hand-off re-enters the existing DispatchExecutor
   boundary and may spawn an executor thread for an already-durable
   reservation. No worker execution happens inside the tick itself.
+
+### 14.10 Canonical reconciliation correlation (review round 7)
+
+- **Reconciliation is task-driven and classifier-gated** —
+  `_reconcile_supervised_auto_dispatches` iterates CURRENT task truth
+  (AUTO_GRACE / BLOCKED tasks with a live `auto_decision_id`), never
+  historical dispatch rows. A raw `owner_dispatches` row is not proof:
+  every mutation is gated on the Round-6 canonical classifier
+  `correlate_supervised_auto_execution` (frozen routing target,
+  deterministic request/dispatch ids, task, authority
+  SUPERVISED_AUTO, reservation-cycle version contract):
+  - **CONFLICT** (wrong authority / task / target / dispatch id /
+    reservation version) → fail closed: metadata + pending preserved,
+    no abort, no discard, no finalize intent, sanitized
+    `AUTO_EXECUTION_CORRELATION_CONFLICT` event.
+  - **EXACT_REAL_RUN** → executor / terminal recovery owns the
+    outcome; never a pre-worker abort.
+  - **NO_DISPATCH** → no current-cycle dispatch exists; unrelated
+    historical SUPERVISED_AUTO rows for the same task can never drive
+    a mutation.
+  - **EXACT_PREWORKER** → only a BLOCKED/CANCELLED exact current
+    reservation is a legitimate pre-worker admission failure and may
+    use the existing crash-atomic abort path (AUTO_GRACE → READY;
+    terminal BLOCKED → READY via `allow_blocked`).
+- **Version semantics** — while the task is AUTO_GRACE the reservation
+  version must exactly equal the live `state_version` (V±1 ⇒ CONFLICT);
+  a terminal BLOCKED task uses the recovery ordering contract
+  (reservation version strictly below the terminal version) — equal or
+  future versions are CONFLICT. The two are never compared for
+  equality.
+- **Conflict-event dedupe** — reconciliation and the terminal sweep
+  share a per-tick dedupe: one `AUTO_EXECUTION_CORRELATION_CONFLICT`
+  event per (task, lifecycle) per tick, payload
+  task_id / auto_decision_id / reason only.
+- **Identifier contract (documentation fix)** — `auto_decision_id` is
+  the lifecycle/cycle id `auto-{task_id}-v{state_version-at-planning}`;
+  it is NOT the `RoutingDecision.decision_id` (independent durable id
+  `route-{digest}`). Chain: auto_decision_id → routing request id
+  `supervised-auto-{auto_decision_id}` → RoutingDecision (`route-*`,
+  looked up by request id). A `PendingShadowObservation` carries
+  `pending_id == auto_decision_id` and
+  `decision_id == RoutingDecision.decision_id`.
