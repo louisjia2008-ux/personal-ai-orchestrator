@@ -143,9 +143,16 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
     /// backwards-compat round-trip.
     public let minTier: String?
 
-    /// M1 WP5a-1: frozen ``RoutingDecision.decision_id`` written by the
-    /// host-owned planning tick. ``nil`` for pre-WP5a-1 tasks or for
-    /// MANUAL tasks that never entered the AUTO path.
+    /// M1 WP5a-1 / WP5b: the supervised-auto **lifecycle/cycle id** —
+    /// ``auto-{task_id}-v{state_version-at-planning}``. It is NOT the
+    /// frozen ``RoutingDecision.decision_id`` (an independent durable
+    /// id of the form ``route-{digest}``). Identifier chain: this id →
+    /// routing request id ``supervised-auto-{autoDecisionId}`` → the
+    /// ``RoutingDecision`` carrying ``route-*``. A pending shadow
+    /// observation is keyed by ``pending_id == autoDecisionId`` while
+    /// its ``decision_id`` is the ``RoutingDecision.decision_id``.
+    /// ``nil`` for pre-WP5a-1 tasks or for tasks that never entered
+    /// the AUTO path.
     public let autoDecisionId: String?
     /// M1 WP5a-1: ISO timestamp at which the grace window expires.
     /// Set on entry to ``AUTO_GRACE`` for projects with

@@ -213,6 +213,141 @@ public struct PAOControlClient: Sendable {
         try await get("/v1/settings/scheduling")
     }
 
+    /// M1 WP5b: change the orchestrator scheduling mode. The daemon's
+    /// `PUT /v1/settings/scheduling` requires `default_scheduling_policy`,
+    /// so the caller must pass the **authoritative current policy**
+    /// (from ``schedulingSettings()``) — never a client-side default,
+    /// which would silently rewrite the owner's global routing policy.
+    public func setSchedulingMode(
+        _ mode: String,
+        defaultSchedulingPolicy: String
+    ) async throws -> SchedulingSettingsView {
+        struct ModeBody: Encodable {
+            let defaultSchedulingPolicy: String
+            let mode: String
+
+            enum CodingKeys: String, CodingKey {
+                case defaultSchedulingPolicy = "default_scheduling_policy"
+                case mode
+            }
+        }
+        let data = try await rawRequest(
+            method: "PUT",
+            path: "/v1/settings/scheduling",
+            body: JSONEncoder().encode(
+                ModeBody(defaultSchedulingPolicy: defaultSchedulingPolicy, mode: mode)
+            )
+        )
+        do {
+            return try JSONDecoder().decode(SchedulingSettingsView.self, from: data)
+        } catch {
+            throw PAOClientError.malformedResponse
+        }
+    }
+
+    /// M1 WP5b: acknowledge an unacked AUTO_GRACE task. First ACK
+    /// requires the exact task state version; the daemon computes the
+    /// grace deadline once and an already-acked retry is idempotent.
+    public func autoAck(
+        taskId: String,
+        taskStateVersion: Int
+    ) async throws -> TaskView {
+        struct AutoAckBody: Encodable {
+            let taskStateVersion: Int
+
+            enum CodingKeys: String, CodingKey {
+                case taskStateVersion = "task_state_version"
+            }
+        }
+        return try await post(
+            "/v1/tasks/\(taskId)/auto/ack",
+            body: AutoAckBody(taskStateVersion: taskStateVersion)
+        )
+    }
+
+    /// M1 WP5b: veto an AUTO_PLANNED / AUTO_GRACE lifecycle. The
+    /// `request_id` is the durable idempotency key: one id per veto
+    /// operation (the store generates it); replays return the current
+    /// task view instead of double-aborting.
+    public func autoVeto(
+        taskId: String,
+        requestId: String,
+        taskStateVersion: Int
+    ) async throws -> TaskView {
+        struct AutoVetoBody: Encodable {
+            let requestId: String
+            let taskStateVersion: Int
+
+            enum CodingKeys: String, CodingKey {
+                case requestId = "request_id"
+                case taskStateVersion = "task_state_version"
+            }
+        }
+        return try await post(
+            "/v1/tasks/\(taskId)/auto/veto",
+            body: AutoVetoBody(requestId: requestId, taskStateVersion: taskStateVersion)
+        )
+    }
+
+    /// M1 WP5b: owner-requested acceleration of the remaining grace
+    /// window. Every execution-admission gate still applies daemon-side;
+    /// the response is the shared `DispatchTaskView` dispatch truth.
+    public func autoDispatchNow(
+        taskId: String,
+        taskStateVersion: Int
+    ) async throws -> DispatchTaskView {
+        struct AutoDispatchNowBody: Encodable {
+            let taskStateVersion: Int
+
+            enum CodingKeys: String, CodingKey {
+                case taskStateVersion = "task_state_version"
+            }
+        }
+        return try await post(
+            "/v1/tasks/\(taskId)/auto/dispatch-now",
+            body: AutoDispatchNowBody(taskStateVersion: taskStateVersion)
+        )
+    }
+
+    /// M1 WP5b: persist the complete project supervised-auto tuple.
+    /// The body is the full triple by contract — the caller resolves
+    /// unchanged fields from the authoritative current `ProjectView`
+    /// so no sibling value is ever silently reset.
+    public func setProjectSupervisedAutoSettings(
+        projectId: String,
+        supervisedAutoAllowed: Bool,
+        unattendedAllowed: Bool,
+        graceSeconds: Int
+    ) async throws -> ProjectView {
+        struct ProjectAutoBody: Encodable {
+            let supervisedAutoAllowed: Bool
+            let unattendedAllowed: Bool
+            let graceSeconds: Int
+
+            enum CodingKeys: String, CodingKey {
+                case supervisedAutoAllowed = "supervised_auto_allowed"
+                case unattendedAllowed = "unattended_allowed"
+                case graceSeconds = "grace_seconds"
+            }
+        }
+        let data = try await rawRequest(
+            method: "PUT",
+            path: "/v1/projects/\(projectId)/settings",
+            body: JSONEncoder().encode(
+                ProjectAutoBody(
+                    supervisedAutoAllowed: supervisedAutoAllowed,
+                    unattendedAllowed: unattendedAllowed,
+                    graceSeconds: graceSeconds
+                )
+            )
+        )
+        do {
+            return try JSONDecoder().decode(ProjectView.self, from: data)
+        } catch {
+            throw PAOClientError.malformedResponse
+        }
+    }
+
     public func setDefaultSchedulingPolicy(
         _ policy: String
     ) async throws -> SchedulingSettingsView {

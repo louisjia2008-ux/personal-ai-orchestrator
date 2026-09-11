@@ -37,6 +37,35 @@ public enum DispatchNotice: Equatable, Sendable {
     case malformedResponse
 }
 
+/// M1 WP5b: the owner-facing supervised-auto control the store ran.
+public enum AutoControlAction: String, Equatable, Sendable {
+    case ack
+    case veto
+    case dispatchNow
+    case schedulingMode
+    case projectAutoSettings
+}
+
+/// M1 WP5b: structured supervised-auto operation outcome. Daemon
+/// semantics are preserved verbatim; `staleState` means the daemon
+/// rejected the operation because the task moved — the authoritative
+/// reload that follows owns the visible truth, never a local guess.
+public enum AutoControlNotice: Equatable, Sendable {
+    case acknowledged(taskId: String)
+    case vetoed(taskId: String)
+    case dispatchRequested(taskId: String, dispatchId: String, status: String)
+    /// A 409 stale/state conflict: state has changed and was reloaded.
+    case staleState(taskId: String)
+    /// Daemon refusal with its sanitized error code.
+    case blocked(code: String)
+    case schedulingModeChanged(mode: String)
+    /// Confirmed stop: the returned settings said `mode == MANUAL`.
+    case supervisedAutoStopped
+    case projectAutoSettingsSaved(projectId: String)
+    case failed(action: AutoControlAction, detail: String)
+    case malformedResponse
+}
+
 /// Client-side display state. Authoritative state is always reloaded from the daemon;
 /// this store keeps no durable task database of its own.
 @MainActor
@@ -78,6 +107,11 @@ public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var submitNotice: SubmitNotice?
     @Published public private(set) var projectNotice: ProjectNotice?
     @Published public private(set) var cancellationNotice: CancelNotice?
+    /// M1 WP5b: outcome of the last supervised-auto control action.
+    @Published public private(set) var autoControlNotice: AutoControlNotice?
+    /// M1 WP5b: in-flight supervised-auto operation keys, so rapid
+    /// clicks coalesce instead of launching duplicate client requests.
+    @Published public private(set) var inFlightAutoKeys: Set<String> = []
     @Published public var menuVisible: Bool = false
     @Published public var dashboardVisible: Bool = false
     @Published public private(set) var isRefreshing: Bool = false
@@ -122,6 +156,15 @@ public final class OrchestratorStore: ObservableObject {
     public static let backgroundInterval: TimeInterval = 15.0
     public static let maximumBackoff: TimeInterval = 60.0
     public static let duplicateSubmitWindow: TimeInterval = 5.0
+
+    /// M1 WP5b §8: task states that warrant the fast refresh cadence
+    /// while visible. AUTO lifecycles sit alongside RUNNING/VERIFYING
+    /// because they transition on their own (tick promotion, deadline
+    /// expiry, dispatch confirmation) — the client must see those
+    /// transitions without waiting for the background cadence.
+    public static let highAttentionTaskStates: Set<String> = [
+        "RUNNING", "VERIFYING", "AUTO_PLANNED", "AUTO_GRACE"
+    ]
 
     /// How often the client asks the daemon to re-collect quota from the
     /// providers' own read-only endpoints. The projection is re-read on every
@@ -247,7 +290,7 @@ public final class OrchestratorStore: ObservableObject {
         if connection.isConnected {
             backoffSeconds = 2.0
             if let detail = selectedTaskDetail,
-               detail.task.state == "RUNNING" || detail.task.state == "VERIFYING" {
+               Self.highAttentionTaskStates.contains(detail.task.state) {
                 return Self.activeTaskInterval
             }
             return (menuVisible || dashboardVisible) ? Self.menuOpenInterval : Self.backgroundInterval
@@ -399,7 +442,246 @@ public final class OrchestratorStore: ObservableObject {
             projectNotice = nil
             cancellationNotice = nil
             dispatchNotice = nil
+            autoControlNotice = nil
+            inFlightAutoKeys = []
         }
+    }
+
+    // MARK: - Supervised-auto controls (M1 WP5b)
+
+    /// Whether a supervised-auto operation is already running for this
+    /// task; controls consult this to coalesce duplicate clicks.
+    public func isAutoActionInFlight(
+        taskId: String? = nil,
+        action: AutoControlAction
+    ) -> Bool {
+        inFlightAutoKeys.contains(Self.autoActionKey(taskId: taskId, action: action))
+    }
+
+    private static func autoActionKey(
+        taskId: String?,
+        action: AutoControlAction
+    ) -> String {
+        taskId.map { "\(action.rawValue):\($0)" } ?? action.rawValue
+    }
+
+    private func beginAutoAction(
+        taskId: String?,
+        action: AutoControlAction
+    ) -> Bool {
+        let key = Self.autoActionKey(taskId: taskId, action: action)
+        guard !inFlightAutoKeys.contains(key) else { return false }
+        inFlightAutoKeys.insert(key)
+        return true
+    }
+
+    private func endAutoAction(
+        taskId: String?,
+        action: AutoControlAction
+    ) {
+        inFlightAutoKeys.remove(Self.autoActionKey(taskId: taskId, action: action))
+    }
+
+    /// 409s that mean "your view of the task is stale", not "app
+    /// failure": the task moved (or left the expected state) between
+    /// render and click. The correct client behavior is an
+    /// authoritative reload plus a short sanitized status — never a
+    /// local success claim.
+    private static func autoFailureNotice(
+        _ error: PAOClientError,
+        taskId: String,
+        action: AutoControlAction
+    ) -> AutoControlNotice {
+        if case .httpError(409, let code) = error,
+           code == "stale_task_state_version" || code == "task_state_not_auto"
+               || code == "task_state_not_auto_grace" {
+            return .staleState(taskId: taskId)
+        }
+        if case .httpError(_, let code) = error {
+            return .blocked(code: code)
+        }
+        return .failed(action: action, detail: error.displayDetail)
+    }
+
+    /// ACK the current unacked AUTO_GRACE lifecycle. The authoritative
+    /// version is fetched immediately before submitting; an
+    /// already-acked retry returns the current task unchanged and the
+    /// deadline is never visually reset or extended by this client.
+    public func autoAck(taskId: String) async {
+        guard beginAutoAction(taskId: taskId, action: .ack) else { return }
+        defer { endAutoAction(taskId: taskId, action: .ack) }
+        do {
+            let task = try await client.getTask(taskId)
+            _ = try await client.autoAck(taskId: taskId, taskStateVersion: task.stateVersion)
+            autoControlNotice = .acknowledged(taskId: taskId)
+            ClientLog.operation("auto_ack", outcome: "ok")
+            await loadTaskDetail(taskId: taskId)
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            autoControlNotice = Self.autoFailureNotice(error, taskId: taskId, action: .ack)
+            ClientLog.operation("auto_ack", outcome: error.logCode)
+            await loadTaskDetail(taskId: taskId)
+        } catch {
+            autoControlNotice = .malformedResponse
+            ClientLog.operation("auto_ack", outcome: "malformed")
+        }
+    }
+
+    /// Veto the current AUTO lifecycle. One durable `request_id` is
+    /// generated per operation; the in-flight guard prevents parallel
+    /// duplicate vetoes with different ids.
+    public func autoVeto(taskId: String) async {
+        guard beginAutoAction(taskId: taskId, action: .veto) else { return }
+        defer { endAutoAction(taskId: taskId, action: .veto) }
+        let requestId = "veto-\(idFactory())"
+        do {
+            let task = try await client.getTask(taskId)
+            _ = try await client.autoVeto(
+                taskId: taskId,
+                requestId: requestId,
+                taskStateVersion: task.stateVersion
+            )
+            autoControlNotice = .vetoed(taskId: taskId)
+            ClientLog.operation("auto_veto", outcome: "ok")
+            await loadTaskDetail(taskId: taskId)
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            autoControlNotice = Self.autoFailureNotice(error, taskId: taskId, action: .veto)
+            ClientLog.operation("auto_veto", outcome: error.logCode)
+            await loadTaskDetail(taskId: taskId)
+        } catch {
+            autoControlNotice = .malformedResponse
+            ClientLog.operation("auto_veto", outcome: "malformed")
+        }
+    }
+
+    /// Owner-requested acceleration of the remaining grace window.
+    /// Admission remains daemon-owned; a refused dispatch surfaces as
+    /// its sanitized failure code, never as local success.
+    public func autoDispatchNow(taskId: String) async {
+        guard beginAutoAction(taskId: taskId, action: .dispatchNow) else { return }
+        defer { endAutoAction(taskId: taskId, action: .dispatchNow) }
+        do {
+            let task = try await client.getTask(taskId)
+            let result = try await client.autoDispatchNow(
+                taskId: taskId,
+                taskStateVersion: task.stateVersion
+            )
+            if result.accepted {
+                lastDispatch = result
+                autoControlNotice = .dispatchRequested(
+                    taskId: taskId,
+                    dispatchId: result.dispatchId,
+                    status: result.status
+                )
+                ClientLog.operation("auto_dispatch_now", outcome: "ok")
+            } else {
+                autoControlNotice = .blocked(code: result.failureCode ?? "BLOCKED")
+                ClientLog.operation("auto_dispatch_now", outcome: "refused")
+            }
+            await loadTaskDetail(taskId: taskId)
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            autoControlNotice = Self.autoFailureNotice(error, taskId: taskId, action: .dispatchNow)
+            ClientLog.operation("auto_dispatch_now", outcome: error.logCode)
+            await loadTaskDetail(taskId: taskId)
+        } catch {
+            autoControlNotice = .malformedResponse
+            ClientLog.operation("auto_dispatch_now", outcome: "malformed")
+        }
+    }
+
+    /// Change the orchestrator scheduling mode. The authoritative
+    /// `default_scheduling_policy` is re-read from the daemon and sent
+    /// back unchanged — a mode switch must never rewrite the owner's
+    /// global routing policy.
+    public func setSchedulingMode(_ mode: String) async {
+        guard beginAutoAction(taskId: nil, action: .schedulingMode) else { return }
+        defer { endAutoAction(taskId: nil, action: .schedulingMode) }
+        do {
+            let current = try await client.schedulingSettings()
+            let updated = try await client.setSchedulingMode(
+                mode,
+                defaultSchedulingPolicy: current.defaultSchedulingPolicy
+            )
+            schedulingSettings = updated
+            autoControlNotice = .schedulingModeChanged(mode: updated.mode)
+            ClientLog.operation("set_scheduling_mode", outcome: "ok")
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            autoControlNotice = .failed(action: .schedulingMode, detail: error.displayDetail)
+            ClientLog.operation("set_scheduling_mode", outcome: error.logCode)
+        } catch {
+            autoControlNotice = .malformedResponse
+            ClientLog.operation("set_scheduling_mode", outcome: "malformed")
+        }
+    }
+
+    /// Menu-bar emergency stop for supervised autonomy. Implementation
+    /// is the existing daemon-owned mode change to `MANUAL` — nothing
+    /// else. Success is only reported when the daemon's returned
+    /// settings actually say `MANUAL`.
+    public func emergencyStopSupervisedAuto() async {
+        await setSchedulingMode("MANUAL")
+        if case .schedulingModeChanged(let mode) = autoControlNotice, mode == "MANUAL" {
+            autoControlNotice = .supervisedAutoStopped
+        }
+    }
+
+    /// Persist one project supervised-auto field, preserving the other
+    /// two from the authoritative current project view. `nil` means
+    /// "unchanged" and is resolved daemon-side, never from a client
+    /// default — so editing one setting can never silently reset its
+    /// siblings.
+    public func setProjectAutoSettings(
+        projectId: String,
+        supervisedAutoAllowed: Bool? = nil,
+        unattendedAllowed: Bool? = nil,
+        graceSeconds: Int? = nil
+    ) async {
+        guard beginAutoAction(taskId: projectId, action: .projectAutoSettings) else { return }
+        defer { endAutoAction(taskId: projectId, action: .projectAutoSettings) }
+        do {
+            var current = projects?.projects.first { $0.projectId == projectId }
+            if current == nil || supervisedAutoAllowed == nil
+                || unattendedAllowed == nil || graceSeconds == nil {
+                current = try await client.projects()
+                    .projects.first { $0.projectId == projectId }
+            }
+            guard let current else {
+                autoControlNotice = .failed(
+                    action: .projectAutoSettings, detail: "project_not_found"
+                )
+                return
+            }
+            _ = try await client.setProjectSupervisedAutoSettings(
+                projectId: projectId,
+                supervisedAutoAllowed: supervisedAutoAllowed ?? current.supervisedAutoAllowed,
+                unattendedAllowed: unattendedAllowed ?? current.unattendedAllowed,
+                graceSeconds: graceSeconds ?? current.graceSeconds
+            )
+            projects = try? await client.projects()
+            autoControlNotice = .projectAutoSettingsSaved(projectId: projectId)
+            ClientLog.operation("set_project_auto_settings", outcome: "ok")
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            if case .httpError(400, let code) = error {
+                autoControlNotice = .blocked(code: code)
+            } else {
+                autoControlNotice = .failed(
+                    action: .projectAutoSettings, detail: error.displayDetail
+                )
+            }
+            ClientLog.operation("set_project_auto_settings", outcome: error.logCode)
+        } catch {
+            autoControlNotice = .malformedResponse
+            ClientLog.operation("set_project_auto_settings", outcome: "malformed")
+        }
+    }
+
+    /// Drop the ephemeral supervised-auto operation notice.
+    public func clearAutoControlNotice() {
+        autoControlNotice = nil
     }
 
     // MARK: - Operations

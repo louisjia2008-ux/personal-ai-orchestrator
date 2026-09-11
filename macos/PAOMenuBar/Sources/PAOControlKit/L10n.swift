@@ -305,7 +305,33 @@ public enum L10n {
         "quota.history.gapNote", "quota.history.accessibleSummary",
         "quota.history.singleObservation", "quota.history.observationCount",
         "quota.resetsIn", "quota.resetPassed", "quota.observedAge",
-        "quota.equivalentCapacity.explanation"
+        "quota.equivalentCapacity.explanation",
+        // M1 WP5b — supervised-auto control surfaces.
+        "auto.mode.title", "auto.mode.choices", "auto.mode.footer",
+        "auto.mode.name.MANUAL", "auto.mode.name.SUPERVISED_AUTO", "auto.mode.name.ACTIVE",
+        "auto.mode.detail.MANUAL", "auto.mode.detail.SUPERVISED_AUTO",
+        "auto.mode.gatedDetail", "auto.mode.activeReported", "auto.mode.gatedSymbol",
+        "auto.task.title", "auto.task.footnote",
+        "auto.task.planned", "auto.task.waitingAck", "auto.task.expired",
+        "auto.task.countdown", "auto.task.countdownAccessibility",
+        "auto.task.targetUnavailable",
+        "auto.label.target", "auto.label.reason", "auto.label.acked",
+        "auto.action.ack", "auto.action.ackHelp",
+        "auto.action.veto", "auto.action.vetoHelp",
+        "auto.action.dispatchNow", "auto.action.dispatchNowHelp",
+        "auto.notice.dismiss",
+        "auto.notice.acknowledged", "auto.notice.vetoed",
+        "auto.notice.dispatchRequested", "auto.notice.staleState",
+        "auto.notice.blocked", "auto.notice.failed", "auto.notice.malformed",
+        "auto.notice.modeChanged",
+        "menubar.schedulingMode",
+        "menubar.stopSupervisedAuto", "menubar.stopSupervisedAutoHelp",
+        "menubar.stopSupervisedAuto.success",
+        "project.auto.title", "project.auto.allowSupervisedAuto",
+        "project.auto.allowUnattended", "project.auto.graceSeconds",
+        "project.auto.graceHelp", "project.auto.graceInvalid",
+        "project.auto.disableWarning", "project.auto.disableConfirm",
+        "project.auto.saved"
     ]
 
     /// English is the guaranteed fallback (`defaultLocalization` in Package.swift).
@@ -377,6 +403,102 @@ public enum L10n {
         cachedBundle = bundle
         return bundle
     }
+
+    // MARK: - Supervised auto (M1 WP5b)
+
+    public static var autoModeTitle: String { tr("auto.mode.title") }
+    public static var autoModeChoices: String { tr("auto.mode.choices") }
+    public static var autoModeFooter: String { tr("auto.mode.footer") }
+    public static var autoModeGatedDetail: String { tr("auto.mode.gatedDetail") }
+    public static var autoModeActiveReported: String { tr("auto.mode.activeReported") }
+    public static var autoModeGatedSymbol: String { tr("auto.mode.gatedSymbol") }
+
+    public static func autoModeName(_ mode: String) -> String {
+        switch mode {
+        case "MANUAL": return tr("auto.mode.name.MANUAL")
+        case "SUPERVISED_AUTO": return tr("auto.mode.name.SUPERVISED_AUTO")
+        case "ACTIVE": return tr("auto.mode.name.ACTIVE")
+        default: return mode
+        }
+    }
+
+    public static func autoModeDetail(_ mode: String) -> String {
+        switch mode {
+        case "MANUAL": return tr("auto.mode.detail.MANUAL")
+        case "SUPERVISED_AUTO": return tr("auto.mode.detail.SUPERVISED_AUTO")
+        default: return tr("auto.mode.gatedDetail")
+        }
+    }
+
+    public static var autoTaskTitle: String { tr("auto.task.title") }
+    public static var autoTaskFootnote: String { tr("auto.task.footnote") }
+    public static var autoPlannedText: String { tr("auto.task.planned") }
+    public static var autoWaitingAckText: String { tr("auto.task.waitingAck") }
+    public static var autoExpiredText: String { tr("auto.task.expired") }
+    public static var autoTargetUnavailable: String { tr("auto.task.targetUnavailable") }
+    public static var autoCountdownAccessibilityLabel: String {
+        tr("auto.task.countdownAccessibility")
+    }
+
+    public static func autoCountdownText(_ clock: String) -> String {
+        tr("auto.task.countdown", [clock])
+    }
+
+    public static var autoLabelTarget: String { tr("auto.label.target") }
+    public static var autoLabelReason: String { tr("auto.label.reason") }
+    public static var autoLabelAcked: String { tr("auto.label.acked") }
+
+    public static var autoActionAck: String { tr("auto.action.ack") }
+    public static var autoActionAckHelp: String { tr("auto.action.ackHelp") }
+    public static var autoActionVeto: String { tr("auto.action.veto") }
+    public static var autoActionVetoHelp: String { tr("auto.action.vetoHelp") }
+    public static var autoActionDispatchNow: String { tr("auto.action.dispatchNow") }
+    public static var autoActionDispatchNowHelp: String { tr("auto.action.dispatchNowHelp") }
+    public static var autoNoticeDismiss: String { tr("auto.notice.dismiss") }
+
+    /// Daemon semantics preserved verbatim; only the wrapping words are
+    /// localized. Raw codes surface untouched after the colon.
+    public static func autoControlNoticeText(_ notice: AutoControlNotice) -> String {
+        switch notice {
+        case .acknowledged:
+            return tr("auto.notice.acknowledged")
+        case .vetoed:
+            return tr("auto.notice.vetoed")
+        case .dispatchRequested(_, let dispatchId, let status):
+            return tr("auto.notice.dispatchRequested", [dispatchId, status])
+        case .staleState:
+            return tr("auto.notice.staleState")
+        case .blocked(let code):
+            return tr("auto.notice.blocked", [code])
+        case .schedulingModeChanged(let mode):
+            return tr("auto.notice.modeChanged", [autoModeName(mode)])
+        case .supervisedAutoStopped:
+            return tr("menubar.stopSupervisedAuto.success")
+        case .projectAutoSettingsSaved:
+            return tr("project.auto.saved")
+        case .failed(let action, let detail):
+            return tr("auto.notice.failed", [action.rawValue, detail])
+        case .malformedResponse:
+            return tr("auto.notice.malformed")
+        }
+    }
+
+    public static var menubarSchedulingMode: String { tr("menubar.schedulingMode") }
+    public static var menubarStopSupervisedAuto: String { tr("menubar.stopSupervisedAuto") }
+    public static var menubarStopSupervisedAutoHelp: String {
+        tr("menubar.stopSupervisedAutoHelp")
+    }
+
+    public static var projectAutoTitle: String { tr("project.auto.title") }
+    public static var projectAutoAllowSupervisedAuto: String {
+        tr("project.auto.allowSupervisedAuto")
+    }
+    public static var projectAutoAllowUnattended: String { tr("project.auto.allowUnattended") }
+    public static var projectAutoGraceSeconds: String { tr("project.auto.graceSeconds") }
+    public static var projectAutoGraceHelp: String { tr("project.auto.graceHelp") }
+    public static var projectAutoGraceInvalid: String { tr("project.auto.graceInvalid") }
+    public static var projectAutoDisableWarning: String { tr("project.auto.disableWarning") }
+    public static var projectAutoDisableConfirm: String { tr("project.auto.disableConfirm") }
 
     private static func languageBundle(for language: String) -> Bundle? {
         guard let entry = lprojDirectories[language.lowercased()] else { return nil }
