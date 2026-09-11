@@ -1499,3 +1499,24 @@ TaskView.autoDecisionId comment is corrected to the lifecycle-id
 contract (auto-{task_id}-v{state_version-at-planning}, not the
 route-{digest} RoutingDecision id). Human visual acceptance of the
 built app bundle remains required before merge.
+
+### WP5b closeout repair (independent review round 1)
+
+The review's three client-side blockers at `aa14cdb` are closed, with
+zero backend/plugin/authority change. (1) Emergency stop now proves
+success only from its own invocation's daemon response: scheduling-mode
+mutation is a single primitive returning applied / coalesced / failed, a
+coalesced stop sends no request and surfaces a scoped busy state, and
+the menu-bar button is disabled while a mode write is in flight — a
+deterministic held-PUT regression (EMERGENCY-STOP-RACE-1) proves zero
+fabricated success with a stale MANUAL notice in place. (2) Settings no
+longer coerces missing scheduling settings to MANUAL: the authoritative
+mode renders as localized unknown and mode selection is gated until
+truth loads (MODE-UNKNOWN-1/2). (3) AutoControlNotice now carries an
+explicit scope (task / project / schedulingMode) consumed through one
+shared applies(to:) helper by every surface, ending cross-surface leaks
+(NOTICE-SCOPE-1..6); project invalid_grace_seconds, task results, and
+scheduling outcomes each render only where they belong. TestDaemon
+gained a deterministic arm/release hold plus nth-arrival waiting (no
+sleep-based tests). Swift 476/0, Python 1000, OpenCode 17/17. Human
+visual acceptance still required on the rebuilt bundle.

@@ -323,3 +323,77 @@ transition; no new dispatch path; Production ACTIVE still
   phases), Settings mode picker, project auto settings, menu-bar stop.
 - App bundle built at `macos/PAOMenuBar/dist/Personal AI
   Orchestrator.app` from the final WP5b head for that acceptance pass.
+
+---
+
+## 13. Closeout repair record (independent review round 1)
+
+Review verdict at `aa14cdb`: accepted in principle, merge blocked by one
+P0 and two P1 client issues. All three repaired; no backend, plugin, or
+authority change.
+
+### P0 — emergency-stop proof is invocation-local
+
+`setSchedulingMode` no longer returns `Void` with a silently coalesced
+path. A single primitive, `performSchedulingModeChange`, returns
+`SchedulingModeMutationResult`:
+
+- `.applied(SchedulingSettingsView)` — this invocation's daemon answer;
+- `.coalesced` — the in-flight key was already held, no request sent;
+- `.failed` — failure notice already surfaced (scoped).
+
+`emergencyStopSupervisedAuto` reports `.supervisedAutoStopped` only from
+its OWN `.applied` response where `mode == MANUAL`. A coalesced stop
+sends no PUT, reads no shared notice, and surfaces the scoped
+`.schedulingModeBusy` state instead. An `.applied` response that somehow
+does not confirm MANUAL surfaces a scoped failure
+(`mode_not_manual_after_put`), never success. The menu-bar stop button
+is additionally disabled while `.schedulingMode` is in flight
+(defense-in-depth; store-level proof is the real gate).
+
+`EMERGENCY-STOP-RACE-1` (merge-critical) pins the exact fabrication
+scenario deterministically: a completed MANUAL mode change leaves a
+stale success notice, a second mutation is parked inside its PUT via a
+new holdable TestDaemon route (arm/release + nth-arrival wait — no
+sleeps), then the stop is invoked. Asserted: emergency-stop PUT count 0,
+notice `.schedulingModeBusy` (not stopped), and after release the
+original operation's MANUAL result renders as a mode change, never as a
+stop confirmation.
+
+### P1 — unknown mode no longer fabricates MANUAL
+
+`AutomationModeCard` renders through the new pure
+`AutomationModePresentation`: `currentMode(from:)` returns `nil` for
+missing settings (never `"MANUAL"`), and `canSelectModes(currentMode:)`
+gates the selectable rows until authoritative truth exists. Unknown
+renders with localized "模式暂不可知" / "Mode unavailable" plus an
+explanatory line. The rest of Settings stays usable. MODE-UNKNOWN-1/2
+tests pin both rules.
+
+### P1 — notices carry semantic scope
+
+New `AutoControlScope` (`.task(id)` / `.project(id)` / `.schedulingMode`)
+with one shared `AutoControlNotice.scope` / `applies(to:)` contract.
+Generic outcomes now carry scope: `blocked(scope:code:)`,
+`failed(scope:action:detail:)`, `malformedResponse(scope:)`. Surfaces
+filter through the shared helper only: the task AUTO card renders
+`.task(T)`, project cards render `.project(P)`, the menu-bar scheduling
+section renders `.schedulingMode` — so Project A's
+`invalid_grace_seconds` can no longer appear on Project B, in a task
+card, or the menu bar, and task ACK/VETO results can no longer appear
+under scheduling. NOTICE-SCOPE-1..6 pin the matrix.
+
+### Documentation correctness
+
+`setProjectAutoSettings` doc comment now states the accepted behavior
+truthfully: nil means unchanged; the CLIENT re-fetches the authoritative
+`ProjectView`, resolves nil fields from it, and sends the complete
+tuple. Behavior unchanged.
+
+### Verification
+
+Swift 476 / 0 (467 baseline + 9 new: EMERGENCY-STOP-RACE-1, MODE-4,
+NOTICE-SCOPE-1..6, MODE-UNKNOWN-1/2). Python 1000 / ruff clean,
+OpenCode adapter 17/17, `git diff --check` clean, no
+TODO/FIXME/HACK. App bundle rebuilt from the closeout HEAD for human
+visual acceptance.
