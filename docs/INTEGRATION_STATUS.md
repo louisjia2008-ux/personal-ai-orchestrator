@@ -1520,3 +1520,24 @@ scheduling outcomes each render only where they belong. TestDaemon
 gained a deterministic arm/release hold plus nth-arrival waiting (no
 sleep-based tests). Swift 476/0, Python 1000, OpenCode 17/17. Human
 visual acceptance still required on the rebuilt bundle.
+
+### WP5b Visual Closeout Round 1 (app shell + Overview)
+
+Owner visual acceptance at `8f1f637` failed on presentation only
+(functional/safety PASS). Round 1 is presentation-only and scoped to
+the app shell plus Overview; Tasks/Resources/Settings visuals await
+the owner's Round 1 screenshots. Changes: content width roles replace
+the leading 980pt `tableMaximumWidth` cap (dashboards/tables/charts
+use the pane; Settings keeps a centered `formMaximumWidth` measure),
+page section spacing 16→28, section headers promoted to headline, the
+Overview KPI row rebuilt as one hairline-divided metric strip with
+36pt values and reserved semantic tints, basic information collapsed
+from eight boxed scalars to one grouped label/value surface, chart
+plot height 160→224 with a localized trend legend, risk rows reworked
+with severity chips and chevrons (same RiskDestination navigation),
+and Overview activity rendered as a feed with the machine event code
+demoted to metadata. Overview's bordered-container count drops 15→4.
+No behavior/API/authority/backend change; Swift 476/0; UI-test
+contracts (`overview.kpiTile` five-tile equal geometry,
+`dashboard.eventRow`, Activity pane span) preserved. Status:
+HUMAN_VISUAL_ACCEPTANCE_PENDING on the rebuilt bundle.

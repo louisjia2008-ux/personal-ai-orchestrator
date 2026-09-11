@@ -397,3 +397,78 @@ NOTICE-SCOPE-1..6, MODE-UNKNOWN-1/2). Python 1000 / ruff clean,
 OpenCode adapter 17/17, `git diff --check` clean, no
 TODO/FIXME/HACK. App bundle rebuilt from the closeout HEAD for human
 visual acceptance.
+
+---
+
+## 14. Visual Closeout Round 1 — App Shell + Overview
+
+Owner visual verdict at `8f1f637` (PR #28 comment 5635780827):
+functional/safety PASS, visual FAIL ("reads as an engineering/admin
+dashboard"). Round 1 is strictly presentation-only and covers the app
+shell plus Overview; Tasks / Resources / Settings visuals are frozen
+out of this round pending owner screenshots.
+
+Status: **HUMAN_VISUAL_ACCEPTANCE_PENDING** — the owner must open the
+rebuilt app and confirm before any further visual round starts.
+
+### App shell
+
+- **Content width roles replace the one-size cap.**
+  `tableMaximumWidth` (the leading-aligned 980pt column applied to
+  Activity and Settings) is gone. Dashboards, tables and charts
+  (Overview, Activity) use the available content-column width;
+  reading/form content keeps a new `formMaximumWidth` (980) measure
+  and centers it, the way System Settings does, so a wide window
+  gains symmetric margins instead of a dead right region.
+- **Section rhythm.** `DashboardLayoutMetrics.sectionSpacing` 16 → 28
+  (still on the 4pt grid, pinned by the layout contract test to
+  exceed row spacing — page sections now breathe noticeably more
+  than the rows inside them).
+- **Section header rank.** `DashboardSectionHeader` is now
+  `headline`/primary — every group heading outranks the quiet
+  `subheadline`/secondary card titles beneath it.
+
+### Overview
+
+- **Primary KPI strip.** The five bordered KPI cards are one quiet
+  surface: equal columns divided by hairlines, values at 36pt rounded
+  (was 28), labels subheadline/secondary, semantic tint only where
+  meaningful (blocked non-zero → critical, verification non-zero →
+  positive). Per-cell click navigation, hover, help text, the
+  `overview.kpiTile` identifier and the five-tile/equal-geometry
+  contract (pinned by UI tests) are unchanged.
+- **Basic information.** Eight boxed scalars are one grouped surface
+  of label/value rows (adaptive grid); the connection state keeps a
+  status badge, quota warnings tint caution when non-zero. No data
+  removed.
+- **Charts.** `chartHeight` 160 → 224; the trend chart gains a
+  three-series legend (new `overview.legend.*` keys, en + zh-Hans);
+  the state distribution chart moves to subheadline rows. Both cards
+  still share one plot-height token so the row ends on one baseline.
+- **Needs attention.** Risk rows carry a severity chip (tone + symbol,
+  never colour alone), body/semibold titles, subheadline details and
+  a trailing chevron. `RiskDestination` navigation is byte-for-byte
+  the same. The raw-blocker `DisclosureGroup` stays for technical
+  detail.
+- **Recent activity.** Overview renders a feed: readable summary as
+  primary text, the machine event code demoted to metadata, hairline
+  separators. The Activity destination keeps the full day-grouped
+  table.
+- **Card count.** Bordered containers on Overview: 15 (5 KPI + 8
+  basic-info + 2 charts) → 4 (KPI strip, basic-info surface, 2 chart
+  cards). Risks and activity are open rows on the page.
+
+### Frozen in this round
+
+No behavior, API, authority, Safety Kernel, plugin, scheduling,
+SUPERVISED_AUTO or backend change. Tasks / Resources / Settings
+content designs untouched (the only Settings/Activity edits are the
+shared width-role and rhythm tokens). UI-test contracts preserved:
+`overview.kpiTile` (5 buttons, equal geometry, same navigation),
+`dashboard.eventRow`, Activity spanning the pane.
+
+### Verification
+
+Swift 476 / 0, `git diff --check` clean; Python / ruff / OpenCode
+adapter re-run green (no non-Swift file touched by the round). App
+bundle rebuilt from the Round 1 head for the owner's screenshot pass.
