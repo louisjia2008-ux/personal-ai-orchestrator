@@ -35,14 +35,24 @@ final class DashboardLayoutContractTests: XCTestCase {
 
     /// Page insets are one value pair, drawn from the shared spacing scale, so
     /// Tasks (20) and Resources (20) can never drift apart again the way
-    /// 20 vs 24 did in B4.
+    /// 20 vs 24 did in B4. Section rhythm stays on the 4pt grid but must
+    /// exceed row rhythm — when both were 16 the page read as one undivided
+    /// block, which the visual round called out as missing breathing room.
     func testPageInsetsAreSharedAndOnTheSpacingScale() {
         XCTAssertEqual(
             DashboardLayoutMetrics.pageHorizontalPadding,
             DashboardLayoutMetrics.pageVerticalPadding
         )
         XCTAssertEqual(DashboardLayoutMetrics.pageHorizontalPadding, Spacing.page)
-        XCTAssertEqual(DashboardLayoutMetrics.sectionSpacing, Spacing.section)
+        XCTAssertEqual(
+            DashboardLayoutMetrics.sectionSpacing.truncatingRemainder(dividingBy: 4),
+            0,
+            "section spacing left the 4pt grid"
+        )
+        XCTAssertGreaterThan(
+            DashboardLayoutMetrics.sectionSpacing, Spacing.element,
+            "page sections must breathe more than the rows inside them"
+        )
     }
 
     /// The sidebar is one pinned width, not a band. A resizable column let the
@@ -63,10 +73,13 @@ final class DashboardLayoutContractTests: XCTestCase {
         XCTAssertGreaterThan(DashboardLayoutMetrics.cardPadding, 0)
     }
 
-    /// KPI tiles reserve one height so the Overview row stays a row.
+    /// KPI tiles reserve one height so the Overview strip stays a strip, and
+    /// charts reserve a plot height tall enough to read as primary content
+    /// rather than an inset thumbnail.
     func testKPITilesReserveACommonHeight() {
-        XCTAssertGreaterThan(DashboardLayoutMetrics.kpiTileHeight, 0)
-        XCTAssertGreaterThan(DashboardLayoutMetrics.chartHeight, 0)
+        XCTAssertGreaterThanOrEqual(DashboardLayoutMetrics.kpiTileHeight, 100)
+        XCTAssertGreaterThanOrEqual(DashboardLayoutMetrics.chartHeight, 200)
+        XCTAssertLessThanOrEqual(DashboardLayoutMetrics.chartHeight, 320)
     }
 
     // MARK: Collection → detail workspace
@@ -124,13 +137,18 @@ final class DashboardLayoutContractTests: XCTestCase {
         XCTAssertGreaterThan(threeCards, content)
     }
 
-    /// A chronological table uses the main pane but stops before it stretches
-    /// a three-column row across a maximised window.
-    func testTableWidthUsesThePaneWithoutStretching() {
+    /// Content width roles, post visual-round-1: dashboards, tables and
+    /// charts use the pane (no page-level cap exists for them to bypass);
+    /// form/reading content keeps a measure wider than prose but bounded, so
+    /// the Settings column neither squeezes nor stretches across a display.
+    /// There is deliberately no `tableMaximumWidth` any more — the token that
+    /// capped Activity and Settings to a leading 980pt column is gone, and
+    /// this test pins its replacement.
+    func testFormPagesKeepAReadingMeasure() {
         XCTAssertGreaterThan(
-            DashboardLayoutMetrics.tableMaximumWidth, ContentWidth.reading,
-            "a table must be allowed wider than a prose measure"
+            DashboardLayoutMetrics.formMaximumWidth, ContentWidth.reading,
+            "a form column must be allowed wider than a prose measure"
         )
-        XCTAssertLessThanOrEqual(DashboardLayoutMetrics.tableMaximumWidth, 1000)
+        XCTAssertLessThanOrEqual(DashboardLayoutMetrics.formMaximumWidth, 1000)
     }
 }

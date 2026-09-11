@@ -537,8 +537,10 @@ private struct ProjectsSection: View {
                 }
             }
         }
-        .frame(maxWidth: DashboardLayoutMetrics.tableMaximumWidth, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // A form measure, centered like System Settings' content column: a
+        // wide window gains symmetric margins, not a dead region on the right.
+        .frame(maxWidth: DashboardLayoutMetrics.formMaximumWidth)
+        .frame(maxWidth: .infinity)
     }
 
     private func pickProjectFolder() {
@@ -931,10 +933,10 @@ private struct ActivityDashboard: View {
         DashboardPageContainer {
             // The events themselves, as one day-grouped table across the main
             // pane. No card: a chronological list is not a summary panel, and
-            // wrapping it in one is what left Activity as a grey slab.
+            // wrapping it in one is what left Activity as a grey slab. The
+            // table uses the pane's full width — the old measure cap was the
+            // left-heavy narrow column the visual round removed.
             EventList(events: store.dashboard?.recentEvents ?? [], groupsByDay: true)
-                .frame(maxWidth: DashboardLayoutMetrics.tableMaximumWidth, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -1103,8 +1105,10 @@ private struct ClientSettingsSection: View {
             AutomationModeCard()
             ActiveSchedulingPolicyCard()
         }
-        .frame(maxWidth: DashboardLayoutMetrics.tableMaximumWidth, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // The same centered form measure as Projects: one Settings grid, not
+        // two alignments inside one destination.
+        .frame(maxWidth: DashboardLayoutMetrics.formMaximumWidth)
+        .frame(maxWidth: .infinity)
         .onAppear {
             Task { await store.loadSchedulingSettings() }
         }

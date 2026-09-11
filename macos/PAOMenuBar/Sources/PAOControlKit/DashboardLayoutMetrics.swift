@@ -26,8 +26,11 @@ public enum DashboardLayoutMetrics {
     public static let pageHorizontalPadding: CGFloat = Spacing.page
     /// Outer vertical inset between the content pane and page content.
     public static let pageVerticalPadding: CGFloat = Spacing.page
-    /// Vertical gap between a page's top-level sections.
-    public static let sectionSpacing: CGFloat = Spacing.section
+    /// Vertical gap between a page's top-level sections. Deliberately off the
+    /// `Spacing.section` value: page sections must breathe noticeably more
+    /// than the rows inside them, which was indistinguishable when both
+    /// used 16. Still on the 4pt grid.
+    public static let sectionSpacing: CGFloat = 28
 
     // MARK: Cards
 
@@ -35,11 +38,13 @@ public enum DashboardLayoutMetrics {
     public static let cardSpacing: CGFloat = Spacing.element
     public static let cardCornerRadius: CGFloat = Radius.panel
     public static let cardPadding: CGFloat = 14
-    /// Reserved height of one KPI tile, so every tile in the row is identical.
-    public static let kpiTileHeight: CGFloat = 104
+    /// Reserved height of one KPI cell, so every cell in the strip is identical.
+    public static let kpiTileHeight: CGFloat = 118
     /// Reserved plot height of a chart inside a card, so cards sharing a row
-    /// end the same height.
-    public static let chartHeight: CGFloat = 160
+    /// end the same height. Charts are primary Overview content, not inset
+    /// thumbnails: the plot must stay tall enough for a week of buckets to
+    /// stay readable.
+    public static let chartHeight: CGFloat = 224
     /// Narrowest a card may become before a row of them wraps.
     public static let cardMinimumWidth: CGFloat = 260
 
@@ -67,10 +72,20 @@ public enum DashboardLayoutMetrics {
     }
     public static let minimumWindowHeight: CGFloat = 600
 
-    // MARK: Reading measure
+    // MARK: Content width roles
+    //
+    // Round 1 of the visual closeout split the old one-size cap into roles:
+    //
+    // - dashboards, tables and charts (Overview, Activity) use the available
+    //   content-column width — a global narrow cap is what left them hugged to
+    //   the left of a wide window;
+    // - reading/form content (the Settings column) keeps a measure and centers
+    //   it, the way System Settings does, so a wide window gains symmetric
+    //   margins instead of a dead region on the right.
 
-    /// Widest a chronological table is allowed to grow. Wide enough to use the
-    /// main pane, bounded so a maximised window does not stretch a three-column
-    /// row across the whole display.
-    public static let tableMaximumWidth: CGFloat = 980
+    /// Widest the Settings-style form column grows. Wide enough for the
+    /// label/value rows and button rows it holds, bounded so a maximised
+    /// window stretches nothing across the whole display, and centered at
+    /// widths beyond it.
+    public static let formMaximumWidth: CGFloat = 980
 }

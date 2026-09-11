@@ -64,7 +64,9 @@ struct DashboardPageContainer<Content: View>: View {
 ///
 /// One weight, one colour, one baseline, on every page that groups content —
 /// so "Basic information" on Overview and "Today" on Activity are visibly the
-/// same rank rather than two designers' idea of a heading.
+/// same rank rather than two designers' idea of a heading. A section header
+/// outranks every card title beneath it: the header is `headline` in the
+/// primary label colour, while card titles stay quiet `subheadline`/secondary.
 struct DashboardSectionHeader: View {
     let title: String
     var symbol: String?
@@ -84,8 +86,7 @@ struct DashboardSectionHeader: View {
                     .foregroundStyle(.secondary)
             }
             Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(.headline)
             if let detail {
                 Spacer(minLength: Spacing.inner)
                 Text(detail)
