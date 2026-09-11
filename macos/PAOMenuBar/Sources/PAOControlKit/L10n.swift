@@ -155,6 +155,7 @@ public enum L10n {
         "overview.runnableTargets", "overview.runningTasks", "overview.tasksToday",
         "overview.routingToday", "overview.quotaWarnings", "overview.lastRefresh",
         "overview.taskTrend", "overview.taskTrend.empty", "overview.taskTrend.help",
+        "overview.legend.submitted", "overview.legend.completed", "overview.legend.blocked",
         "overview.taskStates", "overview.taskStates.empty", "overview.risks",
         "overview.recentActivity", "risk.projectUnavailable.title",
         "risk.projectUnavailable.detail", "risk.executionTargetUnverified.title",
@@ -1043,6 +1044,9 @@ public enum L10n {
     public static var overviewQuotaWarnings: String { tr("overview.quotaWarnings") }
     public static var overviewTaskTrend: String { tr("overview.taskTrend") }
     public static var overviewTaskTrendEmpty: String { tr("overview.taskTrend.empty") }
+    public static var overviewLegendSubmitted: String { tr("overview.legend.submitted") }
+    public static var overviewLegendCompleted: String { tr("overview.legend.completed") }
+    public static var overviewLegendBlocked: String { tr("overview.legend.blocked") }
     public static var overviewTaskStates: String { tr("overview.taskStates") }
     public static var overviewTaskStatesEmpty: String { tr("overview.taskStates.empty") }
     public static var overviewRisks: String { tr("overview.risks") }

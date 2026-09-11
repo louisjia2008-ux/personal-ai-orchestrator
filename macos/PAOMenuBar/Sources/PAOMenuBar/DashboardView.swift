@@ -793,69 +793,23 @@ private struct OverviewDashboard: View {
     var body: some View {
         DashboardPageContainer {
             let counts = store.dashboard?.counts
-            // Equal-width flexible columns plus a shared tile height: the verification
-            // tile aggregates two states and previously wrapped its title, which grew
-            // that one card and broke the row's alignment.
-            LazyVGrid(
-                columns: Array(
-                    repeating: GridItem(.flexible(), spacing: DashboardLayoutMetrics.cardSpacing),
-                    count: 5
-                ),
-                spacing: DashboardLayoutMetrics.cardSpacing
-            ) {
-                MetricTile(L10n.kpiRunning, counts?.running ?? 0, symbol: "gearshape.2") {
-                    navigateToTasks(filter: "RUNNING")
-                }
-                MetricTile(L10n.kpiReady, counts?.ready ?? 0, symbol: "tray") {
-                    navigateToTasks(filter: "READY")
-                }
-                MetricTile(L10n.kpiBlocked, counts?.blocked ?? 0, symbol: "exclamationmark.octagon") {
-                    navigateToTasks(filter: "BLOCKED")
-                }
-                MetricTile(
-                    L10n.kpiVerification,
-                    (counts?.verifying ?? 0) + (counts?.verified ?? 0),
-                    symbol: "checkmark.seal",
-                    detail: L10n.kpiVerificationDetail(
-                        verifying: counts?.verifying ?? 0,
-                        verified: counts?.verified ?? 0
-                    )
-                ) {
-                    navigateToTasks(filter: "VERIFIED")
-                }
-                MetricTile(L10n.kpiCompleted, counts?.completed ?? 0, symbol: "checkmark.circle") {
-                    navigateToTasks(filter: "COMPLETED")
-                }
+            // Primary rank: the five composite counters as ONE metric strip —
+            // one surface, one geometry — rather than five unrelated admin
+            // cards. Each cell keeps the exact tile click contract: it opens
+            // Tasks narrowed to the states it counted.
+            OverviewMetricStrip(counts: counts) { filter in
+                navigateToTasks(filter: filter)
             }
-            .fixedSize(horizontal: false, vertical: true)
 
-            // Grid cells rather than a card wrapping a card: the group is a
-            // heading plus tiles, aligned to the same left and right edges as
-            // the KPI row above it.
+            // Secondary rank: system/resource state as one compact grouped
+            // surface, not a grid of one boxed scalar per fact.
             if let info = store.dashboard?.basicInfo {
                 OverviewGroup(
                     L10n.overviewBasicInfo,
                     symbol: "info.circle",
                     detail: L10n.overviewLastRefresh(Timestamps.friendly(info.lastRefreshSync))
                 ) {
-                    LazyVGrid(
-                        columns: [
-                            GridItem(
-                                .adaptive(minimum: 170),
-                                spacing: DashboardLayoutMetrics.cardSpacing
-                            )
-                        ],
-                        spacing: DashboardLayoutMetrics.cardSpacing
-                    ) {
-                        BasicInfoCell(L10n.overviewConnection, info.daemonConnection)
-                        BasicInfoCell(L10n.overviewProjects, "\(info.registeredProjects)")
-                        BasicInfoCell(L10n.overviewProviders, "\(info.discoveredProviders)")
-                        BasicInfoCell(L10n.overviewRunnableTargets, "\(info.availableExecutionTargets)")
-                        BasicInfoCell(L10n.overviewRunningTasks, "\(info.runningTasks)")
-                        BasicInfoCell(L10n.overviewTasksToday, "\(info.tasksToday)")
-                        BasicInfoCell(L10n.overviewRoutingToday, "\(info.routingDecisionsToday)")
-                        BasicInfoCell(L10n.overviewQuotaWarnings, "\(info.quotaWarningCount)")
-                    }
+                    OverviewBasicInfo(info: info)
                 }
             }
 
@@ -881,29 +835,31 @@ private struct OverviewDashboard: View {
 
             OverviewGroup(L10n.overviewRisks, symbol: "exclamationmark.triangle") {
                 if let risks = store.dashboard?.risks, !risks.isEmpty {
-                    VStack(alignment: .leading, spacing: Spacing.inner) {
-                        ForEach(risks) { risk in
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(risks.enumerated()), id: \.element.id) { index, risk in
+                            if index > 0 { Divider() }
                             RiskRow(risk: risk, onNavigate: onNavigate)
                         }
-                        DisclosureGroup(L10n.advancedDetails) {
-                            ForEach(store.dashboard?.importantBlockers ?? [], id: \.self) { raw in
-                                Text(raw)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .textSelection(.enabled)
-                            }
-                        }
-                        .font(.caption)
                     }
+                    DisclosureGroup(L10n.advancedDetails) {
+                        ForEach(store.dashboard?.importantBlockers ?? [], id: \.self) { raw in
+                            Text(raw)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .font(.caption)
+                    .padding(.top, Spacing.element)
                 } else {
-                    Text(L10n.noBlockers)
+                    Label(L10n.noBlockers, systemImage: "checkmark.circle")
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(StatusTone.positive.color)
                 }
             }
 
             OverviewGroup(L10n.overviewRecentActivity, symbol: "clock") {
-                EventList(events: store.dashboard?.recentEvents ?? [])
+                OverviewActivityFeed(events: store.dashboard?.recentEvents ?? [])
             }
         }
     }
@@ -912,13 +868,6 @@ private struct OverviewDashboard: View {
     /// counted. Never mutates authoritative task state.
     private func navigateToTasks(filter: String) {
         onOpenTasks(filter)
-    }
-
-    private var disconnectedText: String {
-        if case .disconnected(let reason) = store.connection {
-            return L10n.disconnectionReason(reason)
-        }
-        return ""
     }
 }
 
@@ -1334,95 +1283,266 @@ private struct StatusBadge: View {
     }
 }
 
-private struct MetricTile: View {
+/// One composite counter in the Overview metric strip. `id` is the metrics
+/// filter the cell opens (`TaskStateSelection.fromMetricsFilter`), so the
+/// list a cell opens holds exactly the tasks the cell counted.
+private struct OverviewMetric: Identifiable {
+    let id: String
     let label: String
     let value: Int
     let symbol: String
     let detail: String?
-    let action: () -> Void
-    @State private var hovering = false
+    /// Semantic tint, reserved for the counters that carry one (blocked when
+    /// non-zero, verification when non-zero). Nil renders the primary label
+    /// colour — colour is an emphasis, never the only channel.
+    let tint: Color?
+}
 
-    /// Every KPI tile reserves the shared tile height regardless of whether it
-    /// carries a secondary line, so five tiles in a row stay geometrically
-    /// identical. The height is a layout token, not a local number: the row's
-    /// alignment contract is shared with the rest of the dashboard.
-    private static let tileHeight = DashboardLayoutMetrics.kpiTileHeight
+/// The five composite task counters as one strip: a single quiet surface,
+/// equal columns divided by hairlines, values materially larger than their
+/// labels. Five separate bordered cards read as an admin metrics row; one
+/// strip reads as the page's primary statement.
+private struct OverviewMetricStrip: View {
+    let counts: DashboardCountsView?
+    let onOpenTasks: (String) -> Void
 
-    init(
-        _ label: String,
-        _ value: Int,
-        symbol: String,
-        detail: String? = nil,
-        action: @escaping () -> Void
-    ) {
-        self.label = label
-        self.value = value
-        self.symbol = symbol
-        self.detail = detail
-        self.action = action
+    private var metrics: [OverviewMetric] {
+        let verifying = counts?.verifying ?? 0
+        let verified = counts?.verified ?? 0
+        let blocked = counts?.blocked ?? 0
+        return [
+            OverviewMetric(
+                id: "RUNNING",
+                label: L10n.kpiRunning,
+                value: counts?.running ?? 0,
+                symbol: "gearshape.2",
+                detail: nil,
+                tint: nil
+            ),
+            OverviewMetric(
+                id: "READY",
+                label: L10n.kpiReady,
+                value: counts?.ready ?? 0,
+                symbol: "tray",
+                detail: nil,
+                tint: nil
+            ),
+            OverviewMetric(
+                id: "BLOCKED",
+                label: L10n.kpiBlocked,
+                value: blocked,
+                symbol: "exclamationmark.octagon",
+                detail: nil,
+                tint: blocked > 0 ? StatusTone.critical.color : nil
+            ),
+            OverviewMetric(
+                id: "VERIFIED",
+                label: L10n.kpiVerification,
+                value: verifying + verified,
+                symbol: "checkmark.seal",
+                detail: L10n.kpiVerificationDetail(verifying: verifying, verified: verified),
+                tint: verifying + verified > 0 ? StatusTone.positive.color : nil
+            ),
+            OverviewMetric(
+                id: "COMPLETED",
+                label: L10n.kpiCompleted,
+                value: counts?.completed ?? 0,
+                symbol: "checkmark.circle",
+                detail: nil,
+                tint: nil
+            ),
+        ]
     }
 
     var body: some View {
+        DashboardCard {
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 5),
+                spacing: 0
+            ) {
+                ForEach(Array(metrics.enumerated()), id: \.element.id) { index, metric in
+                    OverviewMetricCell(metric: metric, showsSeparator: index > 0) {
+                        onOpenTasks(metric.id)
+                    }
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct OverviewMetricCell: View {
+    let metric: OverviewMetric
+    let showsSeparator: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
         Button(action: action) {
-            DashboardCard(title: label, symbol: symbol, titleLineLimit: 1) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(value)")
-                        .font(.system(size: 28, weight: .semibold, design: .rounded))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                    // The secondary line keeps the aggregate honest: an owner can see
-                    // the verifying/verified split without a second, taller card.
-                    Text(detail ?? " ")
-                        .font(.caption2)
+            VStack(alignment: .leading, spacing: Spacing.tight) {
+                Text("\(metric.value)")
+                    .font(.system(size: 36, weight: .semibold, design: .rounded))
+                    .foregroundStyle(metric.tint ?? Color.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                HStack(spacing: Spacing.tight) {
+                    Image(systemName: metric.symbol)
+                        .imageScale(.small)
+                        .foregroundStyle(.tertiary)
+                    Text(metric.label)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                        .opacity(detail == nil ? 0 : 1)
-                        .accessibilityHidden(detail == nil)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // Reserved so cells with and without a secondary line keep
+                // identical geometry — the strip is one row, one baseline.
+                Text(metric.detail ?? " ")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .opacity(metric.detail == nil ? 0 : 1)
+                    .accessibilityHidden(metric.detail == nil)
             }
-            .frame(height: Self.tileHeight, alignment: .top)
-            .padding(2)
+            .frame(maxWidth: .infinity, minHeight: DashboardLayoutMetrics.kpiTileHeight, alignment: .topLeading)
+            .padding(.trailing, Spacing.element)
+            .padding(.leading, showsSeparator ? Spacing.element : 0)
             .background(
-                RoundedRectangle(cornerRadius: DashboardLayoutMetrics.cardCornerRadius)
-                    .fill(hovering ? Color.accentColor.opacity(0.12) : .clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DashboardLayoutMetrics.cardCornerRadius)
-                    .stroke(hovering ? Color.accentColor.opacity(0.45) : .clear, lineWidth: 1)
+                RoundedRectangle(cornerRadius: Radius.inline)
+                    .fill(hovering ? Color.accentColor.opacity(0.1) : Color.clear)
             )
         }
         .buttonStyle(.plain)
+        .overlay(alignment: .leading) {
+            if showsSeparator {
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(width: 1)
+                    .padding(.vertical, Spacing.element)
+            }
+        }
         .onHover { hovering = $0 }
         .help(L10n.metricTileHelp)
         .accessibilityIdentifier("overview.kpiTile")
     }
 }
 
-private struct BasicInfoCell: View {
-    let label: String
-    let value: String
-
-    init(_ label: String, _ value: String) {
-        self.label = label
-        self.value = value
-    }
+/// Basic information as one compact status surface. Every scalar used to sit
+/// in its own bordered card — eight boxes for eight facts — which is what
+/// gave Overview its admin-console texture. Same data, one grouped grid of
+/// label/value rows, a badge only for the connection state it describes.
+private struct OverviewBasicInfo: View {
+    let info: DashboardBasicInfoView
 
     var body: some View {
         DashboardCard {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(value)
-                    .font(.title3.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                Text(label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            LazyVGrid(
+                columns: [
+                    GridItem(
+                        .adaptive(minimum: 230),
+                        spacing: DashboardLayoutMetrics.cardSpacing
+                    )
+                ],
+                spacing: DashboardLayoutMetrics.cardSpacing
+            ) {
+                field(L10n.overviewConnection) { connectionBadge }
+                field(L10n.overviewProjects) { value("\(info.registeredProjects)") }
+                field(L10n.overviewProviders) { value("\(info.discoveredProviders)") }
+                field(L10n.overviewRunnableTargets) { value("\(info.availableExecutionTargets)") }
+                field(L10n.overviewRunningTasks) { value("\(info.runningTasks)") }
+                field(L10n.overviewTasksToday) { value("\(info.tasksToday)") }
+                field(L10n.overviewRoutingToday) { value("\(info.routingDecisionsToday)") }
+                field(L10n.overviewQuotaWarnings) {
+                    Text("\(info.quotaWarningCount)")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(
+                            info.quotaWarningCount > 0 ? StatusTone.caution.color : Color.primary
+                        )
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    private func field<Value: View>(
+        _ label: String,
+        @ViewBuilder value: () -> Value
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            value()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func value(_ string: String) -> some View {
+        Text(string)
+            .font(.body.weight(.semibold))
+            .lineLimit(1)
+    }
+
+    private var connectionBadge: some View {
+        StatusBadge(text: info.daemonConnection, kind: connectionKind)
+    }
+
+    private var connectionKind: BadgeKind {
+        switch StatusStyle.connection(info.daemonConnection).tone {
+        case .positive: return .good
+        case .caution: return .warn
+        case .critical: return .bad
+        case .neutral, .unknown: return .neutral
+        }
+    }
+}
+
+/// Recent daemon events as an activity feed: the readable summary is the
+/// primary text, the machine event code is demoted to metadata, and rows
+/// sit on hairline separators. The Activity destination keeps the full
+/// day-grouped table; this is Overview's short slice of the same evidence.
+private struct OverviewActivityFeed: View {
+    let events: [ActivityEventView]
+
+    var body: some View {
+        if events.isEmpty {
+            Label(L10n.noEvents, systemImage: "tray")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
+                    if index > 0 { Divider() }
+                    row(event)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func row(_ event: ActivityEventView) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Spacing.element) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(event.summary)
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(event.eventType)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: Spacing.inner)
+            Text(Timestamps.friendly(event.createdAt))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+        .padding(.vertical, Spacing.inner)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(Timestamps.friendly(event.createdAt)), \(event.eventType), \(event.summary)")
+        .accessibilityIdentifier("dashboard.eventRow")
     }
 }
 
@@ -1437,29 +1557,49 @@ private struct TaskTrendChart: View {
     /// growing at a width a bar can still be read as one: four buckets in a
     /// wide card previously rendered as four rectangles the size of cards.
     private static let barMaximumWidth: CGFloat = 36
-    private static let labelHeight: CGFloat = 16
+    private static let labelHeight: CGFloat = 18
 
     private var plotHeight: CGFloat {
         DashboardLayoutMetrics.chartHeight - Self.labelHeight - Spacing.tight
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: Spacing.inner) {
-            ForEach(buckets.suffix(12)) { bucket in
-                VStack(spacing: Spacing.tight) {
-                    stackedBar(bucket)
-                    Text(hour(bucket.bucketStart))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .frame(height: Self.labelHeight)
-                }
-                // The column shares the plot evenly; the bar inside it stops
-                // at a bar's width. Without the cap, four buckets in a wide
-                // card rendered as four rectangles the size of cards.
-                .frame(maxWidth: .infinity)
+        VStack(alignment: .leading, spacing: Spacing.element) {
+            // The three series are the dashboard's state vocabulary; without
+            // a legend the strip asked the owner to memorize three colours.
+            HStack(spacing: Spacing.element) {
+                legendItem(state: "SUBMITTED", label: L10n.overviewLegendSubmitted)
+                legendItem(state: "COMPLETED", label: L10n.overviewLegendCompleted)
+                legendItem(state: "BLOCKED", label: L10n.overviewLegendBlocked)
             }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            HStack(alignment: .bottom, spacing: Spacing.inner) {
+                ForEach(buckets.suffix(12)) { bucket in
+                    VStack(spacing: Spacing.tight) {
+                        stackedBar(bucket)
+                        Text(hour(bucket.bucketStart))
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .frame(height: Self.labelHeight)
+                    }
+                    // The column shares the plot evenly; the bar inside it stops
+                    // at a bar's width. Without the cap, four buckets in a wide
+                    // card rendered as four rectangles the size of cards.
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .frame(height: DashboardLayoutMetrics.chartHeight, alignment: .bottom)
         }
-        .frame(height: DashboardLayoutMetrics.chartHeight, alignment: .bottom)
+    }
+
+    private func legendItem(state: String, label: String) -> some View {
+        HStack(spacing: Spacing.tight) {
+            Circle()
+                .fill(StatusStyle.task(state: state).tone.fillColor)
+                .frame(width: 7, height: 7)
+            Text(label)
+        }
     }
 
     private func stackedBar(_ bucket: TaskTrendBucketView) -> some View {
@@ -1498,22 +1638,24 @@ private struct StateDistributionChart: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             ForEach(slices) { slice in
-                HStack {
+                HStack(spacing: Spacing.element) {
                     Text(slice.state)
-                        .font(.caption)
-                        .frame(width: 92, alignment: .leading)
+                        .font(.subheadline.weight(.medium))
+                        .frame(width: 116, alignment: .leading)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     GeometryReader { proxy in
                         RoundedRectangle(cornerRadius: 4)
-                            .fill(color(for: slice.state).opacity(0.75))
-                            .frame(width: max(4, proxy.size.width * CGFloat(slice.count) / CGFloat(total)))
+                            .fill(color(for: slice.state).opacity(0.8))
+                            .frame(width: max(5, proxy.size.width * CGFloat(slice.count) / CGFloat(total)))
                     }
-                    .frame(height: 8)
+                    .frame(height: 10)
                     Text("\(slice.count)")
-                        .font(.caption)
+                        .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
-                        .frame(width: 30, alignment: .trailing)
+                        .frame(width: 34, alignment: .trailing)
                 }
             }
         }
@@ -1546,35 +1688,42 @@ private struct RiskRow: View {
     let onNavigate: (NavigationIntent) -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .center, spacing: Spacing.element) {
+            // Severity scannable at a glance: the tone carries a symbol-filled
+            // chip, so rank survives greyscale and never rides on colour alone.
             Image(systemName: symbol)
                 .foregroundStyle(color)
-                .frame(width: 20)
+                .frame(width: 28, height: 28)
+                .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: Radius.inline))
             VStack(alignment: .leading, spacing: 3) {
                 Text(L10n.riskTitle(rawCode: risk.rawCode, count: risk.count, fallback: risk.title))
-                    .font(.body.weight(.medium))
+                    .font(.body.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(L10n.riskDetail(rawCode: risk.rawCode, fallback: risk.detail))
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
+            Spacer(minLength: Spacing.inner)
             if let destination = risk.destination,
                let intent = RiskDestination.intent(
-                   for: destination,
-                   // RiskItemView carries no task identity, so a verification risk
-                   // resolves to Activity rather than guessing a task to select.
-                   taskId: nil
-               ) {
+                    for: destination,
+                    // RiskItemView carries no task identity, so a verification risk
+                    // resolves to Activity rather than guessing a task to select.
+                    taskId: nil
+                ) {
                 Button {
                     onNavigate(intent)
                 } label: {
-                    Image(systemName: "arrow.right.circle")
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.borderless)
                 .help(intent.section.title)
+                .accessibilityLabel(intent.section.title)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 10)
     }
 
     private var presentation: StatusPresentation { StatusStyle.severity(risk.severity) }

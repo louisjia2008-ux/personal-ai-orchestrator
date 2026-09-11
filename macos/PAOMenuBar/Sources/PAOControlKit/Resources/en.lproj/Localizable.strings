@@ -338,6 +338,9 @@
 "overview.lastRefresh" = "Last refresh: %@";
 "overview.taskTrend" = "Task Trend";
 "overview.taskTrend.empty" = "Historical data is still being collected.";
+"overview.legend.submitted" = "Submitted";
+"overview.legend.completed" = "Completed";
+"overview.legend.blocked" = "Blocked";
 "overview.taskTrend.help" = "Submitted %1$d, completed %2$d, blocked %3$d";
 "overview.taskStates" = "Task States";
 "overview.taskStates.empty" = "No task state data yet.";

@@ -338,6 +338,9 @@
 "overview.lastRefresh" = "最近刷新：%@";
 "overview.taskTrend" = "任务趋势";
 "overview.taskTrend.empty" = "正在收集历史任务数据。";
+"overview.legend.submitted" = "已提交";
+"overview.legend.completed" = "已完成";
+"overview.legend.blocked" = "已阻塞";
 "overview.taskTrend.help" = "提交 %1$d，完成 %2$d，阻塞 %3$d";
 "overview.taskStates" = "任务状态";
 "overview.taskStates.empty" = "暂无任务状态数据。";
