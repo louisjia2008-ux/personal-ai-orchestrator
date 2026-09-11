@@ -46,6 +46,15 @@ public enum AutoControlAction: String, Equatable, Sendable {
     case projectAutoSettings
 }
 
+/// M1 WP5b closeout: the surface a supervised-auto notice belongs to.
+/// Every ``AutoControlNotice`` carries one deterministically so an
+/// outcome can never attach itself to an unrelated control surface.
+public enum AutoControlScope: Equatable, Sendable {
+    case task(String)
+    case project(String)
+    case schedulingMode
+}
+
 /// M1 WP5b: structured supervised-auto operation outcome. Daemon
 /// semantics are preserved verbatim; `staleState` means the daemon
 /// rejected the operation because the task moved — the authoritative
@@ -56,14 +65,54 @@ public enum AutoControlNotice: Equatable, Sendable {
     case dispatchRequested(taskId: String, dispatchId: String, status: String)
     /// A 409 stale/state conflict: state has changed and was reloaded.
     case staleState(taskId: String)
-    /// Daemon refusal with its sanitized error code.
-    case blocked(code: String)
+    /// Daemon refusal with its sanitized error code, scoped to the
+    /// entity the refused operation targeted.
+    case blocked(scope: AutoControlScope, code: String)
     case schedulingModeChanged(mode: String)
-    /// Confirmed stop: the returned settings said `mode == MANUAL`.
+    /// Confirmed stop: THIS invocation's daemon response said
+    /// `mode == MANUAL`. Never derivable from a prior notice.
     case supervisedAutoStopped
+    /// Another scheduling-mode mutation already owns the in-flight key;
+    /// a coalesced emergency stop surfaces this instead of any success.
+    case schedulingModeBusy
     case projectAutoSettingsSaved(projectId: String)
-    case failed(action: AutoControlAction, detail: String)
-    case malformedResponse
+    case failed(scope: AutoControlScope, action: AutoControlAction, detail: String)
+    case malformedResponse(scope: AutoControlScope)
+}
+
+extension AutoControlNotice {
+    /// One semantic source of truth for which surface may render a
+    /// notice. UI layers filter through ``applies(to:)`` instead of
+    /// re-deriving their own match rules.
+    public var scope: AutoControlScope {
+        switch self {
+        case .acknowledged(let taskId), .vetoed(let taskId),
+             .staleState(let taskId):
+            return .task(taskId)
+        case .dispatchRequested(let taskId, _, _):
+            return .task(taskId)
+        case .blocked(let scope, _), .failed(let scope, _, _),
+             .malformedResponse(let scope):
+            return scope
+        case .schedulingModeChanged, .supervisedAutoStopped, .schedulingModeBusy:
+            return .schedulingMode
+        case .projectAutoSettingsSaved(let projectId):
+            return .project(projectId)
+        }
+    }
+
+    public func applies(to scope: AutoControlScope) -> Bool {
+        self.scope == scope
+    }
+}
+
+/// Invocation-local outcome of one scheduling-mode mutation. A
+/// coalesced invocation sent no request and therefore can never be
+/// reported as success; only `.applied` carries the daemon's answer.
+public enum SchedulingModeMutationResult: Sendable {
+    case applied(SchedulingSettingsView)
+    case coalesced
+    case failed
 }
 
 /// Client-side display state. Authoritative state is always reloaded from the daemon;
@@ -498,9 +547,9 @@ public final class OrchestratorStore: ObservableObject {
             return .staleState(taskId: taskId)
         }
         if case .httpError(_, let code) = error {
-            return .blocked(code: code)
+            return .blocked(scope: .task(taskId), code: code)
         }
-        return .failed(action: action, detail: error.displayDetail)
+        return .failed(scope: .task(taskId), action: action, detail: error.displayDetail)
     }
 
     /// ACK the current unacked AUTO_GRACE lifecycle. The authoritative
@@ -522,7 +571,7 @@ public final class OrchestratorStore: ObservableObject {
             ClientLog.operation("auto_ack", outcome: error.logCode)
             await loadTaskDetail(taskId: taskId)
         } catch {
-            autoControlNotice = .malformedResponse
+            autoControlNotice = .malformedResponse(scope: .task(taskId))
             ClientLog.operation("auto_ack", outcome: "malformed")
         }
     }
@@ -550,7 +599,7 @@ public final class OrchestratorStore: ObservableObject {
             ClientLog.operation("auto_veto", outcome: error.logCode)
             await loadTaskDetail(taskId: taskId)
         } catch {
-            autoControlNotice = .malformedResponse
+            autoControlNotice = .malformedResponse(scope: .task(taskId))
             ClientLog.operation("auto_veto", outcome: "malformed")
         }
     }
@@ -576,7 +625,9 @@ public final class OrchestratorStore: ObservableObject {
                 )
                 ClientLog.operation("auto_dispatch_now", outcome: "ok")
             } else {
-                autoControlNotice = .blocked(code: result.failureCode ?? "BLOCKED")
+                autoControlNotice = .blocked(
+                    scope: .task(taskId), code: result.failureCode ?? "BLOCKED"
+                )
                 ClientLog.operation("auto_dispatch_now", outcome: "refused")
             }
             await loadTaskDetail(taskId: taskId)
@@ -586,17 +637,20 @@ public final class OrchestratorStore: ObservableObject {
             ClientLog.operation("auto_dispatch_now", outcome: error.logCode)
             await loadTaskDetail(taskId: taskId)
         } catch {
-            autoControlNotice = .malformedResponse
+            autoControlNotice = .malformedResponse(scope: .task(taskId))
             ClientLog.operation("auto_dispatch_now", outcome: "malformed")
         }
     }
 
-    /// Change the orchestrator scheduling mode. The authoritative
-    /// `default_scheduling_policy` is re-read from the daemon and sent
-    /// back unchanged — a mode switch must never rewrite the owner's
-    /// global routing policy.
-    public func setSchedulingMode(_ mode: String) async {
-        guard beginAutoAction(taskId: nil, action: .schedulingMode) else { return }
+    /// The one scheduling-mode mutation primitive. Returns THIS
+    /// invocation's outcome so no caller can mistake a prior or
+    /// parallel operation's shared notice for its own answer. The
+    /// authoritative `default_scheduling_policy` is re-read from the
+    /// daemon and sent back unchanged — a mode switch must never
+    /// rewrite the owner's global routing policy. Failures surface
+    /// here already scoped to `.schedulingMode`.
+    private func performSchedulingModeChange(_ mode: String) async -> SchedulingModeMutationResult {
+        guard beginAutoAction(taskId: nil, action: .schedulingMode) else { return .coalesced }
         defer { endAutoAction(taskId: nil, action: .schedulingMode) }
         do {
             let current = try await client.schedulingSettings()
@@ -605,34 +659,66 @@ public final class OrchestratorStore: ObservableObject {
                 defaultSchedulingPolicy: current.defaultSchedulingPolicy
             )
             schedulingSettings = updated
-            autoControlNotice = .schedulingModeChanged(mode: updated.mode)
             ClientLog.operation("set_scheduling_mode", outcome: "ok")
             await refreshOnce()
+            return .applied(updated)
         } catch let error as PAOClientError {
-            autoControlNotice = .failed(action: .schedulingMode, detail: error.displayDetail)
+            autoControlNotice = .failed(
+                scope: .schedulingMode,
+                action: .schedulingMode,
+                detail: error.displayDetail
+            )
             ClientLog.operation("set_scheduling_mode", outcome: error.logCode)
+            return .failed
         } catch {
-            autoControlNotice = .malformedResponse
+            autoControlNotice = .malformedResponse(scope: .schedulingMode)
             ClientLog.operation("set_scheduling_mode", outcome: "malformed")
+            return .failed
+        }
+    }
+
+    /// Change the orchestrator scheduling mode (Settings surface). The
+    /// shared notice records only THIS invocation's daemon answer; a
+    /// coalesced invocation writes no success of its own.
+    public func setSchedulingMode(_ mode: String) async {
+        switch await performSchedulingModeChange(mode) {
+        case .applied(let settings):
+            autoControlNotice = .schedulingModeChanged(mode: settings.mode)
+        case .coalesced:
+            autoControlNotice = .schedulingModeBusy
+        case .failed:
+            break
         }
     }
 
     /// Menu-bar emergency stop for supervised autonomy. Implementation
     /// is the existing daemon-owned mode change to `MANUAL` — nothing
-    /// else. Success is only reported when the daemon's returned
-    /// settings actually say `MANUAL`.
+    /// else. Success is proven ONLY by this invocation's own
+    /// `.applied` response confirming `mode == MANUAL`; a coalesced
+    /// invocation sent no request and can never report a stop, and no
+    /// pre-existing shared notice is ever consulted as proof.
     public func emergencyStopSupervisedAuto() async {
-        await setSchedulingMode("MANUAL")
-        if case .schedulingModeChanged(let mode) = autoControlNotice, mode == "MANUAL" {
+        switch await performSchedulingModeChange("MANUAL") {
+        case .applied(let settings) where settings.mode == "MANUAL":
             autoControlNotice = .supervisedAutoStopped
+        case .applied:
+            autoControlNotice = .failed(
+                scope: .schedulingMode,
+                action: .schedulingMode,
+                detail: "mode_not_manual_after_put"
+            )
+        case .coalesced:
+            autoControlNotice = .schedulingModeBusy
+        case .failed:
+            break
         }
     }
 
-    /// Persist one project supervised-auto field, preserving the other
-    /// two from the authoritative current project view. `nil` means
-    /// "unchanged" and is resolved daemon-side, never from a client
-    /// default — so editing one setting can never silently reset its
-    /// siblings.
+    /// Persist one project supervised-auto field. `nil` means
+    /// "unchanged": this client re-fetches the current authoritative
+    /// `ProjectView` and resolves the nil fields from it, then sends
+    /// the daemon its required complete tuple — so editing one setting
+    /// can never silently reset its siblings.
     public func setProjectAutoSettings(
         projectId: String,
         supervisedAutoAllowed: Bool? = nil,
@@ -650,7 +736,9 @@ public final class OrchestratorStore: ObservableObject {
             }
             guard let current else {
                 autoControlNotice = .failed(
-                    action: .projectAutoSettings, detail: "project_not_found"
+                    scope: .project(projectId),
+                    action: .projectAutoSettings,
+                    detail: "project_not_found"
                 )
                 return
             }
@@ -666,15 +754,17 @@ public final class OrchestratorStore: ObservableObject {
             await refreshOnce()
         } catch let error as PAOClientError {
             if case .httpError(400, let code) = error {
-                autoControlNotice = .blocked(code: code)
+                autoControlNotice = .blocked(scope: .project(projectId), code: code)
             } else {
                 autoControlNotice = .failed(
-                    action: .projectAutoSettings, detail: error.displayDetail
+                    scope: .project(projectId),
+                    action: .projectAutoSettings,
+                    detail: error.displayDetail
                 )
             }
             ClientLog.operation("set_project_auto_settings", outcome: error.logCode)
         } catch {
-            autoControlNotice = .malformedResponse
+            autoControlNotice = .malformedResponse(scope: .project(projectId))
             ClientLog.operation("set_project_auto_settings", outcome: "malformed")
         }
     }

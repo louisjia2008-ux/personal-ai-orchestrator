@@ -857,3 +857,7 @@
 "project.auto.disableWarning" = "关闭受监督自动执行会中止该项目等待中/规划中的 AUTO 生命周期（守护进程将故障关闭式执行）。要继续吗？";
 "project.auto.disableConfirm" = "关闭受监督自动执行";
 "project.auto.saved" = "项目自动执行设置已保存。";
+
+"auto.notice.modeBusy" = "已有模式切换操作正在进行，请等待完成后再试。";
+"auto.mode.unknown" = "模式暂不可知";
+"auto.mode.unknownDetail" = "编排器尚未上报调度模式；在权威设置加载前无法选择任何模式。";

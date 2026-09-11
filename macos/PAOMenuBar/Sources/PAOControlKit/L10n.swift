@@ -319,6 +319,9 @@ public enum L10n {
         "auto.action.ack", "auto.action.ackHelp",
         "auto.action.veto", "auto.action.vetoHelp",
         "auto.action.dispatchNow", "auto.action.dispatchNowHelp",
+        "auto.notice.modeBusy",
+        "auto.mode.unknown",
+        "auto.mode.unknownDetail",
         "auto.notice.dismiss",
         "auto.notice.acknowledged", "auto.notice.vetoed",
         "auto.notice.dispatchRequested", "auto.notice.staleState",
@@ -468,7 +471,7 @@ public enum L10n {
             return tr("auto.notice.dispatchRequested", [dispatchId, status])
         case .staleState:
             return tr("auto.notice.staleState")
-        case .blocked(let code):
+        case .blocked(_, let code):
             return tr("auto.notice.blocked", [code])
         case .schedulingModeChanged(let mode):
             return tr("auto.notice.modeChanged", [autoModeName(mode)])
@@ -476,12 +479,17 @@ public enum L10n {
             return tr("menubar.stopSupervisedAuto.success")
         case .projectAutoSettingsSaved:
             return tr("project.auto.saved")
-        case .failed(let action, let detail):
+        case .schedulingModeBusy:
+            return tr("auto.notice.modeBusy")
+        case .failed(_, let action, let detail):
             return tr("auto.notice.failed", [action.rawValue, detail])
         case .malformedResponse:
             return tr("auto.notice.malformed")
         }
     }
+
+    public static var autoModeUnknown: String { tr("auto.mode.unknown") }
+    public static var autoModeUnknownDetail: String { tr("auto.mode.unknownDetail") }
 
     public static var menubarSchedulingMode: String { tr("menubar.schedulingMode") }
     public static var menubarStopSupervisedAuto: String { tr("menubar.stopSupervisedAuto") }

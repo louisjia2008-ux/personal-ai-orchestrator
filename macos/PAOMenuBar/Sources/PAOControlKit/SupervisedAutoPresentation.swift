@@ -147,3 +147,23 @@ public enum AutomationModeCatalog {
     public static let selectable = ["MANUAL", "SUPERVISED_AUTO"]
     public static let displayOnly = ["ACTIVE"]
 }
+
+/// WP5b closeout: honest mode truth for the Settings surface.
+/// Missing settings mean UNKNOWN — never MANUAL — and mode selection
+/// is not offered until authoritative truth exists.
+public enum AutomationModePresentation {
+    /// The authoritative current mode, or `nil` when the daemon's
+    /// settings have not loaded. `nil` must never be coerced to a
+    /// concrete mode: that would fabricate truth the client does not
+    /// own.
+    public static func currentMode(from settings: SchedulingSettingsView?) -> String? {
+        settings?.mode
+    }
+
+    /// Selectable mode rows are offered only while the authoritative
+    /// mode is known; picking a mode "from" an unknown baseline behaves
+    /// as if the baseline were known, which it is not.
+    public static func canSelectModes(currentMode: String?) -> Bool {
+        currentMode != nil
+    }
+}

@@ -858,3 +858,7 @@
 "project.auto.disableWarning" = "Turning supervised auto off aborts this project's waiting/planned AUTO lifecycles (the daemon does this fail-closed). Continue?";
 "project.auto.disableConfirm" = "Turn off supervised auto";
 "project.auto.saved" = "Project auto settings saved.";
+
+"auto.notice.modeBusy" = "A scheduling-mode change is already in progress. Wait for it to finish, then try again.";
+"auto.mode.unknown" = "Mode unavailable";
+"auto.mode.unknownDetail" = "The orchestrator has not reported a scheduling mode yet. No mode can be selected until the authoritative settings load.";

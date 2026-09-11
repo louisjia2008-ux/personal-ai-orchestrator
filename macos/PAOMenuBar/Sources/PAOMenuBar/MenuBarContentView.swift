@@ -52,8 +52,16 @@ struct MenuBarContentView: View {
                 }
                 .controlSize(.small)
                 .help(L10n.menubarStopSupervisedAutoHelp)
+                // Defense-in-depth: no second mode mutation while one
+                // is in flight. The store separately proves each stop
+                // from its own invocation's daemon response.
+                .disabled(store.isAutoActionInFlight(action: .schedulingMode))
             }
-            if let notice = store.autoControlNotice {
+            // Only scheduling-scoped outcomes belong here; task ACK /
+            // VETO / dispatch and project-settings results render on
+            // the surfaces that caused them.
+            if let notice = store.autoControlNotice,
+               notice.applies(to: .schedulingMode) {
                 Text(L10n.autoControlNoticeText(notice))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
