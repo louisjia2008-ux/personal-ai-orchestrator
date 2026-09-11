@@ -61,6 +61,9 @@ struct TaskDetailSurface: View {
                     )
                     cancellationNotice(detail)
                     TaskAttentionBanner(reasons: TaskAttention.reasons(for: detail))
+                    // WP5b: the one supervised-auto surface — above execution
+                    // so the AUTO lifecycle reads before any manual controls.
+                    TaskAutoSupervisionSection(detail: detail)
                     TaskExecutionSection(detail: detail)
                     TaskLifecycleSection(detail: detail)
                     TaskRoutingSection(summary: detail.routingSummary)

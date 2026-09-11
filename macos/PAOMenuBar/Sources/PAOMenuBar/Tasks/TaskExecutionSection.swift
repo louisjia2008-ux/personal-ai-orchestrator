@@ -31,8 +31,12 @@ struct TaskExecutionSection: View {
         store.ownerExecutionSettings?.ownerInitiatedExecutionEnabled ?? false
     }
 
+    /// Manual dispatch stays on its accepted backend contract
+    /// (SUBMITTED / READY). AUTO_PLANNED / AUTO_GRACE use the dedicated
+    /// supervised-auto surface — the shared policy keeps this gate and
+    /// its tests in one place (WP5b §15).
     private var taskDispatchable: Bool {
-        detail.task.state == "SUBMITTED" || detail.task.state == "READY"
+        ManualDispatchPolicy.isOffered(state: detail.task.state)
     }
 
     private var canDispatch: Bool {
