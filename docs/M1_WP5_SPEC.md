@@ -481,3 +481,50 @@ execution outcome — never the intermediate verifier verdict:
   verified=True; other terminal states ⇔ verified=False;
   non-terminal states never prove). Priority unchanged: pre-worker →
   True; durable finalize intent → True; otherwise observation-only.
+
+### 14.9 Authority-bound source state + terminal correlation (review round 6)
+
+- **Authority owns the legal worker source state** —
+  `expected_source_state_for_dispatch_authority` (safety_kernel, the
+  single low-level definition): `OWNER_INITIATED_EXECUTION` → READY,
+  `SUPERVISED_AUTO` → AUTO_GRACE, any other authority → `ValueError`
+  (fail closed). The executor entry derives the expected state from
+  the DURABLE dispatch row's authority — never from whatever state the
+  task happens to be in — so a stale SUPERVISED_AUTO reservation whose
+  task was vetoed / mode-aborted back to READY can never start (it is
+  not "reinterpreted" as an owner dispatch), and an unknown authority
+  marks the dispatch BLOCKED (`UNKNOWN_DISPATCH_AUTHORITY`) with no
+  worker. `start_dispatched_worker` re-derives the same mapping inside
+  its `BEGIN IMMEDIATE` transaction; a caller-supplied
+  `expected_state` is only a consistency assertion — a value that
+  disagrees with the authority-derived state raises before any
+  mutation, so no caller can weaken the SQL `WHERE state=?` guard.
+- **Authority-aware pre-worker failure** — `_fail_pre_worker` moves
+  the task to BLOCKED only from the dispatch authority's OWN legal
+  source state (OWNER → READY, SUPERVISED_AUTO → AUTO_GRACE). A stale
+  AUTO reservation failing after a veto leaves the owner-controlled
+  READY task untouched; the dispatch row alone carries the failure.
+- **Canonical exact AUTO execution correlation** —
+  `current_supervised_auto_dispatch` / `correlate_supervised_auto_execution`
+  prove the EXACT current SUPERVISED_AUTO reservation before any run
+  classification: frozen routing decision (task-gated, pins the
+  target), deterministic request id + dispatch id, exact task id,
+  authority SUPERVISED_AUTO (an OWNER row is NEVER AUTO evidence) and
+  the reservation-cycle version contract — at admission the live
+  AUTO_GRACE version (exact equality); at terminal recovery the
+  ordering invariant (reservation version strictly below the terminal
+  version — the terminal chain necessarily advanced it; the two are
+  never compared for equality). Classification:
+  `NO_DISPATCH` / `EXACT_PREWORKER` (genuine pre-worker → ordinary
+  cleanup), `EXACT_REAL_RUN` (exact `run-{dispatch_id}` proven →
+  finalize evidence owed), `CONFLICT` (namespace occupied by a
+  non-exact row → fail closed: no discard, no reconstruction, no
+  metadata clear, sanitized `AUTO_EXECUTION_CORRELATION_CONFLICT`
+  event). Every AUTO run-classification path (dispatch admission,
+  terminal sweep, metadata-clear recovery proof, finalize
+  reconstruction) uses this ONE proof.
+- **Thread contract (documentation truth)** — the tick never sleeps,
+  never reads credentials, never executes shell commands; its
+  dispatch/recovery hand-off re-enters the existing DispatchExecutor
+  boundary and may spawn an executor thread for an already-durable
+  reservation. No worker execution happens inside the tick itself.

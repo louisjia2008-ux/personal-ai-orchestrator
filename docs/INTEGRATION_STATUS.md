@@ -1413,3 +1413,34 @@ dimension, exact-row crash recovery, present-pending identity matrix
 (target/catalog/quota/provider mismatch, silent-finalize fault
 injection), and observation-only proof (real route id proves;
 auto id or verdict mismatch does not).
+
+### WP5a-2 authority-state + terminal-correlation repair (review round 6)
+
+Three review findings closed: (1) the executor inferred the worker's
+expected source state from the CURRENT task row, so a stale
+SUPERVISED_AUTO reservation could start after a veto moved the task
+back to READY — the legal source state is now a property of the durable
+dispatch authority (OWNER → READY, SUPERVISED_AUTO → AUTO_GRACE),
+enforced at the executor entry and re-derived inside the store's atomic
+start transaction (a caller-supplied expected_state cannot weaken it);
+unknown authority fails closed with UNKNOWN_DISPATCH_AUTHORITY, and
+pre-worker failure only ever blocks the authority's own source state.
+(2) Terminal recovery classified runs by deterministic request-id
+namespace without proving the dispatch row was the exact current
+SUPERVISED_AUTO reservation — the canonical
+current_supervised_auto_dispatch proof (frozen routing target,
+deterministic ids, task, authority, reservation-cycle version
+contract) now gates every classifier, and a namespace CONFLICT fails
+closed (AUTO_EXECUTION_CORRELATION_CONFLICT; metadata preserved) rather
+than collapsing into pre-worker cleanup; a foreign OWNER run can never
+become AUTO shadow evidence. (3) The tick's "never spawns threads"
+documentation claim was corrected to the truthful executor-hand-off
+wording. Deterministic tests:
+tests/test_auto_authority_correlation.py (15) — authority→state
+mapping, store anti-weakening, AUTHORITY matrix (stale AUTO on READY /
+OWNER on AUTO_GRACE / unknown authority never start; both valid starts
+still run), veto races after spawn (child cancelled exactly once, task
+stays READY, no run row), stale pre-worker failure never blocks READY,
+and the terminal CORRELATION matrix (foreign OWNER / wrong target /
+wrong task rows with runs are CONFLICTs; exact run still recovers with
+exactly one observation; exact no-run stays pre-worker cleanup).
