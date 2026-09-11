@@ -174,6 +174,27 @@ def _reserve_auto_task(harness: ExecutorHarness, journal: ShadowEvidenceJournal)
             expected_version=planned.state_version,
             auto_grace_deadline_at="1970-01-01T00:00:00+00:00",
         )
+        # Round 6: the canonical AUTO dispatch/run proof requires the
+        # frozen routing decision for the routing request id to exist
+        # (real planning always persists it before AUTO_GRACE).
+        import json as _json
+
+        store.connection.execute(
+            "INSERT INTO routing_decisions(decision_id, request_id, task_id,"
+            " payload_json, created_at) VALUES(?,?,?,?,?)",
+            (
+                "route-test-supervised-auto-1",
+                "supervised-auto-auto-task-1-v0",
+                "task-1",
+                _json.dumps(
+                    {"selected_execution_target_id": "zai-coding-plan-glm-5.3"},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "1970-01-01T00:00:00+00:00",
+            ),
+        )
+        store.connection.commit()
         store.reserve_owner_dispatch(
             dispatch_id=f"owner-dispatch-{HELLO_REQUEST_ID}",
             request_id=HELLO_REQUEST_ID,
