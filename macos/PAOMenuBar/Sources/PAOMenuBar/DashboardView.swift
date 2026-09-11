@@ -612,6 +612,141 @@ private struct ProjectCard: View {
                 }
                 .controlSize(.small)
             }
+            ProjectAutoSettingsCard(project: project)
+        }
+    }
+}
+
+/// M1 WP5b §18: per-project supervised-auto policy. Editing one field
+/// submits the complete tuple with the other two resolved from the
+/// authoritative current view, so no sibling is ever silently reset.
+/// Turning supervised auto off asks for confirmation first, because the
+/// daemon aborts that project's waiting/planned AUTO lifecycles.
+private struct ProjectAutoSettingsCard: View {
+    @EnvironmentObject private var store: OrchestratorStore
+    let project: ProjectView
+    @State private var confirmingDisable = false
+    @State private var graceDraft: String = ""
+
+    private var graceValue: Int {
+        Int(graceDraft) ?? project.graceSeconds
+    }
+
+    private var graceIsValid: Bool {
+        (1...86_400).contains(graceValue)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.inner) {
+            Divider()
+            Text(L10n.projectAutoTitle)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Toggle(L10n.projectAutoAllowSupervisedAuto, isOn: Binding(
+                get: { project.supervisedAutoAllowed },
+                set: { newValue in
+                    if newValue {
+                        Task {
+                            await store.setProjectAutoSettings(
+                                projectId: project.projectId,
+                                supervisedAutoAllowed: true
+                            )
+                        }
+                    } else if project.supervisedAutoAllowed {
+                        // The daemon aborts this project's AUTO lifecycles on
+                        // revoke: confirm before the destructive commit.
+                        confirmingDisable = true
+                    }
+                }
+            ))
+            Toggle(L10n.projectAutoAllowUnattended, isOn: Binding(
+                get: { project.unattendedAllowed },
+                set: { newValue in
+                    Task {
+                        await store.setProjectAutoSettings(
+                            projectId: project.projectId,
+                            unattendedAllowed: newValue
+                        )
+                    }
+                }
+            ))
+            .disabled(!project.supervisedAutoAllowed)
+            HStack {
+                Text(L10n.projectAutoGraceSeconds)
+                Spacer()
+                TextField(
+                    "",
+                    text: $graceDraft,
+                    prompt: Text(verbatim: "\(project.graceSeconds)")
+                )
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 90)
+                .multilineTextAlignment(.trailing)
+                .disabled(!project.supervisedAutoAllowed)
+                .onSubmit(commitGrace)
+                Stepper(
+                    "",
+                    onIncrement: { setGrace(graceValue + 30) },
+                    onDecrement: { setGrace(graceValue - 30) }
+                )
+                .fixedSize()
+                .disabled(!project.supervisedAutoAllowed || !graceIsValid)
+                .accessibilityLabel(L10n.projectAutoGraceSeconds)
+            }
+            if !graceDraft.isEmpty && !graceIsValid {
+                // Convenience validation only: the full legal range stays
+                // enterable and the daemon's invalid_grace_seconds remains
+                // the authority surfaced on refusal.
+                Text(L10n.projectAutoGraceInvalid)
+                    .font(.caption2)
+                    .foregroundStyle(StatusTone.caution.color)
+            }
+            Text(L10n.projectAutoGraceHelp)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let notice = store.autoControlNotice,
+               case .projectAutoSettingsSaved(let id) = notice, id == project.projectId {
+                Text(L10n.autoControlNoticeText(notice))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if let notice = store.autoControlNotice,
+               case .blocked(let code) = notice, code == "invalid_grace_seconds" {
+                Text(L10n.autoControlNoticeText(notice))
+                    .font(.caption2)
+                    .foregroundStyle(StatusTone.caution.color)
+            }
+        }
+        .confirmationDialog(
+            L10n.projectAutoDisableWarning,
+            isPresented: $confirmingDisable,
+            titleVisibility: .visible
+        ) {
+            Button(L10n.projectAutoDisableConfirm, role: .destructive) {
+                Task {
+                    await store.setProjectAutoSettings(
+                        projectId: project.projectId,
+                        supervisedAutoAllowed: false
+                    )
+                }
+            }
+            Button(L10n.cancel, role: .cancel) {}
+        }
+    }
+
+    private func setGrace(_ value: Int) {
+        graceDraft = "\(min(max(value, 1), 86_400))"
+        commitGrace()
+    }
+
+    private func commitGrace() {
+        guard graceIsValid else { return }
+        Task {
+            await store.setProjectAutoSettings(
+                projectId: project.projectId,
+                graceSeconds: graceValue
+            )
         }
     }
 }
@@ -960,12 +1095,82 @@ private struct ClientSettingsSection: View {
             }
             // Moved here from the Routing destination, which no longer exists: the
             // full mode list is global scheduling configuration, not task detail.
+            AutomationModeCard()
             ActiveSchedulingPolicyCard()
         }
         .frame(maxWidth: DashboardLayoutMetrics.tableMaximumWidth, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
             Task { await store.loadSchedulingSettings() }
+        }
+    }
+}
+
+/// M1 WP5b §17: the automation-mode card. MANUAL and SUPERVISED_AUTO
+/// are owner-selectable; ACTIVE is displayed for truth with its gate
+/// explanation but is deliberately not offered as an ordinary enable
+/// action — production activation remains separately gated.
+private struct AutomationModeCard: View {
+    @EnvironmentObject private var store: OrchestratorStore
+
+    private var currentMode: String {
+        store.schedulingSettings?.mode ?? "MANUAL"
+    }
+
+    var body: some View {
+        DashboardCard(title: L10n.autoModeTitle, symbol: "sparkles") {
+            Text(L10n.autoModeName(currentMode))
+                .font(.title3.weight(.semibold))
+            Text(L10n.autoModeDetail(currentMode))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Divider()
+            Text(L10n.autoModeChoices)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(AutomationModeCatalog.selectable, id: \.self) { mode in
+                SchedulingModeRow(
+                    mode: mode,
+                    isActive: mode == currentMode,
+                    isSelectable: true,
+                    onSelect: {
+                        Task { await store.setSchedulingMode(mode) }
+                    }
+                )
+                .accessibilityLabel(L10n.autoModeName(mode))
+            }
+            // ACTIVE: authoritative existence, not an ordinary enable.
+            // A future daemon that reports ACTIVE still renders truth
+            // here; no activation flow is implemented in WP5b.
+            HStack(alignment: .top, spacing: 10) {
+                Image(
+                    systemName: currentMode == "ACTIVE"
+                        ? "largecircle.fill.circle" : "circle.dashed"
+                )
+                .foregroundStyle(Color.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.autoModeName("ACTIVE"))
+                        .font(.callout.weight(currentMode == "ACTIVE" ? .semibold : .regular))
+                    Text(L10n.autoModeGatedDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if currentMode == "ACTIVE" {
+                        Text(L10n.autoModeActiveReported)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                Spacer()
+                Image(systemName: "lock")
+                    .foregroundStyle(Color.secondary)
+                    .accessibilityLabel(L10n.autoModeGatedSymbol)
+            }
+            Text(L10n.autoModeFooter)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

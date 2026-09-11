@@ -11,6 +11,7 @@ struct MenuBarContentView: View {
         VStack(alignment: .leading, spacing: 10) {
             header
             Divider()
+            schedulingModeSection
             taskCountsSection
             recentTasksSection
             Divider()
@@ -24,6 +25,40 @@ struct MenuBarContentView: View {
         .padding(12)
         .onAppear { store.menuVisible = true }
         .onDisappear { store.menuVisible = false }
+    }
+
+    /// M1 WP5b: the current orchestrator scheduling mode, plus the
+    /// emergency stop while supervised autonomy is actually in force.
+    /// The stop is the existing daemon-owned mode change to MANUAL —
+    /// never a client-side kill switch — and success is reported only
+    /// from the daemon's returned settings.
+    private var schedulingModeSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(L10n.menubarSchedulingMode)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(store.schedulingSettings?.mode ?? "—")
+                    .font(.callout.bold())
+                    .foregroundStyle(.secondary)
+            }
+            if MenuBarAutoStop.shouldOffer(currentMode: store.schedulingSettings?.mode) {
+                Button(role: .destructive) {
+                    Task { await store.emergencyStopSupervisedAuto() }
+                } label: {
+                    Label(L10n.menubarStopSupervisedAuto, systemImage: "stop.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.small)
+                .help(L10n.menubarStopSupervisedAutoHelp)
+            }
+            if let notice = store.autoControlNotice {
+                Text(L10n.autoControlNoticeText(notice))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private var header: some View {
