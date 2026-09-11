@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from personal_ai_orchestrator.control_api import ControlPlaneError, ControlPlaneService
+from personal_ai_orchestrator.control_api import ControlPlaneService
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
 from personal_ai_orchestrator.scheduling_settings import SchedulingSettings
 from personal_ai_orchestrator.shadow_evidence import ShadowEvidenceJournal
