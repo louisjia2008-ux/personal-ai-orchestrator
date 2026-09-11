@@ -1468,3 +1468,34 @@ conflicts preserve metadata, pending, and emit exactly one deduped
 event; exact pre-worker failures (AUTO_GRACE and terminal BLOCKED)
 still abort safely; an exact real run is never pre-worker-aborted;
 NO_DISPATCH ignores historical rows.
+
+### WP5b SUPERVISED_AUTO macOS control surfaces
+
+Branch `feat/m1-wp5b-supervised-auto-ui` (PR #28) makes the accepted
+WP5a-2 backend lifecycle controllable from the native app without any
+new execution authority. Typed client operations (auto/ack, auto/veto,
+auto/dispatch-now, scheduling-mode PUT that always echoes the
+authoritative default_scheduling_policy, complete project auto tuple
+PUT) drive store operations with per-task in-flight coalescing,
+authoritative re-fetch before each mutation and an authoritative reload
+after every answer; 409 stale/state conflicts surface as
+"状态已经变化，已重新载入" (reloaded state), never as local success.
+Task Detail gains one supervised-auto surface with the four
+presentation states (planned / waiting-for-ack / live countdown /
+expired-refreshing) derived by the pure AutoSupervisionPresentation
+model — the countdown ticks only while its deadline is visible, local
+expiry never claims RUNNING, and the frozen target comes only from the
+authoritative routing read model. The menu bar shows the scheduling
+mode and offers 急停自动执行 only while SUPERVISED_AUTO is in force;
+its implementation is exactly the daemon-owned mode change to MANUAL.
+Settings gains the automation-mode card (MANUAL / SUPERVISED_AUTO
+selectable; ACTIVE displayed gated, never an ordinary enable), and
+each project gains supervised-auto / unattended / grace editors that
+preserve sibling values from authoritative truth and confirm before
+the daemon's fail-closed lifecycle abort. AUTO_PLANNED / AUTO_GRACE
+join the high-attention refresh states. ~50 new en/zh-Hans keys.
+Swift 467 (26 new), Python 1000, OpenCode 17 all green. The stale
+TaskView.autoDecisionId comment is corrected to the lifecycle-id
+contract (auto-{task_id}-v{state_version-at-planning}, not the
+route-{digest} RoutingDecision id). Human visual acceptance of the
+built app bundle remains required before merge.

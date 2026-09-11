@@ -225,3 +225,101 @@ Before merge:
 - human visual acceptance is required for the new countdown / settings / menu-bar surfaces before WP5b is declared product-complete.
 
 No merge and no WP6 until independent WP5b review accepts the branch.
+
+---
+
+## 12. Delivery record (WP5b implementation)
+
+Status: technical implementation complete; **human visual acceptance
+required** before the WP is declared product-complete (§11).
+
+### Surfaces implemented
+
+- **Typed client** (`ControlClient.swift`): `autoAck` / `autoVeto` /
+  `autoDispatchNow` / `setSchedulingMode(mode, defaultSchedulingPolicy)`
+  (the authoritative policy is always echoed back — never a client
+  default) / `setProjectSupervisedAutoSettings` (complete tuple).
+  Response models verified against `control_api.py`: ACK/VETO →
+  `TaskView`, DISPATCH-NOW → `DispatchTaskView`, mode →
+  `SchedulingSettingsView`, project → `ProjectView`.
+- **Pure presentation** (`SupervisedAutoPresentation.swift`, new):
+  `AutoSupervisionPresentation` derives phase (inactive / planned /
+  waitingAck / countingDown / expiredRefreshing), deadline,
+  `secondsRemaining` (`max(0, deadline − now)`, rounded up, never
+  negative), and canAck / canVeto / canDispatchNow offers. Local expiry
+  never claims RUNNING. Also `ManualDispatchPolicy` (SUBMITTED/READY
+  only), `MenuBarAutoStop.shouldOffer` (SUPERVISED_AUTO only),
+  `AutomationModeCatalog` (MANUAL + SUPERVISED_AUTO selectable; ACTIVE
+  display-only).
+- **Store operations** (`OrchestratorStore.swift`): `AutoControlAction`
+  / `AutoControlNotice` (acknowledged / vetoed / dispatchRequested /
+  staleState / blocked(code) / schedulingModeChanged /
+  supervisedAutoStopped / projectAutoSettingsSaved / failed /
+  malformed), per-task in-flight coalescing (no duplicate parallel
+  vetoes; one `request_id` per veto operation), authoritative
+  re-fetch before every mutation, authoritative reload after every
+  answer (including 409s), `highAttentionTaskStates` adds AUTO_PLANNED
+  / AUTO_GRACE to the fast refresh cadence.
+- **Task surface** (`TaskAutoSupervisionSection.swift`, new): the one
+  supervised-auto card in Task Detail — planned / waiting-ack /
+  countdown / expired-refreshing states, frozen target from the
+  authoritative routing read model (unknown shown truthfully),
+  `auto_reason`, ACK/VETO/DISPATCH NOW with in-flight disable, a
+  1-second `TimelineView` only while a deadline is actually displayed,
+  one authoritative reload at local expiry. Manual dispatch panel uses
+  `ManualDispatchPolicy` and never renders for AUTO states.
+- **Menu bar** (`MenuBarContentView.swift`): current scheduling mode
+  always visible; `急停自动执行` offered only in SUPERVISED_AUTO; its
+  implementation is the daemon PUT to `mode=MANUAL` (policy preserved)
+  and success is reported only from the returned settings.
+- **Settings** (`DashboardView.swift`): automation-mode card (MANUAL /
+  SUPERVISED_AUTO selectable; ACTIVE displayed with its gate
+  explanation, lock symbol, and authoritative-state-only note).
+- **Project settings** (`DashboardView.swift`): per-project supervised
+  auto / unattended / grace editors; nil fields resolve from the
+  authoritative project view so siblings are never silently reset;
+  disabling supervised auto requires confirmation (the daemon aborts
+  that project's AUTO lifecycles); grace input validated 1–86400 with
+  the daemon's `invalid_grace_seconds` still surfacing verbatim.
+- **Identifier doc fix** (`APIModels.swift`): `autoDecisionId` is
+  documented as the lifecycle id `auto-{task_id}-v{state_version-at-
+  planning}` (chain: auto id → `supervised-auto-{id}` request id →
+  `route-{digest}` decision id; pending `pending_id == autoDecisionId`).
+- **Localization**: ~50 new keys in en + zh-Hans catalogs and
+  `L10n.requiredKeys`; no hard-coded user-visible English in the new
+  surfaces. Icon-only controls carry accessibility labels; the
+  countdown exposes a stable textual accessibility value.
+
+### Test coverage
+
+- `AutoGracePresentationTests.swift` (14): PRESENTATION-1..6, clock
+  formatting, unknown-target truth, UI-1 (manual dispatch not offered
+  for AUTO states), MENU-1, MODE-3, AUTO-field decode with lifecycle-id
+  semantics.
+- `SupervisedAutoControlTests.swift` (12): CLIENT-1..3 (exact wire
+  bodies), MODE-1 (authoritative `default_scheduling_policy`
+  preserved), MODE-2 (emergency stop = daemon PUT to MANUAL; failure
+  never reported as success), PROJECT-1..3 (sibling preservation on
+  the wire) + sanitized `invalid_grace_seconds`, RACE-1 (409 stale →
+  no false success + authoritative reload; invalid-auto-state 409 the
+  same), duplicate-ACK coalescing.
+- TestDaemon: canned GET/PUT scheduling (incl. a SUPERVISED_AUTO body
+  with a non-default policy), PUT project settings, ACK/VETO/
+  DISPATCH-NOW fixtures, and 409 `stale_task_state_version` /
+  `task_state_not_auto_grace` using the daemon's exact codes.
+- Full suite: Swift 467 (441 + 26), Python 1000, OpenCode 17 — all
+  green; `git diff --check` clean; no TODO/FIXME/HACK/
+  NotImplementedError in touched code.
+
+### Authority boundary confirmation
+
+No Safety Kernel / executor / plugin change; no client-side state
+transition; no new dispatch path; Production ACTIVE still
+`DISABLED_BY_DESIGN` and not offered as an ordinary enable action.
+
+### Known limitations / acceptance
+
+- Human visual acceptance outstanding for: AUTO grace card (all four
+  phases), Settings mode picker, project auto settings, menu-bar stop.
+- App bundle built at `macos/PAOMenuBar/dist/Personal AI
+  Orchestrator.app` from the final WP5b head for that acceptance pass.
