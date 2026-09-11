@@ -345,7 +345,8 @@ let quotaObservedWithBurnBody = """
 func registerStandardRoutes(
     _ daemon: TestDaemon,
     quotaBody: String = quotaUnknownBody,
-    schedulingBody: String = schedulingSettingsBody
+    schedulingBody: String = schedulingSettingsBody,
+    projectsListBody: String = projectsBody
 ) {
     daemon.route("GET", "/v1/health", body: healthBody)
     daemon.route("GET", "/v1/dashboard", body: dashboardBody)
@@ -356,7 +357,7 @@ func registerStandardRoutes(
         "GET", "/v1/tasks?limit=\(OrchestratorStore.taskListLimit)", body: tasksBody
     )
     daemon.route("GET", "/v1/tasks", body: tasksBody)
-    daemon.route("GET", "/v1/projects", body: projectsBody)
+    daemon.route("GET", "/v1/projects", body: projectsListBody)
     daemon.route("GET", "/v1/tasks/t-1/detail", body: taskDetailBody)
     daemon.route("GET", "/v1/providers", body: providersBody)
     daemon.route("GET", "/v1/providers/status", body: providerDiscoveryStatusBody)
@@ -369,4 +370,79 @@ func registerStandardRoutes(
     // picker.
     daemon.route("GET", "/v1/settings/scheduling", body: schedulingBody)
     daemon.route("GET", "/v1/active-status", body: activeStatusBody)
+    // M1 WP5b: supervised-auto control surfaces. Route matching is
+    // first-registered-first-matched, so a test that needs a canned
+    // 409 / alternate body for one of these paths must register its
+    // own route BEFORE calling this function.
+    daemon.route("GET", "/v1/tasks/t-1", body: autoGraceTaskBody)
+    daemon.route("POST", "/v1/tasks/t-1/auto/ack", body: autoAckedTaskBody)
+    daemon.route("POST", "/v1/tasks/t-1/auto/veto", body: autoVetoedTaskBody)
+    daemon.route("POST", "/v1/tasks/t-1/auto/dispatch-now", body: autoDispatchNowBody)
+    daemon.route("PUT", "/v1/settings/scheduling", body: schedulingSettingsManualBody)
+    daemon.route("PUT", "/v1/projects/project-fixture/settings", body: projectAutoSettingsBody)
+}
+
+// MARK: - M1 WP5b supervised-auto canned fixtures
+
+/// An unacked AUTO_GRACE task at version 5 — the canonical pre-ACK
+/// state the store's auto operations fetch and encode.
+let autoGraceTaskBody = """
+{"task_id":"t-1","request_id":"r-1","intent":"fix bug","project_id":"project-fixture","state":"AUTO_GRACE","state_version":5,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:05:00Z","auto_decision_id":"auto-t-1-v4","auto_grace_deadline_at":null,"auto_acked_at":null,"auto_reason":"AUTO_PLANNED{auto-t-1-v4,m3-sub}"}
+"""
+
+/// The same task after a first ACK: deadline computed daemon-side from
+/// the ack time; a client retry must not move these fields.
+let autoAckedTaskBody = """
+{"task_id":"t-1","request_id":"r-1","intent":"fix bug","project_id":"project-fixture","state":"AUTO_GRACE","state_version":6,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:06:00Z","auto_decision_id":"auto-t-1-v4","auto_grace_deadline_at":"2026-08-31T00:08:00Z","auto_acked_at":"2026-08-31T00:06:00Z","auto_reason":"AUTO_PLANNED{auto-t-1-v4,m3-sub}"}
+"""
+
+/// A vetoed lifecycle: back to READY, AUTO metadata cleared by the daemon.
+let autoVetoedTaskBody = """
+{"task_id":"t-1","request_id":"r-1","intent":"fix bug","project_id":"project-fixture","state":"READY","state_version":7,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:07:00Z","auto_decision_id":null,"auto_grace_deadline_at":null,"auto_acked_at":null,"auto_reason":null}
+"""
+
+/// Shared dispatch truth for dispatch-now: accepted SUPERVISED_AUTO
+/// dispatch of the frozen target.
+let autoDispatchNowBody = """
+{"dispatch_id":"supervised-auto-dispatch-auto-t-1-v4","task":{"task_id":"t-1","request_id":"r-1","intent":"fix bug","project_id":"project-fixture","state":"RUNNING","state_version":7,"created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:06:30Z","auto_decision_id":"auto-t-1-v4","auto_grace_deadline_at":"2026-08-31T00:08:00Z","auto_acked_at":"2026-08-31T00:06:00Z","auto_reason":null},"request_id":"supervised-auto-dispatch-auto-t-1-v4","authority":"SUPERVISED_AUTO","execution_target_id":"m3-sub","status":"DISPATCHING","accepted":true,"reason":null,"failure_code":null}
+"""
+
+/// Scheduling settings with the mode at SUPERVISED_AUTO and a
+/// NON-default global policy — so any mode PUT that fails to echo the
+/// authoritative policy back is detectable in tests.
+let schedulingSettingsSupervisedAutoBody = """
+{
+  "default_scheduling_policy": "QUALITY_FIRST",
+  "selectable_policies": ["BALANCED", "QUALITY_FIRST", "QUOTA_SAVER", "SPEED_FIRST", "BURN_DOWN"],
+  "mode": "SUPERVISED_AUTO",
+  "selectable_modes": ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"]
+}
+"""
+
+let schedulingSettingsManualBody = """
+{
+  "default_scheduling_policy": "QUALITY_FIRST",
+  "selectable_policies": ["BALANCED", "QUALITY_FIRST", "QUOTA_SAVER", "SPEED_FIRST", "BURN_DOWN"],
+  "mode": "MANUAL",
+  "selectable_modes": ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"]
+}
+"""
+
+/// Project view carrying the supervised-auto tuple the sibling-
+/// preservation tests assert against.
+let projectAutoSettingsBody = """
+{"project_id":"project-fixture","display_name":"Fixture","canonical_repo_root":"/repo","git_root":"/repo","default_branch":"main","last_known_head":"abc123","created_at":"2026-08-31T00:00:00Z","updated_at":"2026-08-31T00:00:00Z","working_subpath":null,"remote_url":null,"last_opened_at":null,"storage_availability":"ONLINE","recent_task_count":2,"current_branch":"main","supervised_auto_allowed":true,"unattended_allowed":true,"grace_seconds":300}
+"""
+
+let projectAutoSettingsListBody = """
+{"projects":[\(projectAutoSettingsBody)]}
+"""
+
+/// Convenience: canned 409 bodies using the daemon's exact codes.
+func staleAutoStateBody() -> String {
+    "{\"error\":\"stale_task_state_version\"}"
+}
+
+func invalidAutoStateBody() -> String {
+    "{\"error\":\"task_state_not_auto_grace\"}"
 }
