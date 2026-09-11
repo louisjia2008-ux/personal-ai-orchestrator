@@ -73,6 +73,7 @@ from personal_ai_orchestrator.safety_kernel import (
     ShadowFinalizationIntent,
     TaskRecord,
     TaskState,
+    owner_dispatch_matches_expected,
     shadow_identity_payload,
 )
 from personal_ai_orchestrator.scheduler import (
@@ -100,9 +101,22 @@ def supervised_auto_routing_request_id(auto_decision_id: str) -> str:
     return f"supervised-auto-{auto_decision_id}"
 
 
-#: Durable dispatch request id contract (§16).
+#: Durable dispatch request id contract (§16). The prefix is the
+#: RESERVED INTERNAL NAMESPACE of the SUPERVISED_AUTO authority (round
+#: 5 §4): owner-supplied dispatch request ids may never occupy it, and
+#: AUTO crash recovery only ever re-admits a row whose request id uses
+#: it with an exact identity match.
+SUPERVISED_AUTO_DISPATCH_REQUEST_PREFIX = "supervised-auto-dispatch-"
+
+
+def is_reserved_auto_dispatch_request_id(request_id: str) -> bool:
+    """Round 5 §4 — does this request id occupy the internal AUTO namespace?"""
+
+    return request_id.startswith(SUPERVISED_AUTO_DISPATCH_REQUEST_PREFIX)
+
+
 def supervised_auto_dispatch_request_id(auto_decision_id: str) -> str:
-    return f"supervised-auto-dispatch-{auto_decision_id}"
+    return f"{SUPERVISED_AUTO_DISPATCH_REQUEST_PREFIX}{auto_decision_id}"
 
 
 #: One planning cycle's stable decision id: derived from the task id and
@@ -253,6 +267,31 @@ def _expected_observation_from_intent(row: Any) -> ShadowObservation | None:
     )
 
 
+def _pending_proves_intent_identity(pending: Any, row: Any) -> bool:
+    """Round 5 §14 — a PRESENT pending must equal the frozen intent.
+
+    After the finalization intent is enqueued the durable row — not
+    mutable filesystem state — is the authority. A pending file with the
+    same id but a different lifecycle identity (stale, replaced,
+    tampered-but-parseable) is NOT intent fulfillment. The check is the
+    intent's own frozen payload: the four correlation columns plus a
+    canonical-JSON comparison of ``shadow_identity_payload(pending)``
+    against the frozen ``identity_json``. Legacy intents without a
+    frozen identity (``{}``) fail closed — never silently upgraded from
+    filesystem contents.
+    """
+
+    if not row["identity_json"] or row["identity_json"] == "{}":
+        return False
+    return (
+        pending.pending_id == row["pending_id"]
+        and pending.task_id == row["task_id"]
+        and pending.request_id == row["request_id"]
+        and pending.decision_id == row["decision_id"]
+        and shadow_identity_payload(pending) == row["identity_json"]
+    )
+
+
 def _observation_proves_intent(
     journal: ShadowEvidenceJournal, row: Any
 ) -> bool:
@@ -292,10 +331,12 @@ def drain_auto_shadow_finalize_outbox(
     this drain (unlike the cleanup drain) replays a filesystem
     finalize, never a discard:
 
-    - pending exists → ``finalize_pending`` with the EXACT durable
-      payload (``observed_at`` pinned at enqueue → byte-identical
-      replay; the journal accepts identical content idempotently),
-      then discard, then the completed marker;
+    - pending exists → prove the pending identity equals the frozen
+      intent (round 5 §14), then ``finalize_pending`` with the EXACT
+      durable payload (``observed_at`` pinned at enqueue →
+      byte-identical replay; the journal accepts identical content
+      idempotently), then prove the exact expected observation is now
+      durably present (§16), then discard, then the completed marker;
     - pending missing (crash after a completed finalize+discard, or
       torn state) → mark completed ONLY when the finalized observation
       is proven present with a matching verdict (§12); otherwise the
@@ -312,7 +353,7 @@ def drain_auto_shadow_finalize_outbox(
     for row in store.pending_shadow_finalizations(limit=limit):
         pending_id = row["pending_id"]
         try:
-            shadow_journal.load_pending(pending_id)
+            pending = shadow_journal.load_pending(pending_id)
         except FileNotFoundError:
             if _observation_proves_intent(shadow_journal, row):
                 store.complete_shadow_finalization(row["finalization_id"])
@@ -334,11 +375,48 @@ def drain_auto_shadow_finalize_outbox(
         except (OSError, ValueError):
             # Journal unavailable or malformed: leave the intent open.
             continue
+        # Round 5 §14/§15 — a PRESENT pending must still equal the
+        # frozen immutable identity. A parseable-but-divergent pending
+        # (stale / replaced / tampered) must never be finalized,
+        # discarded or completed.
+        if not _pending_proves_intent_identity(pending, row):
+            try:
+                store.record_system_event(
+                    "AUTO_SHADOW_FINALIZE_RETRY_FAILED",
+                    {
+                        "finalization_id": row["finalization_id"],
+                        "task_id": row["task_id"],
+                        "pending_id": pending_id,
+                        "exc_type": "PendingIdentityMismatch",
+                    },
+                )
+            except Exception:  # noqa: BLE001 — event best-effort
+                pass
+            continue
+        # Round 5 §16 — the exact expected observation is demanded BEFORE
+        # any success marker: a plain ``finalize_pending`` return value
+        # is not durable evidence proof. The intent stays OPEN and the
+        # pending file stays in place when the proof fails, so a retry
+        # (or a crash at any point) converges safely.
+        expected = _expected_observation_from_intent(row)
+        if expected is None:
+            try:
+                store.record_system_event(
+                    "AUTO_SHADOW_FINALIZE_RETRY_FAILED",
+                    {
+                        "finalization_id": row["finalization_id"],
+                        "task_id": row["task_id"],
+                        "pending_id": pending_id,
+                        "exc_type": "IntentIdentityNotFrozen",
+                    },
+                )
+            except Exception:  # noqa: BLE001 — event best-effort
+                pass
+            continue
         try:
             shadow_journal.finalize_pending(
                 pending_id, **_finalize_kwargs_from_intent_row(row)
             )
-            shadow_journal.discard_pending(pending_id)
         except (OSError, ValueError) as error:
             # Leave the intent open; the retry event is sanitized.
             try:
@@ -354,6 +432,29 @@ def drain_auto_shadow_finalize_outbox(
             except Exception:  # noqa: BLE001 — event best-effort
                 pass
             continue
+        matches = [
+            observation
+            for observation in shadow_journal.load_all()
+            if observation.observation_id == expected.observation_id
+        ]
+        if not (len(matches) == 1 and matches[0] == expected):
+            # §21: finalize returned but the exact expected observation
+            # is not durably present — NOT success. The pending is NOT
+            # discarded and the intent stays OPEN.
+            try:
+                store.record_system_event(
+                    "AUTO_SHADOW_FINALIZE_RETRY_FAILED",
+                    {
+                        "finalization_id": row["finalization_id"],
+                        "task_id": row["task_id"],
+                        "pending_id": pending_id,
+                        "exc_type": "PostFinalizeObservationUnproven",
+                    },
+                )
+            except Exception:  # noqa: BLE001 — event best-effort
+                pass
+            continue
+        shadow_journal.discard_pending(pending_id)
         store.complete_shadow_finalization(row["finalization_id"])
         completed += 1
     return completed
@@ -374,9 +475,16 @@ def real_execution_recovery_proof(
     row) may clear its auto metadata ONLY when the observation truth is
     durably recoverable:
 
-    A. a durable shadow-finalization intent exists for the pending, OR
-    B. a finalized observation for the exact lifecycle identity
-       (task + routing request id + frozen decision id) is present.
+    A. a durable shadow-finalization intent exists for the pending (the
+       outbox is self-sufficient — §25 priority), OR
+    B. a finalized observation for the exact lifecycle identity is
+       present: task + routing request id + the REAL durable
+       ``RoutingDecision.decision_id`` loaded from ``routing_decisions``
+       (round 5 §23 — the observation's ``decision_id`` is ``route-*``,
+       never the ``auto-*`` pending id), exactly ONE such observation,
+       and its terminal verdict consistent with the task's terminal
+       state (VERIFIED ⇔ verified=True, other terminal states ⇔
+       verified=False; a non-terminal state never proves recovery).
 
     Lifecycles WITHOUT a real exact run (pre-worker) return ``True``:
     the ordinary abort/cleanup path owns them, and the two path classes
@@ -400,18 +508,32 @@ def real_execution_recovery_proof(
     if store.shadow_finalize_intent_exists(pending_id):
         return True
     if shadow_journal is not None:
-        request_id = supervised_auto_routing_request_id(pending_id)
+        routing_request_id = supervised_auto_routing_request_id(pending_id)
+        routing_row = store.routing_decision_by_request_id(routing_request_id)
+        if routing_row is None or routing_row["task_id"] != task_id:
+            return False
+        expected_routing_decision_id = routing_row["decision_id"]
         try:
-            proven = any(
-                observation.task_id == task_id
-                and observation.request_id == request_id
-                and observation.decision_id == pending_id
+            matches = [
+                observation
                 for observation in shadow_journal.load_all()
-            )
+                if observation.task_id == task_id
+                and observation.request_id == routing_request_id
+                and observation.decision_id == expected_routing_decision_id
+            ]
         except OSError:
-            proven = False
-        if proven:
-            return True
+            matches = []
+        if len(matches) != 1:
+            return False
+        try:
+            task = store.get_task(task_id)
+        except KeyError:
+            return False
+        if task.state not in _AUTO_TERMINAL_STATES:
+            return False  # not a legal terminal recovery state
+        if task.state is TaskState.VERIFIED:
+            return matches[0].verified is True
+        return matches[0].verified is False
     return False
 
 
@@ -809,11 +931,43 @@ class SupervisedAutoStep:
         # worker started) re-enters the executor — ``execute_async``
         # re-validates the RESERVED status + expected state atomically, so
         # a re-spawn can never produce a second worker.
+        #
+        # Round 5 §6: the deterministic AUTO request-id namespace can be
+        # occupied by a legacy / foreign row (e.g. an OWNER_INITIATED
+        # dispatch reserved before the namespace became reserved). An
+        # existing row is valid AUTO recovery ONLY when it is the EXACT
+        # reservation this cycle would create — authority, task, state
+        # version, frozen target and dispatch id all identical (the same
+        # single comparison ``reserve_owner_dispatch`` uses). Anything
+        # else is a namespace conflict: never executed, never adopted,
+        # never mutated — the current lifecycle fails closed instead.
         try:
             existing_dispatch = self._store.get_owner_dispatch_by_request_id(request_id)
         except KeyError:
             existing_dispatch = None
         if existing_dispatch is not None:
+            expected_dispatch_id = f"owner-dispatch-{request_id}"
+            exact_match = owner_dispatch_matches_expected(
+                existing_dispatch,
+                dispatch_id=expected_dispatch_id,
+                request_id=request_id,
+                task_id=fresh.task_id,
+                task_state_version=fresh.state_version,
+                execution_target_id=target_id,
+                authority=AUTHORITY_SUPERVISED_AUTO_EXECUTION,
+            )
+            if not exact_match:
+                # §8/§30: the foreign row remains untouched as historical
+                # truth; the CURRENT lifecycle closes fail-closed (atomic
+                # READY + metadata clear + cleanup outbox). A new planning
+                # cycle derives a fresh state_version → fresh
+                # auto_decision_id → fresh request id.
+                self._abort_auto_task(
+                    fresh,
+                    now,
+                    reason="dispatch_namespace_conflict",
+                )
+                return
             if (
                 existing_dispatch.status == "RESERVED"
                 and self._executor is not None
@@ -1404,11 +1558,13 @@ class SupervisedAutoStep:
 
 
 __all__ = [
+    "SUPERVISED_AUTO_DISPATCH_REQUEST_PREFIX",
     "SUPERVISED_AUTO_STEP_NAME",
     "SupervisedAutoStep",
     "UNACKED_TIMEOUT_SECONDS",
     "drain_auto_shadow_cleanup_outbox",
     "drain_auto_shadow_finalize_outbox",
+    "is_reserved_auto_dispatch_request_id",
     "real_execution_recovery_proof",
     "supervised_auto_decision_id",
     "supervised_auto_dispatch_request_id",

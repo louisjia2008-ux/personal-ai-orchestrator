@@ -62,9 +62,25 @@ def _control_plane_error(status: int, code: str) -> Any:
     between ``control_api`` (which imports ``initiate_owner_dispatch``)
     and this one (which raises ``ControlPlaneError``).
     """
+
     from personal_ai_orchestrator.control_api import ControlPlaneError
 
     return ControlPlaneError(status, code)
+
+
+def _is_reserved_auto_dispatch_request_id(request_id: str) -> bool:
+    """Lazy import of the AUTO namespace predicate (round 5 §4).
+
+    ``supervised_auto_step`` imports ``initiate_owner_dispatch`` at
+    module level, so the namespace-ownership module can only be
+    imported lazily here — mirroring ``_control_plane_error``.
+    """
+
+    from personal_ai_orchestrator.supervised_auto_step import (
+        is_reserved_auto_dispatch_request_id,
+    )
+
+    return is_reserved_auto_dispatch_request_id(request_id)
 
 if TYPE_CHECKING:
     from personal_ai_orchestrator.dispatch_executor import DispatchExecutor
@@ -131,6 +147,12 @@ def initiate_owner_dispatch(
         - 409 ``provider_not_connected``
         - 409 ``execution_target_not_launchable``
 
+        Round 5 §5 (BEFORE any durable reservation, owner authority
+        only): 400 ``reserved_dispatch_request_id_namespace`` when the
+        owner-supplied ``request_id`` occupies the deterministic
+        SUPERVISED_AUTO dispatch namespace — no row is inserted, no
+        worker is spawned, no task mutation happens.
+
         ``ValueError`` (uncaught by this helper) propagates from
         ``reserve_owner_dispatch`` when the durable record conflicts;
         the caller maps it to 409 ``conflicting_dispatch_request_id``.
@@ -155,6 +177,20 @@ def initiate_owner_dispatch(
     """
 
     dispatch_id = f"owner-dispatch-{request_id}"
+    # Round 5 §5 — reserved internal namespace guard, BEFORE the durable
+    # reservation: OWNER_INITIATED_EXECUTION may never occupy the
+    # deterministic SUPERVISED_AUTO dispatch namespace. Enforced here —
+    # the shared boundary every owner dispatch initiation passes through
+    # — so no individual HTTP handler can bypass it. SUPERVISED_AUTO
+    # itself derives request ids from this prefix and passes a different
+    # authority, so it is unaffected. Invalid owner-supplied input is a
+    # 400 (the control plane's invalid-input convention, matching
+    # ``invalid_request_id``), not a 409 conflict: nothing was reserved.
+    if (
+        authority == AUTHORITY_OWNER_INITIATED_EXECUTION
+        and _is_reserved_auto_dispatch_request_id(request_id)
+    ):
+        raise _control_plane_error(400, "reserved_dispatch_request_id_namespace")
     dispatch, created = store.reserve_owner_dispatch(
         dispatch_id=dispatch_id,
         request_id=request_id,

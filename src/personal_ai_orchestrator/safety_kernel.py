@@ -189,6 +189,38 @@ class OwnerDispatchRecord(FrozenModel):
     failure_reason: str | None = None
 
 
+def owner_dispatch_matches_expected(
+    record: OwnerDispatchRecord,
+    *,
+    dispatch_id: str,
+    request_id: str,
+    task_id: str,
+    task_state_version: int,
+    execution_target_id: str,
+    authority: str,
+) -> bool:
+    """Round 5 §7 — the ONE definition of an exact dispatch reservation.
+
+    A durable ``owner_dispatches`` row is the reservation expected for a
+    request id only when EVERY identity dimension matches exactly —
+    ``request_id``, ``dispatch_id``, ``task_id``, ``task_state_version``,
+    ``execution_target_id`` and ``authority``. Both
+    :meth:`SafetyKernelStore.reserve_owner_dispatch` (duplicate
+    idempotency) and the SUPERVISED_AUTO crash-recovery path (existing
+    row re-admission) must use THIS comparison so the two can never
+    drift into different equality rules. No partial match exists.
+    """
+
+    return (
+        record.dispatch_id == dispatch_id
+        and record.request_id == request_id
+        and record.task_id == task_id
+        and record.task_state_version == task_state_version
+        and record.execution_target_id == execution_target_id
+        and record.authority == authority
+    )
+
+
 class WorkspaceRecord(FrozenModel):
     task_id: str
     repo_path: str
@@ -1990,12 +2022,14 @@ class SafetyKernelStore:
             ).fetchone()
             if existing is not None:
                 record = self._owner_dispatch_from_row(existing)
-                same = (
-                    record.dispatch_id == dispatch_id
-                    and record.task_id == task_id
-                    and record.task_state_version == task_state_version
-                    and record.execution_target_id == execution_target_id
-                    and record.authority == authority
+                same = owner_dispatch_matches_expected(
+                    record,
+                    dispatch_id=dispatch_id,
+                    request_id=request_id,
+                    task_id=task_id,
+                    task_state_version=task_state_version,
+                    execution_target_id=execution_target_id,
+                    authority=authority,
                 )
                 if not same:
                     raise ValueError("request_id already has a conflicting owner dispatch")
