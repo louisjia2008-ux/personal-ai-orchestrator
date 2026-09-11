@@ -705,17 +705,22 @@ private struct ProjectAutoSettingsCard: View {
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
+            // Only this project's outcomes render here; another
+            // project's invalid_grace_seconds must not leak in.
             if let notice = store.autoControlNotice,
-               case .projectAutoSettingsSaved(let id) = notice, id == project.projectId {
+               case .projectAutoSettingsSaved = notice,
+               notice.applies(to: .project(project.projectId)) {
                 Text(L10n.autoControlNoticeText(notice))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
             if let notice = store.autoControlNotice,
-               case .blocked(let code) = notice, code == "invalid_grace_seconds" {
+               case .blocked(_, let code) = notice,
+               notice.applies(to: .project(project.projectId)) {
                 Text(L10n.autoControlNoticeText(notice))
                     .font(.caption2)
-                    .foregroundStyle(StatusTone.caution.color)
+                    .foregroundStyle(code == "invalid_grace_seconds"
+                        ? StatusTone.caution.color : StatusTone.neutral.color)
             }
         }
         .confirmationDialog(
@@ -1113,18 +1118,30 @@ private struct ClientSettingsSection: View {
 private struct AutomationModeCard: View {
     @EnvironmentObject private var store: OrchestratorStore
 
-    private var currentMode: String {
-        store.schedulingSettings?.mode ?? "MANUAL"
+    /// Authoritative mode or `nil` when unknown. Missing settings are
+    /// rendered as unknown — never coerced to MANUAL, which would
+    /// fabricate truth the client does not own.
+    private var currentMode: String? {
+        AutomationModePresentation.currentMode(from: store.schedulingSettings)
     }
 
     var body: some View {
         DashboardCard(title: L10n.autoModeTitle, symbol: "sparkles") {
-            Text(L10n.autoModeName(currentMode))
-                .font(.title3.weight(.semibold))
-            Text(L10n.autoModeDetail(currentMode))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if let currentMode {
+                Text(L10n.autoModeName(currentMode))
+                    .font(.title3.weight(.semibold))
+                Text(L10n.autoModeDetail(currentMode))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(L10n.autoModeUnknown)
+                    .font(.title3.weight(.semibold))
+                Text(L10n.autoModeUnknownDetail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Divider()
             Text(L10n.autoModeChoices)
                 .font(.caption.weight(.semibold))
@@ -1133,7 +1150,9 @@ private struct AutomationModeCard: View {
                 SchedulingModeRow(
                     mode: mode,
                     isActive: mode == currentMode,
-                    isSelectable: true,
+                    isSelectable: AutomationModePresentation.canSelectModes(
+                        currentMode: currentMode
+                    ),
                     onSelect: {
                         Task { await store.setSchedulingMode(mode) }
                     }

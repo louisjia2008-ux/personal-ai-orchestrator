@@ -171,9 +171,13 @@ struct TaskAutoSupervisionSection: View {
     }
 
     /// The last control outcome, closest to the controls that caused it.
+    /// Only notices scoped to THIS task render here — scheduling-mode
+    /// results, project-settings outcomes, and other tasks' errors all
+    /// belong to their own surfaces.
     @ViewBuilder
     private var notice: some View {
-        if let notice = store.autoControlNotice, noticeApplies(notice, to: detail.task.taskId) {
+        if let notice = store.autoControlNotice,
+           notice.applies(to: .task(detail.task.taskId)) {
             HStack(alignment: .top, spacing: Spacing.tight) {
                 TaskSectionNotice(
                     text: L10n.autoControlNoticeText(notice),
@@ -192,17 +196,6 @@ struct TaskAutoSupervisionSection: View {
         }
     }
 
-    private func noticeApplies(_ notice: AutoControlNotice, to taskId: String) -> Bool {
-        switch notice {
-        case .acknowledged(let id), .vetoed(let id), .dispatchRequested(let id, _, _),
-             .staleState(let id):
-            return id == taskId
-        case .schedulingModeChanged, .supervisedAutoStopped, .projectAutoSettingsSaved,
-             .blocked, .failed, .malformedResponse:
-            return true
-        }
-    }
-
     private func noticeSymbol(_ notice: AutoControlNotice) -> String {
         switch notice {
         case .acknowledged, .vetoed, .dispatchRequested, .schedulingModeChanged,
@@ -210,6 +203,8 @@ struct TaskAutoSupervisionSection: View {
             return "checkmark.circle"
         case .staleState:
             return "arrow.triangle.2.circlepath"
+        case .schedulingModeBusy:
+            return "hourglass"
         case .blocked, .failed, .malformedResponse:
             return "exclamationmark.triangle"
         }
@@ -220,7 +215,7 @@ struct TaskAutoSupervisionSection: View {
         case .acknowledged, .vetoed, .dispatchRequested, .schedulingModeChanged,
              .supervisedAutoStopped, .projectAutoSettingsSaved:
             return .positive
-        case .staleState:
+        case .staleState, .schedulingModeBusy:
             return .caution
         case .blocked, .failed, .malformedResponse:
             return .caution
