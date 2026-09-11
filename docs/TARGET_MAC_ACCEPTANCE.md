@@ -440,3 +440,72 @@ merged and reviewed.
   is occasionally flaky on the baseline (1/5 fail rate observed
   before any WP5a-1 change); it remains flaky after WP5a-1 in
   the same proportion — unrelated to this WP.
+
+### P0 M1 WP5a-2 SUPERVISED_AUTO execution loop (PASS on `feat/m1-wp5a2-auto-tick`)
+
+The first real autonomous side effect. Acceptance evidence:
+
+- **Six hard gates enforced before any side effect** (admitted top-1;
+  quota availability ∈ {AVAILABLE_OBSERVED, AVAILABLE_UNMETERED};
+  evidence fresh ≤ 7d; tier floor; launchable target; no active
+  lease). Failing gates keep the task READY with a deduped
+  ``AUTO_SKIPPED{reason}`` audit + ``auto_reason`` hint.
+- **One frozen RoutingDecision per cycle**; routing request id pinned
+  to ``supervised-auto-{auto_decision_id}``, dispatch request id to
+  ``supervised-auto-dispatch-{auto_decision_id}``; both reused
+  byte-for-byte across ticks; ``routing_decisions.request_id`` UNIQUE
+  unchanged.
+- **Grace semantics correct**: unattended counts down from planning;
+  attended requires the owner ack (deadline from ack time, ACK retry
+  never extends it); 24h unacked aborts to READY.
+- **Dispatch safe**: authority=SUPERVISED_AUTO via the shared
+  initiator with ``expected_state=AUTO_GRACE``; re-admission at
+  worker start; exactly one reservation and at most one worker per
+  decision (duplicates idempotent).
+- **Fail-closed aborts**: mode change / project opt-out abort AUTO_*
+  lifecycles in the same settings handler (tick sweeps are the crash
+  backstop); TOCTOU covered (deadline passed + mode flip ⇒ no
+  dispatch; concurrent veto turns worker start into TASK_NOT_READY).
+- **Lease helper correct**: ``has_active_lease`` = task match AND
+  AUTHORIZED AND unexpired; expired leases never block.
+- **Pending shadow lifecycle complete**: created once at planning,
+  finalized exactly once with the truthful verifier outcome on real
+  runs, discarded on every abort; nothing hangs.
+- **Verifier remains the only task-quality authority**; worker exit
+  ≠ VERIFIED.
+- **Plugin has no SUPERVISED_AUTO side effect**: ``plugin.ts``
+  unchanged; ``optionMode`` still rejects it.
+- **Production ACTIVE unchanged**; authority not weakened.
+- **Control-only daemons never register the autonomous tick**.
+- 914 Python tests pass (845 baseline + 69 new); 441 Swift tests
+  pass; 17/17 TypeScript cases pass; ruff zero findings;
+  ``git diff --check`` clean.
+
+### P0 M1 WP5a-2 crash-consistency closeout (PASS on `feat/m1-wp5a2-auto-tick`, follow-up commits)
+
+Independent review merge blocker closed with deterministic
+crash-injection evidence (no sleep, no wall-clock races):
+
+- **AUTO abort / veto SQLite-atomic**: one `BEGIN IMMEDIATE` per
+  logical close — source gate, version check, READY, four-column
+  clear, optional MANUAL lock, one audit event, one cleanup intent;
+  exactly ONE `state_version` bump (pinned by test).
+- **Veto**: READY + MANUAL + clean metadata commit together; a store
+  reopen right after COMMIT (discard "lost") shows the owner-safe row.
+- **Durable outbox**: pending discard promised in-transaction,
+  fulfilled post-COMMIT idempotently; crash-after-commit /
+  crash-after-discard / duplicate drain / nonexistent pending /
+  unavailable-journal interleavings all pinned; completed rows never
+  reprocessed.
+- **READY stale metadata recovered** (`AUTO_METADATA_RECOVERED`),
+  while the legal frozen-decision boundary (READY + routing row only)
+  and the legal `auto_reason` skip hint are provably untouched.
+- **Mode-change / project-disable / unacked-timeout / pre-worker
+  BLOCKED crash windows** all recover on the restart tick: READY,
+  metadata clean, pending drained, no dispatch, no worker; a fresh
+  cycle after timeout derives a NEW `auto_decision_id` (old id never
+  reused).
+- 929 Python tests pass (914 + 15 crash-recovery); ruff zero
+  findings; `git diff --check` clean; plugin.ts /
+  decision_contract.ts byte-identical to the WP5a-1 baseline;
+  Production ACTIVE unchanged.

@@ -50,6 +50,12 @@ from personal_ai_orchestrator.execution_controller import (
     validate_execution_target_launch,
 )
 from personal_ai_orchestrator.safety_kernel import (
+    AUTHORITY_OWNER_INITIATED_EXECUTION as _AUTHORITY_OWNER_INITIATED_EXECUTION,
+)
+from personal_ai_orchestrator.safety_kernel import (
+    AUTHORITY_SUPERVISED_AUTO as _AUTHORITY_SUPERVISED_AUTO,
+)
+from personal_ai_orchestrator.safety_kernel import (
     ProjectAvailability,
     ProjectRecord,
     SafetyKernelStore,
@@ -62,9 +68,25 @@ def _control_plane_error(status: int, code: str) -> Any:
     between ``control_api`` (which imports ``initiate_owner_dispatch``)
     and this one (which raises ``ControlPlaneError``).
     """
+
     from personal_ai_orchestrator.control_api import ControlPlaneError
 
     return ControlPlaneError(status, code)
+
+
+def _is_reserved_auto_dispatch_request_id(request_id: str) -> bool:
+    """Lazy import of the AUTO namespace predicate (round 5 §4).
+
+    ``supervised_auto_step`` imports ``initiate_owner_dispatch`` at
+    module level, so the namespace-ownership module can only be
+    imported lazily here — mirroring ``_control_plane_error``.
+    """
+
+    from personal_ai_orchestrator.supervised_auto_step import (
+        is_reserved_auto_dispatch_request_id,
+    )
+
+    return is_reserved_auto_dispatch_request_id(request_id)
 
 if TYPE_CHECKING:
     from personal_ai_orchestrator.dispatch_executor import DispatchExecutor
@@ -75,9 +97,18 @@ if TYPE_CHECKING:
 
 
 #: String value forwarded to ``SafetyKernelStore.reserve_owner_dispatch``
-#: as ``authority=...``. Kept here (rather than imported from
-#: ``control_api``) so the authority value is owned by this module.
-AUTHORITY_OWNER_INITIATED_EXECUTION = "OWNER_INITIATED_EXECUTION"
+#: as ``authority=...``. The value itself is owned by
+#: ``safety_kernel`` (round 6 §5 — one source for the authority →
+#: source-state contract); this alias keeps the module's public name.
+AUTHORITY_OWNER_INITIATED_EXECUTION = _AUTHORITY_OWNER_INITIATED_EXECUTION
+
+#: M1 WP5a-2: authority value for the host-owned supervised-auto dispatch
+#: path. Deliberately distinct from ``OWNER_INITIATED_EXECUTION`` — nobody
+#: clicked an owner button; the dispatch authority is the Safety Kernel's
+#: planning tick operating under SUPERVISED_AUTO mode + project opt-in +
+#: grace-window semantics. The two values must never be conflated because
+#: the audit trail (and the pending-shadow lifecycle) keys off them.
+AUTHORITY_SUPERVISED_AUTO_EXECUTION = _AUTHORITY_SUPERVISED_AUTO
 
 
 def initiate_owner_dispatch(
@@ -94,6 +125,7 @@ def initiate_owner_dispatch(
     provider_registry_manager: Any | None,
     runtime_available_provider: Callable[[str], bool],
     execution_evidence_journal: Any | None,
+    expected_state: TaskState = TaskState.READY,
 ) -> tuple[OwnerDispatchRecord, bool, TaskRecord | None]:
     """Reserve, validate, transition, and spawn — the irreversible tail.
 
@@ -122,6 +154,12 @@ def initiate_owner_dispatch(
         - 409 ``provider_not_connected``
         - 409 ``execution_target_not_launchable``
 
+        Round 5 §5 (BEFORE any durable reservation, owner authority
+        only): 400 ``reserved_dispatch_request_id_namespace`` when the
+        owner-supplied ``request_id`` occupies the deterministic
+        SUPERVISED_AUTO dispatch namespace — no row is inserted, no
+        worker is spawned, no task mutation happens.
+
         ``ValueError`` (uncaught by this helper) propagates from
         ``reserve_owner_dispatch`` when the durable record conflicts;
         the caller maps it to 409 ``conflicting_dispatch_request_id``.
@@ -146,6 +184,20 @@ def initiate_owner_dispatch(
     """
 
     dispatch_id = f"owner-dispatch-{request_id}"
+    # Round 5 §5 — reserved internal namespace guard, BEFORE the durable
+    # reservation: OWNER_INITIATED_EXECUTION may never occupy the
+    # deterministic SUPERVISED_AUTO dispatch namespace. Enforced here —
+    # the shared boundary every owner dispatch initiation passes through
+    # — so no individual HTTP handler can bypass it. SUPERVISED_AUTO
+    # itself derives request ids from this prefix and passes a different
+    # authority, so it is unaffected. Invalid owner-supplied input is a
+    # 400 (the control plane's invalid-input convention, matching
+    # ``invalid_request_id``), not a 409 conflict: nothing was reserved.
+    if (
+        authority == AUTHORITY_OWNER_INITIATED_EXECUTION
+        and _is_reserved_auto_dispatch_request_id(request_id)
+    ):
+        raise _control_plane_error(400, "reserved_dispatch_request_id_namespace")
     dispatch, created = store.reserve_owner_dispatch(
         dispatch_id=dispatch_id,
         request_id=request_id,
@@ -165,7 +217,16 @@ def initiate_owner_dispatch(
             failure_reason="dispatch task_state_version did not match authoritative task",
         )
         raise _control_plane_error(409, "stale_task_state_version")
-    if task.state not in {TaskState.SUBMITTED, TaskState.READY}:
+    # M1 WP5a-2: the dispatchable-state guard is anchored on
+    # ``expected_state``. The owner path keeps the historical contract
+    # (READY, or SUBMITTED which transitions to READY below); the
+    # supervised-auto path requires exactly AUTO_GRACE — a task that was
+    # vetoed / aborted back to READY between the tick's read and this
+    # reservation fails closed here with no side effect.
+    dispatchable_states: set[TaskState] = {expected_state}
+    if expected_state is TaskState.READY:
+        dispatchable_states.add(TaskState.SUBMITTED)
+    if task.state not in dispatchable_states:
         store.mark_owner_dispatch_blocked(
             request_id,
             failure_code="TASK_STATE_NOT_DISPATCHABLE",
@@ -230,7 +291,7 @@ def initiate_owner_dispatch(
 
     # --- All guards passed: transition + thread -------------------------
     transitioned_task = None
-    if task.state is TaskState.SUBMITTED:
+    if expected_state is TaskState.READY and task.state is TaskState.SUBMITTED:
         transitioned_task = store.transition_task(
             task.task_id,
             TaskState.READY,
@@ -250,5 +311,6 @@ def initiate_owner_dispatch(
 
 __all__ = [
     "AUTHORITY_OWNER_INITIATED_EXECUTION",
+    "AUTHORITY_SUPERVISED_AUTO_EXECUTION",
     "initiate_owner_dispatch",
 ]

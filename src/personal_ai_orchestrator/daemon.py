@@ -40,6 +40,7 @@ from personal_ai_orchestrator.routing_service import RoutingService
 from personal_ai_orchestrator.runtime_config import RuntimeConfig
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore
 from personal_ai_orchestrator.scheduling_settings import SchedulingSettings
+from personal_ai_orchestrator.shadow_evidence import ShadowEvidenceJournal
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
 
 
@@ -330,6 +331,9 @@ def build_control_service(
             execution_evidence_journal=execution_evidence_journal,
             quota_availability_journal=QuotaAvailabilityJournal(runtime_state_root),
             quota_collectors=quota_collectors or default_quota_collectors(),
+            # M1 WP5a-2: the executor finalizes the SUPERVISED_AUTO
+            # pending shadow when the run reaches a truthful outcome.
+            shadow_journal=ShadowEvidenceJournal(runtime_state_root),
         )
     # Quota observability is connection-scoped: only providers the owner has
     # explicitly connected are ever contacted, and only through documented
@@ -362,6 +366,10 @@ def build_control_service(
         supervisor=supervisor,
         tier_table=tier_table,
         model_tiers_source=model_tiers_source,
+        # M1 WP5a-2: pending-shadow journal + catalog snapshot id for the
+        # supervised-auto tick's frozen decisions.
+        shadow_journal=ShadowEvidenceJournal(runtime_state_root),
+        catalog_snapshot_id=config.catalog_snapshot_id,
     )
 
 
@@ -448,6 +456,21 @@ def main(
         )
         control_server = ControlPlaneServer(control_service, args.control_socket)
         control_server.start_background()
+        # M1 WP5a-2 (§19): the supervised-auto tick runs ONLY on the
+        # non-control-only daemon. ``--control-only`` serves the typed
+        # control plane without any autonomous execution step — the
+        # product daemon (which is control-only today) therefore ships
+        # with zero autonomous tick execution until the owner opts in
+        # via the non-control-only runtime.
+        if not args.control_only:
+            from personal_ai_orchestrator.supervised_auto_step import (
+                SUPERVISED_AUTO_STEP_NAME,
+            )
+
+            supervisor.register(
+                SUPERVISED_AUTO_STEP_NAME,
+                control_service.build_supervised_auto_step(),
+            )
     if args.control_only:
         if control_server is None:
             raise SystemExit("--control-only requires --control-socket")

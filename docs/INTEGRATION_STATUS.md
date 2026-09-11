@@ -1161,3 +1161,310 @@ intentionally introduce the clear.
   clear-on-veto helper).
 - Pending-shadow autonomous lifecycle (veto / finalise / abort).
 - 24h unacked timeout for ``AUTO_GRACE``.
+
+## M1 WP5a-2 — SUPERVISED_AUTO execution loop (`feat/m1-wp5a2-auto-tick`)
+
+WP5a-1 landed the foundations; WP5a-2 lands the first real autonomous
+side effect. Current status:
+
+- **SUPERVISED_AUTO: IMPLEMENTED** — host-owned planning tick, frozen
+  decision, grace / ack / veto, safe autonomous dispatch, verifier
+  gatekeeping, pending-shadow lifecycle.
+- **Production ACTIVE: UNCHANGED** — still
+  ``DISABLED_BY_DESIGN`` unless activation authority authorises it;
+  the two modes remain separate authorities.
+- **Plugin autonomous authority: NO** —
+  ``integrations/opencode/plugin.ts`` is byte-identical to WP5a-1;
+  ``optionMode`` still rejects SUPERVISED_AUTO and the
+  ``mode !== "ACTIVE"`` side-effect gate is untouched.
+- **Auto dispatch authority: HOST / SAFETY KERNEL** — dispatch flows
+  through ``initiate_owner_dispatch`` with the distinct
+  ``authority="SUPERVISED_AUTO"`` and ``expected_state=AUTO_GRACE``;
+  quota admission, worktree isolation, single-writer lock, main-repo
+  immutability and the deterministic verifier all apply unchanged.
+- **Verifier: AUTHORITATIVE** — worker exit ≠ VERIFIED; only a
+  deterministic verifier PASS backed by immutable evidence may
+  finalize a verified pending shadow.
+
+### Tick (`supervised_auto_step.py`)
+
+One bounded, deterministic, fake-clock-friendly sweep per invocation;
+registered on ``DaemonSupervisor`` under ``supervised-auto``. The
+``--control-only`` daemon **never registers it** (zero autonomous tick
+execution; the product daemon is control-only today, so autonomous
+execution is opt-in via the non-control-only runtime). Tick failures
+are bounded: audited via ``SUPERVISED_AUTO_TICK_FAILED`` and the
+supervisor's existing backoff — the daemon never crashes, and no task
+is ever marked successful by a tick failure.
+
+Six hard gates before any side effect (spec §3.4 step 1): admitted
+top-1 recommendation; quota availability in
+``{AVAILABLE_OBSERVED, AVAILABLE_UNMETERED}``; evidence freshness
+(≤ 7 days); tier ≥ min_tier (via recommender admission); execution
+target launchable (reusing ``validate_execution_target_launch`` as
+the protected-surface gate — spec §3.4 item 5 clarification); no
+active switch lease. Any gate failing ⇒ ``AUTO_SKIPPED{reason}``
+(deduped per task+reason) and no side effect.
+
+### Frozen decision contract
+
+- ``auto_decision_id = f"auto-{task_id}-v{state_version-at-planning}"``
+  — stable across ticks of one cycle; a veto/abort/timeout bumps the
+  version, starting a fresh cycle.
+- Routing ``request_id = f"supervised-auto-{auto_decision_id}"`` —
+  no timestamps, no per-tick randomness; the durable
+  ``routing_decisions.request_id`` UNIQUE constraint is unchanged and
+  later ticks reuse the exact frozen decision (crash boundary A
+  reconciles without a second decision).
+- Dispatch ``request_id =
+  f"supervised-auto-dispatch-{auto_decision_id}"`` — idempotent
+  reservation; duplicates return the existing record, never a second
+  worker.
+- Pending shadow ``pending_id == auto_decision_id`` (裁决 15).
+
+### Grace / ack / veto / dispatch-now
+
+- ``unattended_allowed=True``: deadline set on entering AUTO_GRACE.
+- ``unattended_allowed=False``: no countdown before the owner ack
+  (``POST /v1/tasks/{id}/auto/ack``); the FIRST ack requires the exact
+  ``task_state_version``; an already-acked retry is idempotent (200
+  with the current task) and can never extend the deadline. 24h
+  unacked ⇒ abort to READY
+  (``AUTO_ABORTED{reason="unacked_timeout"}``).
+- ``POST /v1/tasks/{id}/auto/veto`` and ``/v1/tasks/{id}/cancel`` on
+  AUTO_*: back to READY, task policy locked MANUAL, pending shadow
+  discarded, all four auto columns cleared, ``AUTO_VETOED`` audited
+  (durable ``request_id`` idempotency).
+- ``POST /v1/tasks/{id}/auto/dispatch-now``: skips only the remaining
+  grace; every execution-admission gate still applies.
+
+### Fail-closed aborts (§8/§25)
+
+Mode change away from SUPERVISED_AUTO and project opt-out revoke
+abort every AUTO_* lifecycle inside the same settings handler; the
+tick's revocation sweeps are the crash backstop. The dispatch path
+revalidates mode/project/version/lease immediately before reserving
+(TOCTOU), and the executor's exact-``expected_state`` RUNNING guard
+closes the reserve→start race: a concurrent veto turns the worker
+start into a fail-closed ``TASK_NOT_READY`` with no process spawned.
+
+### AUTO metadata invariants (§32)
+
+Every terminal exit clears the four ``auto_*`` columns off the active
+task row: veto, mode abort, project abort, unacked timeout,
+pre-worker admission failure, and the executor close-out (verified /
+failed / cancelled). The tick's terminal-state sweep is the durable
+backstop when the executor dies mid-close-out. Historical truth lives
+in the audit trail, the routing decision row and the shadow journal —
+never in stale task-row fields.
+
+### Pending-shadow lifecycle (§26)
+
+Planning writes exactly one pending; repeated ticks never duplicate.
+Verified runs finalize into exactly one real observation (deterministic
+``observation_id`` makes double-finalization content-idempotent);
+failed workers finalize with a truthful failed outcome; every abort
+exit discards. Nothing hangs.
+
+### Test coverage summary
+
+- ``tests/test_supervised_auto_step.py`` (33 tests) — gates, frozen
+  decision stability, request-id stability, unattended/attended grace,
+  ack deadline pinning, dispatch exactly once, lease blocking (active
+  vs expired), mode/project aborts, 24h timeout, crash boundaries A/C,
+  restart round-trip, pre-worker BLOCKED reconciliation, terminal
+  sweep, supervisor registration (control-only excluded).
+- ``tests/test_mode_change_abort.py`` (7 tests) — §25 matrix incl.
+  TOCTOU (deadline passed + mode flip ⇒ no dispatch), ACTIVE API
+  rejection leaving AUTO intact, RUNNING immunity, executor-side
+  expected-state guard.
+- ``tests/test_auto_endpoints.py`` (18 tests) — ack/veto/dispatch-now
+  success/stale/wrong-state/duplicate matrix, deadline pinning,
+  cancel-as-veto, HTTP 400/404/409/200 over the real UDS surface.
+- ``tests/test_pending_shadow_lifecycle.py`` (6 tests) — lifecycle
+  disposition matrix; verified + failed finals run the REAL
+  ``OwnerDispatchExecutor`` with the scripted worker + deterministic
+  verifier.
+- ``tests/test_switch_lease.py`` (+5 tests) — ``has_active_lease``
+  truth table (matching unexpired / expired / wrong task / COMPLETED /
+  ABORTED).
+- ``tests/test_safety_kernel_transactions.py`` — the WP5a-1
+  AUTO_GRACE→RUNNING prohibition test updated to the WP5a-2 contract
+  (edge exists; unpaired bare transitions still fail
+  ``assert_running_invariant``).
+
+## M1 WP5a-2 crash-consistency closeout (`feat/m1-wp5a2-auto-tick`, follow-up commits)
+
+Independent review blocked the merge: the AUTO lifecycle exits were
+multi-stage writes, so a crash between durable commits could leave
+``READY`` + active-looking auto metadata and an orphan pending shadow
+(the terminal sweep never covered READY). Repaired on the same branch:
+
+- **Atomic lifecycle close**: ``abort_auto_lifecycle`` performs the
+  source-state gate (AUTO_PLANNED / AUTO_GRACE; BLOCKED only with
+  ``allow_blocked`` AND a non-NULL ``auto_decision_id``), the exact
+  version check, READY + four-column clear + optional MANUAL lock,
+  exactly ONE ``state_version`` bump, one audit event and one cleanup
+  intent — all in ONE ``BEGIN IMMEDIATE``. Abort, veto (incl.
+  cancel-as-veto), unacked timeout and the pre-worker BLOCKED
+  reconciliation all route through it.
+- **Durable shadow-cleanup outbox** (``auto_shadow_cleanup_outbox``):
+  the pending discard is promised in the abort transaction and
+  fulfilled after COMMIT by an idempotent, bounded drain — crash-safe
+  at every interleaving; a journal failure never rolls back SQLite
+  truth. ``clear_auto_state_metadata`` enqueues the same intent so the
+  terminal sweep / executor close-out inherit the guarantee.
+- **Tick ordering**: outbox drain + stale-READY-metadata recovery run
+  BEFORE revocation sweeps, planning and dispatch (old-lifecycle
+  cleanup precedes new planning), with a second drain at tick end.
+- **READY stale-metadata recovery**: a READY row with lifecycle
+  metadata (decision id / deadline / ack) is recovered atomically with
+  ``AUTO_METADATA_RECOVERED{ready_state_stale_auto_metadata}``;
+  ``auto_reason`` alone is the tick's legal skip hint and a READY row
+  with only a frozen routing decision is the legal crash boundary A —
+  neither is mistaken for staleness.
+- **ACK contract frozen**: first ACK requires the exact version; an
+  already-acked retry is idempotent and never extends the deadline.
+  VETO is exact before first mutation (same-``request_id`` replay
+  idempotent); DISPATCH-NOW is an exact admission guard.
+- Tests: ``tests/test_auto_crash_recovery.py`` (15) — deterministic
+  fault injection (failing journal, store-level commits without the
+  drain, fresh-connection restarts; no sleep) covering the veto /
+  mode-change / project-disable / unacked-timeout / pre-worker-BLOCKED
+  crash windows, the legacy READY stale-metadata row, the frozen
+  boundary-A negative, the outbox mechanics (§20 matrix) and the
+  one-bump / one-audit / plain-owner-BLOCKED-untouched invariants.
+
+### WP5a-2 current-cycle reconciliation repair (review round 2)
+
+Reconciliation of terminal SUPERVISED_AUTO dispatch rows is now
+strictly current-cycle: the row must match
+`supervised_auto_dispatch_request_id(task.auto_decision_id)` (gate
+before any mutation), and "this dispatch has a run" is decided by the
+exact `run-{dispatch_id}` row — never by a task-scoped historical run
+lookup. Historical blocked rows cannot abort a new cycle
+(`tests/test_auto_reconciliation.py`: old run cannot hide a current
+pre-worker failure; old blocked dispatch cannot abort a new cycle;
+current dispatch with its exact run is never pre-worker aborted;
+run correlation is dispatch-scoped — only `run-X` counts for
+dispatch X; a no-metadata historical row fails closed, BLOCKED stays
+BLOCKED).
+
+### WP5a-2 post-worker shadow finalization repair (review round 3)
+
+The terminal VERIFYING → VERIFIED/BLOCKED commit previously preceded
+the filesystem `finalize_pending` — a crash in between let the restart
+terminal sweep DISCARD the pending of a really-executed worker
+(permanent observation loss). Now: durable
+`auto_shadow_finalize_outbox` intents with immutable payloads
+(observed_at pinned for byte-identical replays), the terminal
+transition + intent in ONE SQLite transaction
+(`apply_verification_outcome`), an idempotent bounded drain
+(missing pendings complete only with a proven matching observation,
+else fail closed with a sanitized system event), finalize-beats-discard
+precedence in both the enqueue rules and the drains, exact-run
+terminal-sweep classification with fail-closed reconstruction, and the
+`shadow_journal=None` cleanup-drain bug fixed (intents stay OPEN).
+Deterministic crash tests: tests/test_auto_shadow_finalize_recovery.py
+(15) — verified/failed-verdict/non-zero-exit recovery, byte-identical
+replays, payload-conflict fail-closed, pre-worker discard boundary,
+outbox precedence and the None-journal contract.
+
+### WP5a-2 final outcome ordering repair (review round 4)
+
+Shadow finalization previously froze the intermediate verifier
+outcome — a later main-repo check downgraded VERIFIED → BLOCKED and
+left a stale verified=True observation; and a real-run lifecycle with
+a missing pending could clear `auto_decision_id` before any durable
+finalize intent / proven observation existed. Now: the main-repo
+immutability result is composed with the verifier verdict BEFORE one
+final terminal transaction (verifier PASS + mutation ⇒ BLOCKED +
+verified=False/verification_success=True shadow), a central
+real-execution recovery guard gates every metadata clear
+(intent-or-proven-observation), and the finalize outbox freezes the
+pending's full immutable identity so completion proof rebuilds and
+exactly compares the expected observation. Deterministic tests:
+tests/test_auto_final_outcome.py (9) — real-worker main-mutation
+ordering, happy path, missing-pending preservation (executor + sweep),
+intent-authorized clear with outbox-alone restart proof, and full
+semantic proof (divergent taxonomy/timestamp/quota/burn rejected).
+
+### WP5a-2 namespace + shadow identity repair (review round 5)
+
+Three review findings closed: (1) OWNER dispatch request ids could
+occupy the deterministic SUPERVISED_AUTO dispatch namespace and AUTO
+crash recovery trusted any RESERVED row on that id — owner input in the
+namespace is now rejected before reservation (400
+reserved_dispatch_request_id_namespace), and recovery re-admission
+requires an exact authority/task/version/target/dispatch identity match
+(the one shared `owner_dispatch_matches_expected` rule); a foreign row
+closes the current lifecycle fail-closed (dispatch_namespace_conflict)
+and is never executed or mutated. (2) A present pending shadow is no
+longer trusted by file id alone — the finalize drain proves it equals
+the frozen `identity_json` before finalizing, and completion requires
+the exact expected observation to be durably present (a successful
+`finalize_pending` return is not proof). (3) Observation-only recovery
+proof now correlates on the real durable `route-*`
+`RoutingDecision.decision_id` with exactly-one + terminal
+verdict-consistency requirements. Deterministic tests:
+tests/test_auto_namespace_and_identity.py (18) — namespace rejection
++ normal owner contract, foreign-row non-execution across every tuple
+dimension, exact-row crash recovery, present-pending identity matrix
+(target/catalog/quota/provider mismatch, silent-finalize fault
+injection), and observation-only proof (real route id proves;
+auto id or verdict mismatch does not).
+
+### WP5a-2 authority-state + terminal-correlation repair (review round 6)
+
+Three review findings closed: (1) the executor inferred the worker's
+expected source state from the CURRENT task row, so a stale
+SUPERVISED_AUTO reservation could start after a veto moved the task
+back to READY — the legal source state is now a property of the durable
+dispatch authority (OWNER → READY, SUPERVISED_AUTO → AUTO_GRACE),
+enforced at the executor entry and re-derived inside the store's atomic
+start transaction (a caller-supplied expected_state cannot weaken it);
+unknown authority fails closed with UNKNOWN_DISPATCH_AUTHORITY, and
+pre-worker failure only ever blocks the authority's own source state.
+(2) Terminal recovery classified runs by deterministic request-id
+namespace without proving the dispatch row was the exact current
+SUPERVISED_AUTO reservation — the canonical
+current_supervised_auto_dispatch proof (frozen routing target,
+deterministic ids, task, authority, reservation-cycle version
+contract) now gates every classifier, and a namespace CONFLICT fails
+closed (AUTO_EXECUTION_CORRELATION_CONFLICT; metadata preserved) rather
+than collapsing into pre-worker cleanup; a foreign OWNER run can never
+become AUTO shadow evidence. (3) The tick's "never spawns threads"
+documentation claim was corrected to the truthful executor-hand-off
+wording. Deterministic tests:
+tests/test_auto_authority_correlation.py (15) — authority→state
+mapping, store anti-weakening, AUTHORITY matrix (stale AUTO on READY /
+OWNER on AUTO_GRACE / unknown authority never start; both valid starts
+still run), veto races after spawn (child cancelled exactly once, task
+stays READY, no run row), stale pre-worker failure never blocks READY,
+and the terminal CORRELATION matrix (foreign OWNER / wrong target /
+wrong task rows with runs are CONFLICTs; exact run still recovers with
+exactly one observation; exact no-run stays pre-worker cleanup).
+
+### WP5a-2 reconciliation correlation repair (review round 7)
+
+The pre-worker reconciliation still used its historical partial
+current-cycle logic (raw row + request-id equality + own run lookup)
+instead of the Round-6 canonical classifier, so a conflicting
+SUPERVISED_AUTO row (wrong target / dispatch id / reservation version)
+with no run could be treated as an ordinary pre-worker failure and
+clear lifecycle metadata + pending before the terminal sweep saw the
+conflict. Reconciliation is now task-driven and gates every mutation
+on correlate_supervised_auto_execution: CONFLICT preserves everything
+(sanitized, per-tick-deduped AUTO_EXECUTION_CORRELATION_CONFLICT event
+shared with the terminal sweep); EXACT_REAL_RUN is left to the
+executor/terminal recovery; NO_DISPATCH ignores unrelated historical
+rows; only EXACT_PREWORKER with a BLOCKED/CANCELLED exact reservation
+may abort (crash-atomic, incl. allow_blocked for terminal BLOCKED).
+The auto_decision_id documentation no longer conflates it with
+RoutingDecision.decision_id. Deterministic tests:
+tests/test_auto_reconciliation.py round-7 matrix (9) — wrong
+target / dispatch id / live version (V±1) / terminal version ordering
+conflicts preserve metadata, pending, and emit exactly one deduped
+event; exact pre-worker failures (AUTO_GRACE and terminal BLOCKED)
+still abort safely; an exact real run is never pre-worker-aborted;
+NO_DISPATCH ignores historical rows.
