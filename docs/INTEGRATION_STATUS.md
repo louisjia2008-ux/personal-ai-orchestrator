@@ -1388,3 +1388,28 @@ tests/test_auto_final_outcome.py (9) — real-worker main-mutation
 ordering, happy path, missing-pending preservation (executor + sweep),
 intent-authorized clear with outbox-alone restart proof, and full
 semantic proof (divergent taxonomy/timestamp/quota/burn rejected).
+
+### WP5a-2 namespace + shadow identity repair (review round 5)
+
+Three review findings closed: (1) OWNER dispatch request ids could
+occupy the deterministic SUPERVISED_AUTO dispatch namespace and AUTO
+crash recovery trusted any RESERVED row on that id — owner input in the
+namespace is now rejected before reservation (400
+reserved_dispatch_request_id_namespace), and recovery re-admission
+requires an exact authority/task/version/target/dispatch identity match
+(the one shared `owner_dispatch_matches_expected` rule); a foreign row
+closes the current lifecycle fail-closed (dispatch_namespace_conflict)
+and is never executed or mutated. (2) A present pending shadow is no
+longer trusted by file id alone — the finalize drain proves it equals
+the frozen `identity_json` before finalizing, and completion requires
+the exact expected observation to be durably present (a successful
+`finalize_pending` return is not proof). (3) Observation-only recovery
+proof now correlates on the real durable `route-*`
+`RoutingDecision.decision_id` with exactly-one + terminal
+verdict-consistency requirements. Deterministic tests:
+tests/test_auto_namespace_and_identity.py (18) — namespace rejection
++ normal owner contract, foreign-row non-execution across every tuple
+dimension, exact-row crash recovery, present-pending identity matrix
+(target/catalog/quota/provider mismatch, silent-finalize fault
+injection), and observation-only proof (real route id proves;
+auto id or verdict mismatch does not).

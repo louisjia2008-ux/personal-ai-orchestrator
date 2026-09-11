@@ -435,3 +435,49 @@ execution outcome — never the intermediate verifier verdict:
   alone proves nothing about the verdict (it digests identity only), so
   divergent `failure_class`, `verification_success`, `observed_at`,
   `quota_after_snapshot_ids` or burn data fail closed.
+
+### 14.8 Reserved dispatch namespace + pending identity (review round 5)
+
+- **Reserved internal namespace** — the deterministic
+  `supervised-auto-dispatch-{auto_decision_id}` request-id namespace
+  belongs exclusively to the SUPERVISED_AUTO authority
+  (`SUPERVISED_AUTO_DISPATCH_REQUEST_PREFIX` /
+  `is_reserved_auto_dispatch_request_id`). An OWNER_INITIATED_EXECUTION
+  request carrying a reserved request id is rejected at the shared
+  `initiate_owner_dispatch` boundary BEFORE any durable reservation —
+  HTTP 400 `reserved_dispatch_request_id_namespace`, no
+  `owner_dispatches` row, no worker, no task mutation. Normal owner
+  request ids are unchanged.
+- **Exact existing-row recovery identity** — AUTO crash recovery may
+  re-admit an existing row for the deterministic request id ONLY on an
+  exact identity match: request id, dispatch id, task id,
+  `task_state_version`, frozen `execution_target_id` AND authority —
+  the single shared comparison `owner_dispatch_matches_expected`
+  (also used by `reserve_owner_dispatch`, so the two rules can never
+  drift). A legacy/polluted/foreign row (any dimension mismatch) is
+  never executed, adopted or mutated: the CURRENT lifecycle aborts
+  fail-closed (`dispatch_namespace_conflict`, atomic READY + metadata
+  clear + cleanup outbox) and the foreign row remains untouched
+  historical truth; a new planning cycle derives a fresh
+  state_version → fresh `auto_decision_id` → fresh request id.
+- **Present-pending frozen-identity validation** — after the finalize
+  intent is enqueued, the durable row (not mutable filesystem state) is
+  the authority. The finalize drain proves a PRESENT pending equals the
+  frozen intent (four correlation columns + canonical-JSON
+  `shadow_identity_payload(pending) == identity_json`; legacy `{}`
+  intents fail closed) BEFORE finalizing; a stale/replaced/tampered
+  pending is never finalized, discarded or completed
+  (`AUTO_SHADOW_FINALIZE_RETRY_FAILED` /
+  `PendingIdentityMismatch`). Success additionally requires the exact
+  expected observation to be durably present after `finalize_pending`
+  — a plain function return is not proof
+  (`PostFinalizeObservationUnproven` leaves the intent OPEN and the
+  pending in place).
+- **Observation-only recovery proof** — correlates on the REAL durable
+  `RoutingDecision.decision_id` (`route-*`, loaded from
+  `routing_decisions` by `supervised-auto-{auto_decision_id}`), never
+  the `auto-*` pending id; requires exactly ONE matching observation
+  and terminal task/shadow verdict consistency (VERIFIED ⇔
+  verified=True; other terminal states ⇔ verified=False;
+  non-terminal states never prove). Priority unchanged: pre-worker →
+  True; durable finalize intent → True; otherwise observation-only.
