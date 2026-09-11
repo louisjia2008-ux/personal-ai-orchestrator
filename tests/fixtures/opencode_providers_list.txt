@@ -19,4 +19,3 @@
 ●  MiniMax (minimaxi.com) [90mMINIMAX_API_KEY
 │
 └  5 environment variables
-
