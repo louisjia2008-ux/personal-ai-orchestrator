@@ -12,6 +12,10 @@ final class TestDaemon {
         let path: String
         let status: Int
         let body: String
+        /// Test-only: when armed, the handler parks after the request
+        /// is recorded until the test releases it — deterministic
+        /// in-flight control without sleeps.
+        let hold: Bool
     }
 
     private var routes: [Route] = []
@@ -20,12 +24,64 @@ final class TestDaemon {
     private let lock = NSLock()
     private(set) var receivedRequests: [(method: String, path: String, body: String)] = []
     private var running = false
+    private var requestCounts: [String: Int] = [:]
+    private var armedHolds: Set<String> = []
+    private var holdGates: [String: [DispatchSemaphore]] = [:]
+    private var requestWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
-    func route(_ method: String, _ path: String, status: Int = 200, body: String) {
-        routes.append(Route(method: method, path: path, status: status, body: body))
+    private static func routeKey(_ method: String, _ path: String) -> String {
+        "\(method) \(path)"
+    }
+
+    func route(_ method: String, _ path: String, status: Int = 200, body: String, hold: Bool = false) {
+        routes.append(Route(method: method, path: path, status: status, body: body, hold: hold))
+    }
+
+    /// Park matching handlers until ``release(_:_)``. Requests still
+    /// register (counts, bodies, waiters) before parking, so a test can
+    /// deterministically observe that a request arrived.
+    func armHold(_ method: String, _ path: String) {
+        lock.lock()
+        armedHolds.insert(Self.routeKey(method, path))
+        lock.unlock()
+    }
+
+    /// Let parked handlers for this route continue.
+    func release(_ method: String, _ path: String) {
+        let key = Self.routeKey(method, path)
+        lock.lock()
+        let gates = holdGates.removeValue(forKey: key) ?? []
+        lock.unlock()
+        gates.forEach { $0.signal() }
+    }
+
+    /// How many matching requests the daemon has served (including
+    /// currently parked ones).
+    func requestCount(_ method: String, _ path: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return requestCounts[Self.routeKey(method, path)] ?? 0
+    }
+
+    /// Suspend until exactly `count` matching requests have arrived.
+    /// Waiting for the Nth (not merely "some") request makes phase
+    /// boundaries deterministic: the parked operation is provably
+    /// inside its request before the test proceeds.
+    func waitForRequestCount(_ method: String, _ path: String, count: Int) async {
+        let key = Self.routeKey(method, path)
+        lock.lock()
+        if (requestCounts[key] ?? 0) >= count {
+            lock.unlock()
+            return
+        }
+        await withCheckedContinuation { continuation in
+            requestWaiters[key, default: []].append(continuation)
+            lock.unlock()
+        }
     }
 
     func start(socketPath: String) throws {
+        signal(SIGPIPE, SIG_IGN)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw NSError(domain: "socket", code: Int(errno)) }
         unlink(socketPath)
@@ -55,6 +111,15 @@ final class TestDaemon {
             close(serverFD)
             serverFD = -1
         }
+        // Never leave a test's parked handlers or waiters dangling.
+        lock.lock()
+        let gates = holdGates.values.flatMap { $0 }
+        holdGates.removeAll()
+        let waiters = requestWaiters.values.flatMap { $0 }
+        requestWaiters.removeAll()
+        lock.unlock()
+        gates.forEach { $0.signal() }
+        waiters.forEach { $0.resume() }
     }
 
     private func serve() {
@@ -101,10 +166,29 @@ final class TestDaemon {
         if let headerEnd = data.range(of: Data("\r\n\r\n".utf8)) {
             body = String(data: data[headerEnd.upperBound...], encoding: .utf8) ?? ""
         }
+        let key = Self.routeKey(method, path)
         lock.lock()
         receivedRequests.append((method, path, body))
+        requestCounts[key, default: 0] += 1
         let route = routes.first { $0.method == method && $0.path == path }
+        let shouldHold = (route?.hold ?? false) && armedHolds.contains(key)
+        var toResume: [CheckedContinuation<Void, Never>] = []
+        if var waiters = requestWaiters[key], !waiters.isEmpty {
+            // One arrival satisfies one waiter; later arrivals serve
+            // any remaining waiters waiting for higher counts.
+            toResume.append(waiters.removeFirst())
+            if waiters.isEmpty { requestWaiters.removeValue(forKey: key) }
+            else { requestWaiters[key] = waiters }
+        }
         lock.unlock()
+        toResume.forEach { $0.resume() }
+        if shouldHold {
+            let gate = DispatchSemaphore(value: 0)
+            lock.lock()
+            holdGates[key, default: []].append(gate)
+            lock.unlock()
+            gate.wait()
+        }
         let status = route?.status ?? 404
         let payload = route?.body ?? "{\"error\":\"not_found\"}"
         let response = "HTTP/1.0 \(status) X\r\nContent-Type: application/json\r\n"

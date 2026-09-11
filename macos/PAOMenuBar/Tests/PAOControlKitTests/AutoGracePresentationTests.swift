@@ -169,4 +169,24 @@ final class AutoGracePresentationTests: XCTestCase {
         XCTAssertNil(view.autoAckedAt)
         XCTAssertEqual(view.autoReason, "AUTO_PLANNED{auto-t-1-v4,m3-sub}")
     }
+
+    // MARK: - MODE-UNKNOWN (closeout P1)
+
+    /// MODE-UNKNOWN-1: missing settings stay unknown; they must never
+    /// resolve to MANUAL.
+    func testMissingSchedulingSettingsAreUnknownNotManual() {
+        XCTAssertNil(AutomationModePresentation.currentMode(from: nil))
+        XCTAssertNotEqual(
+            AutomationModePresentation.currentMode(from: nil),
+            Optional("MANUAL")
+        )
+    }
+
+    /// MODE-UNKNOWN-2: mode selection is not offered until the
+    /// authoritative mode exists.
+    func testModeSelectionRequiresAuthoritativeTruth() {
+        XCTAssertFalse(AutomationModePresentation.canSelectModes(currentMode: nil))
+        XCTAssertTrue(AutomationModePresentation.canSelectModes(currentMode: "MANUAL"))
+        XCTAssertTrue(AutomationModePresentation.canSelectModes(currentMode: "SUPERVISED_AUTO"))
+    }
 }

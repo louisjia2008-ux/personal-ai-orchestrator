@@ -227,7 +227,10 @@ final class SupervisedAutoControlTests: XCTestCase {
 
         await store.setProjectAutoSettings(projectId: "project-fixture", graceSeconds: 99_999)
 
-        XCTAssertEqual(store.autoControlNotice, .blocked(code: "invalid_grace_seconds"))
+        XCTAssertEqual(
+            store.autoControlNotice,
+            .blocked(scope: .project("project-fixture"), code: "invalid_grace_seconds")
+        )
     }
 
     // MARK: - RACE
@@ -302,5 +305,154 @@ final class SupervisedAutoControlTests: XCTestCase {
         XCTAssertEqual(
             bodies(daemon, method: "POST", path: "/v1/tasks/t-1/auto/ack").count, 1
         )
+    }
+
+    // MARK: - EMERGENCY-STOP-RACE (closeout P0)
+
+    /// EMERGENCY-STOP-RACE-1 / MODE-4: an old successful MANUAL mode
+    /// notice plus a scheduling mutation parked in-flight must not let
+    /// a coalesced emergency stop fabricate success.
+    func testCoalescedEmergencyStopCannotFabricateSuccessFromStaleNotice() async throws {
+        let daemon = TestDaemon()
+        // The holdable PUT shadows the standard route (first match wins)
+        // but answers with the same canned manual settings.
+        daemon.route(
+            "PUT", "/v1/settings/scheduling",
+            status: 200, body: schedulingSettingsManualBody, hold: true
+        )
+        registerStandardRoutes(daemon, schedulingBody: schedulingSettingsSupervisedAutoBody)
+        let store = try await makeStore(daemon, "stop-race")
+        defer { daemon.stop() }
+
+        // Phase 1: a real, completed MANUAL mode change leaves a
+        // successful scheduling notice behind — the stale trap.
+        await store.setSchedulingMode("MANUAL")
+        XCTAssertEqual(store.autoControlNotice, .schedulingModeChanged(mode: "MANUAL"))
+
+        // Phase 2: a new scheduling mutation acquires the in-flight
+        // key and parks inside its PUT.
+        daemon.armHold("PUT", "/v1/settings/scheduling")
+        let inFlight = Task { await store.setSchedulingMode("MANUAL") }
+        // Deterministic phase boundary: the parked mutation is provably
+        // inside its own PUT (the 2nd this daemon has seen), so the
+        // in-flight key is certainly held before the stop is invoked.
+        await daemon.waitForRequestCount("PUT", "/v1/settings/scheduling", count: 2)
+        let putsBeforeStop = daemon.requestCount("PUT", "/v1/settings/scheduling")
+        XCTAssertEqual(putsBeforeStop, 2)  // phase-1 + the parked mutation
+
+        // Phase 3: the stop coalesces. It must send no PUT of its own
+        // and report busy — never a stop — despite the stale MANUAL
+        // notice sitting in shared state.
+        await store.emergencyStopSupervisedAuto()
+        XCTAssertEqual(daemon.requestCount("PUT", "/v1/settings/scheduling"), putsBeforeStop)
+        XCTAssertEqual(store.autoControlNotice, .schedulingModeBusy)
+        XCTAssertNotEqual(store.autoControlNotice, .supervisedAutoStopped)
+
+        // Phase 4: releasing the parked PUT lets the ORIGINAL mutation
+        // finish under its own authority; its MANUAL result stays a
+        // mode-change outcome, never a stop confirmation.
+        daemon.release("PUT", "/v1/settings/scheduling")
+        _ = await inFlight.value
+        XCTAssertEqual(store.autoControlNotice, .schedulingModeChanged(mode: "MANUAL"))
+        XCTAssertNotEqual(store.autoControlNotice, .supervisedAutoStopped)
+    }
+
+    // MARK: - NOTICE-SCOPE (closeout P1)
+
+    /// NOTICE-SCOPE-1: task success notices apply only to same task.
+    func testTaskOutcomeNoticesApplyOnlyToSameTask() {
+        XCTAssertTrue(AutoControlNotice.acknowledged(taskId: "t-1").applies(to: .task("t-1")))
+        XCTAssertTrue(AutoControlNotice.vetoed(taskId: "t-1").applies(to: .task("t-1")))
+        XCTAssertTrue(
+            AutoControlNotice.dispatchRequested(taskId: "t-1", dispatchId: "d", status: "DISPATCHING")
+                .applies(to: .task("t-1"))
+        )
+        XCTAssertFalse(AutoControlNotice.acknowledged(taskId: "t-1").applies(to: .task("t-2")))
+        XCTAssertFalse(AutoControlNotice.vetoed(taskId: "t-1").applies(to: .task("t-2")))
+    }
+
+    /// NOTICE-SCOPE-2: generic task failures stay scoped to the task.
+    func testTaskGenericFailuresApplyOnlyToSameTask() {
+        XCTAssertTrue(
+            AutoControlNotice.blocked(scope: .task("t-1"), code: "task_state_not_auto")
+                .applies(to: .task("t-1"))
+        )
+        XCTAssertTrue(
+            AutoControlNotice.failed(scope: .task("t-1"), action: .ack, detail: "x")
+                .applies(to: .task("t-1"))
+        )
+        XCTAssertTrue(
+            AutoControlNotice.malformedResponse(scope: .task("t-1")).applies(to: .task("t-1"))
+        )
+        XCTAssertFalse(
+            AutoControlNotice.blocked(scope: .task("t-1"), code: "task_state_not_auto")
+                .applies(to: .task("t-2"))
+        )
+        XCTAssertFalse(
+            AutoControlNotice.failed(scope: .task("t-1"), action: .ack, detail: "x")
+                .applies(to: .task("t-2"))
+        )
+    }
+
+    /// NOTICE-SCOPE-3: project refusals apply only to that project.
+    func testProjectRefusalAppliesOnlyToThatProject() {
+        let notice = AutoControlNotice.blocked(
+            scope: .project("p-a"), code: "invalid_grace_seconds"
+        )
+        XCTAssertTrue(notice.applies(to: .project("p-a")))
+        XCTAssertFalse(notice.applies(to: .project("p-b")))
+        XCTAssertFalse(notice.applies(to: .task("t-1")))
+        XCTAssertFalse(notice.applies(to: .schedulingMode))
+        XCTAssertFalse(
+            AutoControlNotice.projectAutoSettingsSaved(projectId: "p-a").applies(to: .project("p-b"))
+        )
+    }
+
+    /// NOTICE-SCOPE-4: scheduling notices apply only to scheduling.
+    func testSchedulingNoticesApplyOnlyToSchedulingScope() {
+        XCTAssertTrue(AutoControlNotice.schedulingModeChanged(mode: "MANUAL").applies(to: .schedulingMode))
+        XCTAssertTrue(AutoControlNotice.supervisedAutoStopped.applies(to: .schedulingMode))
+        XCTAssertTrue(AutoControlNotice.schedulingModeBusy.applies(to: .schedulingMode))
+        XCTAssertFalse(AutoControlNotice.supervisedAutoStopped.applies(to: .task("t-1")))
+        XCTAssertFalse(AutoControlNotice.schedulingModeChanged(mode: "MANUAL").applies(to: .project("p-a")))
+    }
+
+    /// NOTICE-SCOPE-5: the menu-bar scheduling filter cannot accept
+    /// task or project notices.
+    func testMenuSchedulingFilterRejectsTaskAndProjectNotices() {
+        let candidates: [AutoControlNotice] = [
+            .acknowledged(taskId: "t-1"),
+            .vetoed(taskId: "t-1"),
+            .staleState(taskId: "t-1"),
+            .dispatchRequested(taskId: "t-1", dispatchId: "d", status: "DISPATCHING"),
+            .blocked(scope: .task("t-1"), code: "x"),
+            .projectAutoSettingsSaved(projectId: "p-a"),
+            .blocked(scope: .project("p-a"), code: "invalid_grace_seconds"),
+        ]
+        for notice in candidates {
+            XCTAssertFalse(
+                notice.applies(to: .schedulingMode),
+                "\(notice) leaked into the scheduling surface"
+            )
+        }
+    }
+
+    /// NOTICE-SCOPE-6: Task A's notice never applies to Task B.
+    func testTaskANoticeDoesNotApplyToTaskB() {
+        let notices: [AutoControlNotice] = [
+            .acknowledged(taskId: "task-a"),
+            .vetoed(taskId: "task-a"),
+            .staleState(taskId: "task-a"),
+            .dispatchRequested(taskId: "task-a", dispatchId: "d", status: "DISPATCHING"),
+            .blocked(scope: .task("task-a"), code: "x"),
+            .failed(scope: .task("task-a"), action: .veto, detail: "x"),
+            .malformedResponse(scope: .task("task-a")),
+        ]
+        for notice in notices {
+            XCTAssertFalse(
+                notice.applies(to: .task("task-b")),
+                "\(notice) leaked into another task's surface"
+            )
+        }
     }
 }
