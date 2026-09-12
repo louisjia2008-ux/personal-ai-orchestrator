@@ -36,9 +36,9 @@ class RoutingService:
     """Own scheduler inputs and persist every adapter-facing decision before returning it."""
 
     registry: ModelRegistry
-    registry_provider: Callable[[], ModelRegistry] | None = None
     store: SafetyKernelStore
     catalog_snapshot_id: str
+    registry_provider: Callable[[], ModelRegistry] | None = None
     policy: RoutingPolicy = field(default_factory=RoutingPolicy)
     project_policy_overrides: dict[str, RoutingPolicy] = field(default_factory=dict)
     task_policy_overrides: dict[str, RoutingPolicy] = field(default_factory=dict)
