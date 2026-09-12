@@ -121,6 +121,30 @@ def run_pi_execution_probe(
     """Run one real Pi worker and journal scoped verification evidence."""
 
     journal = ExecutionEvidenceJournal(evidence_root)
+
+    spec = next(
+        (item for item in __import__(
+            "personal_ai_orchestrator.pi_provider_discovery",
+            fromlist=["PI_PROVIDER_SPECS"],
+        ).PI_PROVIDER_SPECS if item.pao_provider_id == provider_id),
+        None,
+    )
+    expected_target_id = (
+        f"pi-{provider_id}-{model_sku_id.split("/", 1)[-1]}"
+        if "/" in model_sku_id
+        else f"pi-{provider_id}-{model_sku_id}"
+    )
+    if spec is None or execution_target_id != expected_target_id:
+        evidence = build_execution_evidence(
+            provider_id=provider_id,
+            execution_target_id=execution_target_id,
+            model_sku_id=model_sku_id,
+            result=ExecutionVerificationOutcome.UNKNOWN,
+            reason_code="PI_PROBE_TARGET_IDENTITY_MISMATCH",
+        )
+        journal.append(evidence)
+        return evidence.model_dump(mode="json")
+
     guard_path = seed_pi_worktree_guard(evidence_root / "pi-probe-policy")
     model_ref = pi_model_ref(
         provider_id=provider_id,
