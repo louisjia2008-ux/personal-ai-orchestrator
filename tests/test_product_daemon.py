@@ -335,6 +335,62 @@ def test_product_daemon_unsupported_schema_does_not_auto_discover(
     assert manager.status().last_error_code == "PERSISTED_REGISTRY_UNSUPPORTED_SCHEMA"
 
 
+def test_product_daemon_upgraded_install_bootstraps_missing_pi_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = _short_home("pao-product-pi-upgrade-")
+    layout = default_application_support_layout(home)
+    save(_result(), runtime_state_root=layout.runtime_state_root)
+
+    pi_calls = [0]
+    import personal_ai_orchestrator.pi_provider_registry_manager as pi_manager_module
+    from personal_ai_orchestrator.pi_provider_discovery import (
+        PiAuthStatus,
+        PiDiscoveryCycleOutcome,
+        PiDiscoveryResult,
+        PiDiscoveryState,
+        PiProviderDiscovery,
+    )
+
+    pi_result = PiDiscoveryResult(
+        discovered_at=datetime(2026, 9, 12, tzinfo=UTC),
+        pi_path="/usr/local/bin/pi",
+        pi_version="0.85.1",
+        providers=(
+            PiProviderDiscovery(
+                provider_id="zai-coding-plan",
+                runtime_provider_id="zai",
+                display_name="GLM / Z.AI",
+                auth_status=PiAuthStatus.READY,
+                model_skus=("glm-5.3",),
+                observed_at=datetime(2026, 9, 12, tzinfo=UTC),
+            ),
+        ),
+        state=PiDiscoveryState.DISCOVERED,
+        configured_family_count=1,
+    )
+
+    def fake_pi_discover(**_kwargs):
+        pi_calls[0] += 1
+        return PiDiscoveryCycleOutcome(
+            result=pi_result,
+            error_code=None,
+            error_message=None,
+        )
+
+    monkeypatch.setattr(pi_manager_module, "discover_pi", fake_pi_discover)
+    monkeypatch.setattr(
+        "personal_ai_orchestrator.provider_registry_manager.discover",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("existing OpenCode snapshot must not refresh on upgrade")
+        ),
+    )
+
+    manager = _run_main_without_server(home, monkeypatch)
+
+    assert pi_calls[0] == 1
+    assert "pi-zai-coding-plan-glm-5.3" in manager.registry().execution_targets
+
 def test_product_daemon_explicit_refresh_discovers_exactly_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
