@@ -2,8 +2,8 @@
 
 PI-2 intentionally adds Pi as a *discovery source* without replacing the
 existing OpenCode discovery path or changing scheduler/quota/verifier
-semantics.  The source is deliberately curated: a Pi provider is mapped to a
-PAO provider surface only after that mapping has been verified.  PI-1 proved
+semantics. The source is deliberately curated: a Pi provider is mapped to a
+PAO provider surface only after that mapping has been verified. PI-1 proved
 ``zai-coding-plan`` -> Pi ``zai`` with a real ``zai/glm-5.3`` invocation.
 
 Security contract
@@ -15,14 +15,14 @@ Security contract
   API-key values are not forwarded;
 - auth readiness is inspected only through ``pi auth check --json
   --no-refresh``;
-- model discovery uses ``pi --offline --list-models <provider>`` and does not
-  execute an LLM prompt or burn model quota;
+- model discovery uses Pi's offline catalog mode with project/resource
+  discovery disabled and does not execute an LLM prompt or burn model quota;
 - all subprocesses are bounded by the same no-shell wrapper used by the
   existing provider discovery implementation.
 
 This module builds a normal :class:`ModelRegistry` whose execution targets are
 explicitly ``runtime_id='pi'`` and retain Pi's canonical provider id in
-``runtime_provider_id``.  Product-level selection between OpenCode and Pi is
+``runtime_provider_id``. Product-level selection between OpenCode and Pi is
 out of PI-2 scope and remains a later wiring phase.
 """
 
@@ -82,7 +82,7 @@ class PiProviderSpec:
     """Curated mapping between a PAO provider surface and Pi provider id.
 
     ``pao_provider_id`` carries commercial/quota identity inside PAO.
-    ``pi_provider_id`` is only the runtime provider id passed to Pi.  The two
+    ``pi_provider_id`` is only the runtime provider id passed to Pi. The two
     identities must not be collapsed: Pi's ``zai`` runtime surface is the PAO
     ``zai-coding-plan`` resource proven by PI-1.
     """
@@ -255,7 +255,7 @@ def _strip_ansi(value: str) -> str:
 def _parse_pi_auth_check(stdout: str, *, expected_provider: str) -> PiAuthCheck:
     """Parse the sanitized output of ``pi auth check --json --no-refresh``.
 
-    Credential-bearing output is rejected.  PI-2 never passes
+    Credential-bearing output is rejected. PI-2 never passes
     ``--credentials``; this check is a fail-closed guard against future CLI
     drift or accidental caller misuse.
     """
@@ -267,9 +267,19 @@ def _parse_pi_auth_check(stdout: str, *, expected_provider: str) -> PiAuthCheck:
         raise ValueError("PI_AUTH_CHECK_INVALID_JSON") from exc
     if not isinstance(payload, dict):
         raise ValueError("PI_AUTH_CHECK_INVALID_SHAPE")
-    forbidden = {"credential", "credentials", "apiKey", "api_key", "token", "bearerToken"}
+    forbidden = {
+        "credential",
+        "credentials",
+        "apiKey",
+        "api_key",
+        "token",
+        "bearerToken",
+    }
     if forbidden.intersection(payload):
         raise ValueError("PI_AUTH_CHECK_EXPOSED_CREDENTIAL_FIELD")
+    # The status payload itself is metadata-only. Refuse any unexpected value
+    # that still resembles a secret before selecting the fields we persist.
+    assert_sanitized(payload)
     provider = payload.get("provider")
     if provider != expected_provider:
         raise ValueError("PI_AUTH_CHECK_PROVIDER_MISMATCH")
@@ -296,8 +306,8 @@ def _parse_pi_model_table(stdout: str, *, expected_provider: str) -> tuple[str, 
     """Parse Pi 0.85.x ``--list-models`` table output.
 
     Upstream emits six whitespace-separated columns headed by ``provider`` and
-    ``model``.  We intentionally retain only those first two metadata fields
-    and ignore context/max-output/thinking/image columns.  A fallback accepts
+    ``model``. We intentionally retain only those first two metadata fields
+    and ignore context/max-output/thinking/image columns. A fallback accepts
     canonical ``provider/model`` tokens so the parser remains compatible with
     older or alternate Pi renderers without guessing provider identity.
     """
@@ -362,7 +372,11 @@ def discover_pi(
             error_code="PI_VERSION_FAILED",
             error_message=f"pi --version exited with code {version_result.returncode}",
         )
-    pi_version = version_result.stdout.strip().splitlines()[0] if version_result.stdout else "unknown"
+    pi_version = (
+        version_result.stdout.strip().splitlines()[0]
+        if version_result.stdout
+        else "unknown"
+    )
 
     records: list[PiProviderDiscovery] = []
     for spec in specs:
@@ -383,6 +397,12 @@ def discover_pi(
                 auth_result.stdout,
                 expected_provider=spec.pi_provider_id,
             )
+            if auth.status is PiAuthStatus.READY and auth_result.returncode != 0:
+                auth = PiAuthCheck(
+                    provider=spec.pi_provider_id,
+                    status=PiAuthStatus.UNKNOWN,
+                    reason="auth_check_exit_mismatch",
+                )
         except ValueError:
             auth = PiAuthCheck(
                 provider=spec.pi_provider_id,
@@ -392,8 +412,20 @@ def discover_pi(
 
         model_skus: tuple[str, ...] = ()
         if auth.status is PiAuthStatus.READY:
+            # Do not let global/project extensions, skills, prompt templates,
+            # context files, or project approval mutate a metadata-only catalog
+            # read. `--offline` additionally disables startup network refreshes.
             models_result = _run_pi(
-                ("--offline", "--list-models", spec.pi_provider_id),
+                (
+                    "--offline",
+                    "--no-approve",
+                    "--no-extensions",
+                    "--no-skills",
+                    "--no-prompt-templates",
+                    "--no-context-files",
+                    "--list-models",
+                    spec.pi_provider_id,
+                ),
                 executable=executable,
                 timeout_seconds=timeout_seconds,
             )
