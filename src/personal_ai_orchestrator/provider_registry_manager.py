@@ -32,6 +32,9 @@ from pathlib import Path
 from typing import Any
 
 from personal_ai_orchestrator.model_registry import ModelRegistry
+from personal_ai_orchestrator.pi_provider_registry_manager import (
+    PiProviderRegistryManager,
+)
 from personal_ai_orchestrator.provider_connections import (
     ProviderConnection,
     ProviderConnectionRegistry,
@@ -51,15 +54,12 @@ from personal_ai_orchestrator.provider_discovery import (
     build_registry,
     discover,
 )
-from personal_ai_orchestrator.pi_provider_registry_manager import (
-    PiProviderRegistryManager,
-)
-from personal_ai_orchestrator.runtime_registry import merge_runtime_registries
 from personal_ai_orchestrator.provider_registry_store import (
     RegistryLoadStatus,
     load,
     save,
 )
+from personal_ai_orchestrator.runtime_registry import merge_runtime_registries
 
 
 @dataclass(frozen=True)
