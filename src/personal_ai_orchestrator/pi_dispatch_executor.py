@@ -9,7 +9,6 @@ and final task authority remain owned by ``OwnerDispatchExecutor``.
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
 
 from personal_ai_orchestrator.dispatch_executor import (
     DispatchExecutorConfig,
@@ -33,8 +32,8 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
     """Owner-dispatch executor whose child runtime is Pi JSON mode.
 
     ``OwnerDispatchExecutor`` still performs the complete host authority
-    pipeline.  The only substitutions here are runtime availability, argv,
-    worktree guard seeding, and fail-closed validation of Pi's JSONL stream.
+    pipeline. The only substitutions here are runtime availability, argv,
+    host guard seeding, and fail-closed validation of Pi's JSONL stream.
     """
 
     def __init__(self, *, pi_runtime: PiRuntimeConfig | None = None, **kwargs: object) -> None:
@@ -44,17 +43,24 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
             raise TypeError("PiOwnerDispatchExecutor requires DispatchExecutorConfig")
 
         # The base executor's runtime-availability gate intentionally remains
-        # untouched.  Point that existing host-owned gate at the selected Pi
+        # untouched. Point that existing host-owned gate at the selected Pi
         # binary, then keep the Pi-specific command construction in this
-        # adapter.  No Safety Kernel or verification semantics are forked.
+        # adapter. No Safety Kernel or verification semantics are forked.
         kwargs["config"] = replace(config, opencode_bin=runtime.pi_bin)
         self.pi_runtime = runtime
         super().__init__(**kwargs)  # type: ignore[arg-type]
 
+    def _guard_path(self):
+        # Keep policy outside the writable task worktree. The Pi file tools
+        # are confined to the worktree, so the worker cannot weaken this file.
+        runtime_policy_root = self.config.worktree_root / ".pao-runtime"
+        return seed_pi_worktree_guard(runtime_policy_root)
+
     def _seed_worker_policy(self, managed: ManagedWorktree) -> None:
-        # Overwrite on every adopt/create so a previous worker cannot persist
+        del managed
+        # Overwrite on every adopt/create so a previous process cannot persist
         # a weakened policy into the next run.
-        seed_pi_worktree_guard(managed.worktree_path)
+        self._guard_path()
 
     def _pi_model_ref(self, dispatch: OwnerDispatchRecord) -> str:
         return pi_model_ref(
@@ -69,12 +75,11 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
         worktree: ManagedWorktree,
     ) -> SupervisedProcess:
         task = store.get_task(dispatch.task_id)
-        guard_path = seed_pi_worktree_guard(worktree.worktree_path)
         argv = build_pi_json_argv(
             config=self.pi_runtime,
             model_ref=self._pi_model_ref(dispatch),
             intent=task.intent,
-            guard_path=guard_path,
+            guard_path=self._guard_path(),
         )
         store._audit(
             dispatch.task_id,
@@ -100,7 +105,7 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
             summary = summarize_pi_json_stream(stdout)
             if not summary.completed:
                 # A clean OS exit is not enough to claim a real Pi worker
-                # invocation.  Fail closed before WORKER_FINISHED so the
+                # invocation. Fail closed before WORKER_FINISHED so the
                 # deterministic verifier can never bless a malformed or
                 # incomplete runtime transcript.
                 exit_code = PI_PROTOCOL_ERROR_EXIT
