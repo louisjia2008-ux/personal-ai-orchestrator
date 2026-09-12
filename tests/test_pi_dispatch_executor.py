@@ -14,7 +14,7 @@ from personal_ai_orchestrator.model_registry import (
     Provider,
 )
 from personal_ai_orchestrator.pi_dispatch_executor import PiOwnerDispatchExecutor
-from personal_ai_orchestrator.pi_runtime import PiRuntimeConfig
+from personal_ai_orchestrator.pi_runtime import PI_PROTOCOL_ERROR_EXIT, PiRuntimeConfig
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
@@ -218,7 +218,7 @@ def test_pi_adapter_fails_closed_on_incomplete_json_stream(tmp_path: Path) -> No
         ).fetchone()
         assert task.state is TaskState.BLOCKED
         assert run is not None and run["status"] == "FAILED"
-        assert '"pi_protocol_valid":false' in run["result_json"]
+        assert f'"exit_code":{PI_PROTOCOL_ERROR_EXIT}' in run["result_json"]
         store.assert_running_invariant("task-pi")
     finally:
         store.close()
