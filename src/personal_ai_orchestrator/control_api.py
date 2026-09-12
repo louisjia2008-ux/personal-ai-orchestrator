@@ -1303,18 +1303,19 @@ class ControlPlaneService:
         )
 
     def _runtime_available(self, execution_target_id: str) -> bool:
-        """Static availability map wins; discovered opencode targets derive
-        availability from the local runtime surface truthfully."""
+        """Resolve target availability from the selected runtime's host truth."""
 
         if execution_target_id in self.runtime_availability:
             return self.runtime_availability[execution_target_id]
+        if self.provider_registry_manager is not None:
+            return self.provider_registry_manager.runtime_available(execution_target_id)
         target = self._effective_registry().execution_targets.get(execution_target_id)
         if target is None:
             return False
         runtime_provider = target.runtime_provider_id or "opencode"
-        if runtime_provider != "opencode":
-            return False
-        return _opencode_binary_available()
+        if runtime_provider == "opencode":
+            return _opencode_binary_available()
+        return False
 
     def _recommendation_service(self) -> DispatchRecommendationService:
         """Build the host recommendation service on demand.
@@ -3445,9 +3446,8 @@ class ControlPlaneService:
     # not run ``provider_discovery``. When the registry knows the
     # target's provider family, the discovery-set fields win.
     def _auth_kind_for_target(self, target) -> str:
-        if self.registry is None:
-            return "env"
-        model = self.registry.models.get(target.model_sku_id)
+        registry = self._effective_registry()
+        model = registry.models.get(target.model_sku_id)
         if model is None:
             return "env"
         from personal_ai_orchestrator.provider_discovery import (
@@ -3459,9 +3459,8 @@ class ControlPlaneService:
         return "env"
 
     def _pool_kind_for_target(self, target) -> str:
-        if self.registry is None:
-            return "windowed"
-        model = self.registry.models.get(target.model_sku_id)
+        registry = self._effective_registry()
+        model = registry.models.get(target.model_sku_id)
         if model is None:
             return "windowed"
         from personal_ai_orchestrator.provider_discovery import (
@@ -3511,9 +3510,9 @@ class ControlPlaneService:
         targets = (
             [
                 target
-                for target in self.registry.execution_targets.values()
-                if self.registry.models.get(target.model_sku_id)
-                and self.registry.models[target.model_sku_id].provider_id
+                for target in self._effective_registry().execution_targets.values()
+                if self._effective_registry().models.get(target.model_sku_id)
+                and self._effective_registry().models[target.model_sku_id].provider_id
                 == connection.provider_id
             ]
             if self.registry is not None
@@ -3619,9 +3618,10 @@ class ControlPlaneService:
         # the maximum ``consecutive_failures`` from the per-target
         # journal. ``0`` when no journal entry exists.
         collection_failure_streak = 0
-        if self.quota_availability_journal is not None and self.registry is not None:
-            for target in self.registry.execution_targets.values():
-                target_model = self.registry.models.get(target.model_sku_id)
+        if self.quota_availability_journal is not None:
+            registry = self._effective_registry()
+            for target in registry.execution_targets.values():
+                target_model = registry.models.get(target.model_sku_id)
                 if target_model is None:
                     continue
                 if target_model.provider_id != connection.provider_id:
