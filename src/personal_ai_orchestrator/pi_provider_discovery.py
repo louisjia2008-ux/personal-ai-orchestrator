@@ -244,7 +244,16 @@ class PiDiscoveryResult:
         providers_raw = payload.get("providers")
         configured_count = payload.get("configured_family_count", 0)
         last_error_code = payload.get("last_error_code")
-        if not all(isinstance(value, str) for value in (generated_at, pi_path, pi_version, source_method, state_raw)):
+        if not all(
+            isinstance(value, str)
+            for value in (
+                generated_at,
+                pi_path,
+                pi_version,
+                source_method,
+                state_raw,
+            )
+        ):
             raise ValueError("invalid Pi discovery snapshot identity")
         if not isinstance(providers_raw, list) or not all(
             isinstance(item, dict) for item in providers_raw
