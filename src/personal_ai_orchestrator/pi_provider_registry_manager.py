@@ -119,6 +119,22 @@ class PiProviderRegistryManager:
             last_error_code=result.last_error_code,
         )
 
+    def bootstrap_if_missing(self) -> bool:
+        """Run one discovery cycle when no persisted Pi snapshot exists.
+
+        This is an upgrade path for existing installations that already have
+        an OpenCode provider snapshot from PI-2-era boots. It is intentionally
+        a one-time missing-state bootstrap, not a refresh on every daemon boot.
+        """
+
+        with self._lock:
+            load_status = self._state.load_status
+            already_loaded = self._state.last_result is not None
+        if already_loaded or load_status is not PiRegistryLoadStatus.MISSING:
+            return False
+        self.refresh()
+        return True
+
     def registry(self) -> ModelRegistry:
         with self._lock:
             return self._state.registry
