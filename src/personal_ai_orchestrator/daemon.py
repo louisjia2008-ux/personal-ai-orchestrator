@@ -20,11 +20,11 @@ from personal_ai_orchestrator.dispatch_executor import (
     DispatchExecutorConfig,
     OwnerDispatchExecutor,
 )
+from personal_ai_orchestrator.execution_controller import reconcile_workspace_truth
+from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
 from personal_ai_orchestrator.pi_dispatch_executor import PiOwnerDispatchExecutor
 from personal_ai_orchestrator.pi_runtime import PiRuntimeConfig
 from personal_ai_orchestrator.runtime_dispatch_executor import RuntimeDispatchExecutor
-from personal_ai_orchestrator.execution_controller import reconcile_workspace_truth
-from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
 from personal_ai_orchestrator.local_api import serve
 from personal_ai_orchestrator.model_tiers import (
     DEFAULT_TIER_TABLE_JSON,
