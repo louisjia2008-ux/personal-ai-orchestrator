@@ -8,15 +8,19 @@ and final task authority remain owned by ``OwnerDispatchExecutor``.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from personal_ai_orchestrator.dispatch_executor import (
+    MAX_WORKER_STDERR_BYTES,
     DispatchExecutorConfig,
     OwnerDispatchExecutor,
     build_worker_env,
 )
 from personal_ai_orchestrator.pi_runtime import (
+    PI_MAX_STDOUT_BYTES,
     PI_PROTOCOL_ERROR_EXIT,
     PiRuntimeConfig,
     build_pi_json_argv,
@@ -101,16 +105,55 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
     async def _wait_for_worker(
         self, supervised: SupervisedProcess
     ) -> tuple[int, bytes, bytes, bool]:
-        exit_code, stdout, stderr, truncated = await super()._wait_for_worker(supervised)
-        if exit_code == 0:
+        """Drain one Pi JSON stream with a larger but still bounded cap."""
+
+        chunks: dict[str, list[bytes]] = {"out": [], "err": []}
+        truncated = False
+
+        async def _drain(stream: Any, cap: int, key: str) -> None:
+            nonlocal truncated
+            total = 0
+            while True:
+                chunk = await stream.read(8192)
+                if not chunk:
+                    break
+                remaining = max(0, cap - total)
+                if remaining:
+                    chunks[key].append(chunk[:remaining])
+                total += len(chunk)
+                if total > cap:
+                    truncated = True
+
+        stdout_task = asyncio.create_task(
+            _drain(supervised.process.stdout, PI_MAX_STDOUT_BYTES, "out")
+        )
+        stderr_task = asyncio.create_task(
+            _drain(supervised.process.stderr, MAX_WORKER_STDERR_BYTES, "err")
+        )
+        try:
+            await asyncio.wait_for(
+                supervised.process.wait(), timeout=self.config.worker_timeout_seconds
+            )
+        except TimeoutError:
+            stdout_task.cancel()
+            stderr_task.cancel()
+            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+            raise
+        await asyncio.gather(stdout_task, stderr_task)
+
+        stdout = b"".join(chunks["out"])
+        stderr = b"".join(chunks["err"])
+        returncode = supervised.process.returncode or 0
+        self._supervisor._children.pop(supervised.pid, None)
+
+        if returncode == 0:
             summary = summarize_pi_json_stream(stdout)
-            if not summary.completed:
+            if truncated or not summary.completed:
                 # A clean OS exit is not enough to claim a real Pi worker
                 # invocation. Fail closed before WORKER_FINISHED so the
-                # deterministic verifier can never bless a malformed or
-                # incomplete runtime transcript.
-                exit_code = PI_PROTOCOL_ERROR_EXIT
-        return exit_code, stdout, stderr, truncated
+                # deterministic verifier can never bless an incomplete stream.
+                returncode = PI_PROTOCOL_ERROR_EXIT
+        return returncode, stdout, stderr, truncated
 
     @classmethod
     def _host_result_envelope(
@@ -133,7 +176,7 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
         result.update(
             {
                 "runtime": "pi-json",
-                "pi_protocol_valid": summary.completed,
+                "pi_protocol_valid": summary.completed and not truncated,
                 "pi_event_count": summary.event_count,
                 "pi_tool_start_count": summary.tool_start_count,
                 "pi_tool_end_count": summary.tool_end_count,
