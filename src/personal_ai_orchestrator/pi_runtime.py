@@ -1,7 +1,7 @@
 """Pi one-shot worker runtime primitives for the PAO execution boundary.
 
 PI-1 deliberately uses Pi's ``--mode json`` one-shot event stream rather
-than RPC.  PAO's existing execution contract is one task -> one exact child
+than RPC. PAO's existing execution contract is one task -> one exact child
 process -> one durable run row; a one-shot Pi process preserves that contract
 without introducing a long-lived shared runtime or a second task authority.
 
@@ -16,8 +16,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PI_PROTOCOL_ERROR_EXIT = 70
+PI_MAX_STDOUT_BYTES = 4 * 1024 * 1024
 PI_GUARD_RELATIVE_PATH = Path(".pao") / "pi-worktree-guard.ts"
-PI_ALLOWED_TOOLS: tuple[str, ...] = ("read", "edit", "write", "grep", "find", "ls")
+PI_ALLOWED_TOOLS: tuple[str, ...] = (
+    "read",
+    "edit",
+    "write",
+    "grep",
+    "find",
+    "ls",
+)
 
 # PAO provider surfaces and Pi provider IDs are not always the same identity.
 # Keep this translation narrow and explicit; unknown providers preserve their
@@ -32,21 +40,39 @@ PI_PROVIDER_ALIASES: dict[str, str] = {
     "opencode": "opencode",
 }
 
-# Host-owned Pi extension.  Pi itself has no built-in sandbox, so PI-1 does
-# not rely on prompt instructions for workspace confinement.  The extension
+# Host-owned Pi extension. Pi itself has no built-in sandbox, so PI-1 does
+# not rely on prompt instructions for workspace confinement. The extension
 # blocks every enabled path-bearing file tool when its path escapes the task
-# worktree lexically OR through an existing symlink.  Bash is not enabled at
+# worktree lexically OR through an existing symlink. Bash is not enabled at
 # all, and project/global extensions are disabled by argv policy.
-PI_WORKTREE_GUARD_SOURCE = r'''import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+PI_WORKTREE_GUARD_SOURCE = r'''import type {
+  ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
 import { existsSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import {
+  dirname,
+  isAbsolute,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 
-const PATH_TOOLS = new Set(["read", "edit", "write", "grep", "find", "ls"]);
+const PATH_TOOLS = new Set([
+  "read",
+  "edit",
+  "write",
+  "grep",
+  "find",
+  "ls",
+]);
 const MUTATING_TOOLS = new Set(["edit", "write"]);
 
 function isWithin(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+  return (
+    rel === "" ||
+    (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  );
 }
 
 function existingAncestor(path: string): string {
@@ -66,7 +92,11 @@ export default function (pi: ExtensionAPI) {
     const input = event.input as Record<string, unknown>;
     const raw = input?.path;
     if (typeof raw !== "string" || raw.length === 0) {
-      return { block: true, reason: "PAO worktree guard: missing path", terminate: true };
+      return {
+        block: true,
+        reason: "PAO worktree guard: missing path",
+        terminate: true,
+      };
     }
 
     try {
@@ -76,24 +106,43 @@ export default function (pi: ExtensionAPI) {
       const logicalTarget = resolve(logicalRoot, normalized);
 
       if (!isWithin(logicalRoot, logicalTarget)) {
-        return { block: true, reason: "PAO worktree guard: path escapes assigned worktree", terminate: true };
+        return {
+          block: true,
+          reason: "PAO worktree guard: path escapes assigned worktree",
+          terminate: true,
+        };
       }
 
       const ancestor = existingAncestor(logicalTarget);
       const realAncestor = realpathSync(ancestor);
       if (!isWithin(realRoot, realAncestor)) {
-        return { block: true, reason: "PAO worktree guard: symlink escapes assigned worktree", terminate: true };
+        return {
+          block: true,
+          reason: "PAO worktree guard: symlink escapes assigned worktree",
+          terminate: true,
+        };
       }
 
       if (MUTATING_TOOLS.has(event.toolName)) {
         const gitDir = resolve(logicalRoot, ".git");
         const policyDir = resolve(logicalRoot, ".pao");
-        if (isWithin(gitDir, logicalTarget) || isWithin(policyDir, logicalTarget)) {
-          return { block: true, reason: "PAO worktree guard: protected host path", terminate: true };
+        if (
+          isWithin(gitDir, logicalTarget) ||
+          isWithin(policyDir, logicalTarget)
+        ) {
+          return {
+            block: true,
+            reason: "PAO worktree guard: protected host path",
+            terminate: true,
+          };
         }
       }
     } catch {
-      return { block: true, reason: "PAO worktree guard: path could not be proven safe", terminate: true };
+      return {
+        block: true,
+        reason: "PAO worktree guard: path could not be proven safe",
+        terminate: true,
+      };
     }
   });
 }
@@ -140,10 +189,10 @@ def pi_model_ref(*, provider_id: str, model_sku_id: str) -> str:
     return f"{provider}/{model}"
 
 
-def seed_pi_worktree_guard(worktree: Path) -> Path:
+def seed_pi_worktree_guard(policy_root: Path) -> Path:
     """Write the exact host-owned guard for this run and return its path."""
 
-    target = worktree / PI_GUARD_RELATIVE_PATH
+    target = policy_root / PI_GUARD_RELATIVE_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(PI_WORKTREE_GUARD_SOURCE, encoding="utf-8")
     return target
@@ -194,7 +243,17 @@ def summarize_pi_json_stream(data: bytes) -> PiJsonRunSummary:
     try:
         text = data.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
-        return PiJsonRunSummary(False, False, False, False, 0, 0, 0, 0, "invalid_utf8")
+        return PiJsonRunSummary(
+            False,
+            False,
+            False,
+            False,
+            0,
+            0,
+            0,
+            0,
+            "invalid_utf8",
+        )
 
     session_seen = False
     agent_start_seen = False
@@ -277,6 +336,7 @@ def summarize_pi_json_stream(data: bytes) -> PiJsonRunSummary:
 __all__ = [
     "PI_ALLOWED_TOOLS",
     "PI_GUARD_RELATIVE_PATH",
+    "PI_MAX_STDOUT_BYTES",
     "PI_PROTOCOL_ERROR_EXIT",
     "PI_PROVIDER_ALIASES",
     "PI_WORKTREE_GUARD_SOURCE",
