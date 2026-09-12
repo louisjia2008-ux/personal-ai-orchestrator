@@ -28,6 +28,7 @@ from personal_ai_orchestrator.daemon import main as daemon_main
 from personal_ai_orchestrator.legacy_migration import migrate_legacy_state
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.model_tiers import DEFAULT_TIER_TABLE_JSON
+from personal_ai_orchestrator.pi_provider_registry_manager import PiProviderRegistryManager
 from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryManager
 from personal_ai_orchestrator.provider_registry_store import (
     EMPTY_BOOTSTRAP_SNAPSHOT_ID,
@@ -77,9 +78,13 @@ def resolve_dynamic_registry(
     observable ``FAILED`` status so the Dashboard can surface the truth.
     """
 
+    pi_runtime_manager = PiProviderRegistryManager(
+        runtime_state_root=layout.runtime_state_root,
+    )
     manager = ProviderRegistryManager(
         runtime_state_root=layout.runtime_state_root,
         opencode_path=opencode_path,
+        pi_runtime_manager=pi_runtime_manager,
     )
     # Sole owner of first-boot bootstrap. The manager decides whether
     # persisted state is MISSING (cold first install) or invalid
