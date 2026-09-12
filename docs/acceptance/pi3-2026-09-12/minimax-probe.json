@@ -1,0 +1,10 @@
+{
+  "evidence_id": "exec-verify-dac8a06a56407036ea01d8ed",
+  "provider_id": "minimax-cn-coding-plan",
+  "execution_target_id": "pi-minimax-cn-coding-plan-MiniMax-M3",
+  "model_sku_id": "minimax-cn-coding-plan/MiniMax-M3",
+  "observed_at": "2026-09-12T15:26:45.623894Z",
+  "verification_method": "REAL_WORKER_INVOCATION",
+  "result": "UNKNOWN",
+  "reason_code": "PI_PROBE_PROVIDER_ERROR"
+}
