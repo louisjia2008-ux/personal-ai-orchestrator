@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import stat
 import subprocess
 from pathlib import Path
@@ -44,18 +45,35 @@ def _make_repo(path: Path) -> Path:
     return path
 
 
-def _fake_pi(path: Path, *, complete: bool) -> Path:
+def _fake_pi(
+    path: Path,
+    *,
+    complete: bool,
+    provider: str = "zai",
+    model: str = "glm-5.3",
+    stop_reason: str = "stop",
+    error_message: str | None = None,
+) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    session_line = (
-        "printf '%s\\n' "
-        "'{\"type\":\"session\",\"version\":3,\"id\":\"s1\","
-        "\"cwd\":\"fixture\"}'"
+    assistant: dict[str, object] = {
+        "role": "assistant",
+        "provider": provider,
+        "model": model,
+        "stopReason": stop_reason,
+        "content": [],
+    }
+    if error_message is not None:
+        assistant["errorMessage"] = error_message
+    message_end = json.dumps({"type": "message_end", "message": assistant})
+    session = json.dumps(
+        {"type": "session", "version": 3, "id": "s1", "cwd": "fixture"}
     )
     lines = [
         "#!/bin/sh",
         f"printf '%s\\n' '{HELLO}' > hello.txt",
-        session_line,
+        f"printf '%s\\n' '{session}'",
         "printf '%s\\n' '{\"type\":\"agent_start\"}'",
+        f"printf '%s\\n' '{message_end}'",
     ]
     if complete:
         lines.append(
@@ -112,13 +130,26 @@ def _profile() -> VerifierProfile:
 
 
 def _executor(
-    tmp_path: Path, *, complete: bool
+    tmp_path: Path,
+    *,
+    complete: bool,
+    provider: str = "zai",
+    model: str = "glm-5.3",
+    stop_reason: str = "stop",
+    error_message: str | None = None,
 ) -> tuple[PiOwnerDispatchExecutor, Path, Path]:
     repo = _make_repo(tmp_path / "repo")
     state_db = tmp_path / "state.sqlite3"
     runtime = tmp_path / "runtime"
     runtime.mkdir()
-    pi_bin = _fake_pi(tmp_path / "bin" / "pi", complete=complete)
+    pi_bin = _fake_pi(
+        tmp_path / "bin" / "pi",
+        complete=complete,
+        provider=provider,
+        model=model,
+        stop_reason=stop_reason,
+        error_message=error_message,
+    )
     executor = PiOwnerDispatchExecutor(
         state_db=state_db,
         config=DispatchExecutorConfig(
@@ -174,6 +205,12 @@ def _reserve(repo: Path, state_db: Path) -> None:
         store.close()
 
 
+def _run_row(store: SafetyKernelStore):
+    return store.connection.execute(
+        "SELECT status,result_json FROM runs WHERE task_id='task-pi'"
+    ).fetchone()
+
+
 def test_pi_adapter_reuses_existing_host_authority_to_verified(tmp_path: Path) -> None:
     executor, repo, state_db = _executor(tmp_path, complete=True)
     _reserve(repo, state_db)
@@ -183,14 +220,14 @@ def test_pi_adapter_reuses_existing_host_authority_to_verified(tmp_path: Path) -
     store = SafetyKernelStore(state_db)
     try:
         task = store.get_task("task-pi")
-        run = store.connection.execute(
-            "SELECT status,result_json FROM runs WHERE task_id='task-pi'"
-        ).fetchone()
+        run = _run_row(store)
         workspace = store.get_workspace("task-pi")
         assert task.state is TaskState.VERIFIED
         assert run is not None and run["status"] == "FINISHED"
         assert '"runtime":"pi-json"' in run["result_json"]
         assert '"pi_protocol_valid":true' in run["result_json"]
+        assert '"pi_provider":"zai"' in run["result_json"]
+        assert '"pi_model":"glm-5.3"' in run["result_json"]
         assert workspace.writer_token is None
         store.assert_running_invariant("task-pi")
     finally:
@@ -213,9 +250,7 @@ def test_pi_adapter_fails_closed_on_incomplete_json_stream(tmp_path: Path) -> No
     store = SafetyKernelStore(state_db)
     try:
         task = store.get_task("task-pi")
-        run = store.connection.execute(
-            "SELECT status,result_json FROM runs WHERE task_id='task-pi'"
-        ).fetchone()
+        run = _run_row(store)
         assert task.state is TaskState.BLOCKED
         assert run is not None and run["status"] == "FAILED"
         assert f'"exit_code":{PI_PROTOCOL_ERROR_EXIT}' in run["result_json"]
@@ -223,4 +258,52 @@ def test_pi_adapter_fails_closed_on_incomplete_json_stream(tmp_path: Path) -> No
     finally:
         store.close()
 
+    assert _git(repo, "status", "--porcelain") == ""
+
+
+def test_pi_adapter_fails_closed_when_runtime_reports_wrong_model(tmp_path: Path) -> None:
+    executor, repo, state_db = _executor(
+        tmp_path,
+        complete=True,
+        model="glm-5.2",
+    )
+    _reserve(repo, state_db)
+
+    executor.execute("dispatch-pi")
+
+    store = SafetyKernelStore(state_db)
+    try:
+        task = store.get_task("task-pi")
+        run = _run_row(store)
+        assert task.state is TaskState.BLOCKED
+        assert run is not None and run["status"] == "FAILED"
+        assert f'"exit_code":{PI_PROTOCOL_ERROR_EXIT}' in run["result_json"]
+    finally:
+        store.close()
+    assert _git(repo, "status", "--porcelain") == ""
+
+
+def test_pi_provider_error_is_failed_worker_and_quota_signal(tmp_path: Path) -> None:
+    executor, repo, state_db = _executor(
+        tmp_path,
+        complete=True,
+        stop_reason="error",
+        error_message="429: usage limit reached for this plan",
+    )
+    _reserve(repo, state_db)
+
+    executor.execute("dispatch-pi")
+
+    store = SafetyKernelStore(state_db)
+    try:
+        task = store.get_task("task-pi")
+        run = _run_row(store)
+        assert task.state is TaskState.BLOCKED
+        assert run is not None and run["status"] == "FAILED"
+    finally:
+        store.close()
+
+    quota = executor._quota_availability_journal.load(TARGET_ID)
+    assert quota is not None
+    assert quota.state.value in {"EXHAUSTED_OBSERVED", "COOLDOWN"}
     assert _git(repo, "status", "--porcelain") == ""
