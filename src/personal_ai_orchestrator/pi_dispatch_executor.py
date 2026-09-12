@@ -9,6 +9,7 @@ and final task authority remain owned by ``OwnerDispatchExecutor``.
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 from personal_ai_orchestrator.dispatch_executor import (
     DispatchExecutorConfig,
@@ -50,7 +51,7 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
         self.pi_runtime = runtime
         super().__init__(**kwargs)  # type: ignore[arg-type]
 
-    def _guard_path(self):
+    def _guard_path(self) -> Path:
         # Keep policy outside the writable task worktree. The Pi file tools
         # are confined to the worktree, so the worker cannot weaken this file.
         runtime_policy_root = self.config.worktree_root / ".pao-runtime"
