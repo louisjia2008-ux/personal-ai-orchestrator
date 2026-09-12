@@ -13,15 +13,14 @@ from personal_ai_orchestrator.pi_provider_discovery import (
     PiAuthStatus,
     PiDiscoveryState,
     PiProviderSpec,
-    build_pi_registry,
-    discover_pi,
     _parse_pi_auth_check,
     _parse_pi_model_table,
     _resolve_pi,
     _run_pi,
+    build_pi_registry,
+    discover_pi,
 )
 from personal_ai_orchestrator.provider_discovery import SubprocessResult
-
 
 HARDENED_MODEL_ARGV = (
     "--offline",
