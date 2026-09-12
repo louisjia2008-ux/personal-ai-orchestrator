@@ -22,9 +22,6 @@ from personal_ai_orchestrator.dispatch_executor import (
 )
 from personal_ai_orchestrator.execution_controller import reconcile_workspace_truth
 from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
-from personal_ai_orchestrator.pi_dispatch_executor import PiOwnerDispatchExecutor
-from personal_ai_orchestrator.pi_runtime import PiRuntimeConfig
-from personal_ai_orchestrator.runtime_dispatch_executor import RuntimeDispatchExecutor
 from personal_ai_orchestrator.local_api import serve
 from personal_ai_orchestrator.model_tiers import (
     DEFAULT_TIER_TABLE_JSON,
@@ -32,6 +29,8 @@ from personal_ai_orchestrator.model_tiers import (
     parse_tier_table,
 )
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
+from personal_ai_orchestrator.pi_dispatch_executor import PiOwnerDispatchExecutor
+from personal_ai_orchestrator.pi_runtime import PiRuntimeConfig
 from personal_ai_orchestrator.policy_snapshot import PolicySnapshotJournal
 from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryManager
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
@@ -41,6 +40,7 @@ from personal_ai_orchestrator.quota_collectors.zai import ZAIQuotaCollector
 from personal_ai_orchestrator.quota_refresh import QuotaRefreshService
 from personal_ai_orchestrator.routing_service import RoutingService
 from personal_ai_orchestrator.runtime_config import RuntimeConfig
+from personal_ai_orchestrator.runtime_dispatch_executor import RuntimeDispatchExecutor
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore
 from personal_ai_orchestrator.scheduling_settings import SchedulingSettings
 from personal_ai_orchestrator.shadow_evidence import ShadowEvidenceJournal
