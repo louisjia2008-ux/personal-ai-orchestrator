@@ -269,7 +269,10 @@ def initiate_owner_dispatch(
             store.mark_owner_dispatch_blocked(
                 request_id,
                 failure_code="PROVIDER_NOT_CONNECTED",
-                failure_reason="execution target provider is not connected or runtime-authenticated by owner",
+                failure_reason=(
+                    "execution target provider is not connected or "
+                    "runtime-authenticated by owner"
+                ),
             )
             raise _control_plane_error(
                 409, "provider_not_connected"
