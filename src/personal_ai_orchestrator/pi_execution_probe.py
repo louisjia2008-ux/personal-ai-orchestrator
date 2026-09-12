@@ -28,6 +28,7 @@ from personal_ai_orchestrator.execution_evidence import (
     ExecutionVerificationOutcome,
     build_execution_evidence,
 )
+from personal_ai_orchestrator.pi_provider_discovery import PI_PROVIDER_SPECS
 from personal_ai_orchestrator.pi_runtime import (
     PI_MAX_STDOUT_BYTES,
     PI_PROTOCOL_ERROR_EXIT,
@@ -122,10 +123,7 @@ def run_pi_execution_probe(
     journal = ExecutionEvidenceJournal(evidence_root)
 
     spec = next(
-        (item for item in __import__(
-            "personal_ai_orchestrator.pi_provider_discovery",
-            fromlist=["PI_PROVIDER_SPECS"],
-        ).PI_PROVIDER_SPECS if item.pao_provider_id == provider_id),
+        (item for item in PI_PROVIDER_SPECS if item.pao_provider_id == provider_id),
         None,
     )
     expected_target_id = (
