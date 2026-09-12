@@ -15,6 +15,7 @@ from personal_ai_orchestrator.pi_provider_discovery import (
     PiDiscoveryResult,
     PiDiscoveryState,
     _resolve_pi,
+    build_pi_registry,
     discover_pi,
 )
 from personal_ai_orchestrator.pi_provider_registry_store import (
@@ -89,19 +90,15 @@ class PiProviderRegistryManager:
         outcome = load(self._runtime_state_root)
         if outcome.status is PiRegistryLoadStatus.MISSING:
             return self._empty_state(load_status=outcome.status)
-        if not outcome.loaded if hasattr(outcome, "loaded") else outcome.persisted is None:
+        if outcome.persisted is None:
             return self._empty_state(
                 load_status=outcome.status,
                 discovery_state=PiDiscoveryState.FAILED,
                 error_code=outcome.error_code,
             )
         try:
-            assert outcome.persisted is not None
             result = PiDiscoveryResult.from_dict(outcome.persisted.payload)
-            registry = __import__(
-                "personal_ai_orchestrator.pi_provider_discovery",
-                fromlist=["build_pi_registry"],
-            ).build_pi_registry(result)
+            registry = build_pi_registry(result)
         except (AssertionError, KeyError, TypeError, ValueError):
             return self._empty_state(
                 load_status=PiRegistryLoadStatus.SANITIZATION_REJECTED,
@@ -177,10 +174,7 @@ class PiProviderRegistryManager:
             with self._lock:
                 if outcome.result is not None and outcome.error_code is None:
                     result = outcome.result
-                    registry = __import__(
-                        "personal_ai_orchestrator.pi_provider_discovery",
-                        fromlist=["build_pi_registry"],
-                    ).build_pi_registry(result)
+                    registry = build_pi_registry(result)
                     save(result, runtime_state_root=self._runtime_state_root)
                     snapshot_id = next(iter(registry.catalog_snapshots), None)
                     self._state = _PiRuntimeState(
