@@ -46,14 +46,22 @@ def _make_repo(path: Path) -> Path:
 
 def _fake_pi(path: Path, *, complete: bool) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    session_line = (
+        "printf '%s\\n' "
+        "'{\"type\":\"session\",\"version\":3,\"id\":\"s1\","
+        "\"cwd\":\"fixture\"}'"
+    )
     lines = [
         "#!/bin/sh",
         f"printf '%s\\n' '{HELLO}' > hello.txt",
-        "printf '%s\\n' '{\"type\":\"session\",\"version\":3,\"id\":\"s1\",\"cwd\":\"fixture\"}'",
+        session_line,
         "printf '%s\\n' '{\"type\":\"agent_start\"}'",
     ]
     if complete:
-        lines.append("printf '%s\\n' '{\"type\":\"agent_end\",\"messages\":[]}'")
+        lines.append(
+            "printf '%s\\n' "
+            "'{\"type\":\"agent_end\",\"messages\":[]}'"
+        )
     lines.append("exit 0")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
@@ -99,11 +107,13 @@ def _profile() -> VerifierProfile:
                 argv=("sh", "-c", f'test "$(cat hello.txt)" = "{HELLO}"'),
             ),
         ),
-        allowed_paths=("hello.txt", ".pao/pi-worktree-guard.ts"),
+        allowed_paths=("hello.txt",),
     )
 
 
-def _executor(tmp_path: Path, *, complete: bool) -> tuple[PiOwnerDispatchExecutor, Path, Path]:
+def _executor(
+    tmp_path: Path, *, complete: bool
+) -> tuple[PiOwnerDispatchExecutor, Path, Path]:
     repo = _make_repo(tmp_path / "repo")
     state_db = tmp_path / "state.sqlite3"
     runtime = tmp_path / "runtime"
@@ -189,7 +199,9 @@ def test_pi_adapter_reuses_existing_host_authority_to_verified(tmp_path: Path) -
     assert _git(repo, "status", "--porcelain") == ""
     worktree = tmp_path / "worktrees" / "task-pi"
     assert (worktree / "hello.txt").read_text(encoding="utf-8").strip() == HELLO
-    assert (worktree / ".pao" / "pi-worktree-guard.ts").exists()
+    guard = tmp_path / "worktrees" / ".pao-runtime" / ".pao" / "pi-worktree-guard.ts"
+    assert guard.exists()
+    assert not (worktree / ".pao").exists()
 
 
 def test_pi_adapter_fails_closed_on_incomplete_json_stream(tmp_path: Path) -> None:
