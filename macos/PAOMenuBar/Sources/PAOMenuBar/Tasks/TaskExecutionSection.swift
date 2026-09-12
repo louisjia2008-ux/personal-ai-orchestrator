@@ -129,7 +129,9 @@ struct TaskExecutionSection: View {
                 } else {
                     Picker(L10n.executionTarget, selection: $selectedTargetId) {
                         ForEach(verifiedTargets) { target in
-                            Text(target.executionTargetId).tag(target.executionTargetId)
+                            let runtime = target.runtimeId == "pi" ? "Pi" : "OpenCode"
+                            Text("\(runtime) · \(target.modelSkuId)")
+                                .tag(target.executionTargetId)
                         }
                     }
                     if let target = verifiedTargets.first(where: {
