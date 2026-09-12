@@ -89,7 +89,7 @@ def build_service(
         runtime_availability=dict(config.runtime_availability),
         telemetry=dict(config.telemetry),
         connected_provider_ids_provider=(
-            provider_registry_manager.connected_provider_ids
+            provider_registry_manager.routing_connected_provider_ids
             if provider_registry_manager is not None
             else None
         ),
