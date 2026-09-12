@@ -30,6 +30,7 @@ from personal_ai_orchestrator.pi_runtime import (
 )
 from personal_ai_orchestrator.process_supervisor import SupervisedProcess
 from personal_ai_orchestrator.safety_kernel import OwnerDispatchRecord, SafetyKernelStore
+from personal_ai_orchestrator.worker_outcome_classifier import WorkerFailureClass
 from personal_ai_orchestrator.worktree_manager import ManagedWorktree
 
 
@@ -102,6 +103,15 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
             env=build_worker_env(),
         )
 
+    @staticmethod
+    def _expected_model_ref(supervised: SupervisedProcess) -> str | None:
+        try:
+            index = supervised.argv.index("--model")
+            value = supervised.argv[index + 1]
+        except (ValueError, IndexError):
+            return None
+        return value if "/" in value else None
+
     async def _wait_for_worker(
         self, supervised: SupervisedProcess
     ) -> tuple[int, bytes, bytes, bool]:
@@ -148,10 +158,15 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
 
         if returncode == 0:
             summary = summarize_pi_json_stream(stdout)
-            if truncated or not summary.completed:
+            expected_model_ref = self._expected_model_ref(supervised)
+            if (
+                truncated
+                or expected_model_ref is None
+                or not summary.matches_model_ref(expected_model_ref)
+            ):
                 # A clean OS exit is not enough to claim a real Pi worker
-                # invocation. Fail closed before WORKER_FINISHED so the
-                # deterministic verifier can never bless an incomplete stream.
+                # invocation. The final assistant event must be a normal
+                # stop on the exact PAO-selected provider/model.
                 returncode = PI_PROTOCOL_ERROR_EXIT
         return returncode, stdout, stderr, truncated
 
@@ -181,10 +196,38 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
                 "pi_tool_start_count": summary.tool_start_count,
                 "pi_tool_end_count": summary.tool_end_count,
                 "pi_extension_error_count": summary.extension_error_count,
+                "pi_provider": summary.final_provider,
+                "pi_model": summary.final_model,
+                "pi_stop_reason": summary.final_stop_reason,
+                "pi_error_message": summary.final_error_message,
                 "pi_parse_error": summary.parse_error,
             }
         )
         return result
+
+    def _classify_worker_failure(
+        self,
+        *,
+        exit_code: int,
+        worker_result: dict[str, object],
+    ) -> WorkerFailureClass:
+        """Classify Pi provider errors without persisting raw provider bodies."""
+
+        from personal_ai_orchestrator.worker_outcome_classifier import (
+            classify_worker_failure,
+        )
+
+        stderr = worker_result.get("stderr_tail")
+        error_message = worker_result.get("pi_error_message")
+        diagnostic_parts = [
+            value
+            for value in (stderr, error_message)
+            if isinstance(value, str) and value
+        ]
+        return classify_worker_failure(
+            exit_code=exit_code,
+            stderr_tail="\n".join(diagnostic_parts),
+        )
 
 
 __all__ = ["PiOwnerDispatchExecutor"]
