@@ -36,6 +36,7 @@ class RoutingService:
     """Own scheduler inputs and persist every adapter-facing decision before returning it."""
 
     registry: ModelRegistry
+    registry_provider: Callable[[], ModelRegistry] | None = None
     store: SafetyKernelStore
     catalog_snapshot_id: str
     policy: RoutingPolicy = field(default_factory=RoutingPolicy)
@@ -51,6 +52,9 @@ class RoutingService:
     shadow_journal: ShadowEvidenceJournal | None = None
     shadow_actual_execution_targets: dict[str, str] = field(default_factory=dict)
     scheduling_settings: Any = None
+
+    def _effective_registry(self) -> ModelRegistry:
+        return self.registry_provider() if self.registry_provider is not None else self.registry
 
     @property
     def policy_snapshot(self) -> PolicySnapshot:
@@ -205,7 +209,7 @@ class RoutingService:
             )
 
         return route_task(
-            self.registry,
+            self._effective_registry(),
             task=profile,
             now=reference,
             known_at=request.requested_at,
@@ -257,10 +261,10 @@ class RoutingService:
         predicted_burn_fraction = None
         quota_confidence = EvidenceConfidence.UNKNOWN
         collector_status = None
-        actual_target = self.registry.execution_targets.get(manual_target_id)
+        actual_target = self._effective_registry().execution_targets.get(manual_target_id)
         if actual_target is not None:
             target = actual_target
-            model = self.registry.models[target.model_sku_id]
+            model = self._effective_registry().models[target.model_sku_id]
             provider_id = model.provider_id
         if actual_evaluation is not None:
             quota_pool_id = actual_evaluation.quota_pool_id
@@ -269,7 +273,7 @@ class RoutingService:
             quota_pool_id = selected_evaluation.quota_pool_id
             predicted_burn_fraction = selected_evaluation.predicted_burn_fraction
         if quota_pool_id is not None:
-            snapshot = self.registry.quota_pools[quota_pool_id].snapshot
+            snapshot = self._effective_registry().quota_pools[quota_pool_id].snapshot
             quota_confidence = snapshot.confidence
             if snapshot.confidence.value == "UNKNOWN":
                 collector_status = QuotaCollectionStatus.UNKNOWN
@@ -361,7 +365,7 @@ class RoutingService:
         decision = build_routing_decision(
             request,
             scheduler,
-            self.registry,
+            self._effective_registry(),
             catalog_snapshot_id=self.catalog_snapshot_id,
             policy_snapshot_id=policy_snapshot.id,
             activation_gate=self.activation_gate,
