@@ -29,7 +29,6 @@ from personal_ai_orchestrator.runtime_dispatch_executor import RuntimeDispatchEx
 from personal_ai_orchestrator.runtime_registry import merge_runtime_registries
 from personal_ai_orchestrator.safety_kernel import OwnerDispatchStatus
 
-
 NOW = datetime(2026, 9, 12, 22, 0, tzinfo=UTC)
 
 
