@@ -95,10 +95,9 @@ class PiProviderSpec:
     pool_kind: str = "windowed"
 
 
-# PI-2 starts only with the mapping that PI-1 verified on the real target Mac.
-# MiniMax/OpenCode/other Pi surfaces must receive their own semantic acceptance
-# before being added here; a shared runtime provider name is not enough to
-# infer subscription/plan identity.
+# Curated PAO commercial identities mapped to real Pi auth/catalog surfaces.
+# PI-3 confirmed MiniMax China readiness and MiniMax-M3 catalog presence.
+# Discovery never grants execution verification; each target needs its own probe.
 PI_PROVIDER_SPECS: tuple[PiProviderSpec, ...] = (
     PiProviderSpec(
         pao_provider_id="zai-coding-plan",
@@ -107,6 +106,12 @@ PI_PROVIDER_SPECS: tuple[PiProviderSpec, ...] = (
         env_variables=("ZAI_API_KEY",),
         auth_kind="api_key",
         pool_kind="windowed",
+    ),
+    PiProviderSpec(
+        pao_provider_id="minimax-cn-coding-plan",
+        pi_provider_id="minimax-cn",
+        display_name="MiniMax CN Coding Plan",
+        env_variables=("MINIMAX_API_KEY",),
     ),
 )
 
