@@ -38,8 +38,6 @@ from personal_ai_orchestrator.pi_runtime import (
     summarize_pi_json_stream,
 )
 from personal_ai_orchestrator.process_supervisor import ProcessSupervisor
-
-
 PROBE_PROMPT = "Reply with exactly: PERSONAL-AI-ORCHESTRATOR-PI-EXECUTION-PROBE-OK"
 PROBE_MARKER = "PERSONAL-AI-ORCHESTRATOR-PI-EXECUTION-PROBE-OK"
 PROBE_TIMEOUT_SECONDS = 300.0
