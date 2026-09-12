@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import shutil
 import threading
-from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 from personal_ai_orchestrator.model_registry import ModelRegistry
