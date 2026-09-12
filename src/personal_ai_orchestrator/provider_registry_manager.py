@@ -313,6 +313,28 @@ class ProviderRegistryManager:
         with self._lock:
             return self._connections.connected_provider_ids()
 
+    def routing_connected_provider_ids(self) -> frozenset[str]:
+        """Return providers eligible for runtime routing.
+
+        Explicit provider connections remain the authority for OpenCode and
+        other connection-managed surfaces. Pi is local-runtime authenticated:
+        a provider is considered routing-connected only when the Pi discovery
+        snapshot reports READY auth and at least one discovered model.
+        """
+
+        ids = set(self.connected_provider_ids())
+        with self._lock:
+            pi_manager = self._pi_runtime_manager
+        if pi_manager is None:
+            return frozenset(ids)
+        result = pi_manager.last_discovery_result()
+        if result is None:
+            return frozenset(ids)
+        for provider in result.providers:
+            if provider.auth_status.value == "READY" and provider.model_skus:
+                ids.add(provider.provider_id)
+        return frozenset(ids)
+
     def connect_provider(self, provider_id: str) -> ProviderConnection:
         with self._lock:
             if self._state.last_result is None:
