@@ -90,6 +90,9 @@ def resolve_dynamic_registry(
     # persisted state is MISSING (cold first install) or invalid
     # (fail-closed; no automatic discovery).
     manager.bootstrap_if_empty(catalog_snapshot_id=EMPTY_BOOTSTRAP_SNAPSHOT_ID)
+    # Existing installs may already have an OpenCode snapshot but no Pi snapshot.
+    # Bootstrap Pi once in that upgrade case; never refresh Pi on every boot.
+    pi_runtime_manager.bootstrap_if_missing()
     return manager
 
 
