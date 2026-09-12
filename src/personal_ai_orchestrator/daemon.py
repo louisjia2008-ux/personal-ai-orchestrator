@@ -20,6 +20,9 @@ from personal_ai_orchestrator.dispatch_executor import (
     DispatchExecutorConfig,
     OwnerDispatchExecutor,
 )
+from personal_ai_orchestrator.pi_dispatch_executor import PiOwnerDispatchExecutor
+from personal_ai_orchestrator.pi_runtime import PiRuntimeConfig
+from personal_ai_orchestrator.runtime_dispatch_executor import RuntimeDispatchExecutor
 from personal_ai_orchestrator.execution_controller import reconcile_workspace_truth
 from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
 from personal_ai_orchestrator.local_api import serve
@@ -70,6 +73,11 @@ def build_service(
     )
     service = RoutingService(
         registry=registry,
+        registry_provider=(
+            provider_registry_manager.registry
+            if provider_registry_manager is not None
+            else None
+        ),
         store=store,
         catalog_snapshot_id=config.catalog_snapshot_id,
         policy=config.policy,
@@ -312,28 +320,59 @@ def build_control_service(
         )
     executor = None
     if execution_repo is not None:
-        executor = OwnerDispatchExecutor(
+        registry_provider = (
+            provider_registry_manager.registry
+            if provider_registry_manager is not None
+            else lambda: config.registry
+        )
+        dispatch_config = DispatchExecutorConfig(
+            repo_path=execution_repo,
+            worktree_root=worktree_root
+            or (runtime_state_root / "worktrees"),
+            opencode_bin=opencode_bin,
+            verifier_profile=verifier_profile,
+            worker_permission_config=worker_permission_config,
+        )
+        collectors = quota_collectors or default_quota_collectors()
+        verification_journal = VerificationEvidenceJournal(runtime_state_root)
+        quota_availability_journal = QuotaAvailabilityJournal(runtime_state_root)
+        shadow_journal = ShadowEvidenceJournal(runtime_state_root)
+
+        opencode_executor = OwnerDispatchExecutor(
             state_db=state_db,
-            config=DispatchExecutorConfig(
-                repo_path=execution_repo,
-                worktree_root=worktree_root
-                or (runtime_state_root / "worktrees"),
-                opencode_bin=opencode_bin,
-                verifier_profile=verifier_profile,
-                worker_permission_config=worker_permission_config,
-            ),
-            registry_provider=lambda: (
-                provider_registry_manager.registry()
-                if provider_registry_manager is not None
-                else config.registry
-            ),
-            verification_journal=VerificationEvidenceJournal(runtime_state_root),
+            config=dispatch_config,
+            registry_provider=registry_provider,
+            verification_journal=verification_journal,
             execution_evidence_journal=execution_evidence_journal,
-            quota_availability_journal=QuotaAvailabilityJournal(runtime_state_root),
-            quota_collectors=quota_collectors or default_quota_collectors(),
-            # M1 WP5a-2: the executor finalizes the SUPERVISED_AUTO
-            # pending shadow when the run reaches a truthful outcome.
-            shadow_journal=ShadowEvidenceJournal(runtime_state_root),
+            quota_availability_journal=quota_availability_journal,
+            quota_collectors=collectors,
+            shadow_journal=shadow_journal,
+        )
+
+        pi_executor = None
+        if (
+            provider_registry_manager is not None
+            and provider_registry_manager.pi_runtime_manager() is not None
+        ):
+            pi_executor = PiOwnerDispatchExecutor(
+                state_db=state_db,
+                config=dispatch_config,
+                registry_provider=registry_provider,
+                verification_journal=verification_journal,
+                execution_evidence_journal=execution_evidence_journal,
+                quota_availability_journal=quota_availability_journal,
+                quota_collectors=collectors,
+                shadow_journal=shadow_journal,
+                pi_runtime=PiRuntimeConfig(),
+            )
+
+        runtimes = {"opencode": opencode_executor}
+        if pi_executor is not None:
+            runtimes["pi"] = pi_executor
+        executor = RuntimeDispatchExecutor(
+            state_db=state_db,
+            registry_provider=registry_provider,
+            executors=runtimes,
         )
     # Quota observability is connection-scoped: only providers the owner has
     # explicitly connected are ever contacted, and only through documented
