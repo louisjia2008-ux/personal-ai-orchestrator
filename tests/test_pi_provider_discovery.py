@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,13 +23,27 @@ from personal_ai_orchestrator.pi_provider_discovery import (
 from personal_ai_orchestrator.provider_discovery import SubprocessResult
 
 
+HARDENED_MODEL_ARGV = (
+    "--offline",
+    "--no-approve",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-context-files",
+    "--list-models",
+    "zai",
+)
+
+
 def test_verified_pi_provider_mapping_is_explicit_and_unique() -> None:
     assert PI_PROVIDER_SPECS
     pao_ids = [spec.pao_provider_id for spec in PI_PROVIDER_SPECS]
     runtime_ids = [spec.pi_provider_id for spec in PI_PROVIDER_SPECS]
     assert len(pao_ids) == len(set(pao_ids))
     assert len(runtime_ids) == len(set(runtime_ids))
-    zai = next(spec for spec in PI_PROVIDER_SPECS if spec.pao_provider_id == "zai-coding-plan")
+    zai = next(
+        spec for spec in PI_PROVIDER_SPECS if spec.pao_provider_id == "zai-coding-plan"
+    )
     assert zai.pi_provider_id == "zai"
 
 
@@ -163,7 +176,7 @@ def test_discover_pi_builds_runtime_specific_registry(
                 "",
                 False,
             )
-        if argv == ("--offline", "--list-models", "zai"):
+        if argv == HARDENED_MODEL_ARGV:
             return SubprocessResult(
                 full,
                 0,
@@ -242,7 +255,47 @@ def test_discover_pi_not_ready_does_not_call_model_catalog(
     assert outcome.error_code is None
     assert outcome.result is not None
     assert outcome.result.state is PiDiscoveryState.EMPTY
-    assert ("--offline", "--list-models", "zai") not in calls
+    assert HARDENED_MODEL_ARGV not in calls
+
+
+def test_ready_payload_with_nonzero_exit_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import personal_ai_orchestrator.pi_provider_discovery as mod
+
+    executable = tmp_path / "pi"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+    spec = PiProviderSpec(
+        pao_provider_id="zai-coding-plan",
+        pi_provider_id="zai",
+        display_name="GLM / Z.AI",
+        env_variables=("ZAI_API_KEY",),
+    )
+    monkeypatch.setenv("ZAI_API_KEY", "weak-evidence-only")
+    monkeypatch.setattr(mod, "_resolve_pi", lambda _explicit: executable)
+
+    def fake_run(argv, **_kwargs):
+        full = (str(executable), *argv)
+        if argv == ("--version",):
+            return SubprocessResult(full, 0, "0.85.1\n", "", False)
+        return SubprocessResult(
+            full,
+            9,
+            '{"status":"ready","provider":"zai","authType":"api_key"}\n',
+            "",
+            False,
+        )
+
+    monkeypatch.setattr(mod, "_run_pi", fake_run)
+    outcome = discover_pi(specs=(spec,))
+
+    assert outcome.result is not None
+    record = outcome.result.providers[0]
+    assert record.auth_status is PiAuthStatus.UNKNOWN
+    assert record.auth_reason == "auth_check_exit_mismatch"
+    assert record.model_skus == ()
 
 
 def test_discover_pi_surfaces_env_presence_only_as_weak_evidence(
