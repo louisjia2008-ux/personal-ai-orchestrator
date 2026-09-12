@@ -65,3 +65,14 @@ jobs:
       - name: Typecheck and contract tests
         working-directory: integrations/opencode
         run: npm run typecheck
+
+  macos-swift:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Swift package tests
+        working-directory: macos/PAOMenuBar
+        run: swift test
