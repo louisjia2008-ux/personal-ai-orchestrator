@@ -19,16 +19,11 @@ struct QuickSubmitView: View {
             (store.providerConnections?.connected ?? []).map(\.providerId)
         )
         return (store.providers?.providers ?? [])
-            .flatMap(\.executionTargets)
-            .filter { target in
-                if target.runtimeId == "pi" {
-                    return target.runtimeAvailable == true
+            .flatMap { provider in
+                provider.executionTargets.filter { target in
+                    connectedIds.contains(provider.providerId)
+                        || (target.runtimeId == "pi" && target.runtimeAvailable == true)
                 }
-                return connectedIds.contains(
-                    store.providers?.providers.first(where: { provider in
-                        provider.executionTargets.contains { $0.executionTargetId == target.executionTargetId }
-                    })?.providerId ?? ""
-                )
             }
             .sorted {
                 if $0.runtimeId != $1.runtimeId {
