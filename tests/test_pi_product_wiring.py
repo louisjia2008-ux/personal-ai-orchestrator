@@ -155,7 +155,9 @@ def test_provider_manager_exposes_pi_ready_provider_to_routing(
     assert manager.connected_provider_ids() == frozenset()
 
 
-def test_runtime_dispatch_executor_routes_by_target_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_runtime_dispatch_executor_routes_by_target_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import personal_ai_orchestrator.runtime_dispatch_executor as module
 
     class FakeStore:
@@ -201,7 +203,7 @@ def test_runtime_dispatch_executor_fails_closed_on_unsupported_runtime(
     import personal_ai_orchestrator.runtime_dispatch_executor as module
 
     class FakeStore:
-        instances: list["FakeStore"] = []
+        instances: list[FakeStore] = []
 
         def __init__(self, _state_db):
             self.blocked: tuple[str, str | None] | None = None
