@@ -17,6 +17,7 @@ from pathlib import Path
 
 PI_PROTOCOL_ERROR_EXIT = 70
 PI_MAX_STDOUT_BYTES = 4 * 1024 * 1024
+PI_MAX_ERROR_MESSAGE_CHARS = 2048
 PI_GUARD_RELATIVE_PATH = Path(".pao") / "pi-worktree-guard.ts"
 PI_ALLOWED_TOOLS: tuple[str, ...] = (
     "read",
@@ -45,10 +46,12 @@ PI_PROVIDER_ALIASES: dict[str, str] = {
 # blocks every enabled path-bearing file tool when its path escapes the task
 # worktree lexically OR through an existing symlink. Bash is not enabled at
 # all, and project/global extensions are disabled by argv policy.
-PI_WORKTREE_GUARD_SOURCE = r'''import type {
-  ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
-import { existsSync, realpathSync } from "node:fs";
+#
+# The source intentionally has no dependency on pi's package types. CLI
+# ``-e`` loads this trusted TypeScript file directly, while all imports are
+# Node built-ins. This avoids relying on global npm module resolution merely
+# to enforce the guard.
+PI_WORKTREE_GUARD_SOURCE = r'''import { existsSync, realpathSync } from "node:fs";
 import {
   dirname,
   isAbsolute,
@@ -65,6 +68,7 @@ const PATH_TOOLS = new Set([
   "find",
   "ls",
 ]);
+const OPTIONAL_PATH_TOOLS = new Set(["grep", "find", "ls"]);
 const MUTATING_TOOLS = new Set(["edit", "write"]);
 
 function isWithin(root: string, candidate: string): boolean {
@@ -85,12 +89,18 @@ function existingAncestor(path: string): string {
   return current;
 }
 
-export default function (pi: ExtensionAPI) {
-  pi.on("tool_call", async (event, ctx) => {
+export default function (pi: any) {
+  pi.on("tool_call", async (event: any, ctx: any) => {
     if (!PATH_TOOLS.has(event.toolName)) return;
 
     const input = event.input as Record<string, unknown>;
-    const raw = input?.path;
+    let raw = input?.path;
+    if (
+      (raw === undefined || raw === "") &&
+      OPTIONAL_PATH_TOOLS.has(event.toolName)
+    ) {
+      raw = ".";
+    }
     if (typeof raw !== "string" || raw.length === 0) {
       return {
         block: true,
@@ -167,6 +177,10 @@ class PiJsonRunSummary:
     tool_start_count: int
     tool_end_count: int
     extension_error_count: int
+    final_provider: str | None = None
+    final_model: str | None = None
+    final_stop_reason: str | None = None
+    final_error_message: str | None = None
     parse_error: str | None = None
 
     @property
@@ -178,6 +192,18 @@ class PiJsonRunSummary:
             and self.agent_end_seen
             and self.tool_start_count == self.tool_end_count
             and self.extension_error_count == 0
+            and self.final_provider is not None
+            and self.final_model is not None
+            and self.final_stop_reason == "stop"
+        )
+
+    def matches_model_ref(self, model_ref: str) -> bool:
+        expected_provider, separator, expected_model = model_ref.partition("/")
+        return (
+            bool(separator)
+            and self.completed
+            and self.final_provider == expected_provider
+            and self.final_model == expected_model
         )
 
 
@@ -237,22 +263,63 @@ def build_pi_json_argv(
     )
 
 
+def _bounded_error_message(value: object) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    return value[:PI_MAX_ERROR_MESSAGE_CHARS]
+
+
+def _invalid_summary(
+    *,
+    session_seen: bool,
+    agent_start_seen: bool,
+    agent_end_seen: bool,
+    event_count: int,
+    tool_start_count: int,
+    tool_end_count: int,
+    extension_error_count: int,
+    final_provider: str | None,
+    final_model: str | None,
+    final_stop_reason: str | None,
+    final_error_message: str | None,
+    parse_error: str,
+) -> PiJsonRunSummary:
+    return PiJsonRunSummary(
+        protocol_valid=False,
+        session_seen=session_seen,
+        agent_start_seen=agent_start_seen,
+        agent_end_seen=agent_end_seen,
+        event_count=event_count,
+        tool_start_count=tool_start_count,
+        tool_end_count=tool_end_count,
+        extension_error_count=extension_error_count,
+        final_provider=final_provider,
+        final_model=final_model,
+        final_stop_reason=final_stop_reason,
+        final_error_message=final_error_message,
+        parse_error=parse_error,
+    )
+
+
 def summarize_pi_json_stream(data: bytes) -> PiJsonRunSummary:
     """Validate the bounded Pi JSONL stream without granting it authority."""
 
     try:
         text = data.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
-        return PiJsonRunSummary(
-            False,
-            False,
-            False,
-            False,
-            0,
-            0,
-            0,
-            0,
-            "invalid_utf8",
+        return _invalid_summary(
+            session_seen=False,
+            agent_start_seen=False,
+            agent_end_seen=False,
+            event_count=0,
+            tool_start_count=0,
+            tool_end_count=0,
+            extension_error_count=0,
+            final_provider=None,
+            final_model=None,
+            final_stop_reason=None,
+            final_error_message=None,
+            parse_error="invalid_utf8",
         )
 
     session_seen = False
@@ -262,6 +329,27 @@ def summarize_pi_json_stream(data: bytes) -> PiJsonRunSummary:
     tool_end_count = 0
     extension_error_count = 0
     event_count = 0
+    active_tool_ids: set[str] = set()
+    final_provider: str | None = None
+    final_model: str | None = None
+    final_stop_reason: str | None = None
+    final_error_message: str | None = None
+
+    def invalid(parse_error: str) -> PiJsonRunSummary:
+        return _invalid_summary(
+            session_seen=session_seen,
+            agent_start_seen=agent_start_seen,
+            agent_end_seen=agent_end_seen,
+            event_count=event_count,
+            tool_start_count=tool_start_count,
+            tool_end_count=tool_end_count,
+            extension_error_count=extension_error_count,
+            final_provider=final_provider,
+            final_model=final_model,
+            final_stop_reason=final_stop_reason,
+            final_error_message=final_error_message,
+            parse_error=parse_error,
+        )
 
     for raw_line in text.split("\n"):
         line = raw_line[:-1] if raw_line.endswith("\r") else raw_line
@@ -270,72 +358,70 @@ def summarize_pi_json_stream(data: bytes) -> PiJsonRunSummary:
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
-            return PiJsonRunSummary(
-                False,
-                session_seen,
-                agent_start_seen,
-                agent_end_seen,
-                event_count,
-                tool_start_count,
-                tool_end_count,
-                extension_error_count,
-                "invalid_jsonl",
-            )
+            return invalid("invalid_jsonl")
         if not isinstance(event, dict) or not isinstance(event.get("type"), str):
-            return PiJsonRunSummary(
-                False,
-                session_seen,
-                agent_start_seen,
-                agent_end_seen,
-                event_count,
-                tool_start_count,
-                tool_end_count,
-                extension_error_count,
-                "invalid_event_shape",
-            )
+            return invalid("invalid_event_shape")
+
         event_count += 1
         event_type = event["type"]
         if event_count == 1 and event_type != "session":
-            return PiJsonRunSummary(
-                False,
-                False,
-                agent_start_seen,
-                agent_end_seen,
-                event_count,
-                tool_start_count,
-                tool_end_count,
-                extension_error_count,
-                "missing_session_header",
-            )
+            return invalid("missing_session_header")
+
         if event_type == "session":
             session_seen = True
         elif event_type == "agent_start":
             agent_start_seen = True
         elif event_type == "agent_end":
             agent_end_seen = True
+        elif event_type == "message_end":
+            message = event.get("message")
+            if isinstance(message, dict) and message.get("role") == "assistant":
+                provider = message.get("provider")
+                model = message.get("model")
+                stop_reason = message.get("stopReason")
+                final_provider = provider if isinstance(provider, str) else None
+                final_model = model if isinstance(model, str) else None
+                final_stop_reason = stop_reason if isinstance(stop_reason, str) else None
+                final_error_message = _bounded_error_message(message.get("errorMessage"))
         elif event_type == "tool_execution_start":
+            tool_call_id = event.get("toolCallId")
+            if not isinstance(tool_call_id, str) or tool_call_id in active_tool_ids:
+                return invalid("invalid_tool_lifecycle")
+            active_tool_ids.add(tool_call_id)
             tool_start_count += 1
         elif event_type == "tool_execution_end":
+            tool_call_id = event.get("toolCallId")
+            if not isinstance(tool_call_id, str) or tool_call_id not in active_tool_ids:
+                return invalid("invalid_tool_lifecycle")
+            active_tool_ids.remove(tool_call_id)
             tool_end_count += 1
         elif event_type == "extension_error":
             extension_error_count += 1
 
+    if active_tool_ids:
+        return invalid("incomplete_tool_lifecycle")
+
     return PiJsonRunSummary(
-        True,
-        session_seen,
-        agent_start_seen,
-        agent_end_seen,
-        event_count,
-        tool_start_count,
-        tool_end_count,
-        extension_error_count,
-        None,
+        protocol_valid=True,
+        session_seen=session_seen,
+        agent_start_seen=agent_start_seen,
+        agent_end_seen=agent_end_seen,
+        event_count=event_count,
+        tool_start_count=tool_start_count,
+        tool_end_count=tool_end_count,
+        extension_error_count=extension_error_count,
+        final_provider=final_provider,
+        final_model=final_model,
+        final_stop_reason=final_stop_reason,
+        final_error_message=final_error_message,
+        parse_error=None,
     )
 
 
 __all__ = [
     "PI_ALLOWED_TOOLS",
     "PI_GUARD_RELATIVE_PATH",
+    "PI_MAX_ERROR_MESSAGE_CHARS",
     "PI_MAX_STDOUT_BYTES",
     "PI_PROTOCOL_ERROR_EXIT",
     "PI_PROVIDER_ALIASES",
