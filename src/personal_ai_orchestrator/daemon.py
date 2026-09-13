@@ -11,14 +11,26 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from personal_ai_orchestrator.activation import ActiveRoutingGate
-from personal_ai_orchestrator.control_api import ControlPlaneServer, ControlPlaneService
+from personal_ai_orchestrator.control_api import ControlPlaneService
 from personal_ai_orchestrator.daemon_supervisor import (
     DaemonSupervisor,
     build_default_supervisor,
 )
+from personal_ai_orchestrator.delegation_campaign import (
+    DelegationCalibrationCampaignStore,
+)
+from personal_ai_orchestrator.delegation_campaign_control import (
+    DelegationCampaignControlPlaneServer,
+)
+from personal_ai_orchestrator.delegation_campaign_runtime import (
+    CampaignAwareDelegationChildPort,
+)
 from personal_ai_orchestrator.delegation_evidence import (
     DelegationOutcomeJournal,
     resolve_delegation_policy,
+)
+from personal_ai_orchestrator.delegation_quota_calibration import (
+    DelegationQuotaCalibrationJournal,
 )
 from personal_ai_orchestrator.delegation_shadow import DelegationShadowJournal
 from personal_ai_orchestrator.dispatch_executor import (
@@ -37,7 +49,6 @@ from personal_ai_orchestrator.model_tiers import (
     parse_tier_table,
 )
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
-from personal_ai_orchestrator.pi5_child_execution import PAODelegationChildPort
 from personal_ai_orchestrator.pi_dispatch_executor import PiOwnerDispatchExecutor
 from personal_ai_orchestrator.pi_runtime import PiRuntimeConfig
 from personal_ai_orchestrator.policy_snapshot import PolicySnapshotJournal
@@ -68,11 +79,7 @@ def build_service(
 ) -> RoutingService:
     runtime_state_root.mkdir(parents=True, exist_ok=True)
     store = SafetyKernelStore(state_db)
-    # A daemon restart destroys live process truth. Reconcile before exposing any routing path so
-    # stale RUNNING/WORKER_FINISHED/VERIFYING tasks cannot continue to influence model selection.
     store.reconcile_startup()
-    # Startup blocking is also the point at which stale writer ownership becomes invalid. Clear
-    # those exact persisted locks and fail closed any still-routable task whose worktree vanished.
     reconcile_workspace_truth(store)
     registry = (
         provider_registry_manager.registry()
@@ -91,7 +98,6 @@ def build_service(
         policy=config.policy,
         project_policy_overrides=dict(config.project_policy_overrides),
         task_policy_overrides=dict(config.task_policy_overrides),
-        # Production ACTIVE is intentionally impossible from static config alone.
         activation_gate=ActiveRoutingGate(),
         policy_journal=PolicySnapshotJournal(runtime_state_root),
         runtime_availability=dict(config.runtime_availability),
@@ -101,8 +107,6 @@ def build_service(
             if provider_registry_manager is not None
             else None
         ),
-        # The owner's global default lives host-side and outranks the static config
-        # objective, so Settings and routing cannot disagree.
         scheduling_settings=SchedulingSettings(
             runtime_state_root / "scheduling-settings.json"
         ),
@@ -203,21 +207,7 @@ def load_model_tiers(
     *,
     audit: SafetyKernelStore | None = None,
 ) -> tuple[TierTable, str]:
-    """Load the host-owned tier table at startup.
-
-    Returns ``(table, source)`` where ``source`` is one of
-    ``"owner_file"`` / ``"default_fallback"`` and surfaces on
-    ``/v1/health.model_tiers_source``. A malformed file does NOT abort
-    boot — the daemon falls back to the shipped defaults and records a
-    ``MODEL_TIERS_INVALID`` system event so the owner can fix the file
-    without restarting.
-
-    The table is loaded exactly once at startup; there is no hot
-    reload. A host that wants to change the table must restart the
-    daemon (this is intentional — the table is small, the recommender
-    is a hot path, and a mid-session table swap could silently change
-    every recommendation in flight).
-    """
+    """Load the host-owned tier table once at startup."""
 
     if path is None:
         return parse_tier_table(DEFAULT_TIER_TABLE_JSON), "default_fallback"
@@ -239,17 +229,7 @@ def load_model_tiers(
 
 
 def default_quota_collectors() -> dict[str, object]:
-    """Collectors keyed by discovery provider family.
-
-    Tokens come ONLY from the operator environment. auth.json is never
-    read; when a token is absent the collector reports AUTH_REQUIRED and
-    quota admission fails closed or records UNKNOWN truthfully.
-
-    M1 WP4: the ``opencode`` family is unmetered — OpenCode Zen proxies
-    free-model traffic through ``opencode.ai`` and the host needs no
-    credential of its own. ``UnmeteredQuotaCollector`` is always
-    registered; it never opens a network socket.
-    """
+    """Collectors keyed by discovery provider family."""
 
     collectors: dict[str, object] = {}
     for spec in QUOTA_SOURCES:
@@ -265,13 +245,6 @@ def default_quota_collectors() -> dict[str, object]:
                 SecretValue(token),
                 spec.quota_pool_id,
             )
-    # M1 WP4: the opencode free-model family. The collector is keyed
-    # by ``provider_id``; the dispatch executor / scheduler look up
-    # the collector via ``provider_id``, not ``pool_id``. The
-    # ``covered_model_ids`` list is empty by default — discovery
-    # populates it from the ``provider_id-{sku}`` execution-target
-    # rows so each free SKU gets its own binding. Tests inject a
-    # tighter list.
     collectors["opencode"] = UnmeteredQuotaCollector(
         provider_id="opencode",
         pool_id="opencode",
@@ -304,25 +277,13 @@ def build_control_service(
     pi_runtime: PiRuntimeConfig | None = None,
     supervisor: DaemonSupervisor | None = None,
 ) -> ControlPlaneService:
-    """Build the control-plane facade over the same durable truth.
-
-    When ``execution_repo`` is provided (host-owned repository policy),
-    owner dispatch executes real isolated worktree workers. The optional
-    ``supervisor`` (WP0) is wired into the control plane so ``/v1/health``
-    can surface the heartbeat status; callers that do not run a supervisor
-    (CLI tools, ad-hoc scripts) can omit it and ``/v1/health`` still works,
-    just without ``last_tick_at`` / ``supervisor_steps``.
-    """
+    """Build the control-plane facade over the same durable truth."""
 
     registry = (
         provider_registry_manager.registry()
         if provider_registry_manager is not None
         else config.registry
     )
-    # M1 WP2: load the tier table once at startup. Malformed files
-    # fall back to the shipped defaults; the system event
-    # MODEL_TIERS_INVALID and the /v1/health ``model_tiers_source``
-    # field are how the owner sees the fallback fired.
     store = SafetyKernelStore(state_db)
     tier_table, model_tiers_source = load_model_tiers(
         model_tiers_path,
@@ -332,11 +293,11 @@ def build_control_service(
         runtime_state_root / "scheduling-settings.json"
     )
     task_profiles = {profile.task_id: profile for profile in config.task_profiles}
+    delegation_campaign = DelegationCalibrationCampaignStore(
+        runtime_state_root / "delegation-calibration-campaign.json"
+    )
     execution_evidence_journal = ExecutionEvidenceJournal(runtime_state_root)
     if provider_registry_manager is not None:
-        # Import candidates may cite a prior VERIFIED real worker execution. The
-        # lookup is scoped to one exact provider_id, so evidence never crosses a
-        # region, plan surface, or provider boundary.
         provider_registry_manager.set_verified_execution_lookup(
             lambda provider_id: (
                 lambda evidence: evidence.observed_at if evidence is not None else None
@@ -373,7 +334,6 @@ def build_control_service(
             shadow_journal=shadow_journal,
         )
 
-        pi_executor = None
         if (
             provider_registry_manager is not None
             and provider_registry_manager.pi_runtime_manager() is not None
@@ -398,9 +358,7 @@ def build_control_service(
             registry_provider=registry_provider,
             executors=runtimes,
         )
-    # Quota observability is connection-scoped: only providers the owner has
-    # explicitly connected are ever contacted, and only through documented
-    # read-only endpoints.
+
     quota_refresh_service = QuotaRefreshService(
         runtime_state_root=runtime_state_root,
         connected_provider_ids=(
@@ -418,7 +376,8 @@ def build_control_service(
 
         delegation_shadow_journal = DelegationShadowJournal(runtime_state_root)
         delegation_outcome_journal = DelegationOutcomeJournal(runtime_state_root)
-        pi_executor.delegation_child_port = PAODelegationChildPort(
+        delegation_quota_journal = DelegationQuotaCalibrationJournal(runtime_state_root)
+        pi_executor.delegation_child_port = CampaignAwareDelegationChildPort(
             state_db=state_db,
             executor=executor,
             recommendation_factory=lambda child_store: DispatchRecommendationService(
@@ -448,8 +407,12 @@ def build_control_service(
                     scheduling_settings=scheduling_settings,
                 )
             ),
+            delegation_campaign=delegation_campaign,
+            quota_refresh_service=quota_refresh_service,
+            quota_calibration_journal=delegation_quota_journal,
         )
-    return ControlPlaneService(
+
+    service = ControlPlaneService(
         registry=registry,
         store=store,
         activation_gate=ActiveRoutingGate(),
@@ -465,20 +428,16 @@ def build_control_service(
         supervisor=supervisor,
         tier_table=tier_table,
         model_tiers_source=model_tiers_source,
-        # M1 WP5a-2: pending-shadow journal + catalog snapshot id for the
-        # supervised-auto tick's frozen decisions.
         shadow_journal=ShadowEvidenceJournal(runtime_state_root),
         catalog_snapshot_id=config.catalog_snapshot_id,
     )
+    # Deliberately not a ControlPlaneService authority field: both the wrapped
+    # UDS handler and campaign-aware evidence adapter share this host object.
+    service.__dict__["_delegation_campaign_store"] = delegation_campaign
+    return service
 
 
 def _resolve_tick_interval_seconds(args: argparse.Namespace) -> float:
-    """CLI arg > PAO_TICK_INTERVAL_SECONDS env var > 5.0s default.
-
-    The env var follows the existing PAO_* convention used by PAO_BUILD_*
-    and PAO_CONTROL_SOCKET. Negative or non-positive values raise ValueError
-    so a misconfigured container cannot silently disable the heartbeat.
-    """
     raw = args.tick_interval_seconds
     if raw is None:
         env_raw = os.environ.get("PAO_TICK_INTERVAL_SECONDS")
@@ -497,21 +456,7 @@ def main(
 ) -> int:
     args = parse_args(argv)
     config = load_runtime_config(args.config)
-    # P4.2.4-A.1 single-startup-contract: when invoked from
-    # ``product_daemon`` the manager has already been constructed and
-    # rehydrated from disk; pass it through so we honour the contract
-    # (exactly one discovery cycle on cold first launch, zero cycles on
-    # subsequent boots). When invoked directly without an external
-    # manager, fall back to building one here; the manager constructor
-    # rehydrates from disk and does NOT run an implicit refresh.
     if provider_registry_manager is None:
-        # ``service.store`` is not built yet at this point. The audit
-        # sink is wired in after ``build_service`` returns — for now
-        # we let the manager run with ``audit=None``; the very first
-        # discovery cycle will not write M1 WP4 events. The
-        # supervisor step takes over for subsequent refreshes and
-        # the explicit ``discover`` call from the daemon boots the
-        # audit path. Tests inject an audit store directly.
         provider_registry_manager = ProviderRegistryManager(
             runtime_state_root=args.runtime_state_root,
         )
@@ -521,19 +466,10 @@ def main(
         runtime_state_root=args.runtime_state_root,
         provider_registry_manager=provider_registry_manager,
     )
-    # M1 WP4: wire the audit sink into the manager now that the
-    # SafetyKernelStore exists. Subsequent discovery cycles write
-    # ``FREE_MODEL_SUFFIX_UNLISTED`` / ``OPENCODE_MODEL_UNCLASSIFIED``
-    # events through ``service.store.record_system_event``.
     if provider_registry_manager._audit is None:
         provider_registry_manager._audit = service.store
-    control_server: ControlPlaneServer | None = None
+    control_server: DelegationCampaignControlPlaneServer | None = None
     control_service: ControlPlaneService | None = None
-    # WP0: heartbeat cadence — wired through both --control-only and the
-    # routing path so ``/v1/health`` always reports a live ``last_tick_at``.
-    # Build the supervisor BEFORE the control service so it can carry the
-    # same reference; both share the routing service's SafetyKernelStore
-    # (which points at the same SQLite file the control plane reads).
     tick_interval_seconds = _resolve_tick_interval_seconds(args)
     supervisor = build_default_supervisor(
         interval_seconds=tick_interval_seconds,
@@ -553,14 +489,13 @@ def main(
             model_tiers_path=args.model_tiers_path,
             supervisor=supervisor,
         )
-        control_server = ControlPlaneServer(control_service, args.control_socket)
+        campaign = control_service.__dict__["_delegation_campaign_store"]
+        control_server = DelegationCampaignControlPlaneServer(
+            control_service,
+            args.control_socket,
+            campaign=campaign,
+        )
         control_server.start_background()
-        # M1 WP5a-2 (§19): the supervised-auto tick runs ONLY on the
-        # non-control-only daemon. ``--control-only`` serves the typed
-        # control plane without any autonomous execution step — the
-        # product daemon (which is control-only today) therefore ships
-        # with zero autonomous tick execution until the owner opts in
-        # via the non-control-only runtime.
         if not args.control_only:
             from personal_ai_orchestrator.supervised_auto_step import (
                 SUPERVISED_AUTO_STEP_NAME,
@@ -599,9 +534,7 @@ def main(
                 control_service.store.close()
             service.store.close()
         return 0
-    # Routing path: ``serve()`` blocks on its own select loop. The supervisor
-    # runs in a daemon thread so the heartbeat still updates while the
-    # loopback API is up; SIGINT/SIGTERM handled inside ``serve``.
+
     supervisor_stop = threading.Event()
     supervisor_thread = threading.Thread(
         target=supervisor.run,
@@ -624,7 +557,7 @@ def main(
     return 0
 
 
-if __name__ == "__main__":  # pragma: no cover - exercised through real daemon acceptance
+if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
 
 
