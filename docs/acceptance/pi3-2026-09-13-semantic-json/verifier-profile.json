@@ -1,0 +1,18 @@
+{
+  "name": "pi3-semantic-json",
+  "commands": [
+    {
+      "name": "exact-json-value",
+      "argv": [
+        "/Users/<user>/Developer/personal-ai-orchestrator/.venv/bin/python",
+        "-c",
+        "import json\nfrom pathlib import Path\nobj = json.loads(Path(\"pi3_acceptance.json\").read_text(encoding=\"utf-8\"))\nassert obj == {\"status\": \"PI3_MINIMAX_PRODUCT_ACCEPTANCE\"}\n"
+      ],
+      "timeout_seconds": 300.0
+    }
+  ],
+  "allowed_paths": [
+    "pi3_acceptance.json"
+  ],
+  "require_diff_check": true
+}

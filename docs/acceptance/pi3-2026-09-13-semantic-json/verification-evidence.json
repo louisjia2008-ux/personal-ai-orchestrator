@@ -1,0 +1,36 @@
+{
+  "profile": "pi3-semantic-json",
+  "passed": true,
+  "changed_paths": [
+    "pi3_acceptance.json"
+  ],
+  "unexpected_paths": [],
+  "stages": [
+    {
+      "name": "git diff --check",
+      "argv": [
+        "git",
+        "diff",
+        "--check",
+        "f32c13d92eafa39b36029e9bb3cbbcdd74e1b340",
+        "--"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "exact-json-value",
+      "argv": [
+        "/Users/<user>/Developer/personal-ai-orchestrator/.venv/bin/python",
+        "-c",
+        "import json\nfrom pathlib import Path\nobj = json.loads(Path(\"pi3_acceptance.json\").read_text(encoding=\"utf-8\"))\nassert obj == {\"status\": \"PI3_MINIMAX_PRODUCT_ACCEPTANCE\"}\n"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "evidence_id": "verify-098307232e034a03f1636fae",
+  "failure_reason": null
+}
