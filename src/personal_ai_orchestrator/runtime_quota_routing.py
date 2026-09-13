@@ -5,11 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from personal_ai_orchestrator.model_registry import ModelRegistry
+from personal_ai_orchestrator.model_registry import EvidenceConfidence, ModelRegistry
 from personal_ai_orchestrator.quota_availability import (
     QuotaAvailabilityEvidence,
     QuotaAvailabilityState,
 )
+from personal_ai_orchestrator.quota_refresh import quota_pool_id_for
 
 _BLOCKING_STATES = {
     QuotaAvailabilityState.EXHAUSTED_OBSERVED,
@@ -43,7 +44,17 @@ def quota_pool_id_for_target(
             execution_target_id=target.id,
         )
     except (KeyError, LookupError, ValueError):
-        return model.provider_id
+        # Explicit facts own their temporal/ambiguity semantics. Never mask an
+        # expired, future, or ambiguous binding with discovery metadata.
+        if any(
+            fact.model_sku_id == model.id
+            and fact.execution_target_id in (None, target.id)
+            for fact in registry.quota_bindings
+        ):
+            return None
+        return quota_pool_id_for(model.provider_id)
+    if binding.confidence is EvidenceConfidence.UNKNOWN:
+        return None
     return binding.quota_pool_id
 
 
@@ -65,7 +76,12 @@ def pool_evidence(
             evidence = QuotaAvailabilityEvidence.model_validate(payload)
         except (TypeError, ValueError):
             continue
-        if evidence.provider_id == provider_id and evidence.quota_pool_id == quota_pool_id:
+        evidence_pool = evidence.quota_pool_id
+        # Earlier dispatch journals explicitly used the provider ID as pool.
+        # Resolve that known legacy format without rewriting immutable evidence.
+        if evidence_pool == evidence.provider_id:
+            evidence_pool = quota_pool_id_for(evidence.provider_id) or evidence_pool
+        if evidence_pool == quota_pool_id:
             rows.append(evidence)
     rows.sort(key=lambda item: (item.observed_at, item.execution_target_id))
     return tuple(rows)
