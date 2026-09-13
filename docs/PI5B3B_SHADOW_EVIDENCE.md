@@ -1,6 +1,6 @@
 # PI-5B3B Delegation Shadow Evidence
 
-Status: `PI_5B3B_SHADOW_EVIDENCE_IN_PROGRESS`
+Status: `PI_5B3B_SHADOW_EVIDENCE_COMPLETE`
 
 Tracking: #41 (parent PI-5B3: #37)
 
@@ -59,12 +59,19 @@ This slice does not:
 
 ## Acceptance
 
-- a synthetic verified child can produce a replayable SHADOW record;
+The implementation checkpoint at `39c39404458a1ebd1dd4ff1bb63191900b53bba9` passed exact-head CI run `34744645830`: Python lint/tests/diff hygiene, OpenCode adapter checks, and macOS Swift build all passed. No real worker/model calls were introduced or authorized.
+
+Accepted properties:
+
+- a synthetic verified child produces a replayable SHADOW record;
 - persisted JSON contains no child intent/reason prose;
 - unavailable failure-count/burn/PAYG/policy signals are recorded rather than invented;
 - limited evidence is explicitly `enforcement_ready = false`;
+- same-pool identity is represented truthfully without becoming an uncalibrated auto-denial;
+- missing quota truth is persisted before the existing child path fails closed;
 - a SHADOW `DENY` does not prevent the ordinary child from reaching VERIFIED;
 - journal failure cannot change the child result and does not persist exception text;
 - repeated child replay does not rewrite the original observation;
-- daemon construction wires the journal without creating the history directory;
-- exact-head CI must pass with zero real model calls before PI-5B3B is marked complete.
+- daemon construction wires the journal without creating the history directory.
+
+This status commit changes documentation only. PR merge still requires the final documentation head to remain CI-green.
