@@ -22,11 +22,13 @@ The first slice intentionally does not build a learned router or a weighted "del
 - `DENY` — a hard gate fails;
 - `SHADOW_ONLY` — execution is mechanically possible, but current evidence does not justify active delegation.
 
+Every decision records the explicit policy mode plus `policy_version=pi5b3a-v1` so later policy changes cannot make historical decisions ambiguous.
+
 Policy modes are separate from verdicts:
 
-- `OFF` — delegation policy cannot authorize execution;
-- `SHADOW` — calculate and record a recommendation, never enforce it;
-- `ENFORCE` — a caller may enforce `ALLOW`/`DENY`, but downstream scheduler/quota/Safety Kernel/verifier gates still remain authoritative.
+- `OFF` — authorizes no delegation;
+- `SHADOW` — calculate and record a recommendation without changing existing PI-5B2 execution behavior;
+- `ENFORCE` — only `ALLOW` may proceed to the existing child scheduler/quota/Safety Kernel/verifier chain. `DENY` and `SHADOW_ONLY` must not launch a child.
 
 Phase A is provider-agnostic by construction. Worker-supplied provider/model/runtime/target identities are not inputs to this policy.
 
@@ -34,13 +36,14 @@ Phase A is provider-agnostic by construction. Worker-supplied provider/model/run
 
 The initial hard-denial order is deterministic:
 
-1. delegation feature/mode disabled;
-2. no eligible child candidate;
-3. required quota truth missing;
-4. required burn estimate missing;
-5. predicted child burn exceeds usable headroom;
-6. paid usage would be required without approval;
-7. an explicit independence requirement cannot be satisfied.
+1. policy mode off;
+2. delegation feature disabled;
+3. no eligible child candidate;
+4. required quota truth missing;
+5. required burn estimate missing;
+6. predicted child burn exceeds usable headroom;
+7. paid usage would be required without approval;
+8. an explicit independence requirement cannot be satisfied.
 
 Only after those gates pass does the policy inspect positive host justification.
 
@@ -54,7 +57,7 @@ Therefore Phase A records `SHARED_QUOTA_POOL` or `DIFFERENT_QUOTA_POOL` as an ex
 
 ## Positive justification
 
-Phase A permits active `ALLOW` only from host-owned evidence that already has deterministic semantics:
+Phase A permits `ALLOW` only from host-owned evidence that already has deterministic semantics:
 
 - `host_required=True`, for a future host policy that explicitly requires delegation/review;
 - `failure_count >= failure_escalation_after`, reusing the scheduler's existing escalation threshold concept.
@@ -82,12 +85,13 @@ PI-5B2's broker, `DELEGATED_CHILD` authority, worktree isolation, single-writer 
 Before wiring this policy into the broker/child execution path:
 
 1. fixed inputs must replay to byte-equivalent decision JSON;
-2. hard denials must take precedence over positive justification;
-3. `SHADOW_ONLY` must never be enforceable;
-4. `SHADOW` mode must never mark any decision enforceable;
-5. same-pool scarcity must remain explanatory rather than an uncalibrated hidden score;
-6. the contract must contain no provider/model special casing;
-7. CI must pass with zero real model calls.
+2. decisions must record the exact policy mode and policy version;
+3. policy-off and feature-disabled reasons must remain distinguishable;
+4. hard denials must take precedence over positive justification;
+5. passing hard gates without host justification must remain `SHADOW_ONLY`;
+6. same-pool scarcity must remain explanatory rather than an uncalibrated hidden score;
+7. the contract must contain no provider/model special casing;
+8. CI must pass with zero real model calls.
 
 ## Planned next slices
 
@@ -97,7 +101,7 @@ Build the facts from existing PAO truth and persist a replayable shadow decision
 
 ### PI-5B3C — enforced admission experiment
 
-After shadow evidence is adequate, allow a narrowly scoped feature flag to enforce policy decisions in disposable fixtures. `DENY` must create no child; `ALLOW` still must pass the existing child scheduler/quota/verifier chain.
+After shadow evidence is adequate, allow a narrowly scoped feature flag to enforce policy decisions in disposable fixtures. `DENY` and `SHADOW_ONLY` must create no child; `ALLOW` still must pass the existing child scheduler/quota/verifier chain.
 
 ### PI-5B3D — production activation gate
 
