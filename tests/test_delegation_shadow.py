@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from personal_ai_orchestrator.delegation_policy import (
@@ -8,6 +10,7 @@ from personal_ai_orchestrator.delegation_policy import (
 )
 from personal_ai_orchestrator.delegation_shadow import DelegationShadowJournal
 from tests.test_pi5_child_execution import _setup
+from tests.test_pi_dispatch_executor import _registry
 
 
 async def _run_with_shadow(tmp_path, monkeypatch):
@@ -107,3 +110,36 @@ def test_shadow_path_rejects_unsafe_observation_ids(tmp_path):
             pass
         else:
             raise AssertionError(f"unsafe id accepted: {value!r}")
+
+
+def test_daemon_wires_shadow_journal_without_creating_files(tmp_path):
+    from personal_ai_orchestrator.daemon import build_control_service
+    from personal_ai_orchestrator.pi_runtime import PiRuntimeConfig
+    from personal_ai_orchestrator.runtime_config import RuntimeConfig
+
+    manager = SimpleNamespace(
+        registry=_registry,
+        pi_runtime_manager=lambda: object(),
+        set_verified_execution_lookup=lambda _: None,
+        connected_provider_ids=lambda: (),
+        runtime_available=lambda _: True,
+    )
+    runtime_root = tmp_path / "runtime"
+    service = build_control_service(
+        config=RuntimeConfig(catalog_snapshot_id="synthetic", registry=_registry()),
+        state_db=tmp_path / "state.db",
+        runtime_state_root=runtime_root,
+        execution_repo=tmp_path / "repo",
+        provider_registry_manager=manager,
+        pi_runtime=PiRuntimeConfig(delegation_enabled=True),
+    )
+    try:
+        port = service.dispatch_executor._executors["pi"].delegation_child_port
+        journal = port.delegation_shadow_journal
+        assert isinstance(journal, DelegationShadowJournal)
+        assert journal.directory == runtime_root / "delegation-shadow-history"
+        # Construction alone has no I/O; the directory is created only on the
+        # first real/synthetic delegation observation.
+        assert not journal.directory.exists()
+    finally:
+        service.store.close()
