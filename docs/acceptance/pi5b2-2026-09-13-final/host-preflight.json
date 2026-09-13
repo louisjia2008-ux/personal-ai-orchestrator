@@ -1,0 +1,131 @@
+{
+  "baseline_head": "0bb89a9f6c4fc90cd7854b301f0a9ce780d28f4b",
+  "events": [
+    {
+      "event": "CANONICAL_RECOMMENDATION_OBSERVATION",
+      "observed_at": "2026-09-13T06:00:47.897814+00:00",
+      "task_id": "pi5b2-final-parent",
+      "target": "pi-minimax-cn-coding-plan-MiniMax-M2.7",
+      "canonical_resolver": "runtime_quota_routing.quota_pool_id_for_target",
+      "quota_pool_id": "minimax-token-plan-cn",
+      "observation_found": true,
+      "snapshot_id": "quota-a679f5bc-6aea-48fa-8526-c0e78e8bb35f",
+      "source": "PERSISTED_POOL_CACHE",
+      "cache_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/runtime/quota/quota-minimax-token-plan-cn.json",
+      "cache_sha256": "ca50fe7ef7b7c4db76f67dfd09fdd363bd5e1b7adbce4a919e1a629b91b93541",
+      "observation_state": "AVAILABLE",
+      "observation_confidence": "EXACT",
+      "age_seconds": 0.001816,
+      "observation_time": "2026-09-13T06:00:47.894190+00:00",
+      "measurement_source": "PROVIDER_API",
+      "recommendation_read_observed": true,
+      "remaining_fractions": [
+        0.91,
+        0.34
+      ],
+      "ephemeral_mapping_entries": 1,
+      "selected": false
+    },
+    {
+      "event": "CANONICAL_RECOMMENDATION_OBSERVATION",
+      "observed_at": "2026-09-13T06:00:47.898066+00:00",
+      "task_id": "pi5b2-final-parent",
+      "target": "pi-minimax-cn-coding-plan-MiniMax-M2.7-highspeed",
+      "canonical_resolver": "runtime_quota_routing.quota_pool_id_for_target",
+      "quota_pool_id": "minimax-token-plan-cn",
+      "observation_found": true,
+      "snapshot_id": "quota-a679f5bc-6aea-48fa-8526-c0e78e8bb35f",
+      "source": "PERSISTED_POOL_CACHE",
+      "cache_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/runtime/quota/quota-minimax-token-plan-cn.json",
+      "cache_sha256": "ca50fe7ef7b7c4db76f67dfd09fdd363bd5e1b7adbce4a919e1a629b91b93541",
+      "observation_state": "AVAILABLE",
+      "observation_confidence": "EXACT",
+      "age_seconds": 0.001816,
+      "observation_time": "2026-09-13T06:00:47.894190+00:00",
+      "measurement_source": "PROVIDER_API",
+      "recommendation_read_observed": true,
+      "remaining_fractions": [
+        0.91,
+        0.34
+      ],
+      "ephemeral_mapping_entries": 1,
+      "selected": false
+    },
+    {
+      "event": "CANONICAL_RECOMMENDATION_OBSERVATION",
+      "observed_at": "2026-09-13T06:00:47.898249+00:00",
+      "task_id": "pi5b2-final-parent",
+      "target": "pi-minimax-cn-coding-plan-MiniMax-M3",
+      "canonical_resolver": "runtime_quota_routing.quota_pool_id_for_target",
+      "quota_pool_id": "minimax-token-plan-cn",
+      "observation_found": true,
+      "snapshot_id": "quota-a679f5bc-6aea-48fa-8526-c0e78e8bb35f",
+      "source": "PERSISTED_POOL_CACHE",
+      "cache_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/runtime/quota/quota-minimax-token-plan-cn.json",
+      "cache_sha256": "ca50fe7ef7b7c4db76f67dfd09fdd363bd5e1b7adbce4a919e1a629b91b93541",
+      "observation_state": "AVAILABLE",
+      "observation_confidence": "EXACT",
+      "age_seconds": 0.001816,
+      "observation_time": "2026-09-13T06:00:47.894190+00:00",
+      "measurement_source": "PROVIDER_API",
+      "recommendation_read_observed": true,
+      "remaining_fractions": [
+        0.91,
+        0.34
+      ],
+      "ephemeral_mapping_entries": 1,
+      "selected": true
+    },
+    {
+      "event": "HOST_RECOMMENDATION",
+      "observed_at": "2026-09-13T06:00:47.898386+00:00",
+      "parent_state": "SUBMITTED",
+      "child_state": "SUBMITTED",
+      "task_id": "pi5b2-final-parent",
+      "policy": "BALANCED",
+      "top_pick": "pi-minimax-cn-coding-plan-MiniMax-M3",
+      "candidates": [
+        {
+          "target": "pi-minimax-cn-coding-plan-MiniMax-M3",
+          "admitted": true,
+          "reasons": [
+            "policy=BALANCED, headroom_min=0.34, headroom_mean=0.62, verified=True, runtime=True, tier=T1 min_tier=T1 match=default"
+          ]
+        },
+        {
+          "target": "pi-minimax-cn-coding-plan-MiniMax-M2.7",
+          "admitted": false,
+          "reasons": [
+            "execution target has not been runtime-verified"
+          ]
+        },
+        {
+          "target": "pi-minimax-cn-coding-plan-MiniMax-M2.7-highspeed",
+          "admitted": false,
+          "reasons": [
+            "execution target has not been runtime-verified"
+          ]
+        }
+      ]
+    },
+    {
+      "event": "PREFLIGHT_READY",
+      "observed_at": "2026-09-13T06:00:47.898717+00:00",
+      "parent_target": "pi-minimax-cn-coding-plan-MiniMax-M3",
+      "previous_execution_evidence": "exec-verify-7942476e1bd1ecf16a69dd8d",
+      "quota_status": "SUCCESS",
+      "quota_state": "AVAILABLE",
+      "remaining_fractions": [
+        0.91,
+        0.34
+      ],
+      "shared_pool_blocker": false,
+      "profile_sha256": {
+        "child": "8ab340b77099b18d58db40720cbe513d0a627c5767ccb1a3c3abf423f2faacae",
+        "parent": "ca28e8a1373b855f579240232f3d24b33bc2e95d4b56220ce34c1e884cec6db1"
+      }
+    }
+  ],
+  "real_workers": [],
+  "source_code_changed": false
+}

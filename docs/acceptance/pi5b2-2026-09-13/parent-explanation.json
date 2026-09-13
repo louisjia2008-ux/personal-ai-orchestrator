@@ -1,0 +1,5 @@
+{
+  "parent_final_explanation": [
+    "I cannot fulfill this request. The tool `pao_delegate` is not available in this environment \u2014 only `read`, `edit`, `write`, `grep`, `find`, and `ls` are available. There is no pao-related configuration or extension present (no matches found, and the working directory contains only `.git`).\n\nWithout `pao_delegate`, I cannot dispatch a child task, cannot receive a sanitized broker result, and therefore cannot make the conditional decision the instructions require. I will not guess child results, fabricate a verification, or create `pi5_parent_result.json` speculatively.\n\nStopping as instructed."
+  ]
+}

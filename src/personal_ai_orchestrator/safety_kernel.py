@@ -102,18 +102,19 @@ _ALLOWED_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
 
 AUTHORITY_OWNER_INITIATED_EXECUTION = "OWNER_INITIATED_EXECUTION"
 AUTHORITY_SUPERVISED_AUTO = "SUPERVISED_AUTO"
+AUTHORITY_DELEGATED_CHILD = "DELEGATED_CHILD"
 
 
 def expected_source_state_for_dispatch_authority(authority: str) -> TaskState:
     """Round 6 §5 — the ONE authority → legal-source-state mapping.
 
-    ``OWNER_INITIATED_EXECUTION`` may only start a worker from READY;
+    ``OWNER_INITIATED_EXECUTION`` and ``DELEGATED_CHILD`` start only from READY;
     ``SUPERVISED_AUTO`` may only start from AUTO_GRACE. Any other
     authority value raises :class:`ValueError` — callers must fail
     closed (no worker spawn) rather than guessing a default.
     """
 
-    if authority == AUTHORITY_OWNER_INITIATED_EXECUTION:
+    if authority in (AUTHORITY_OWNER_INITIATED_EXECUTION, AUTHORITY_DELEGATED_CHILD):
         return TaskState.READY
     if authority == AUTHORITY_SUPERVISED_AUTO:
         return TaskState.AUTO_GRACE
@@ -1054,6 +1055,7 @@ class SafetyKernelStore:
         scheduling_policy: str | None = None,
         manual_execution_target_id: str | None = None,
         min_tier: str = "T1",
+        delegated_parent: tuple[str, str] | None = None,
     ) -> TaskRecord:
         if project_id is not None:
             self.get_project(project_id)
@@ -1069,6 +1071,21 @@ class SafetyKernelStore:
             )
         self.connection.execute("BEGIN IMMEDIATE")
         try:
+            if delegated_parent is not None:
+                parent_id, parent_run_id = delegated_parent
+                parent = self.get_task(parent_id)
+                run = self.connection.execute(
+                    "SELECT task_id,status FROM runs WHERE run_id=?", (parent_run_id,)
+                ).fetchone()
+                if (
+                    run is None or run["task_id"] != parent_id or run["status"] != "RUNNING"
+                    or parent.state is not TaskState.RUNNING
+                    or parent.project_id != project_id or parent.base_sha != base_sha
+                    or parent.working_subpath != working_subpath or parent_id == task_id
+                    or parent.request_id.startswith("pi5-child-submit-")
+                    or parent.scheduling_policy == "MANUAL"
+                ):
+                    raise ValueError("delegated parent is not an active matching run")
             existing = self.connection.execute(
                 "SELECT * FROM tasks WHERE request_id = ?", (request_id,)
             ).fetchone()
@@ -1124,6 +1141,9 @@ class SafetyKernelStore:
                     "working_subpath": working_subpath,
                     "scheduling_policy": scheduling_policy,
                     "manual_execution_target_id": manual_execution_target_id,
+                    **({"delegated_parent_task_id": delegated_parent[0],
+                        "delegated_parent_run_id": delegated_parent[1]}
+                       if delegated_parent is not None else {}),
                 },
             )
             self.connection.execute("COMMIT")

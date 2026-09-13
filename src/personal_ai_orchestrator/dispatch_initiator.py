@@ -50,16 +50,18 @@ from personal_ai_orchestrator.execution_controller import (
     validate_execution_target_launch,
 )
 from personal_ai_orchestrator.safety_kernel import (
-    AUTHORITY_OWNER_INITIATED_EXECUTION as _AUTHORITY_OWNER_INITIATED_EXECUTION,
-)
-from personal_ai_orchestrator.safety_kernel import (
-    AUTHORITY_SUPERVISED_AUTO as _AUTHORITY_SUPERVISED_AUTO,
-)
-from personal_ai_orchestrator.safety_kernel import (
+    AUTHORITY_DELEGATED_CHILD,
     ProjectAvailability,
     ProjectRecord,
     SafetyKernelStore,
     TaskState,
+    expected_source_state_for_dispatch_authority,
+)
+from personal_ai_orchestrator.safety_kernel import (
+    AUTHORITY_OWNER_INITIATED_EXECUTION as _AUTHORITY_OWNER_INITIATED_EXECUTION,
+)
+from personal_ai_orchestrator.safety_kernel import (
+    AUTHORITY_SUPERVISED_AUTO as _AUTHORITY_SUPERVISED_AUTO,
 )
 
 
@@ -109,6 +111,7 @@ AUTHORITY_OWNER_INITIATED_EXECUTION = _AUTHORITY_OWNER_INITIATED_EXECUTION
 #: grace-window semantics. The two values must never be conflated because
 #: the audit trail (and the pending-shadow lifecycle) keys off them.
 AUTHORITY_SUPERVISED_AUTO_EXECUTION = _AUTHORITY_SUPERVISED_AUTO
+AUTHORITY_DELEGATED_CHILD_EXECUTION = AUTHORITY_DELEGATED_CHILD
 
 
 def initiate_owner_dispatch(
@@ -183,6 +186,11 @@ def initiate_owner_dispatch(
           ``validate_execution_target_launch``.
     """
 
+    if expected_source_state_for_dispatch_authority(authority) is not expected_state:
+        raise ValueError("dispatch authority/source-state mismatch")
+    if authority == AUTHORITY_DELEGATED_CHILD_EXECUTION:
+        if request_id != f"pi5-child-dispatch-{task.task_id}":
+            raise ValueError("invalid delegated child dispatch request id")
     dispatch_id = f"owner-dispatch-{request_id}"
     # Round 5 §5 — reserved internal namespace guard, BEFORE the durable
     # reservation: OWNER_INITIATED_EXECUTION may never occupy the
@@ -195,7 +203,10 @@ def initiate_owner_dispatch(
     # ``invalid_request_id``), not a 409 conflict: nothing was reserved.
     if (
         authority == AUTHORITY_OWNER_INITIATED_EXECUTION
-        and _is_reserved_auto_dispatch_request_id(request_id)
+        and (
+            _is_reserved_auto_dispatch_request_id(request_id)
+            or request_id.startswith("pi5-child-dispatch-")
+        )
     ):
         raise _control_plane_error(400, "reserved_dispatch_request_id_namespace")
     dispatch, created = store.reserve_owner_dispatch(
@@ -313,6 +324,7 @@ def initiate_owner_dispatch(
 
 
 __all__ = [
+    "AUTHORITY_DELEGATED_CHILD_EXECUTION",
     "AUTHORITY_OWNER_INITIATED_EXECUTION",
     "AUTHORITY_SUPERVISED_AUTO_EXECUTION",
     "initiate_owner_dispatch",

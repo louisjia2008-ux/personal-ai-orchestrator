@@ -706,9 +706,11 @@ def test_known_provider_families_have_readonly_quota_sources() -> None:
     assert not has_readonly_quota_source("some-unmapped-provider")
 
 
-def test_every_quota_source_has_a_distinct_pool_id() -> None:
-    pool_ids = [spec.quota_pool_id for spec in QUOTA_SOURCE_BY_PROVIDER.values()]
-    assert len(pool_ids) == len(set(pool_ids))
+def test_minimax_aliases_share_regional_pools() -> None:
+    sources = QUOTA_SOURCE_BY_PROVIDER
+    assert sources["minimax-cn"].quota_pool_id == sources["minimax-cn-coding-plan"].quota_pool_id
+    assert sources["minimax"].quota_pool_id == sources["minimax-coding-plan"].quota_pool_id
+    assert sources["minimax-cn"].quota_pool_id != sources["minimax"].quota_pool_id
 
 
 def test_collector_is_built_from_environment_credential_only(

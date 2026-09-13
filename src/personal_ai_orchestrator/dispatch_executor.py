@@ -72,6 +72,7 @@ from personal_ai_orchestrator.quota_collectors.base import (
     QuotaCollectionResult,
     QuotaCollectionStatus,
 )
+from personal_ai_orchestrator.runtime_quota_routing import quota_pool_id_for_target
 from personal_ai_orchestrator.safety_kernel import (
     OwnerDispatchRecord,
     OwnerDispatchStatus,
@@ -281,6 +282,18 @@ class OwnerDispatchExecutor:
                 store.close()
 
     async def execute_async(self, request_id: str) -> None:
+        try:
+            await self._execute_async(request_id)
+        finally:
+            self._disable_worker_session(request_id)
+
+    def _disable_worker_session(self, request_id: str) -> None:
+        """Runtime hook: synchronously revoke optional worker capabilities."""
+
+    def _activate_worker_session(self, request_id: str) -> None:
+        """Runtime hook called only after the durable RUNNING commit."""
+
+    async def _execute_async(self, request_id: str) -> None:
         store = self._open_store()
         try:
             dispatch = store.get_owner_dispatch_by_request_id(request_id)
@@ -432,6 +445,7 @@ class OwnerDispatchExecutor:
                 pid=supervised.pid,
                 expected_state=expected_state,
             )
+            self._activate_worker_session(request_id)
         except Exception as error:
             # The child exists but is not durably owned: kill the exact
             # child before any state repair so no orphan process remains.
@@ -463,6 +477,7 @@ class OwnerDispatchExecutor:
         worker_exit_code: int | None = None
         try:
             exit_code, stdout, stderr, truncated = await self._wait_for_worker(supervised)
+            self._disable_worker_session(request_id)
             worker_exit_code = exit_code
             if (
                 exit_code != 0
@@ -534,6 +549,7 @@ class OwnerDispatchExecutor:
             )
             raise
         except TimeoutError:
+            self._disable_worker_session(request_id)
             exit_code = await self._supervisor.cancel(
                 supervised, grace_seconds=self.config.worker_grace_seconds
             )
@@ -783,6 +799,7 @@ class OwnerDispatchExecutor:
         return bool(future.result(timeout=timeout))
 
     async def _cancel_on_loop(self, execution: ActiveExecution) -> bool:
+        self._disable_worker_session(execution.request_id)
         execution.cancel_requested.set()
         store = self._open_store()
         try:
@@ -844,6 +861,7 @@ class OwnerDispatchExecutor:
             _human_reason_for_failure,
         )
 
+        self._disable_worker_session(request_id)
         self.execution_supervisor.unregister(dispatch.task_id)
         self._supervisor.emergency_kill(supervised)
         # emergency_kill always sends SIGKILL to the process group. Tails
@@ -1125,6 +1143,19 @@ class OwnerDispatchExecutor:
             )
             return None
 
+    @staticmethod
+    def _check_delegated_workspace(store, dispatch, managed) -> None:
+        from personal_ai_orchestrator.safety_kernel import AUTHORITY_DELEGATED_CHILD
+
+        if dispatch.authority != AUTHORITY_DELEGATED_CHILD:
+            return
+        child_path = managed.worktree_path.resolve()
+        rows = store.connection.execute(
+            "SELECT worktree_path FROM workspaces WHERE task_id != ?", (dispatch.task_id,)
+        ).fetchall()
+        if any(Path(row["worktree_path"]).resolve() == child_path for row in rows):
+            raise ValueError("delegated child workspace aliases another task workspace")
+
     def _prepare_worktree(
         self, store: SafetyKernelStore, dispatch: OwnerDispatchRecord
     ) -> tuple[ManagedWorktree | None, str | None]:
@@ -1149,6 +1180,7 @@ class OwnerDispatchExecutor:
                     branch=existing.branch,
                     base_sha=existing.base_sha,
                 )
+                self._check_delegated_workspace(store, dispatch, managed)
                 self._seed_worker_policy(managed)
                 return managed, None
             except KeyError:
@@ -1158,6 +1190,7 @@ class OwnerDispatchExecutor:
                 task_id=dispatch.task_id,
                 base_sha=base_sha,
             )
+            self._check_delegated_workspace(store, dispatch, managed)
             self._seed_worker_policy(managed)
             store.register_workspace(
                 task_id=dispatch.task_id,
@@ -1322,7 +1355,11 @@ class OwnerDispatchExecutor:
         )
         is_unmetered = bool(family and family.pool_kind == "unmetered")
         previous = self._quota_availability_journal.load(execution_target_id)
-        quota_pool_id = provider_id
+        quota_pool_id = quota_pool_id_for_target(
+            self._registry_provider(), execution_target_id=execution_target_id, now=observed_at,
+        )
+        if quota_pool_id is None:
+            return None
         if is_unmetered:
             self._quota_availability_journal.save(
                 _observe_rate_limited(
@@ -1389,7 +1426,17 @@ class OwnerDispatchExecutor:
         now = datetime.now(UTC)
         provider_id = self._provider_id(dispatch)
         execution_target_id = dispatch.execution_target_id
-        quota_pool_id = provider_id
+        quota_pool_id = quota_pool_id_for_target(
+            self._registry_provider(), execution_target_id=execution_target_id, now=now,
+        )
+        if quota_pool_id is None:
+            return QuotaAdmission(
+                admitted=False, failure_code="QUOTA_BINDING_UNKNOWN", collected=False,
+                evidence=unknown_availability(
+                    execution_target_id=execution_target_id, provider_id=provider_id,
+                    quota_pool_id="unbound", observed_at=now,
+                ),
+            )
 
         previous = self._quota_availability_journal.load(execution_target_id)
         # Definitive exhaustions short-circuit before any observation: they
@@ -1434,6 +1481,13 @@ class OwnerDispatchExecutor:
                 )
         else:
             result: QuotaCollectionResult = collector.collect()
+            # A collector cannot silently redirect an explicitly bound target
+            # to an unrelated balance. Unnamed legacy results cannot prove identity.
+            if (
+                result.snapshot is not None
+                and result.snapshot.quota_pool_id != quota_pool_id
+            ):
+                result = QuotaCollectionResult(status=QuotaCollectionStatus.UNKNOWN)
             evidence = self._snapshot_to_availability(
                 result,
                 previous=previous,

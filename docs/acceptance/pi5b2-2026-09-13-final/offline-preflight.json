@@ -1,0 +1,107 @@
+{
+  "FIXTURE_REPO": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/fixture",
+  "BASE_SHA": "0431845631c193ef9c1a63108cc2a954d44ea827",
+  "MAIN_HEAD_BEFORE": "0431845631c193ef9c1a63108cc2a954d44ea827",
+  "MAIN_STATUS_BEFORE": "",
+  "profile_sha256": {
+    "child": "8ab340b77099b18d58db40720cbe513d0a627c5767ccb1a3c3abf423f2faacae",
+    "parent": "ca28e8a1373b855f579240232f3d24b33bc2e95d4b56220ce34c1e884cec6db1"
+  },
+  "verifier_selftests": [
+    {
+      "role": "child",
+      "case": "good",
+      "expected": true,
+      "passed": true,
+      "self_test": "PASS"
+    },
+    {
+      "role": "child",
+      "case": "wrong",
+      "expected": false,
+      "passed": false,
+      "self_test": "PASS"
+    },
+    {
+      "role": "child",
+      "case": "extra",
+      "expected": false,
+      "passed": false,
+      "self_test": "PASS"
+    },
+    {
+      "role": "child",
+      "case": "invalid",
+      "expected": false,
+      "passed": false,
+      "self_test": "PASS"
+    },
+    {
+      "role": "child",
+      "case": "formatted",
+      "expected": true,
+      "passed": true,
+      "self_test": "PASS"
+    },
+    {
+      "role": "child",
+      "case": "unexpected-path",
+      "expected": false,
+      "passed": false,
+      "self_test": "PASS"
+    },
+    {
+      "role": "parent",
+      "case": "good",
+      "expected": true,
+      "passed": true,
+      "self_test": "PASS"
+    },
+    {
+      "role": "parent",
+      "case": "wrong",
+      "expected": false,
+      "passed": false,
+      "self_test": "PASS"
+    },
+    {
+      "role": "parent",
+      "case": "extra",
+      "expected": false,
+      "passed": false,
+      "self_test": "PASS"
+    },
+    {
+      "role": "parent",
+      "case": "invalid",
+      "expected": false,
+      "passed": false,
+      "self_test": "PASS"
+    },
+    {
+      "role": "parent",
+      "case": "formatted",
+      "expected": true,
+      "passed": true,
+      "self_test": "PASS"
+    },
+    {
+      "role": "parent",
+      "case": "unexpected-path",
+      "expected": false,
+      "passed": false,
+      "self_test": "PASS"
+    }
+  ],
+  "all_selftests_passed": true,
+  "previous_execution_evidence": "exec-verify-7942476e1bd1ecf16a69dd8d",
+  "registered_targets": [
+    "pi-minimax-cn-coding-plan-MiniMax-M2.7",
+    "pi-minimax-cn-coding-plan-MiniMax-M2.7-highspeed",
+    "pi-minimax-cn-coding-plan-MiniMax-M3"
+  ],
+  "connected": [],
+  "routing_connected": [
+    "minimax-cn-coding-plan"
+  ]
+}

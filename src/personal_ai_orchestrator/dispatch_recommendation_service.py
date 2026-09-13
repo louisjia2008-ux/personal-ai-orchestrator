@@ -39,7 +39,7 @@ from personal_ai_orchestrator.runtime_quota_routing import (
     quota_pool_id_for_target,
 )
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskRecord
-from personal_ai_orchestrator.scheduler import RoutingObjective
+from personal_ai_orchestrator.scheduler import RoutingObjective, RoutingPolicy
 
 
 class DispatchRecommendationService:
@@ -83,17 +83,36 @@ class DispatchRecommendationService:
             if target.model_sku_id in registry.models
         }
 
-        remaining_by_provider: dict[str, list[float]] = {}
-        windows_by_provider: dict[str, list[CandidateWindowInput]] = {}
+        connected = (
+            {item.provider_id for item in self._quota_refresh_service.observations()}
+            if self._quota_refresh_service is not None else set()
+        )
+        pool_by_target = {
+            target_id: quota_pool_id_for_target(
+                registry, execution_target_id=target_id, now=now,
+            ) if provider_by_target.get(target_id) in connected else None
+            for target_id in registry.execution_targets
+        }
+        remaining_by_pool: dict[str, list[float]] = {}
+        windows_by_pool: dict[str, list[CandidateWindowInput]] = {}
         if self._quota_refresh_service is not None:
-            for observation in self._quota_refresh_service.observations():
-                snapshot = observation.snapshot
-                if snapshot is None:
+            for pool_id in sorted({pool for pool in pool_by_target.values() if pool is not None}):
+                snapshot = self._quota_refresh_service.snapshot_for_pool(pool_id)
+                if snapshot is None or snapshot.quota_pool_id != pool_id:
                     continue
-                for window in snapshot.windows:
+                # Keep identity resolution separate from observation validity.
+                if snapshot.is_stale(
+                    as_of=now, max_age_seconds=RoutingPolicy().max_quota_age_seconds
+                ) or snapshot.confidence.value == "UNKNOWN":
+                    continue
+                if snapshot.state.value in {"UNKNOWN", "EXHAUSTED"}:
+                    continue
+                if snapshot.minimum_remaining_fraction(at=now) is None:
+                    continue
+                for window in snapshot.active_windows(at=now):
                     if window.reset_at is None:
                         continue
-                    windows_by_provider.setdefault(observation.provider_id, []).append(
+                    windows_by_pool.setdefault(pool_id, []).append(
                         CandidateWindowInput(
                             kind=window.window_kind,
                             window_started_at=window.window_started_at,
@@ -103,14 +122,13 @@ class DispatchRecommendationService:
                     )
                     fraction = window.remaining_fraction
                     if fraction is not None:
-                        remaining_by_provider.setdefault(
-                            observation.provider_id, []
-                        ).append(fraction)
+                        remaining_by_pool.setdefault(pool_id, []).append(fraction)
 
         candidates: list[DispatchCandidateInput] = []
         for target_id, target in sorted(registry.execution_targets.items()):
             provider_id = provider_by_target.get(target_id, "")
-            remaining = tuple(remaining_by_provider.get(provider_id, ()))
+            quota_pool_id = pool_by_target[target_id]
+            remaining = tuple(remaining_by_pool.get(quota_pool_id, ()))
 
             if self._runtime_availability is not None and target_id in self._runtime_availability:
                 runtime_available = self._runtime_availability.get(target_id)
@@ -137,11 +155,6 @@ class DispatchRecommendationService:
                 evidence = self._quota_availability_journal.load(target_id)
                 if evidence is not None:
                     availability_state = evidence.state_at(now=now)
-                quota_pool_id = quota_pool_id_for_target(
-                    registry,
-                    execution_target_id=target_id,
-                    now=now,
-                )
                 if quota_pool_id is not None and provider_id:
                     shared = active_shared_pool_blocker(
                         self._quota_availability_journal,
@@ -166,7 +179,7 @@ class DispatchRecommendationService:
                     verified=bool(verified),
                     verified_stale=verified_stale,
                     remaining_fractions=remaining,
-                    windows=tuple(windows_by_provider.get(provider_id, ())),
+                    windows=tuple(windows_by_pool.get(quota_pool_id, ())),
                     evidence_observed_at=evidence_observed_at,
                     availability_state=availability_state,
                     tier=tier_value,
