@@ -317,11 +317,11 @@ def load_readiness_evidence(
     root = Path(runtime_state_root)
     shadows = tuple(
         DelegationShadowRecord.model_validate_json(path.read_text(encoding="utf-8"))
-        for path in sorted((root / "delegation-shadow-history").glob("delegation-shadow-*.json"))
+        for path in sorted((root / "delegation-shadow-history").glob("*.json"))
     )
     outcomes = tuple(
         DelegationOutcomeRecord.model_validate_json(path.read_text(encoding="utf-8"))
-        for path in sorted((root / "delegation-outcome-history").glob("delegation-outcome-*.json"))
+        for path in sorted((root / "delegation-outcome-history").glob("*.json"))
     )
     return shadows, outcomes
 
