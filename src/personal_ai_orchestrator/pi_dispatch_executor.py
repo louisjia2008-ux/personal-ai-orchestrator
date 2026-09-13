@@ -9,6 +9,8 @@ and final task authority remain owned by ``OwnerDispatchExecutor``.
 from __future__ import annotations
 
 import asyncio
+import shutil
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -19,9 +21,19 @@ from personal_ai_orchestrator.dispatch_executor import (
     OwnerDispatchExecutor,
     build_worker_env,
 )
+from personal_ai_orchestrator.pi5_broker import (
+    DelegationBrokerContext,
+    DelegationBrokerSession,
+    DelegationChildExecutionPort,
+    UnixDelegationBrokerServer,
+)
+from personal_ai_orchestrator.pi5_runtime import PI5_TOOL_NAME
+from personal_ai_orchestrator.pi5_tool import pi5_socket_tool_source, seed_pi5_socket_tool
 from personal_ai_orchestrator.pi_runtime import (
+    PI_ALLOWED_TOOLS,
     PI_MAX_STDOUT_BYTES,
     PI_PROTOCOL_ERROR_EXIT,
+    PiDelegationActivationError,
     PiRuntimeConfig,
     build_pi_json_argv,
     pi_model_ref,
@@ -29,9 +41,25 @@ from personal_ai_orchestrator.pi_runtime import (
     summarize_pi_json_stream,
 )
 from personal_ai_orchestrator.process_supervisor import SupervisedProcess
-from personal_ai_orchestrator.safety_kernel import OwnerDispatchRecord, SafetyKernelStore
+from personal_ai_orchestrator.safety_kernel import (
+    AUTHORITY_OWNER_INITIATED_EXECUTION,
+    AUTHORITY_SUPERVISED_AUTO,
+    OwnerDispatchRecord,
+    SafetyKernelStore,
+)
 from personal_ai_orchestrator.worker_outcome_classifier import WorkerFailureClass
 from personal_ai_orchestrator.worktree_manager import ManagedWorktree
+
+
+def should_pao_delegate_be_model_visible(
+    config: PiRuntimeConfig, authority: str, task_request_id: str
+) -> bool:
+    """One host policy decision; durable child identity also survives owner retry."""
+    return (
+        config.delegation_enabled
+        and authority in (AUTHORITY_OWNER_INITIATED_EXECUTION, AUTHORITY_SUPERVISED_AUTO)
+        and not task_request_id.startswith("pi5-child-submit-")
+    )
 
 
 class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
@@ -54,7 +82,20 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
         # adapter. No Safety Kernel or verification semantics are forked.
         kwargs["config"] = replace(config, opencode_bin=runtime.pi_bin)
         self.pi_runtime = runtime
+        self.delegation_child_port: DelegationChildExecutionPort | None = None
+        self._delegation_brokers: dict[str, UnixDelegationBrokerServer] = {}
         super().__init__(**kwargs)  # type: ignore[arg-type]
+
+    def _activate_worker_session(self, request_id: str) -> None:
+        broker = self._delegation_brokers.get(request_id)
+        if broker is not None:
+            broker.session.active = True
+
+    def _disable_worker_session(self, request_id: str) -> None:
+        broker = self._delegation_brokers.pop(request_id, None)
+        if broker is not None:
+            broker.close()
+            shutil.rmtree(broker.socket_path.parent, ignore_errors=True)
 
     def _guard_path(self) -> Path:
         # Keep policy outside the writable task worktree. The Pi file tools
@@ -80,13 +121,61 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
         dispatch: OwnerDispatchRecord,
         worktree: ManagedWorktree,
     ) -> SupervisedProcess:
+        try:
+            return await self._spawn_with_activation(store, dispatch, worktree)
+        except PiDelegationActivationError as error:
+            store._audit(dispatch.task_id, error.code, {"reason_code": error.reason_code})
+            raise
+
+    async def _spawn_with_activation(self, store, dispatch, worktree) -> SupervisedProcess:
         task = store.get_task(dispatch.task_id)
+        enabled = should_pao_delegate_be_model_visible(
+            self.pi_runtime, dispatch.authority, task.request_id
+        )
+        tool_path = None
+        if enabled:
+            if (self.delegation_child_port is None
+                    or task.project_id is None or task.base_sha is None):
+                raise PiDelegationActivationError("HOST_DEPENDENCIES_UNAVAILABLE")
+            policy_root = Path(tempfile.mkdtemp(prefix="pao-pi5-"))
+            broker = UnixDelegationBrokerServer(
+                socket_path=policy_root / "broker.sock",
+                session=DelegationBrokerSession(
+                    context=DelegationBrokerContext(
+                        parent_task_id=task.task_id, parent_run_id=f"run-{dispatch.dispatch_id}",
+                        project_id=task.project_id, base_sha=task.base_sha,
+                        working_subpath=task.working_subpath,
+                    ),
+                    child_port=self.delegation_child_port, active=False,
+                ),
+            )
+            self._delegation_brokers[dispatch.request_id] = broker
+            try:
+                await broker.start()
+                tool_path = seed_pi5_socket_tool(policy_root, socket_path=broker.socket_path)
+                if (not tool_path.is_file()
+                        or tool_path.read_text(encoding="utf-8")
+                        != pi5_socket_tool_source(broker.socket_path)
+                        or not broker.socket_path.is_socket()):
+                    raise PiDelegationActivationError("TRUSTED_TOOL_UNRESOLVED")
+            except PiDelegationActivationError:
+                raise
+            except (OSError, UnicodeError):
+                raise PiDelegationActivationError("TRUSTED_TOOL_UNAVAILABLE") from None
         argv = build_pi_json_argv(
-            config=self.pi_runtime,
+            config=replace(self.pi_runtime, delegation_enabled=enabled),
             model_ref=self._pi_model_ref(dispatch),
             intent=task.intent,
             guard_path=self._guard_path(),
+            delegation_tool_path=tool_path,
         )
+        if enabled:
+            expected_tools = ",".join((*PI_ALLOWED_TOOLS, PI5_TOOL_NAME))
+            if (argv.count("--tools") != 1
+                    or argv[argv.index("--tools") + 1] != expected_tools
+                    or argv.count(str(tool_path)) != 1
+                    or "--no-extensions" not in argv):
+                raise PiDelegationActivationError("MODEL_TOOL_VISIBILITY_MISMATCH")
         store._audit(
             dispatch.task_id,
             "WORKER_ARGV_BUILT",

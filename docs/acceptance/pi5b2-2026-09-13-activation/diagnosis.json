@@ -1,0 +1,62 @@
+{
+  "classification": "QUOTA_POOL_ID_LOOKUP_MISMATCH_ACROSS_PROCESSES",
+  "read_only_network_requests": 0,
+  "configured_lookup_pool": "minimax-coding-plan-cn",
+  "persisted_snapshot_pool": "minimax-token-plan-cn",
+  "persisted_snapshot_observed_at": "2026-09-13T04:44:27.394138Z",
+  "fresh_process_snapshot_present": false,
+  "explanation": "The preflight process can use its in-memory observed pool fallback. The new run process looks up the table pool and has no fallback. Direct parent admission writes quota-availability evidence, which does not supply recommendation headroom windows. Host child selection therefore fails closed. No source fix or new real run was performed.",
+  "workspaces": [
+    {
+      "task_id": "pi5b2-activation-parent",
+      "worktree_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-activation/worktrees/pi5b2-activation-parent",
+      "base_sha": "e5086f9ba857e017346dc1abb71433d129603390",
+      "writer_released": true,
+      "writer_acquired_at_cleared": true
+    }
+  ],
+  "verifiers": [
+    {
+      "profile": "pi5b2-parent-semantic-json",
+      "passed": false,
+      "evidence_id": "verify-9d53b013300843f4a9bfa24b",
+      "changed_paths": [],
+      "unexpected_paths": [],
+      "failure_reason": "verifier command failed: exact-semantic-json",
+      "stages": [
+        {
+          "name": "git diff --check",
+          "argv": [
+            "git",
+            "diff",
+            "--check",
+            "e5086f9ba857e017346dc1abb71433d129603390",
+            "--"
+          ],
+          "returncode": 0
+        },
+        {
+          "name": "exact-semantic-json",
+          "argv": [
+            "/Users/louisjia/Developer/pao-p4-full-dashboard/.venv/bin/python",
+            "-c",
+            "import json\nfrom pathlib import Path\nobj=json.loads(Path('pi5_parent_result.json').read_text())\nassert obj == {'status': 'PI5_PARENT_VERIFIED', 'child_verified': True}\nassert obj[\"child_verified\"] is True\n"
+          ],
+          "returncode": 1
+        }
+      ]
+    }
+  ],
+  "parent_artifact_present": false,
+  "child_dispatch_created": false,
+  "child_run_created": false,
+  "harness_sha256": "f7becda7695a5b35ba8b8be6fe87df41b17d67c0f33094df0b78cc02f5b9dab5",
+  "pool_source_locations": [
+    "src/personal_ai_orchestrator/daemon.py:249",
+    "src/personal_ai_orchestrator/quota_collectors/minimax.py:679",
+    "src/personal_ai_orchestrator/quota_refresh.py:162",
+    "src/personal_ai_orchestrator/quota_refresh.py:326",
+    "src/personal_ai_orchestrator/quota_refresh.py:386",
+    "src/personal_ai_orchestrator/dispatch_recommendation_service.py:88"
+  ]
+}
