@@ -54,6 +54,8 @@ select = ["E", "F", "I", "UP", "B"]
 "src/personal_ai_orchestrator/execution_controller.py" = ["I001"]
 "src/personal_ai_orchestrator/routing_service.py" = ["I001"]
 "src/personal_ai_orchestrator/shadow_evidence.py" = ["E501"]
+# Embedded TypeScript tool source is intentionally kept readable as its own language.
+"src/personal_ai_orchestrator/pi5_tool.py" = ["E501"]
 "tests/test_execution_controller.py" = ["I001"]
 "tests/test_quota_capabilities.py" = ["E501"]
 "tests/test_scheduler_hardening.py" = ["E501"]
