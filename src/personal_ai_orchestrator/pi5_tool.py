@@ -160,13 +160,16 @@ export default function (pi: any) {
 '''
 
 
-def seed_pi5_socket_tool(policy_root: Path, *, socket_path: Path) -> Path:
+def pi5_socket_tool_source(socket_path: Path) -> str:
     import json
 
-    source = (PI5_SOCKET_TOOL_SOURCE.replace("__SOCKET_PATH__", json.dumps(str(socket_path)))
+    return (PI5_SOCKET_TOOL_SOURCE.replace("__SOCKET_PATH__", json.dumps(str(socket_path)))
               .replace("__MAX_INTENT__", str(PI5_MAX_INTENT_CHARS))
               .replace("__MAX_REASON__", str(PI5_MAX_REASON_CHARS)))
+
+
+def seed_pi5_socket_tool(policy_root: Path, *, socket_path: Path) -> Path:
     target = policy_root / PI5_TOOL_RELATIVE_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(source, encoding="utf-8")
+    target.write_text(pi5_socket_tool_source(socket_path), encoding="utf-8")
     return target

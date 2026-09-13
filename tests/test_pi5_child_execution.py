@@ -127,6 +127,7 @@ def _setup(tmp_path, monkeypatch):
         assert Path(child_ws.worktree_path).resolve() != Path(parent_ws.worktree_path).resolve()
         worker = await original_spawn(child_store, child_dispatch, managed)
         assert worker.argv.count("-e") == 1  # child delegation disabled despite global flag
+        assert "pao_delegate" not in worker.argv[worker.argv.index("--tools") + 1]
         assert not executor._delegation_brokers
         observations.append(child_dispatch.execution_target_id)
         return worker
@@ -323,7 +324,7 @@ def test_feature_flag_preserves_allowlist_and_explicit_extensions():
         **kwargs,
     )
     assert on.count("-e") == 2 and "--no-extensions" in on
-    assert on[on.index("--tools") + 1] == off[off.index("--tools") + 1]
+    assert on[on.index("--tools") + 1] == off[off.index("--tools") + 1] + ",pao_delegate"
     tools = on[on.index("--tools") + 1].split(",")
     assert not {"bash", "powershell", "webfetch"}.intersection(tools)
     with pytest.raises(ValueError):

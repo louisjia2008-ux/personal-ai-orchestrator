@@ -27,10 +27,13 @@ from personal_ai_orchestrator.pi5_broker import (
     DelegationChildExecutionPort,
     UnixDelegationBrokerServer,
 )
-from personal_ai_orchestrator.pi5_tool import seed_pi5_socket_tool
+from personal_ai_orchestrator.pi5_runtime import PI5_TOOL_NAME
+from personal_ai_orchestrator.pi5_tool import pi5_socket_tool_source, seed_pi5_socket_tool
 from personal_ai_orchestrator.pi_runtime import (
+    PI_ALLOWED_TOOLS,
     PI_MAX_STDOUT_BYTES,
     PI_PROTOCOL_ERROR_EXIT,
+    PiDelegationActivationError,
     PiRuntimeConfig,
     build_pi_json_argv,
     pi_model_ref,
@@ -39,12 +42,24 @@ from personal_ai_orchestrator.pi_runtime import (
 )
 from personal_ai_orchestrator.process_supervisor import SupervisedProcess
 from personal_ai_orchestrator.safety_kernel import (
-    AUTHORITY_DELEGATED_CHILD,
+    AUTHORITY_OWNER_INITIATED_EXECUTION,
+    AUTHORITY_SUPERVISED_AUTO,
     OwnerDispatchRecord,
     SafetyKernelStore,
 )
 from personal_ai_orchestrator.worker_outcome_classifier import WorkerFailureClass
 from personal_ai_orchestrator.worktree_manager import ManagedWorktree
+
+
+def should_pao_delegate_be_model_visible(
+    config: PiRuntimeConfig, authority: str, task_request_id: str
+) -> bool:
+    """One host policy decision; durable child identity also survives owner retry."""
+    return (
+        config.delegation_enabled
+        and authority in (AUTHORITY_OWNER_INITIATED_EXECUTION, AUTHORITY_SUPERVISED_AUTO)
+        and not task_request_id.startswith("pi5-child-submit-")
+    )
 
 
 class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
@@ -106,18 +121,22 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
         dispatch: OwnerDispatchRecord,
         worktree: ManagedWorktree,
     ) -> SupervisedProcess:
+        try:
+            return await self._spawn_with_activation(store, dispatch, worktree)
+        except PiDelegationActivationError as error:
+            store._audit(dispatch.task_id, error.code, {"reason_code": error.reason_code})
+            raise
+
+    async def _spawn_with_activation(self, store, dispatch, worktree) -> SupervisedProcess:
         task = store.get_task(dispatch.task_id)
-        # Durable child identity disables recursion even on a later owner retry.
-        enabled = (
-            self.pi_runtime.delegation_enabled
-            and dispatch.authority != AUTHORITY_DELEGATED_CHILD
-            and not task.request_id.startswith("pi5-child-submit-")
+        enabled = should_pao_delegate_be_model_visible(
+            self.pi_runtime, dispatch.authority, task.request_id
         )
         tool_path = None
         if enabled:
             if (self.delegation_child_port is None
                     or task.project_id is None or task.base_sha is None):
-                raise RuntimeError("delegation host dependencies unavailable")
+                raise PiDelegationActivationError("HOST_DEPENDENCIES_UNAVAILABLE")
             policy_root = Path(tempfile.mkdtemp(prefix="pao-pi5-"))
             broker = UnixDelegationBrokerServer(
                 socket_path=policy_root / "broker.sock",
@@ -131,8 +150,18 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
                 ),
             )
             self._delegation_brokers[dispatch.request_id] = broker
-            await broker.start()
-            tool_path = seed_pi5_socket_tool(policy_root, socket_path=broker.socket_path)
+            try:
+                await broker.start()
+                tool_path = seed_pi5_socket_tool(policy_root, socket_path=broker.socket_path)
+                if (not tool_path.is_file()
+                        or tool_path.read_text(encoding="utf-8")
+                        != pi5_socket_tool_source(broker.socket_path)
+                        or not broker.socket_path.is_socket()):
+                    raise PiDelegationActivationError("TRUSTED_TOOL_UNRESOLVED")
+            except PiDelegationActivationError:
+                raise
+            except (OSError, UnicodeError):
+                raise PiDelegationActivationError("TRUSTED_TOOL_UNAVAILABLE") from None
         argv = build_pi_json_argv(
             config=replace(self.pi_runtime, delegation_enabled=enabled),
             model_ref=self._pi_model_ref(dispatch),
@@ -140,6 +169,13 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
             guard_path=self._guard_path(),
             delegation_tool_path=tool_path,
         )
+        if enabled:
+            expected_tools = ",".join((*PI_ALLOWED_TOOLS, PI5_TOOL_NAME))
+            if (argv.count("--tools") != 1
+                    or argv[argv.index("--tools") + 1] != expected_tools
+                    or argv.count(str(tool_path)) != 1
+                    or "--no-extensions" not in argv):
+                raise PiDelegationActivationError("MODEL_TOOL_VISIBILITY_MISMATCH")
         store._audit(
             dispatch.task_id,
             "WORKER_ARGV_BUILT",
