@@ -86,6 +86,44 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
         self._delegation_brokers: dict[str, UnixDelegationBrokerServer] = {}
         super().__init__(**kwargs)  # type: ignore[arg-type]
 
+    async def execute_async(self, request_id: str) -> None:
+        """Run normal authority flow, then append best-effort parent outcome evidence."""
+        try:
+            await super().execute_async(request_id)
+        finally:
+            self._record_parent_delegation_outcomes(request_id)
+
+    def _record_parent_delegation_outcomes(self, request_id: str) -> None:
+        port = self.delegation_child_port
+        record_method = getattr(port, "record_parent_final_outcomes", None)
+        if port is None or not callable(record_method):
+            return
+        store = SafetyKernelStore(self._state_db)
+        try:
+            try:
+                dispatch = store.get_owner_dispatch_by_request_id(request_id)
+                task = store.get_task(dispatch.task_id)
+            except (KeyError, ValueError):
+                return
+            if not should_pao_delegate_be_model_visible(
+                self.pi_runtime,
+                dispatch.authority,
+                task.request_id,
+            ):
+                return
+            parent_task_id = task.task_id
+            parent_run_id = f"run-{dispatch.dispatch_id}"
+        finally:
+            store.close()
+        try:
+            record_method(
+                parent_task_id=parent_task_id,
+                parent_run_id=parent_run_id,
+            )
+        except Exception:
+            # Outcome enrichment is SHADOW evidence only and has zero task authority.
+            pass
+
     def _activate_worker_session(self, request_id: str) -> None:
         broker = self._delegation_brokers.get(request_id)
         if broker is not None:
@@ -134,29 +172,40 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
         )
         tool_path = None
         if enabled:
-            if (self.delegation_child_port is None
-                    or task.project_id is None or task.base_sha is None):
+            if (
+                self.delegation_child_port is None
+                or task.project_id is None
+                or task.base_sha is None
+            ):
                 raise PiDelegationActivationError("HOST_DEPENDENCIES_UNAVAILABLE")
             policy_root = Path(tempfile.mkdtemp(prefix="pao-pi5-"))
             broker = UnixDelegationBrokerServer(
                 socket_path=policy_root / "broker.sock",
                 session=DelegationBrokerSession(
                     context=DelegationBrokerContext(
-                        parent_task_id=task.task_id, parent_run_id=f"run-{dispatch.dispatch_id}",
-                        project_id=task.project_id, base_sha=task.base_sha,
+                        parent_task_id=task.task_id,
+                        parent_run_id=f"run-{dispatch.dispatch_id}",
+                        project_id=task.project_id,
+                        base_sha=task.base_sha,
                         working_subpath=task.working_subpath,
                     ),
-                    child_port=self.delegation_child_port, active=False,
+                    child_port=self.delegation_child_port,
+                    active=False,
                 ),
             )
             self._delegation_brokers[dispatch.request_id] = broker
             try:
                 await broker.start()
-                tool_path = seed_pi5_socket_tool(policy_root, socket_path=broker.socket_path)
-                if (not tool_path.is_file()
-                        or tool_path.read_text(encoding="utf-8")
-                        != pi5_socket_tool_source(broker.socket_path)
-                        or not broker.socket_path.is_socket()):
+                tool_path = seed_pi5_socket_tool(
+                    policy_root,
+                    socket_path=broker.socket_path,
+                )
+                if (
+                    not tool_path.is_file()
+                    or tool_path.read_text(encoding="utf-8")
+                    != pi5_socket_tool_source(broker.socket_path)
+                    or not broker.socket_path.is_socket()
+                ):
                     raise PiDelegationActivationError("TRUSTED_TOOL_UNRESOLVED")
             except PiDelegationActivationError:
                 raise
@@ -171,10 +220,12 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
         )
         if enabled:
             expected_tools = ",".join((*PI_ALLOWED_TOOLS, PI5_TOOL_NAME))
-            if (argv.count("--tools") != 1
-                    or argv[argv.index("--tools") + 1] != expected_tools
-                    or argv.count(str(tool_path)) != 1
-                    or "--no-extensions" not in argv):
+            if (
+                argv.count("--tools") != 1
+                or argv[argv.index("--tools") + 1] != expected_tools
+                or argv.count(str(tool_path)) != 1
+                or "--no-extensions" not in argv
+            ):
                 raise PiDelegationActivationError("MODEL_TOOL_VISIBILITY_MISMATCH")
         store._audit(
             dispatch.task_id,
