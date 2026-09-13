@@ -16,7 +16,6 @@ import hashlib
 import json
 import os
 import stat
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -140,7 +139,7 @@ def delegation_child_task_id(
     """Mint a stable host child ID without trusting worker-supplied identity."""
 
     digest = hashlib.sha256(
-        f"{parent_task_id}\x00{parent_run_id}\x00{ordinal}".encode("utf-8")
+        f"{parent_task_id}\x00{parent_run_id}\x00{ordinal}".encode()
     ).hexdigest()[:20]
     return f"pi5-child-{digest}"
 
