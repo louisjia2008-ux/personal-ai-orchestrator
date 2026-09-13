@@ -44,6 +44,13 @@ async def test_shadow_record_replays_without_changing_verified_execution(tmp_pat
         assert record.facts.eligible_child_count >= 1
         assert record.enforcement_ready is False
 
+        # The fixture parent and host-selected child consume one canonical pool.
+        # Keep this observable without turning same-pool scarcity into an
+        # uncalibrated automatic denial.
+        assert record.parent_quota_pool_id == record.child_quota_pool_id == "zai-coding-plan"
+        assert record.facts.same_quota_pool_as_parent is True
+        assert DelegationReasonCode.SHARED_QUOTA_POOL in record.decision.reasons
+
         # The child-dispatch path has no canonical TaskProfile failure count.
         # BLOCKED dispatch rows include policy/infra failures and must not be
         # mislabelled as model-quality failures just to make escalation trigger.
@@ -73,6 +80,41 @@ async def test_shadow_record_replays_without_changing_verified_execution(tmp_pat
         before = path.read_bytes()
         assert (await port.execute_child(plan)).verified
         assert path.read_bytes() == before
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_missing_quota_truth_is_preserved_in_shadow_before_child_block(tmp_path, monkeypatch):
+    store, _, port, _, plan, observations = _setup(tmp_path, monkeypatch)
+    journal = DelegationShadowJournal(tmp_path / "shadow-state")
+    port.delegation_shadow_journal = journal
+
+    service = port.recommendation_factory(store)
+    service._quota_refresh_service = SimpleNamespace(
+        observations=lambda: (),
+        snapshot_for_pool=lambda _: None,
+    )
+    port.recommendation_factory = lambda _: service
+    observation_id = journal.observation_id(
+        parent_run_id=plan.parent_run_id,
+        child_task_id=plan.child_task_id,
+    )
+    try:
+        result = await port.execute_child(plan)
+        assert result.final_state == "BLOCKED"
+        assert not result.verified
+        assert observations == []
+
+        record = journal.load(observation_id)
+        assert record is not None
+        assert record.replay_matches()
+        assert record.facts.quota_truth_known is False
+        assert record.facts.eligible_child_count == 0
+        assert record.selected_child_execution_target_id is None
+        assert record.child_quota_pool_id is None
+        assert record.decision.reasons[0] is DelegationReasonCode.NO_ELIGIBLE_CHILD
+        assert record.enforcement_ready is False
     finally:
         store.close()
 
