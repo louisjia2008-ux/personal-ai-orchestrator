@@ -118,20 +118,21 @@ async def test_broker_mints_identity_and_disables_child_delegation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_broker_budget_is_consumed_and_fourth_request_is_rejected() -> None:
+async def test_broker_context_budget_rejects_next_schema_valid_request() -> None:
     port = FakeChildPort()
-    session = DelegationBrokerSession(context=_context(), child_port=port)
+    session = DelegationBrokerSession(
+        context=_context(max_children=2), child_port=port
+    )
 
-    responses = [await session.handle(_request(index)) for index in range(1, 5)]
+    responses = [await session.handle(_request(index)) for index in range(1, 4)]
 
-    assert [item.status for item in responses[:3]] == [
-        DelegationBrokerStatus.COMPLETED,
+    assert [item.status for item in responses[:2]] == [
         DelegationBrokerStatus.COMPLETED,
         DelegationBrokerStatus.COMPLETED,
     ]
-    assert responses[3].status is DelegationBrokerStatus.REJECTED
-    assert responses[3].reason_code == "DELEGATION_BUDGET_EXHAUSTED"
-    assert len(port.plans) == 3
+    assert responses[2].status is DelegationBrokerStatus.REJECTED
+    assert responses[2].reason_code == "DELEGATION_BUDGET_EXHAUSTED"
+    assert len(port.plans) == 2
 
 
 @pytest.mark.asyncio
