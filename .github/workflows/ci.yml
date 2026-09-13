@@ -22,6 +22,11 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      - name: Set up Node for synthetic PI-5 socket tool tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
       - name: Install
         run: python -m pip install --upgrade pip && python -m pip install -e '.[dev]'
 
