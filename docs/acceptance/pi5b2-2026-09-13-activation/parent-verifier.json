@@ -1,0 +1,18 @@
+{
+  "name": "pi5b2-parent-semantic-json",
+  "commands": [
+    {
+      "name": "exact-semantic-json",
+      "argv": [
+        "/Users/louisjia/Developer/pao-p4-full-dashboard/.venv/bin/python",
+        "-c",
+        "import json\nfrom pathlib import Path\nobj=json.loads(Path('pi5_parent_result.json').read_text())\nassert obj == {'status': 'PI5_PARENT_VERIFIED', 'child_verified': True}\nassert obj[\"child_verified\"] is True\n"
+      ],
+      "timeout_seconds": 300.0
+    }
+  ],
+  "allowed_paths": [
+    "pi5_parent_result.json"
+  ],
+  "require_diff_check": true
+}
