@@ -16,10 +16,9 @@ Scope split (kept strict for WP5a-1 commit 1):
   the host-owned tier table. This is the layer that knows about
   ``ControlPlaneService`` runtime state.
 
-Pure extraction from ``control_api.ControlPlaneService`` —
-``_collect_dispatch_candidates`` and the candidate-gathering
-portion of ``recommend_dispatch`` moved here. Behavior is
-byte-equivalent.
+PI-4B additionally projects a commercial quota-pool blocker across sibling
+worker runtimes before recommendation scoring. The authoritative PI-4A runtime
+gate still revalidates the frozen target immediately before execution.
 """
 
 from __future__ import annotations
@@ -35,32 +34,16 @@ from personal_ai_orchestrator.dispatch_recommender import (
 )
 from personal_ai_orchestrator.model_tiers import ModelTier
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityState
+from personal_ai_orchestrator.runtime_quota_routing import (
+    active_shared_pool_blocker,
+    quota_pool_id_for_target,
+)
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskRecord
 from personal_ai_orchestrator.scheduler import RoutingObjective
 
 
 class DispatchRecommendationService:
-    """Host application/service layer for owner-dispatch recommendations.
-
-    Holds the references the data-gathering phase needs (registry,
-    quota refresh service, execution evidence journal, quota
-    availability journal, tier table, runtime availability map) and
-    exposes two methods:
-
-    - :meth:`collect_candidates` produces ``DispatchCandidateInput``
-      rows for every execution target — this is what the owner-dispatch
-      "recommendation" view feeds into the deterministic
-      ``recommend_owner_dispatch`` core.
-    - :meth:`recommend_for_task` runs the deterministic ranking on
-      those candidates, applying the ``min_tier`` validation gate and
-      recording a system event when the stored ``min_tier`` cannot
-      be parsed into a known tier.
-
-    The view-model layer (``DispatchRecommendationCandidate``,
-    ``DispatchRecommendationScoreComponent``, etc.) stays in
-    ``control_api.py`` — view construction is a wire-shape concern
-    this service does not own.
-    """
+    """Host application/service layer for owner-dispatch recommendations."""
 
     def __init__(
         self,
@@ -88,18 +71,12 @@ class DispatchRecommendationService:
         *,
         now: datetime | None = None,
     ) -> list[DispatchCandidateInput]:
-        """Gather one ``DispatchCandidateInput`` per execution target.
-
-        Pure extraction of the previous ``_collect_dispatch_candidates``
-        method on ``ControlPlaneService``. Reads the same sources in
-        the same order and produces the same candidate list.
-        """
+        """Gather one host-evidence row per execution target."""
 
         if now is None:
             now = datetime.now(UTC)
 
         registry = self._registry_provider()
-
         provider_by_target: dict[str, str] = {
             target_id: registry.models[target.model_sku_id].provider_id
             for target_id, target in registry.execution_targets.items()
@@ -107,12 +84,7 @@ class DispatchRecommendationService:
         }
 
         remaining_by_provider: dict[str, list[float]] = {}
-        # M1 WP1: per-window snapshots keyed by provider_id.
-        # ``source_pressure`` needs kind + reset_at + used_fraction, not
-        # just remaining. Empty for providers the quota refresh service
-        # has not read yet.
         windows_by_provider: dict[str, list[CandidateWindowInput]] = {}
-
         if self._quota_refresh_service is not None:
             for observation in self._quota_refresh_service.observations():
                 snapshot = observation.snapshot
@@ -120,12 +92,8 @@ class DispatchRecommendationService:
                     continue
                 for window in snapshot.windows:
                     if window.reset_at is None:
-                        # ``source_pressure`` short-circuits on missing
-                        # reset_at; don't carry it through.
                         continue
-                    windows_by_provider.setdefault(
-                        observation.provider_id, []
-                    ).append(
+                    windows_by_provider.setdefault(observation.provider_id, []).append(
                         CandidateWindowInput(
                             kind=window.window_kind,
                             window_started_at=window.window_started_at,
@@ -134,11 +102,10 @@ class DispatchRecommendationService:
                         )
                     )
                     fraction = window.remaining_fraction
-                    if fraction is None:
-                        continue
-                    remaining_by_provider.setdefault(
-                        observation.provider_id, []
-                    ).append(fraction)
+                    if fraction is not None:
+                        remaining_by_provider.setdefault(
+                            observation.provider_id, []
+                        ).append(fraction)
 
         candidates: list[DispatchCandidateInput] = []
         for target_id, target in sorted(registry.execution_targets.items()):
@@ -150,9 +117,6 @@ class DispatchRecommendationService:
             else:
                 runtime_available = self._runtime_availability_fallback(target_id)
 
-            # Demote-fallback: prefer the journal's historical VERIFIED
-            # over the static registry flag so transient UNKNOWN evidence
-            # does not hide a real verified history.
             verified = False
             verified_stale = False
             evidence_observed_at: datetime | None = None
@@ -173,6 +137,20 @@ class DispatchRecommendationService:
                 evidence = self._quota_availability_journal.load(target_id)
                 if evidence is not None:
                     availability_state = evidence.state_at(now=now)
+                quota_pool_id = quota_pool_id_for_target(
+                    registry,
+                    execution_target_id=target_id,
+                    now=now,
+                )
+                if quota_pool_id is not None and provider_id:
+                    shared = active_shared_pool_blocker(
+                        self._quota_availability_journal,
+                        provider_id=provider_id,
+                        quota_pool_id=quota_pool_id,
+                        now=now,
+                    )
+                    if shared is not None:
+                        availability_state = shared.state_at(now=now)
 
             tier_value = None
             tier_match_reason = None
@@ -204,27 +182,8 @@ class DispatchRecommendationService:
         policy: RoutingObjective,
         now: datetime | None = None,
     ) -> tuple[DispatchRecommendation, list[DispatchCandidateInput], str | None]:
-        """Collect candidates and run the deterministic ranking for one task.
-
-        Returns:
-            - ``recommendation``: the ``DispatchRecommendation`` produced
-              by the deterministic core (top-1 + per-candidate
-              evaluation rows).
-            - ``candidates``: the gathered ``DispatchCandidateInput``
-              list (caller needs it for view-model construction).
-            - ``invalid_min_tier``: the raw ``task.min_tier`` string when
-              it could not be parsed into a ``ModelTier`` (the caller
-              may want to surface this; the recommender already records
-              a ``TASK_MIN_TIER_INVALID`` system event).
-
-        Pure extraction of the candidate-gathering + ranking portion
-        of the previous ``recommend_dispatch`` method. Behavior is
-        byte-equivalent.
-        """
-
         if now is None:
             now = datetime.now(UTC)
-
         candidates = self.collect_candidates(now=now)
 
         invalid_min_tier: str | None = None
