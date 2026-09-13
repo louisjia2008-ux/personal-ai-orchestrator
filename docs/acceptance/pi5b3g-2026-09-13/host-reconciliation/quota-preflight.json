@@ -1,0 +1,16 @@
+{
+  "provider_id": "minimax-cn-coding-plan",
+  "quota_pool_id": "minimax-token-plan-cn",
+  "observation_state": "AVAILABLE",
+  "confidence": "EXACT",
+  "snapshot_id": "quota-d53f8021-128a-4e00-89c9-bed75081b980",
+  "observation_time": "2026-09-13T11:53:50.418273+00:00",
+  "remaining_fractions": [
+    0.88,
+    0.33
+  ],
+  "shared_pool_blocker": null,
+  "launchable": true,
+  "read_only_refresh_count": 1,
+  "inference_calls": 0
+}

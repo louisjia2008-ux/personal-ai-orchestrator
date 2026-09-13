@@ -1,0 +1,179 @@
+{
+  "refreshed_provider_ids": [
+    "minimax-cn-coding-plan"
+  ],
+  "providers": [
+    {
+      "provider_id": "minimax-cn-coding-plan",
+      "display_name": "MiniMax CN Coding Plan",
+      "connection_state": "CONNECTED",
+      "auth_state": "AUTHENTICATED",
+      "plan_surface": "Coding Plan",
+      "region": "CN",
+      "quota_state": "OBSERVED",
+      "confidence": "EXACT",
+      "measurement_source": "PROVIDER_API",
+      "observed_at": "2026-09-13T11:53:50.418273+00:00",
+      "readonly_source_available": true,
+      "collector_available": true,
+      "last_refresh_status": "SUCCESS",
+      "last_refresh_at": "2026-09-13T11:53:50.423256+00:00",
+      "failure_reason": null,
+      "credential_source": "ENVIRONMENT",
+      "quota_pools": [
+        {
+          "quota_pool_id": "minimax-token-plan-cn",
+          "name": "minimax-token-plan-cn",
+          "plan_id": "token-plan",
+          "state": "AVAILABLE",
+          "confidence": "EXACT",
+          "measurement_source_type": "PROVIDER_API",
+          "observed_at": "2026-09-13T11:53:50.418273+00:00",
+          "windows": [
+            {
+              "window_id": "5h",
+              "window_kind": "FIVE_HOUR",
+              "state": "AVAILABLE",
+              "confidence": "EXACT",
+              "remaining_fraction": 0.88,
+              "reset_at": "2026-09-13T12:00:00+00:00"
+            },
+            {
+              "window_id": "weekly",
+              "window_kind": "WEEKLY",
+              "state": "AVAILABLE",
+              "confidence": "EXACT",
+              "remaining_fraction": 0.33,
+              "reset_at": "2026-09-13T16:00:00+00:00"
+            }
+          ]
+        }
+      ],
+      "plan": {
+        "provider_id": "minimax",
+        "plan_id": "token-plan",
+        "display_name": "MiniMax Coding Plan",
+        "plan_level": null,
+        "quota_semantics": "SHARED_POOL",
+        "pool_id": "minimax-token-plan-cn",
+        "resource_kind": "TOKEN_PLAN_INCLUDED_QUOTA",
+        "shared_across_models": true,
+        "unit_kind": "PROVIDER_UNITS",
+        "covered_model_ids": [],
+        "state": "AVAILABLE",
+        "confidence": "EXACT",
+        "observed_at": "2026-09-13T11:53:50.418273+00:00",
+        "unknown_reason": null,
+        "active_workload_scope": "CODING_TEXT",
+        "workload_scope_notes": [
+          "VIDEO_SCOPE_IGNORED_FOR_CODING"
+        ],
+        "windows": [
+          {
+            "window_id": "5h",
+            "window_kind": "FIVE_HOUR",
+            "state": "AVAILABLE",
+            "confidence": "EXACT",
+            "remaining_fraction": 0.88,
+            "remaining_units": null,
+            "total_units": null,
+            "unit": null,
+            "reset_at": "2026-09-13T12:00:00+00:00",
+            "burn": {
+              "expected_used_fraction": 0.9794681418333334,
+              "actual_used_fraction": 0.12,
+              "deviation": -0.8594681418333334,
+              "remaining_fraction": 0.88,
+              "seconds_to_reset": 369.573447,
+              "pressure": "STARVED",
+              "pressure_score": -1.0,
+              "window_start_inferred": false
+            }
+          },
+          {
+            "window_id": "weekly",
+            "window_kind": "WEEKLY",
+            "state": "AVAILABLE",
+            "confidence": "EXACT",
+            "remaining_fraction": 0.33,
+            "remaining_units": null,
+            "total_units": null,
+            "unit": null,
+            "reset_at": "2026-09-13T16:00:00+00:00",
+            "burn": {
+              "expected_used_fraction": 0.9755794089831349,
+              "actual_used_fraction": 0.6699999999999999,
+              "deviation": -0.30557940898313496,
+              "remaining_fraction": 0.33000000000000007,
+              "seconds_to_reset": 14769.573447,
+              "pressure": "BEHIND",
+              "pressure_score": -0.3595051870389823,
+              "window_start_inferred": false
+            }
+          }
+        ],
+        "binding_window": {
+          "window_id": "weekly",
+          "window_kind": "WEEKLY",
+          "remaining_fraction": 0.33,
+          "reset_at": "2026-09-13T16:00:00+00:00",
+          "seconds_until_reset": 14769.581727,
+          "reason": "SCARCEST_COMPARABLE_WINDOW",
+          "confidence": "EXACT"
+        },
+        "model_consumption": [],
+        "model_equivalents": [
+          {
+            "scope_id": "general",
+            "scope_kind": "UNKNOWN",
+            "workload_scope": "CODING_TEXT",
+            "window_id": "5h",
+            "remaining_fraction": 0.88,
+            "remaining_units": null,
+            "total_units": null,
+            "unit_kind": "UNKNOWN",
+            "confidence": "EXACT"
+          },
+          {
+            "scope_id": "general",
+            "scope_kind": "UNKNOWN",
+            "workload_scope": "CODING_TEXT",
+            "window_id": "weekly",
+            "remaining_fraction": 0.33,
+            "remaining_units": null,
+            "total_units": null,
+            "unit_kind": "UNKNOWN",
+            "confidence": "EXACT"
+          },
+          {
+            "scope_id": "video",
+            "scope_kind": "UNKNOWN",
+            "workload_scope": "VIDEO_GENERATION",
+            "window_id": "5h",
+            "remaining_fraction": 1.0,
+            "remaining_units": null,
+            "total_units": null,
+            "unit_kind": "UNKNOWN",
+            "confidence": "EXACT"
+          },
+          {
+            "scope_id": "video",
+            "scope_kind": "UNKNOWN",
+            "workload_scope": "VIDEO_GENERATION",
+            "window_id": "weekly",
+            "remaining_fraction": 1.0,
+            "remaining_units": null,
+            "total_units": null,
+            "unit_kind": "UNKNOWN",
+            "confidence": "EXACT"
+          }
+        ],
+        "equivalent_capacity": []
+      },
+      "source_pressure": "BEHIND",
+      "collection_failure_streak": 0,
+      "pool_kind": "windowed",
+      "unmetered": null
+    }
+  ]
+}
