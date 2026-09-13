@@ -263,6 +263,14 @@ def build_delegation_shadow_record(
         DelegationCommercialMode.SUBSCRIPTION,
         DelegationCommercialMode.PREPAID,
     }
+    # B3B already treated an admitted target with observed quota fractions as
+    # metered and fail-closed on a missing burn estimate. B3C may learn that the
+    # registry lacks enough plan lineage to name the commercial mode; that new
+    # UNKNOWN limitation must not weaken the older conservative burn gate.
+    observed_metered_unknown = (
+        commercial_mode is DelegationCommercialMode.UNKNOWN and bool(remaining)
+    )
+    burn_gated_candidate = metered_subscription or observed_metered_unknown
     quota_truth_required = commercial_mode not in {
         DelegationCommercialMode.PAY_AS_YOU_GO,
         DelegationCommercialMode.UNMETERED,
@@ -272,13 +280,10 @@ def build_delegation_shadow_record(
         or commercial_mode is DelegationCommercialMode.UNMETERED
         or commercial_mode is DelegationCommercialMode.PAY_AS_YOU_GO
     )
-    require_burn = (
-        metered_subscription
-        and (
-            True
-            if resolved_policy is None
-            else resolved_policy.require_burn_estimate_for_subscription
-        )
+    require_burn = burn_gated_candidate and (
+        True
+        if resolved_policy is None
+        else resolved_policy.require_burn_estimate_for_subscription
     )
 
     facts = DelegationPolicyInput(
@@ -318,11 +323,8 @@ def build_delegation_shadow_record(
     ]
     limitations = list(host_evidence.limitations)
 
-    # Preserve B3B's explicit statement when a metered selected candidate still
-    # lacks a target-adjusted child burn estimate, even if no policy provider was
-    # injected by a synthetic/legacy caller.
     if (
-        metered_subscription
+        burn_gated_candidate
         and host_evidence.predicted_child_burn_fraction is None
         and "predicted_child_burn_unavailable" not in limitations
     ):
