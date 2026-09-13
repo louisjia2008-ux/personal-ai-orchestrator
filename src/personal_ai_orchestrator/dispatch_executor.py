@@ -281,6 +281,18 @@ class OwnerDispatchExecutor:
                 store.close()
 
     async def execute_async(self, request_id: str) -> None:
+        try:
+            await self._execute_async(request_id)
+        finally:
+            self._disable_worker_session(request_id)
+
+    def _disable_worker_session(self, request_id: str) -> None:
+        """Runtime hook: synchronously revoke optional worker capabilities."""
+
+    def _activate_worker_session(self, request_id: str) -> None:
+        """Runtime hook called only after the durable RUNNING commit."""
+
+    async def _execute_async(self, request_id: str) -> None:
         store = self._open_store()
         try:
             dispatch = store.get_owner_dispatch_by_request_id(request_id)
@@ -432,6 +444,7 @@ class OwnerDispatchExecutor:
                 pid=supervised.pid,
                 expected_state=expected_state,
             )
+            self._activate_worker_session(request_id)
         except Exception as error:
             # The child exists but is not durably owned: kill the exact
             # child before any state repair so no orphan process remains.
@@ -463,6 +476,7 @@ class OwnerDispatchExecutor:
         worker_exit_code: int | None = None
         try:
             exit_code, stdout, stderr, truncated = await self._wait_for_worker(supervised)
+            self._disable_worker_session(request_id)
             worker_exit_code = exit_code
             if (
                 exit_code != 0
@@ -534,6 +548,7 @@ class OwnerDispatchExecutor:
             )
             raise
         except TimeoutError:
+            self._disable_worker_session(request_id)
             exit_code = await self._supervisor.cancel(
                 supervised, grace_seconds=self.config.worker_grace_seconds
             )
@@ -783,6 +798,7 @@ class OwnerDispatchExecutor:
         return bool(future.result(timeout=timeout))
 
     async def _cancel_on_loop(self, execution: ActiveExecution) -> bool:
+        self._disable_worker_session(execution.request_id)
         execution.cancel_requested.set()
         store = self._open_store()
         try:
@@ -844,6 +860,7 @@ class OwnerDispatchExecutor:
             _human_reason_for_failure,
         )
 
+        self._disable_worker_session(request_id)
         self.execution_supervisor.unregister(dispatch.task_id)
         self._supervisor.emergency_kill(supervised)
         # emergency_kill always sends SIGKILL to the process group. Tails
@@ -1125,6 +1142,19 @@ class OwnerDispatchExecutor:
             )
             return None
 
+    @staticmethod
+    def _check_delegated_workspace(store, dispatch, managed) -> None:
+        from personal_ai_orchestrator.safety_kernel import AUTHORITY_DELEGATED_CHILD
+
+        if dispatch.authority != AUTHORITY_DELEGATED_CHILD:
+            return
+        child_path = managed.worktree_path.resolve()
+        rows = store.connection.execute(
+            "SELECT worktree_path FROM workspaces WHERE task_id != ?", (dispatch.task_id,)
+        ).fetchall()
+        if any(Path(row["worktree_path"]).resolve() == child_path for row in rows):
+            raise ValueError("delegated child workspace aliases another task workspace")
+
     def _prepare_worktree(
         self, store: SafetyKernelStore, dispatch: OwnerDispatchRecord
     ) -> tuple[ManagedWorktree | None, str | None]:
@@ -1149,6 +1179,7 @@ class OwnerDispatchExecutor:
                     branch=existing.branch,
                     base_sha=existing.base_sha,
                 )
+                self._check_delegated_workspace(store, dispatch, managed)
                 self._seed_worker_policy(managed)
                 return managed, None
             except KeyError:
@@ -1158,6 +1189,7 @@ class OwnerDispatchExecutor:
                 task_id=dispatch.task_id,
                 base_sha=base_sha,
             )
+            self._check_delegated_workspace(store, dispatch, managed)
             self._seed_worker_policy(managed)
             store.register_workspace(
                 task_id=dispatch.task_id,

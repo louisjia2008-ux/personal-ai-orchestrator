@@ -165,6 +165,7 @@ class PiRuntimeConfig:
 
     pi_bin: str = "pi"
     extra_args: tuple[str, ...] = ()
+    delegation_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -230,6 +231,7 @@ def build_pi_json_argv(
     model_ref: str,
     intent: str,
     guard_path: Path,
+    delegation_tool_path: Path | None = None,
 ) -> tuple[str, ...]:
     """Build the deterministic one-shot Pi worker command.
 
@@ -241,6 +243,11 @@ def build_pi_json_argv(
     - bash/powershell are absent from the active tool allowlist.
     """
 
+    if config.delegation_enabled and delegation_tool_path is None:
+        raise ValueError("enabled delegation requires a host-seeded trusted tool")
+    extensions = (
+        ("-e", str(delegation_tool_path)) if config.delegation_enabled else ()
+    )
     return (
         config.pi_bin,
         "--mode",
@@ -250,6 +257,7 @@ def build_pi_json_argv(
         "--no-extensions",
         "-e",
         str(guard_path),
+        *extensions,
         "--no-skills",
         "--no-prompt-templates",
         "--no-context-files",

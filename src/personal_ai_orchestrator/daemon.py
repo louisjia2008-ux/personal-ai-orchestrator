@@ -20,6 +20,7 @@ from personal_ai_orchestrator.dispatch_executor import (
     DispatchExecutorConfig,
     OwnerDispatchExecutor,
 )
+from personal_ai_orchestrator.dispatch_recommendation_service import DispatchRecommendationService
 from personal_ai_orchestrator.execution_controller import reconcile_workspace_truth
 from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
 from personal_ai_orchestrator.local_api import serve
@@ -29,6 +30,7 @@ from personal_ai_orchestrator.model_tiers import (
     parse_tier_table,
 )
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
+from personal_ai_orchestrator.pi5_child_execution import PAODelegationChildPort
 from personal_ai_orchestrator.pi_dispatch_executor import PiOwnerDispatchExecutor
 from personal_ai_orchestrator.pi_runtime import PiRuntimeConfig
 from personal_ai_orchestrator.policy_snapshot import PolicySnapshotJournal
@@ -283,6 +285,7 @@ def build_control_service(
     verifier_profile=None,
     worker_permission_config: Path | None = None,
     model_tiers_path: Path | None = None,
+    pi_runtime: PiRuntimeConfig | None = None,
     supervisor: DaemonSupervisor | None = None,
 ) -> ControlPlaneService:
     """Build the control-plane facade over the same durable truth.
@@ -319,6 +322,7 @@ def build_control_service(
             )(execution_evidence_journal.latest_verified_for_provider(provider_id))
         )
     executor = None
+    pi_executor = None
     if execution_repo is not None:
         registry_provider = (
             provider_registry_manager.registry
@@ -363,7 +367,7 @@ def build_control_service(
                 quota_availability_journal=quota_availability_journal,
                 quota_collectors=collectors,
                 shadow_journal=shadow_journal,
-                pi_runtime=PiRuntimeConfig(),
+                pi_runtime=pi_runtime or PiRuntimeConfig(),
             )
 
         runtimes = {"opencode": opencode_executor}
@@ -385,6 +389,30 @@ def build_control_service(
             else tuple
         ),
     )
+    if pi_executor is not None:
+        def child_runtime_available(target_id: str) -> bool:
+            if target_id in config.runtime_availability:
+                return config.runtime_availability[target_id]
+            return bool(provider_registry_manager.runtime_available(target_id))
+
+        pi_executor.delegation_child_port = PAODelegationChildPort(
+            state_db=state_db,
+            executor=executor,
+            recommendation_factory=lambda child_store: DispatchRecommendationService(
+                child_store,
+                registry_provider=registry_provider,
+                quota_refresh_service=quota_refresh_service,
+                execution_evidence_journal=execution_evidence_journal,
+                quota_availability_journal=quota_availability_journal,
+                tier_table=tier_table,
+                runtime_availability=dict(config.runtime_availability),
+                runtime_availability_fallback=child_runtime_available,
+            ),
+            registry_provider=registry_provider,
+            runtime_available_provider=child_runtime_available,
+            provider_registry_manager=provider_registry_manager,
+            execution_evidence_journal=execution_evidence_journal,
+        )
     return ControlPlaneService(
         registry=registry,
         store=store,

@@ -152,7 +152,9 @@ class DelegationBrokerSession:
         *,
         context: DelegationBrokerContext,
         child_port: DelegationChildExecutionPort,
+        active: bool = True,
     ) -> None:
+        self.active = active
         self.context = context
         self.child_port = child_port
         self._consumed = 0
@@ -182,6 +184,8 @@ class DelegationBrokerSession:
         assert_sanitized(request.model_dump(mode="json"))
         fingerprint = self._fingerprint(request)
         async with self._lock:
+            if not self.active:
+                return self._reject(request, "PARENT_SESSION_INACTIVE")
             prior = self._responses.get(request.tool_call_id)
             if prior is not None:
                 prior_fingerprint, prior_response = prior
@@ -265,6 +269,8 @@ class UnixDelegationBrokerServer:
         self.socket_path = socket_path
         self.session = session
         self._server: asyncio.AbstractServer | None = None
+        self._clients: set[asyncio.Task] = set()
+        self._owns_socket = False
 
     async def start(self) -> None:
         if self._server is not None:
@@ -278,9 +284,21 @@ class UnixDelegationBrokerServer:
             path=str(self.socket_path),
             limit=PI5_BROKER_MAX_REQUEST_BYTES + 1,
         )
+        self._owns_socket = True
         os.chmod(self.socket_path, 0o600)
 
+    def close(self) -> None:
+        """Revoke immediately, including during synchronous emergency repair."""
+        self.session.active = False
+        if self._server is not None:
+            self._server.close()
+        for client in tuple(self._clients):
+            client.cancel()
+        if self._owns_socket and self.socket_path.is_socket():
+            self.socket_path.unlink()
+
     async def stop(self) -> None:
+        self.close()
         server = self._server
         self._server = None
         if server is not None:
@@ -306,10 +324,12 @@ class UnixDelegationBrokerServer:
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        client = asyncio.current_task()
+        self._clients.add(client)
         try:
             try:
-                raw = await reader.readline()
-            except ValueError:
+                raw = await asyncio.wait_for(reader.readline(), timeout=10.0)
+            except (ValueError, TimeoutError):
                 raw = b""
             if not raw or len(raw) > PI5_BROKER_MAX_REQUEST_BYTES:
                 await self._write(
@@ -335,6 +355,7 @@ class UnixDelegationBrokerServer:
                 return
             await self._write(writer, await self.session.handle(request))
         finally:
+            self._clients.discard(client)
             writer.close()
             await writer.wait_closed()
 
