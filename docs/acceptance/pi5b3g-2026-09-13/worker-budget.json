@@ -1,0 +1,33 @@
+{
+  "scope": "this_acceptance_attempt",
+  "max_observations": 3,
+  "max_parent_worker_processes": 3,
+  "max_child_worker_processes": 3,
+  "max_total_real_worker_processes": 6,
+  "observations": [
+    {
+      "observation": 1,
+      "state": "NOT_STARTED",
+      "parent_workers": 0,
+      "child_workers": 0
+    },
+    {
+      "observation": 2,
+      "state": "NOT_STARTED",
+      "parent_workers": 0,
+      "child_workers": 0
+    },
+    {
+      "observation": 3,
+      "state": "NOT_STARTED",
+      "parent_workers": 0,
+      "child_workers": 0
+    }
+  ],
+  "total_parent_worker_processes": 0,
+  "total_child_worker_processes": 0,
+  "total_real_worker_processes": 0,
+  "automatic_retries": 0,
+  "automatic_fallback": false,
+  "grandchild_count": 0
+}
