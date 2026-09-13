@@ -1,8 +1,8 @@
 """Replayable PI-5B3 SHADOW evidence for delegation decisions.
 
-This module is deliberately observational.  It converts host-owned routing/quota
+This module is deliberately observational. It converts host-owned routing/quota
 truth into the pure PI-5B3A policy contract and persists a sanitized immutable
-record.  It never launches a child, changes target selection, or makes a shadow
+record. It never launches a child, changes target selection, or makes a shadow
 verdict authoritative.
 """
 
@@ -16,7 +16,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from personal_ai_orchestrator.delegation_policy import (
     PI5B3A_POLICY_VERSION,
@@ -49,15 +49,22 @@ class DelegationShadowRecord(RegistryModel):
     child_quota_pool_id: str | None = None
     evidence_sources: tuple[str, ...] = ()
     limitations: tuple[str, ...] = ()
+    enforcement_ready: bool = False
     facts: DelegationPolicyInput
     decision: DelegationDecision
+
+    @model_validator(mode="after")
+    def validate_shadow_contract(self) -> DelegationShadowRecord:
+        if self.decision.mode is not DelegationPolicyMode.SHADOW:
+            raise ValueError("delegation shadow record must use SHADOW mode")
+        if self.enforcement_ready and self.limitations:
+            raise ValueError("limited shadow evidence cannot be enforcement-ready")
+        return self
 
     def replay(self) -> DelegationDecision:
         """Re-evaluate the versioned structured facts using SHADOW semantics."""
         if self.decision.policy_version != PI5B3A_POLICY_VERSION:
             raise ValueError("unsupported delegation shadow policy version")
-        if self.decision.mode is not DelegationPolicyMode.SHADOW:
-            raise ValueError("delegation shadow record is not SHADOW mode")
         return evaluate_delegation(self.facts, mode=DelegationPolicyMode.SHADOW)
 
     def replay_matches(self) -> bool:
@@ -65,7 +72,7 @@ class DelegationShadowRecord(RegistryModel):
 
 
 class DelegationShadowJournal:
-    """Append-only per-child SHADOW record store with atomic 0600 writes."""
+    """Append-only first-observation store with atomic 0600 writes."""
 
     def __init__(self, root: str | Path) -> None:
         self.directory = Path(root) / "delegation-shadow-history"
@@ -91,6 +98,9 @@ class DelegationShadowJournal:
     def append(self, record: DelegationShadowRecord) -> Path:
         target = self.path_for(record.observation_id)
         if target.exists():
+            # One child in one parent run has one initial SHADOW decision. Re-entry
+            # returns that first observation rather than silently time-shifting the
+            # evidence after quota/recommendation state may have changed.
             existing = DelegationShadowRecord.model_validate_json(
                 target.read_text(encoding="utf-8")
             )
@@ -181,37 +191,39 @@ def build_delegation_shadow_record(
     predicted_burn = None if pick is None else pick.predicted_burn_fraction
     metered_candidate = bool(remaining)
 
-    blocked_dispatches = store.connection.execute(
-        "SELECT COUNT(*) FROM owner_dispatches WHERE task_id=? AND status='BLOCKED'",
-        (parent_task_id,),
-    ).fetchone()[0]
-
     parent_provider = _provider_id_for_target(registry, parent_target)
-    different_provider_available = any(
-        evaluation.admitted
-        and _provider_id_for_target(registry, evaluation.execution_target_id)
-        not in (None, parent_provider)
-        for evaluation in recommendation.evaluations
-    ) if parent_provider is not None else False
+    different_provider_available = (
+        any(
+            evaluation.admitted
+            and _provider_id_for_target(registry, evaluation.execution_target_id)
+            not in (None, parent_provider)
+            for evaluation in recommendation.evaluations
+        )
+        if parent_provider is not None
+        else False
+    )
 
     routing_policy = RoutingPolicy()
     facts = DelegationPolicyInput(
         delegation_feature_enabled=True,
         host_required=False,
-        failure_count=int(blocked_dispatches),
+        # Safety Kernel owner-dispatch BLOCKED rows are not equivalent to the
+        # scheduler TaskProfile.failure_count (they also include policy/infra
+        # failures). Do not manufacture a quality-failure count from them.
+        failure_count=0,
         failure_escalation_after=routing_policy.failure_escalation_after,
         eligible_child_count=sum(1 for item in recommendation.evaluations if item.admitted),
         quota_truth_required=True,
         quota_truth_known=bool(remaining),
-        # Do not manufacture a per-task burn estimate.  Metered candidates keep
+        # Do not manufacture a per-task burn estimate. Metered candidates keep
         # the hard requirement and will surface the missing evidence in SHADOW.
         require_burn_estimate=metered_candidate,
         predicted_child_burn_fraction=predicted_burn,
         usable_child_headroom_fraction=headroom,
         # The owner-dispatch recommendation does not yet expose reliable PAYG
-        # requirements.  Do not guess one; record the limitation below.
+        # requirements. Keep the neutral/default fact and record the limitation.
         paid_usage_required=False,
-        paid_usage_allowed=routing_policy.allow_paid_usage,
+        paid_usage_allowed=False,
         independence_required=False,
         different_provider_candidate_available=different_provider_available,
         same_quota_pool_as_parent=same_pool,
@@ -223,16 +235,20 @@ def build_delegation_shadow_record(
         "dispatch_recommendation.evaluations",
         "dispatch_candidate.remaining_fractions",
         "runtime_quota_routing.quota_pool_id_for_target",
-        "owner_dispatches.blocked_count",
     ]
-    limitations: list[str] = []
+    limitations: list[str] = [
+        "task_profile_failure_count_not_available_in_child_dispatch_context",
+        "host_required_delegation_signal_not_exposed",
+        "independence_requirement_signal_not_exposed",
+        "paid_usage_requirement_not_exposed_by_dispatch_recommendation",
+        "resolved_routing_policy_not_exposed_by_child_dispatch_context",
+    ]
     if predicted_burn is None and metered_candidate:
         limitations.append("predicted_child_burn_unavailable")
     if parent_pool is None:
         limitations.append("parent_quota_pool_unresolved")
     if child_target is not None and child_pool is None:
         limitations.append("child_quota_pool_unresolved")
-    limitations.append("paid_usage_requirement_not_exposed_by_dispatch_recommendation")
 
     return DelegationShadowRecord(
         observation_id=DelegationShadowJournal.observation_id(
@@ -249,6 +265,7 @@ def build_delegation_shadow_record(
         child_quota_pool_id=child_pool,
         evidence_sources=tuple(sources),
         limitations=tuple(limitations),
+        enforcement_ready=False,
         facts=facts,
         decision=decision,
     )
