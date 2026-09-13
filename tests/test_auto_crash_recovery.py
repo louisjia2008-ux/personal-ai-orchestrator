@@ -22,8 +22,7 @@ from personal_ai_orchestrator.supervised_auto_step import (
     supervised_auto_decision_id,
 )
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
-from tests.test_dispatch_initiator import _registry
-from tests.test_supervised_auto_step import NOW, _env, _plan
+from tests.test_supervised_auto_step import NOW, _env, _plan, _registry
 
 
 class _FailingJournal:
@@ -81,6 +80,7 @@ def _restart_service(
     *,
     executor,
     shadow,
+    quota_observed_at: datetime = NOW,
 ) -> tuple[SafetyKernelStore, ControlPlaneService]:
     """Fresh store + service on the same durable files (daemon restart)."""
 
@@ -130,7 +130,7 @@ def _restart_service(
         ),
         scheduling_settings=SchedulingSettings(tmp_path / "scheduling.json"),
         execution_evidence_journal=evidence_journal,
-        quota_refresh_service=_FakeQuotaRefresh(_observation()),
+        quota_refresh_service=_FakeQuotaRefresh(_observation(now=quota_observed_at)),
         dispatch_executor=executor,
         shadow_journal=shadow,
         catalog_snapshot_id="catalog-test",
@@ -305,8 +305,13 @@ def test_unacked_timeout_crash_recovers_and_new_cycle_is_fresh(tmp_path) -> None
 
     executor = _RecordingExecutor()
     shadow2 = ShadowEvidenceJournal(tmp_path / "shadow-root")
-    store2, service2 = _restart_service(tmp_path, executor=executor, shadow=shadow2)
-    service2.supervised_auto_tick(NOW + timedelta(minutes=30))
+    restarted_at = NOW + timedelta(minutes=30)
+    # This test isolates lifecycle recovery: the new cycle has a fresh quota
+    # fixture, rather than bypassing the production observation-age gate.
+    store2, service2 = _restart_service(
+        tmp_path, executor=executor, shadow=shadow2, quota_observed_at=restarted_at,
+    )
+    service2.supervised_auto_tick(restarted_at)
 
     task2 = store2.get_task("task-1")
     new_decision_id = task2.auto_decision_id
