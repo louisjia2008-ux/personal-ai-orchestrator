@@ -1,0 +1,45 @@
+{
+  "pid": 37671,
+  "bootloader_pid": 37669,
+  "argv": [
+    "/Users/louisjia/Developer/pao-p4-full-dashboard/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon"
+  ],
+  "cwd": "/Users/louisjia/Library/Application Support/Personal AI Orchestrator",
+  "binary": "/Users/louisjia/Developer/pao-p4-full-dashboard/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon",
+  "binary_sha256": "71c50079e5295896ec5dd78331d3831c6e38521944fc1985becf7d1b29012c46",
+  "daemon_reported_revision": "unknown",
+  "app_embedded_revision": "bd82dba299fd54472e39f12971251a34ce2a927f",
+  "archive_modules": {
+    "delegation_campaign": false,
+    "delegation_campaign_control": false,
+    "delegation_campaign_runtime": false,
+    "pi_provider_registry_manager": false
+  },
+  "host_deployment_stale": true,
+  "config": "/Users/louisjia/Library/Application Support/Personal AI Orchestrator/runtime.json",
+  "state_db": "/Users/louisjia/Library/Application Support/Personal AI Orchestrator/state.sqlite3",
+  "runtime_state_root": "/Users/louisjia/Library/Application Support/Personal AI Orchestrator/runtime-state",
+  "control_socket": "/Users/louisjia/Library/Caches/Personal AI Orchestrator/control.sock",
+  "path_provenance": "zero-argument product entrypoint defaults confirmed in frozen archive; cwd, database and socket confirmed by exact-PID lsof",
+  "campaign_http_status": 404,
+  "target_present": false,
+  "execution_verified": false,
+  "pi_registry_snapshot_present": false,
+  "counts": {
+    "tasks": 34,
+    "runs": 7,
+    "workspaces": 7,
+    "running_rows": 0,
+    "active_run_rows": 0,
+    "held_writers": 0
+  },
+  "state_history": {
+    "classification": "SEPARATE_ACCEPTANCE_RUNTIME_NOT_PRODUCT_INSTALLATION",
+    "pi3_runtime_root": "/private/tmp/pao-pi3-local-evidence-20260912/pi3/runtime",
+    "pi3_latest_verified_id": "exec-verify-e6ad947964ec813e48c6de6b",
+    "pi3_verification_method": "REAL_WORKER_INVOCATION",
+    "product_migration_date": "2026-09-02T07:11:45.715092Z",
+    "pi3_migration_performed": false,
+    "supported_import_of_acceptance_execution_authority": false
+  }
+}
