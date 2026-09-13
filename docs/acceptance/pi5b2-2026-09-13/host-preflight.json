@@ -1,0 +1,54 @@
+{
+  "baseline_head": "04f41981d77b448d73c527d195756bb815f24c8d",
+  "events": [
+    {
+      "event": "HOST_RECOMMENDATION",
+      "observed_at": "2026-09-13T02:47:35.620591+00:00",
+      "task_id": "pi5b2-real-parent",
+      "policy": "BALANCED",
+      "top_pick": "pi-minimax-cn-coding-plan-MiniMax-M3",
+      "candidates": [
+        {
+          "target": "pi-minimax-cn-coding-plan-MiniMax-M3",
+          "admitted": true,
+          "reasons": [
+            "policy=BALANCED, headroom_min=0.35, headroom_mean=0.66, verified=True, runtime=True, tier=T1 min_tier=T1 match=default"
+          ]
+        },
+        {
+          "target": "pi-minimax-cn-coding-plan-MiniMax-M2.7",
+          "admitted": false,
+          "reasons": [
+            "execution target has not been runtime-verified"
+          ]
+        },
+        {
+          "target": "pi-minimax-cn-coding-plan-MiniMax-M2.7-highspeed",
+          "admitted": false,
+          "reasons": [
+            "execution target has not been runtime-verified"
+          ]
+        }
+      ]
+    },
+    {
+      "event": "PREFLIGHT_READY",
+      "observed_at": "2026-09-13T02:47:35.621050+00:00",
+      "parent_target": "pi-minimax-cn-coding-plan-MiniMax-M3",
+      "previous_execution_evidence": "exec-verify-e6ad947964ec813e48c6de6b",
+      "quota_status": "SUCCESS",
+      "quota_state": "AVAILABLE",
+      "remaining_fractions": [
+        0.97,
+        0.35
+      ],
+      "shared_pool_blocker": false,
+      "profile_sha256": {
+        "child": "8ab340b77099b18d58db40720cbe513d0a627c5767ccb1a3c3abf423f2faacae",
+        "parent": "ca28e8a1373b855f579240232f3d24b33bc2e95d4b56220ce34c1e884cec6db1"
+      }
+    }
+  ],
+  "real_workers": [],
+  "source_code_changed": false
+}

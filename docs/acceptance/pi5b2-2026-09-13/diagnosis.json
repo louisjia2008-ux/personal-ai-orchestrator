@@ -1,0 +1,29 @@
+{
+  "parent_workspace": {
+    "task_id": "pi5b2-real-parent",
+    "worktree_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913/worktrees/pi5b2-real-parent",
+    "base_sha": "7bb8752a7a73207bc7d3863645fec8a2b159e0ba"
+  },
+  "parent_file_exists": false,
+  "writer_released": true,
+  "verification": {
+    "evidence_id": "verify-5e75c9067343517d7c140a17",
+    "passed": false,
+    "unexpected_paths": [],
+    "stages": [
+      {
+        "name": "git diff --check",
+        "returncode": 0
+      },
+      {
+        "name": "exact-semantic-json",
+        "returncode": 1
+      }
+    ]
+  },
+  "installed_pi_source": {
+    "main.js": "f0b7e5a8419af8d149ffe367af2992c76ce70b73484c15492bd50787d4f4962a",
+    "core/sdk.js": "6969bd56ba8e1628cd033bb15cb15fe38299f00b5ad84f4f8ef37a33a98681c9",
+    "core/agent-session.js": "fb8a3981c20c8c0bbd42231b1c99a10335fb3858b659056b341954de9cfa467f"
+  }
+}
