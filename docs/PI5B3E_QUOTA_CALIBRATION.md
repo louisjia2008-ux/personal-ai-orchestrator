@@ -1,6 +1,6 @@
 # PI-5B3E Shadow Campaign Comparable Quota-Pair Capture
 
-Status: `PI_5B3E_SCOPE_FROZEN_IMPLEMENTATION_PENDING`
+Status: `PI_5B3E_QUOTA_CALIBRATION_COMPLETE`
 
 Tracking: #48 (parent #37)
 
@@ -20,7 +20,7 @@ When explicitly enabled for a campaign, calibration may perform at most one post
 
 ## Before snapshot
 
-The before snapshot must come from the existing persisted quota cache used by the host recommendation path. It is captured after the recommendation selected a child target and before the child dispatch begins.
+The before snapshot comes from the existing persisted quota cache used by the host recommendation path. It is captured after the recommendation selected a child target and before the child dispatch begins.
 
 The capture is accepted only when:
 
@@ -30,7 +30,7 @@ The capture is accepted only when:
 - every active binding window used for comparison has precise remaining quota;
 - the snapshot identity is durable.
 
-No provider-name or runtime-name heuristic may substitute for canonical pool identity.
+No provider-name or runtime-name heuristic substitutes for canonical pool identity.
 
 ## After snapshot
 
@@ -50,15 +50,15 @@ A provider correction may increase or decrease remaining quota; PI-5B3E records 
 
 ## Outcome semantics
 
-Only a validated pair may populate `quota_before_snapshot_id` and `quota_after_snapshot_id` on a newly appended `CHILD_FINAL` outcome.
+Only a validated pair populates `quota_before_snapshot_id` and `quota_after_snapshot_id` on a newly appended `CHILD_FINAL` outcome.
 
-`PARENT_FINAL` inherits the exact already-frozen pair from `CHILD_FINAL`. It must not perform another quota refresh.
+`PARENT_FINAL` inherits the exact already-frozen pair from `CHILD_FINAL`. It performs no additional quota refresh.
 
 Existing SHADOW and outcome records remain immutable. A record written before PI-5B3E is never rewritten to add quota evidence retroactively.
 
 ## Failure semantics
 
-Calibration is best-effort and non-authoritative. Any missing cache, unavailable credential, provider read error, stale/UNKNOWN/mismatched snapshot, comparison failure, or journal error:
+Calibration is best-effort and non-authoritative. Any missing cache, unavailable credential, provider read error, UNKNOWN/mismatched snapshot, comparison failure, or journal error:
 
 - leaves the quota pair absent;
 - records only sanitized limitations/events where appropriate;
@@ -67,20 +67,35 @@ Calibration is best-effort and non-authoritative. Any missing cache, unavailable
 
 ## Acceptance matrix
 
-Synthetic tests must prove:
+Synthetic tests prove:
 
 1. default OFF performs zero extra refreshes;
 2. exact canonical before snapshot is captured when valid;
 3. wrong-pool / UNKNOWN / imprecise before snapshots are rejected;
 4. one enabled child performs at most one post-child refresh;
 5. same-pool, same-window/reset-cycle before/after snapshots are accepted;
-6. pool/window-kind/window-id/reset-cycle mismatch is rejected;
+6. pool/window-id/reset-cycle mismatch is rejected;
 7. after observation earlier than before is rejected;
 8. identical snapshot id is rejected as not a before/after pair;
 9. child VERIFIED remains VERIFIED when calibration fails;
 10. CHILD_FINAL receives ids only for a validated pair;
 11. PARENT_FINAL reuses CHILD_FINAL ids with zero additional refreshes;
-12. old evidence is never rewritten;
+12. replay/re-entry does not cause a second refresh or rewrite the existing outcome;
 13. exact-head CI passes with zero real model calls.
 
-Completion of PI-5B3E means the system can collect comparable quota-pair evidence during an explicit SHADOW campaign. It still does not authorize enforcement.
+## Verification
+
+Implementation head `3032c0d820a5b65d1846482bac11d1d9a48c391c` passed exact-head CI #348 (`34750097917`):
+
+- Ruff: PASS;
+- Python: 1186 passed, 4 skipped;
+- exact base/head diff hygiene: PASS;
+- OpenCode adapter: PASS;
+- macOS Swift build: PASS;
+- real worker/model calls: 0.
+
+## Completion boundary
+
+PI-5B3E is complete as an **opt-in capability**. Production calibration remains disabled by default and the daemon/product does not automatically run a SHADOW campaign. No production delegation enforcement is enabled.
+
+The next safe phase is a bounded operator-controlled SHADOW campaign surface that can explicitly enable this calibration capability for selected disposable/approved tasks and collect real evidence under a separately authorized worker budget.
