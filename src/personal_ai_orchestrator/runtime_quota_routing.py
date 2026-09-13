@@ -11,6 +11,16 @@ from personal_ai_orchestrator.quota_availability import (
     QuotaAvailabilityState,
 )
 
+_BLOCKING_STATES = {
+    QuotaAvailabilityState.EXHAUSTED_OBSERVED,
+    QuotaAvailabilityState.COOLDOWN,
+}
+_SUCCESS_STATES = {
+    QuotaAvailabilityState.AVAILABLE_OBSERVED,
+    QuotaAvailabilityState.AVAILABLE_UNMETERED,
+    QuotaAvailabilityState.RECOVERED_OBSERVED,
+}
+
 
 def quota_pool_id_for_target(
     registry: ModelRegistry,
@@ -58,4 +68,38 @@ def pool_evidence(
     return tuple(rows)
 
 
-__all__ = ["pool_evidence", "quota_pool_id_for_target"]
+def active_shared_pool_blocker(
+    journal: Any,
+    *,
+    provider_id: str,
+    quota_pool_id: str,
+    now: datetime,
+) -> QuotaAvailabilityEvidence | None:
+    rows = pool_evidence(
+        journal,
+        provider_id=provider_id,
+        quota_pool_id=quota_pool_id,
+    )
+    blockers = [item for item in rows if item.state_at(now=now) in _BLOCKING_STATES]
+    if not blockers:
+        return None
+    latest_blocker = max(
+        blockers,
+        key=lambda item: (item.observed_at, item.execution_target_id),
+    )
+    successes = [item for item in rows if item.state_at(now=now) in _SUCCESS_STATES]
+    if successes:
+        latest_success = max(
+            successes,
+            key=lambda item: (item.observed_at, item.execution_target_id),
+        )
+        if latest_success.observed_at > latest_blocker.observed_at:
+            return None
+    return latest_blocker
+
+
+__all__ = [
+    "active_shared_pool_blocker",
+    "pool_evidence",
+    "quota_pool_id_for_target",
+]
