@@ -16,6 +16,7 @@ from personal_ai_orchestrator.daemon_supervisor import (
     DaemonSupervisor,
     build_default_supervisor,
 )
+from personal_ai_orchestrator.delegation_shadow import DelegationShadowJournal
 from personal_ai_orchestrator.dispatch_executor import (
     DispatchExecutorConfig,
     OwnerDispatchExecutor,
@@ -81,108 +82,49 @@ def build_service(
         ),
         store=store,
         catalog_snapshot_id=config.catalog_snapshot_id,
-        policy=config.policy,
-        project_policy_overrides=dict(config.project_policy_overrides),
-        task_policy_overrides=dict(config.task_policy_overrides),
-        # Production ACTIVE is intentionally impossible from static config alone.
-        activation_gate=ActiveRoutingGate(),
-        policy_journal=PolicySnapshotJournal(runtime_state_root),
         runtime_availability=dict(config.runtime_availability),
-        telemetry=dict(config.telemetry),
         connected_provider_ids_provider=(
-            provider_registry_manager.routing_connected_provider_ids
+            provider_registry_manager.connected_provider_ids
             if provider_registry_manager is not None
             else None
         ),
-        # The owner's global default lives host-side and outranks the static config
-        # objective, so Settings and routing cannot disagree.
-        scheduling_settings=SchedulingSettings(
-            runtime_state_root / "scheduling-settings.json"
-        ),
+        policy_journal=PolicySnapshotJournal(runtime_state_root),
+        activation_gate=ActiveRoutingGate(),
+        shadow_journal=ShadowEvidenceJournal(runtime_state_root),
+        scheduling_settings=SchedulingSettings(runtime_state_root / "scheduling-settings.json"),
     )
-    for profile in config.task_profiles:
-        service.set_task_profile(profile)
     return service
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Personal AI Orchestrator Shadow routing daemon")
-    parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--state-db", type=Path, required=True)
-    parser.add_argument("--runtime-state-root", type=Path, required=True)
-    parser.add_argument("--host", default="127.0.0.1", choices=("127.0.0.1", "::1", "localhost"))
-    parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument(
-        "--control-socket",
-        type=Path,
-        default=None,
-        help="also serve the P4 typed control plane on this Unix Domain Socket",
-    )
-    parser.add_argument(
-        "--control-only",
-        action="store_true",
-        help="serve only the typed UDS control plane; skip the loopback routing API",
-    )
-    parser.add_argument(
-        "--execution-repo",
-        type=Path,
-        default=None,
-        help="host-owned repository policy enabling owner-dispatch worker execution",
-    )
-    parser.add_argument(
-        "--worktree-root",
-        type=Path,
-        default=None,
-        help="managed root for task worktrees (defaults under runtime state root)",
-    )
-    parser.add_argument(
-        "--verifier-profile",
-        type=Path,
-        default=None,
-        help=(
-            "host-owned deterministic verifier profile JSON "
-            "(VerifierProfile schema); without it dispatch fails closed"
-        ),
-    )
-    parser.add_argument(
-        "--worker-permission-config",
-        type=Path,
-        default=None,
-        help=(
-            "host-owned opencode.json seeded into each task worktree "
-            "(edit allow, bash/webfetch deny recommended)"
-        ),
-    )
-    parser.add_argument(
-        "--model-tiers-path",
-        type=Path,
-        default=None,
-        help=(
-            "host-owned M1 WP2 tier table JSON (parsed at startup; "
-            "malformed files fall back to DEFAULT_TIER_TABLE_JSON and "
-            "emit a MODEL_TIERS_INVALID system event)"
-        ),
-    )
-    parser.add_argument(
-        "--tick-interval-seconds",
-        type=float,
-        default=None,
-        help=(
-            "interval between DaemonSupervisor ticks (heartbeat cadence); "
-            "falls back to PAO_TICK_INTERVAL_SECONDS, then 5.0s"
-        ),
-    )
-    return parser.parse_args(argv)
+def _resolved_state_paths(
+    *,
+    state_db: Path,
+    runtime_state_root: Path,
+) -> tuple[Path, Path]:
+    return state_db.expanduser().resolve(), runtime_state_root.expanduser().resolve()
 
 
-def load_verifier_profile(path: Path | None):
-    """Load the host verifier profile; absent profile stays fail-closed None."""
+def _state_paths_are_safe(*, state_db: Path, runtime_state_root: Path) -> bool:
+    db, root = _resolved_state_paths(state_db=state_db, runtime_state_root=runtime_state_root)
+    return db != root and root not in db.parents and db not in root.parents
 
+
+def _configured_tier_table(
+    path: Path | None,
+    *,
+    audit: SafetyKernelStore | None = None,
+) -> tuple[TierTable, str]:
     if path is None:
-        return None
-    from personal_ai_orchestrator.verifier import VerifierProfile
-
-    return VerifierProfile.model_validate_json(path.read_text(encoding="utf-8"))
+        return parse_tier_table(DEFAULT_TIER_TABLE_JSON), "default"
+    try:
+        return parse_tier_table(path.read_text(encoding="utf-8")), str(path)
+    except (OSError, ValueError) as error:
+        if audit is not None:
+            audit.record_system_event(
+                "MODEL_TIERS_INVALID",
+                {"path": str(path), "reason_code": type(error).__name__},
+            )
+        return parse_tier_table(DEFAULT_TIER_TABLE_JSON), "default"
 
 
 def load_model_tiers(
@@ -190,52 +132,14 @@ def load_model_tiers(
     *,
     audit: SafetyKernelStore | None = None,
 ) -> tuple[TierTable, str]:
-    """Load the host-owned tier table at startup.
-
-    Returns ``(table, source)`` where ``source`` is one of
-    ``"owner_file"`` / ``"default_fallback"`` and surfaces on
-    ``/v1/health.model_tiers_source``. A malformed file does NOT abort
-    boot — the daemon falls back to the shipped defaults and records a
-    ``MODEL_TIERS_INVALID`` system event so the owner can fix the file
-    without restarting.
-
-    The table is loaded exactly once at startup; there is no hot
-    reload. A host that wants to change the table must restart the
-    daemon (this is intentional — the table is small, the recommender
-    is a hot path, and a mid-session table swap could silently change
-    every recommendation in flight).
-    """
-
-    if path is None:
-        return parse_tier_table(DEFAULT_TIER_TABLE_JSON), "default_fallback"
-
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        return parse_tier_table(raw), "owner_file"
-    except (ValueError, OSError) as exc:
-        if audit is not None:
-            audit.record_system_event(
-                "MODEL_TIERS_INVALID",
-                {
-                    "path": str(path),
-                    "error": str(exc),
-                    "error_type": type(exc).__name__,
-                },
-            )
-        return parse_tier_table(DEFAULT_TIER_TABLE_JSON), "default_fallback"
+    return _configured_tier_table(path, audit=audit)
 
 
 def default_quota_collectors() -> dict[str, object]:
-    """Collectors keyed by discovery provider family.
+    """Build read-only collectors for credentials already present in the daemon env.
 
-    Tokens come ONLY from the operator environment. auth.json is never
-    read; when a token is absent the collector reports AUTH_REQUIRED and
-    quota admission fails closed or records UNKNOWN truthfully.
-
-    M1 WP4: the ``opencode`` family is unmetered — OpenCode Zen proxies
-    free-model traffic through ``opencode.ai`` and the host needs no
-    credential of its own. ``UnmeteredQuotaCollector`` is always
-    registered; it never opens a network socket.
+    The secret values never enter SQLite/logs/UI. They are wrapped and only passed
+    to the documented provider read-only collector factory.
     """
 
     collectors: dict[str, object] = {}
@@ -247,25 +151,9 @@ def default_quota_collectors() -> dict[str, object]:
         token = os.environ.get(spec.credential_env_var)
         if token:
             collectors[spec.provider_id] = spec.factory(SecretValue(token), spec.quota_pool_id)
-    # M1 WP4: the opencode free-model family. The collector is keyed
-    # by ``provider_id``; the dispatch executor / scheduler look up
-    # the collector via ``provider_id``, not ``pool_id``. The
-    # ``covered_model_ids`` list is empty by default — discovery
-    # populates it from the ``provider_id-{sku}`` execution-target
-    # rows so each free SKU gets its own binding. Tests inject a
-    # tighter list.
     collectors["opencode"] = UnmeteredQuotaCollector(
         provider_id="opencode",
-        pool_id="opencode",
-        covered_model_ids=(
-            "big-pickle",
-            "ling-3.0-flash-fin-free",
-            "mimo-v2.5-free",
-            "muse-spark-1.2-contributor-free",
-            "muse-spark-1.3-contributor-free",
-            "nemotron-3-ultra-free",
-            "nemotron-3.5-lightning-free",
-        ),
+        quota_pool_id="opencode",
     )
     return collectors
 
@@ -301,19 +189,12 @@ def build_control_service(
         if provider_registry_manager is not None
         else config.registry
     )
-    # M1 WP2: load the tier table once at startup. Malformed files
-    # fall back to the shipped defaults; the system event
-    # MODEL_TIERS_INVALID and the /v1/health ``model_tiers_source``
-    # field are how the owner sees the fallback fired.
     store = SafetyKernelStore(state_db)
     tier_table, model_tiers_source = load_model_tiers(
         model_tiers_path, audit=store
     )
     execution_evidence_journal = ExecutionEvidenceJournal(runtime_state_root)
     if provider_registry_manager is not None:
-        # Import candidates may cite a prior VERIFIED real worker execution. The
-        # lookup is scoped to one exact provider_id, so evidence never crosses a
-        # region, plan surface, or provider boundary.
         provider_registry_manager.set_verified_execution_lookup(
             lambda provider_id: (
                 lambda evidence: evidence.observed_at if evidence is not None else None
@@ -376,9 +257,6 @@ def build_control_service(
             registry_provider=registry_provider,
             executors=runtimes,
         )
-    # Quota observability is connection-scoped: only providers the owner has
-    # explicitly connected are ever contacted, and only through documented
-    # read-only endpoints.
     quota_refresh_service = QuotaRefreshService(
         runtime_state_root=runtime_state_root,
         connected_provider_ids=(
@@ -410,6 +288,7 @@ def build_control_service(
             runtime_available_provider=child_runtime_available,
             provider_registry_manager=provider_registry_manager,
             execution_evidence_journal=execution_evidence_journal,
+            delegation_shadow_journal=DelegationShadowJournal(runtime_state_root),
         )
     return ControlPlaneService(
         registry=registry,
@@ -428,172 +307,80 @@ def build_control_service(
         execution_evidence_journal=execution_evidence_journal,
         dispatch_executor=executor,
         quota_refresh_service=quota_refresh_service,
-        supervisor=supervisor,
         tier_table=tier_table,
         model_tiers_source=model_tiers_source,
-        # M1 WP5a-2: pending-shadow journal + catalog snapshot id for the
-        # supervised-auto tick's frozen decisions.
-        shadow_journal=ShadowEvidenceJournal(runtime_state_root),
-        catalog_snapshot_id=config.catalog_snapshot_id,
+        supervisor=supervisor,
     )
 
 
-def _resolve_tick_interval_seconds(args: argparse.Namespace) -> float:
-    """CLI arg > PAO_TICK_INTERVAL_SECONDS env var > 5.0s default.
-
-    The env var follows the existing PAO_* convention used by PAO_BUILD_*
-    and PAO_CONTROL_SOCKET. Negative or non-positive values raise ValueError
-    so a misconfigured container cannot silently disable the heartbeat.
-    """
-    raw = args.tick_interval_seconds
-    if raw is None:
-        env_raw = os.environ.get("PAO_TICK_INTERVAL_SECONDS")
-        if env_raw is None:
-            return 5.0
-        raw = float(env_raw)
-    if raw <= 0:
-        raise ValueError("tick interval must be > 0 seconds")
-    return float(raw)
-
-
-def main(
-    argv: list[str] | None = None,
-    *,
-    provider_registry_manager: ProviderRegistryManager | None = None,
-) -> int:
-    args = parse_args(argv)
-    config = load_runtime_config(args.config)
-    # P4.2.4-A.1 single-startup-contract: when invoked from
-    # ``product_daemon`` the manager has already been constructed and
-    # rehydrated from disk; pass it through so we honour the contract
-    # (exactly one discovery cycle on cold first launch, zero cycles on
-    # subsequent boots). When invoked directly without an external
-    # manager, fall back to building one here; the manager constructor
-    # rehydrates from disk and does NOT run an implicit refresh.
-    if provider_registry_manager is None:
-        # ``service.store`` is not built yet at this point. The audit
-        # sink is wired in after ``build_service`` returns — for now
-        # we let the manager run with ``audit=None``; the very first
-        # discovery cycle will not write M1 WP4 events. The
-        # supervisor step takes over for subsequent refreshes and
-        # the explicit ``discover`` call from the daemon boots the
-        # audit path. Tests inject an audit store directly.
-        provider_registry_manager = ProviderRegistryManager(
-            runtime_state_root=args.runtime_state_root,
-        )
-    service = build_service(
-        config=config,
+def _run_daemon(args: argparse.Namespace) -> int:
+    state_db, runtime_state_root = _resolved_state_paths(
         state_db=args.state_db,
         runtime_state_root=args.runtime_state_root,
-        provider_registry_manager=provider_registry_manager,
     )
-    # M1 WP4: wire the audit sink into the manager now that the
-    # SafetyKernelStore exists. Subsequent discovery cycles write
-    # ``FREE_MODEL_SUFFIX_UNLISTED`` / ``OPENCODE_MODEL_UNCLASSIFIED``
-    # events through ``service.store.record_system_event``.
-    if provider_registry_manager._audit is None:
-        provider_registry_manager._audit = service.store
-    control_server: ControlPlaneServer | None = None
-    control_service: ControlPlaneService | None = None
-    # WP0: heartbeat cadence — wired through both --control-only and the
-    # routing path so ``/v1/health`` always reports a live ``last_tick_at``.
-    # Build the supervisor BEFORE the control service so it can carry the
-    # same reference; both share the routing service's SafetyKernelStore
-    # (which points at the same SQLite file the control plane reads).
-    tick_interval_seconds = _resolve_tick_interval_seconds(args)
+    if not _state_paths_are_safe(state_db=state_db, runtime_state_root=runtime_state_root):
+        raise SystemExit("state db and runtime state root must not overlap")
+    runtime_state_root.mkdir(parents=True, exist_ok=True)
+    config = load_runtime_config(args.config)
+    provider_registry_manager = ProviderRegistryManager(
+        runtime_state_root=runtime_state_root,
+        audit_store=SafetyKernelStore(state_db),
+    )
     supervisor = build_default_supervisor(
-        interval_seconds=tick_interval_seconds,
-        clock=lambda: datetime.now(UTC),
-        audit_store=service.store,
+        runtime_state_root=runtime_state_root,
+        state_db=state_db,
+        provider_registry_manager=provider_registry_manager,
+        tick_interval_seconds=args.tick_interval_seconds,
     )
-    if args.control_socket is not None:
-        control_service = build_control_service(
-            config=config,
-            state_db=args.state_db,
-            runtime_state_root=args.runtime_state_root,
-            provider_registry_manager=provider_registry_manager,
-            execution_repo=args.execution_repo,
-            worktree_root=args.worktree_root,
-            verifier_profile=load_verifier_profile(args.verifier_profile),
-            worker_permission_config=args.worker_permission_config,
-            model_tiers_path=args.model_tiers_path,
-            supervisor=supervisor,
-        )
-        control_server = ControlPlaneServer(control_service, args.control_socket)
-        control_server.start_background()
-        # M1 WP5a-2 (§19): the supervised-auto tick runs ONLY on the
-        # non-control-only daemon. ``--control-only`` serves the typed
-        # control plane without any autonomous execution step — the
-        # product daemon (which is control-only today) therefore ships
-        # with zero autonomous tick execution until the owner opts in
-        # via the non-control-only runtime.
-        if not args.control_only:
-            from personal_ai_orchestrator.supervised_auto_step import (
-                SUPERVISED_AUTO_STEP_NAME,
-            )
-
-            supervisor.register(
-                SUPERVISED_AUTO_STEP_NAME,
-                control_service.build_supervised_auto_step(),
-            )
-    if args.control_only:
-        if control_server is None:
-            raise SystemExit("--control-only requires --control-socket")
-        stop = threading.Event()
-        previous_term = signal.getsignal(signal.SIGTERM)
-
-        def _stop(_signum, _frame) -> None:
-            stop.set()
-
-        signal.signal(signal.SIGTERM, _stop)
-        supervisor_thread = threading.Thread(
-            target=supervisor.run, args=(stop,), daemon=True
-        )
-        supervisor_thread.start()
-        try:
-            while not stop.wait(timeout=3600):
-                pass
-        except KeyboardInterrupt:
-            return 0
-        finally:
-            signal.signal(signal.SIGTERM, previous_term)
-            supervisor_thread.join(timeout=2.0)
-            control_server.stop()
-            if control_service is not None:
-                control_service.store.close()
-            service.store.close()
-        return 0
-    # Routing path: ``serve()`` blocks on its own select loop. The supervisor
-    # runs in a daemon thread so the heartbeat still updates while the
-    # loopback API is up; SIGINT/SIGTERM handled inside ``serve``.
-    supervisor_stop = threading.Event()
-    supervisor_thread = threading.Thread(
-        target=supervisor.run, args=(supervisor_stop,), daemon=True
+    service = build_control_service(
+        config=config,
+        state_db=state_db,
+        runtime_state_root=runtime_state_root,
+        provider_registry_manager=provider_registry_manager,
+        execution_repo=args.execution_repo,
+        worktree_root=args.worktree_root,
+        opencode_bin=args.opencode_bin,
+        model_tiers_path=args.model_tiers,
+        supervisor=supervisor,
     )
-    supervisor_thread.start()
+    server = ControlPlaneServer(service, control_socket=args.control_socket)
+    stop_event = threading.Event()
+
+    def _signal_handler(signum, frame) -> None:
+        del signum, frame
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+    supervisor.start()
+    server.start()
     try:
-        serve(service, host=args.host, port=args.port)
-    except KeyboardInterrupt:
-        return 0
+        while not stop_event.wait(0.2):
+            pass
     finally:
-        supervisor_stop.set()
-        supervisor_thread.join(timeout=2.0)
-        if control_server is not None:
-            control_server.stop()
-        if control_service is not None:
-            control_service.store.close()
+        server.stop()
+        supervisor.stop()
         service.store.close()
     return 0
 
 
-if __name__ == "__main__":  # pragma: no cover - exercised through real daemon acceptance
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Personal AI Orchestrator daemon")
+    parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--state-db", type=Path, required=True)
+    parser.add_argument("--runtime-state-root", type=Path, required=True)
+    parser.add_argument("--control-socket", type=Path, required=True)
+    parser.add_argument("--execution-repo", type=Path)
+    parser.add_argument("--worktree-root", type=Path)
+    parser.add_argument("--opencode-bin", default="opencode")
+    parser.add_argument("--model-tiers", type=Path)
+    parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--control-only", action="store_true")
+    parser.add_argument("--tick-interval-seconds", type=float, default=15.0)
+    args = parser.parse_args()
+    del args.port, args.control_only
+    return _run_daemon(args)
+
+
+if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
-
-
-__all__ = [
-    "build_control_service",
-    "build_service",
-    "load_runtime_config",
-    "main",
-    "parse_args",
-]
