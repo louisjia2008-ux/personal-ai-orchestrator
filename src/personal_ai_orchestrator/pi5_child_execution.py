@@ -7,6 +7,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from personal_ai_orchestrator.delegation_shadow import (
+    DelegationShadowJournal,
+    build_delegation_shadow_record,
+)
 from personal_ai_orchestrator.dispatch_initiator import (
     AUTHORITY_DELEGATED_CHILD_EXECUTION,
     initiate_owner_dispatch,
@@ -34,6 +38,7 @@ class PAODelegationChildPort:
         runtime_available_provider: Callable[[str], bool],
         provider_registry_manager: Any = None,
         execution_evidence_journal: Any = None,
+        delegation_shadow_journal: DelegationShadowJournal | None = None,
         timeout_seconds: float = 300.0,
         poll_seconds: float = 0.05,
     ) -> None:
@@ -46,6 +51,7 @@ class PAODelegationChildPort:
         self.runtime_available_provider = runtime_available_provider
         self.provider_registry_manager = provider_registry_manager
         self.execution_evidence_journal = execution_evidence_journal
+        self.delegation_shadow_journal = delegation_shadow_journal
         self.timeout_seconds = timeout_seconds
         self.poll_seconds = poll_seconds
 
@@ -69,6 +75,57 @@ class PAODelegationChildPort:
                 expected_version=task.state_version,
                 reason="delegated child was not admitted for execution",
             )
+
+    def _record_shadow(
+        self,
+        *,
+        store: SafetyKernelStore,
+        plan: DelegationChildPlan,
+        recommendation: Any,
+        candidates: list[Any],
+    ) -> None:
+        """Best-effort observation only; never changes child execution semantics."""
+        journal = self.delegation_shadow_journal
+        if journal is None:
+            return
+        try:
+            record = build_delegation_shadow_record(
+                store=store,
+                registry=self.registry_provider(),
+                parent_task_id=plan.parent_task_id,
+                parent_run_id=plan.parent_run_id,
+                child_task_id=plan.child_task_id,
+                recommendation=recommendation,
+                candidates=candidates,
+            )
+            journal.append(record)
+            try:
+                store.record_system_event(
+                    "DELEGATION_SHADOW_RECORDED",
+                    {
+                        "observation_id": record.observation_id,
+                        "parent_task_id": plan.parent_task_id,
+                        "child_task_id": plan.child_task_id,
+                        "policy_version": record.decision.policy_version,
+                        "verdict": record.decision.verdict.value,
+                    },
+                )
+            except Exception:
+                pass
+        except Exception:
+            # SHADOW capture is deliberately non-authoritative.  Do not leak
+            # provider/filesystem exception text into durable audit evidence.
+            try:
+                store.record_system_event(
+                    "DELEGATION_SHADOW_RECORD_FAILED",
+                    {
+                        "parent_task_id": plan.parent_task_id,
+                        "child_task_id": plan.child_task_id,
+                        "reason_code": "SHADOW_CAPTURE_FAILED",
+                    },
+                )
+            except Exception:
+                pass
 
     async def execute_child(self, plan: DelegationChildPlan) -> DelegationChildResult:
         store = SafetyKernelStore(self.state_db)
@@ -123,9 +180,15 @@ class PAODelegationChildPort:
                 if child.state.value in _TERMINAL:
                     return self._result(plan, child.state.value)
                 service = self.recommendation_factory(store)
-                recommendation, _, invalid_tier = service.recommend_for_task(
+                recommendation, candidates, invalid_tier = service.recommend_for_task(
                     child,
                     policy=policy,
+                )
+                self._record_shadow(
+                    store=store,
+                    plan=plan,
+                    recommendation=recommendation,
+                    candidates=candidates,
                 )
                 pick = recommendation.top_pick
                 if invalid_tier is not None or pick is None or not pick.admitted:
