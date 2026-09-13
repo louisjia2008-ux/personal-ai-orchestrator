@@ -11,14 +11,26 @@ struct QuickSubmitView: View {
         store.projects?.projects.filter(\.isOnline) ?? []
     }
 
-    /// Manual targets come from owner-connected providers only.
+    /// Manual targets are owner-connected for connection-managed runtimes,
+    /// while Pi is considered connected when its host-authenticated runtime
+    /// reports the target as available.
     private var connectedTargets: [ExecutionTargetHealthView] {
         let connectedIds = Set(
             (store.providerConnections?.connected ?? []).map(\.providerId)
         )
         return (store.providers?.providers ?? [])
-            .filter { connectedIds.contains($0.providerId) }
-            .flatMap(\.executionTargets)
+            .flatMap { provider in
+                provider.executionTargets.filter { target in
+                    connectedIds.contains(provider.providerId)
+                        || (target.runtimeId == "pi" && target.runtimeAvailable == true)
+                }
+            }
+            .sorted {
+                if $0.runtimeId != $1.runtimeId {
+                    return $0.runtimeId < $1.runtimeId
+                }
+                return $0.modelSkuId.localizedStandardCompare($1.modelSkuId) == .orderedAscending
+            }
     }
 
     private static let selectablePolicies = SelectablePolicyFallback.policies + ["MANUAL"]
@@ -55,7 +67,9 @@ struct QuickSubmitView: View {
                 Picker(L10n.newTaskManualModel, selection: $store.selectedManualExecutionTargetId) {
                     Text(L10n.newTaskChooseModel).tag(String?.none)
                     ForEach(connectedTargets) { target in
-                        Text(target.modelSkuId).tag(String?.some(target.executionTargetId))
+                        let runtime = target.runtimeId == "pi" ? "Pi" : "OpenCode"
+                        Text("\(runtime) · \(target.modelSkuId)")
+                            .tag(String?.some(target.executionTargetId))
                     }
                 }
                 .pickerStyle(.menu)
