@@ -381,3 +381,86 @@ def test_pi_discovery_payload_contains_no_credential_values() -> None:
     assert "ZAI_API_KEY" in payload  # name is metadata
     assert "Bearer " not in payload
     assert "sk-" not in payload
+
+
+def test_minimax_cn_discovery_keeps_commercial_and_runtime_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import personal_ai_orchestrator.pi_provider_discovery as mod
+
+    executable = tmp_path / "pi"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+
+    spec = next(s for s in PI_PROVIDER_SPECS if s.pao_provider_id == "minimax-cn-coding-plan")
+
+    def fake_resolve(_explicit: Path | None) -> Path:
+        return executable
+
+    def fake_run(argv, **_kwargs):
+        full = (str(executable), *argv)
+        if argv == ("--version",):
+            return SubprocessResult(full, 0, "0.85.1\n", "", False)
+        if argv == (
+            "auth",
+            "check",
+            "--provider",
+            "minimax-cn",
+            "--json",
+            "--no-refresh",
+        ):
+            return SubprocessResult(
+                full,
+                0,
+                '{"status":"ready","provider":"minimax-cn","authType":"api_key"}\n',
+                "",
+                False,
+            )
+        if argv == (*HARDENED_MODEL_ARGV[:-1], "minimax-cn"):
+            return SubprocessResult(
+                full,
+                0,
+                "provider  model    context  max-out  thinking  images\n"
+                "minimax-cn MiniMax-M3  200K     128K     yes       no\n",
+                "",
+                False,
+            )
+        raise AssertionError(f"unexpected argv: {argv!r}")
+
+    monkeypatch.setattr(mod, "_resolve_pi", fake_resolve)
+    monkeypatch.setattr(mod, "_run_pi", fake_run)
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+
+    outcome = discover_pi(
+        specs=(spec,),
+        clock=lambda: datetime(2026, 9, 12, 20, 0, tzinfo=UTC),
+    )
+
+    assert outcome.error_code is None
+    assert outcome.result is not None
+    assert outcome.result.state is PiDiscoveryState.DISCOVERED
+    assert outcome.result.source_method == PI_SOURCE_METHOD
+    assert outcome.result.pi_version == "0.85.1"
+    assert outcome.result.provider_count() == 1
+    record = outcome.result.providers[0]
+    assert record.provider_id == "minimax-cn-coding-plan"
+    assert record.runtime_provider_id == "minimax-cn"
+    assert record.auth_status is PiAuthStatus.READY
+    assert record.model_skus == ("MiniMax-M3",)
+
+    registry = build_pi_registry(outcome.result)
+    assert "minimax-cn-coding-plan" in registry.providers
+    assert "minimax-cn-coding-plan/MiniMax-M3" in registry.models
+    target = registry.execution_targets["pi-minimax-cn-coding-plan-MiniMax-M3"]
+    assert target.runtime_id == "pi"
+    assert target.runtime_provider_id == "minimax-cn"
+    assert target.model_sku_id == "minimax-cn-coding-plan/MiniMax-M3"
+    assert target.execution_verified is False
+
+    from personal_ai_orchestrator.pi_runtime import pi_model_ref
+
+    assert target.id != "minimax-cn-coding-plan-MiniMax-M3"
+    assert pi_model_ref(
+        provider_id=spec.pao_provider_id, model_sku_id=target.model_sku_id,
+    ) == "minimax-cn/MiniMax-M3"

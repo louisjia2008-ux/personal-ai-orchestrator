@@ -1,0 +1,36 @@
+{
+  "profile": "pi3-minimax-host-file-check",
+  "passed": false,
+  "changed_paths": [
+    "hello.txt"
+  ],
+  "unexpected_paths": [],
+  "stages": [
+    {
+      "name": "git diff --check",
+      "argv": [
+        "git",
+        "diff",
+        "--check",
+        "82519fc9c754dad3b8e6fae11a03e9872bda2fd6",
+        "--"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "exact-content",
+      "argv": [
+        "/Users/<user>/Developer/personal-ai-orchestrator/.venv/bin/python",
+        "-c",
+        "from pathlib import Path; assert Path('hello.txt').read_bytes() == b'PI3_MINIMAX_PRODUCT_OK\\n'"
+      ],
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    from pathlib import Path; assert Path('hello.txt').read_bytes() == b'PI3_MINIMAX_PRODUCT_OK\\n'\n                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+    }
+  ],
+  "evidence_id": "verify-608a46d10eba0f939ea68db3",
+  "failure_reason": "verifier command failed: exact-content"
+}

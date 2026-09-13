@@ -264,12 +264,15 @@ def initiate_owner_dispatch(
             if target is not None
             else None
         )
-        connected_provider_ids = provider_registry_manager.connected_provider_ids()
+        connected_provider_ids = provider_registry_manager.routing_connected_provider_ids()
         if model is None or model.provider_id not in connected_provider_ids:
             store.mark_owner_dispatch_blocked(
                 request_id,
                 failure_code="PROVIDER_NOT_CONNECTED",
-                failure_reason="execution target provider is not connected by owner",
+                failure_reason=(
+                    "execution target provider is not connected or "
+                    "runtime-authenticated by owner"
+                ),
             )
             raise _control_plane_error(
                 409, "provider_not_connected"

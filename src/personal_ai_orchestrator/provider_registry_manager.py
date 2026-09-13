@@ -23,6 +23,7 @@ sanitized snapshot without re-running OpenCode CLI inspection.
 
 from __future__ import annotations
 
+import shutil
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -31,6 +32,9 @@ from pathlib import Path
 from typing import Any
 
 from personal_ai_orchestrator.model_registry import ModelRegistry
+from personal_ai_orchestrator.pi_provider_registry_manager import (
+    PiProviderRegistryManager,
+)
 from personal_ai_orchestrator.provider_connections import (
     ProviderConnection,
     ProviderConnectionRegistry,
@@ -55,6 +59,7 @@ from personal_ai_orchestrator.provider_registry_store import (
     load,
     save,
 )
+from personal_ai_orchestrator.runtime_registry import merge_runtime_registries
 
 
 @dataclass(frozen=True)
@@ -131,6 +136,7 @@ class ProviderRegistryManager:
         runtime_state_root: Path,
         opencode_path: Path | None = None,
         audit: Any | None = None,
+        pi_runtime_manager: PiProviderRegistryManager | None = None,
     ) -> None:
         self._runtime_state_root = runtime_state_root
         self._opencode_path = opencode_path
@@ -144,6 +150,7 @@ class ProviderRegistryManager:
         # :class:`ProviderDiscovery` rows without the audit
         # side-effect.
         self._audit = audit
+        self._pi_runtime_manager = pi_runtime_manager
         # Injected by the runtime once the execution-evidence journal exists. Kept
         # optional so discovery still works before any real execution has happened.
         self._verified_execution_lookup: Callable[[str], datetime | None] | None = None
@@ -259,10 +266,36 @@ class ProviderRegistryManager:
     # ------------------------------------------------------------------
 
     def registry(self) -> ModelRegistry:
-        """Return the current registry (read-only contract)."""
+        """Return the current registry, including optional Pi runtime targets."""
 
         with self._lock:
-            return self._state.registry
+            base = self._state.registry
+            pi_manager = self._pi_runtime_manager
+        if pi_manager is None:
+            return base
+        return merge_runtime_registries(base, pi_manager.registry())
+
+    def pi_runtime_manager(self) -> PiProviderRegistryManager | None:
+        with self._lock:
+            return self._pi_runtime_manager
+
+    def runtime_available(self, execution_target_id: str) -> bool:
+        with self._lock:
+            target = self.registry().execution_targets.get(execution_target_id)
+            opencode_path = self._opencode_path
+            pi_manager = self._pi_runtime_manager
+        if target is None or not target.enabled:
+            return False
+        if target.runtime_id == "pi":
+            return (
+                pi_manager.runtime_available(execution_target_id)
+                if pi_manager is not None
+                else False
+            )
+        if target.runtime_id == "opencode":
+            executable = str(opencode_path) if opencode_path is not None else "opencode"
+            return shutil.which(executable) is not None
+        return False
 
     def status(self) -> ProviderDiscoveryStatus:
         with self._lock:
@@ -279,6 +312,28 @@ class ProviderRegistryManager:
     def connected_provider_ids(self) -> frozenset[str]:
         with self._lock:
             return self._connections.connected_provider_ids()
+
+    def routing_connected_provider_ids(self) -> frozenset[str]:
+        """Return providers eligible for runtime routing.
+
+        Explicit provider connections remain the authority for OpenCode and
+        other connection-managed surfaces. Pi is local-runtime authenticated:
+        a provider is considered routing-connected only when the Pi discovery
+        snapshot reports READY auth and at least one discovered model.
+        """
+
+        ids = set(self.connected_provider_ids())
+        with self._lock:
+            pi_manager = self._pi_runtime_manager
+        if pi_manager is None:
+            return frozenset(ids)
+        result = pi_manager.last_discovery_result()
+        if result is None:
+            return frozenset(ids)
+        for provider in result.providers:
+            if provider.auth_status.value == "READY" and provider.model_skus:
+                ids.add(provider.provider_id)
+        return frozenset(ids)
 
     def connect_provider(self, provider_id: str) -> ProviderConnection:
         with self._lock:
@@ -426,6 +481,8 @@ class ProviderRegistryManager:
                         outcome.result,
                         runtime_state_root=self._runtime_state_root,
                     )
+                    if self._pi_runtime_manager is not None:
+                        self._pi_runtime_manager.refresh()
                     status = _status_from_result(outcome.result)
                     self._state = _RuntimeState(
                         registry=registry,
@@ -456,6 +513,8 @@ class ProviderRegistryManager:
                 )
                 self._state.last_status = failed_status
                 self._state.last_error_code = outcome.error_code
+                if self._pi_runtime_manager is not None:
+                    self._pi_runtime_manager.refresh()
                 return failed_status
         finally:
             with self._lock:

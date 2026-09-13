@@ -95,10 +95,9 @@ class PiProviderSpec:
     pool_kind: str = "windowed"
 
 
-# PI-2 starts only with the mapping that PI-1 verified on the real target Mac.
-# MiniMax/OpenCode/other Pi surfaces must receive their own semantic acceptance
-# before being added here; a shared runtime provider name is not enough to
-# infer subscription/plan identity.
+# Curated PAO commercial identities mapped to real Pi auth/catalog surfaces.
+# PI-3 confirmed MiniMax China readiness and MiniMax-M3 catalog presence.
+# Discovery never grants execution verification; each target needs its own probe.
 PI_PROVIDER_SPECS: tuple[PiProviderSpec, ...] = (
     PiProviderSpec(
         pao_provider_id="zai-coding-plan",
@@ -107,6 +106,12 @@ PI_PROVIDER_SPECS: tuple[PiProviderSpec, ...] = (
         env_variables=("ZAI_API_KEY",),
         auth_kind="api_key",
         pool_kind="windowed",
+    ),
+    PiProviderSpec(
+        pao_provider_id="minimax-cn-coding-plan",
+        pi_provider_id="minimax-cn",
+        display_name="MiniMax CN Coding Plan",
+        env_variables=("MINIMAX_API_KEY",),
     ),
 )
 
@@ -129,6 +134,69 @@ class PiProviderDiscovery:
     @property
     def catalog_discovered(self) -> bool:
         return bool(self.model_skus)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> PiProviderDiscovery:
+        assert_sanitized(payload)
+        if payload.get("runtime_id") != "pi":
+            raise ValueError("Pi provider record must declare runtime_id=pi")
+        provider_id = payload.get("provider_id")
+        runtime_provider_id = payload.get("runtime_provider_id")
+        display_name = payload.get("display_name")
+        auth_status_raw = payload.get("auth_status")
+        model_skus_raw = payload.get("model_skus")
+        observed_at_raw = payload.get("observed_at")
+        if not all(
+            isinstance(value, str)
+            for value in (
+                provider_id,
+                runtime_provider_id,
+                display_name,
+                auth_status_raw,
+                observed_at_raw,
+            )
+        ):
+            raise ValueError("invalid Pi provider discovery identity")
+        if not isinstance(model_skus_raw, list) or not all(
+            isinstance(model, str) for model in model_skus_raw
+        ):
+            raise ValueError("invalid Pi provider model list")
+        try:
+            observed_at = datetime.fromisoformat(observed_at_raw)
+            auth_status = PiAuthStatus(auth_status_raw)
+        except ValueError as exc:
+            raise ValueError("invalid Pi provider discovery timestamp/status") from exc
+        if observed_at.tzinfo is None:
+            observed_at = observed_at.replace(tzinfo=UTC)
+        env_raw = payload.get("env_variables_present", [])
+        auth_reason = payload.get("auth_reason")
+        auth_type = payload.get("auth_kind", "api_key")
+        pool_kind = payload.get("pool_kind", "windowed")
+        if not isinstance(env_raw, list) or not all(
+            isinstance(value, str) for value in env_raw
+        ):
+            raise ValueError("invalid Pi provider environment metadata")
+        if not isinstance(auth_type, str) or not isinstance(pool_kind, str):
+            raise ValueError("invalid Pi provider metadata")
+        if auth_reason is not None and not isinstance(auth_reason, str):
+            raise ValueError("invalid Pi provider auth reason")
+        execution_verified = payload.get("execution_verified", False)
+        if not isinstance(execution_verified, bool):
+            raise ValueError("invalid Pi provider execution verification flag")
+        return cls(
+            provider_id=provider_id,
+            runtime_provider_id=runtime_provider_id,
+            display_name=display_name,
+            auth_status=auth_status,
+            model_skus=tuple(model_skus_raw),
+            observed_at=observed_at,
+            evidence_source=str(payload.get("evidence_source", "PI_CLI_INSPECTION")),
+            env_variables_present=tuple(env_raw),
+            auth_kind=auth_type,
+            pool_kind=pool_kind,
+            execution_verified=execution_verified,
+            auth_reason=auth_reason,
+        )
 
     def to_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -167,6 +235,64 @@ class PiDiscoveryResult:
 
     def execution_target_count(self) -> int:
         return sum(len(provider.model_skus) for provider in self.providers)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> PiDiscoveryResult:
+        assert_sanitized(payload)
+        if payload.get("schema_version") != 1 or payload.get("runtime_id") != "pi":
+            raise ValueError("unsupported Pi discovery snapshot")
+        generated_at = payload.get("generated_at")
+        pi_path = payload.get("runtime_path")
+        pi_version = payload.get("runtime_version")
+        source_method = payload.get("source_method", PI_SOURCE_METHOD)
+        state_raw = payload.get("discovery_state")
+        providers_raw = payload.get("providers")
+        configured_count = payload.get("configured_family_count", 0)
+        last_error_code = payload.get("last_error_code")
+        if not all(
+            isinstance(value, str)
+            for value in (
+                generated_at,
+                pi_path,
+                pi_version,
+                source_method,
+                state_raw,
+            )
+        ):
+            raise ValueError("invalid Pi discovery snapshot identity")
+        if not isinstance(providers_raw, list) or not all(
+            isinstance(item, dict) for item in providers_raw
+        ):
+            raise ValueError("invalid Pi discovery provider list")
+        if not isinstance(configured_count, int) or configured_count < 0:
+            raise ValueError("invalid Pi configured family count")
+        if last_error_code is not None and not isinstance(last_error_code, str):
+            raise ValueError("invalid Pi discovery error code")
+        try:
+            discovered_at = datetime.fromisoformat(generated_at)
+            state = PiDiscoveryState(state_raw)
+        except ValueError as exc:
+            raise ValueError("invalid Pi discovery timestamp/state") from exc
+        if discovered_at.tzinfo is None:
+            discovered_at = discovered_at.replace(tzinfo=UTC)
+        providers = tuple(
+            PiProviderDiscovery.from_dict(item) for item in providers_raw
+        )
+        if len(providers) != payload.get("provider_count"):
+            raise ValueError("Pi provider_count does not match provider records")
+        expected_targets = sum(len(provider.model_skus) for provider in providers)
+        if expected_targets != payload.get("execution_target_count"):
+            raise ValueError("Pi execution_target_count does not match model records")
+        return cls(
+            discovered_at=discovered_at,
+            pi_path=pi_path,
+            pi_version=pi_version,
+            providers=providers,
+            state=state,
+            source_method=source_method,
+            configured_family_count=configured_count,
+            last_error_code=last_error_code,
+        )
 
     def to_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {
