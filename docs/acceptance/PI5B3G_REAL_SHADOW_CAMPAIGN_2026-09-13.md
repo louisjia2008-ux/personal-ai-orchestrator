@@ -206,3 +206,111 @@ call through the normal production verification mechanism would be required;
 it would be separate from campaign observations. No such call is authorized or
 performed by this reconciliation task. PR #53 stays Draft; do not merge or
 start the real campaign from this result.
+
+## EXACT_TARGET_PRODUCT_REVERIFICATION
+
+The owner separately authorized exactly one real exact-target verification
+call, with zero retries and no campaign startup. This section preserves both
+previous blocked-preflight and host-reconciliation evidence unchanged.
+
+Evidence branch baseline: `c704abb8e85ba34b760c9003470b0b59c0dee000`.
+Production code remains merged main
+`64a45a3adaafb42cac2c6a55a3ac0db31c06f059`.
+
+### Before the call
+
+The live product reported the expected production commit. Campaign GET returned
+HTTP 200 / OFF / consumed=0. The exact target was present, enabled and runtime
+available, with `runtime_id=pi`, `runtime_provider_id=minimax-cn`, and model SKU
+`minimax-cn-coding-plan/MiniMax-M3`. Pi version was 0.85.1; the metadata-only
+auth check returned READY and the catalog included MiniMax-M3.
+
+The product `ExecutionEvidenceJournal` had no evidence for this exact target.
+Normal `validate_execution_target_launch` rejected it solely with
+`execution target has not been runtime-verified`.
+
+One live-host provider-scoped read-only quota refresh returned SUCCESS and
+AVAILABLE / EXACT in canonical pool `minimax-token-plan-cn`, snapshot
+`quota-519fee87-5e6f-40b3-8307-4040df47fcea`. Remaining fractions were 0.99 for
+the five-hour window and 0.33 for the weekly window. There was no active shared
+pool blocker. No model call was used to discover quota.
+
+### Canonical verification and separate budget
+
+The unchanged production `run_pi_execution_probe` ran against the existing
+target and the actual product runtime-state root:
+`/Users/<user>/Library/Application Support/Personal AI Orchestrator/runtime-state`.
+The probe retained the canonical model translation, trusted worktree guard,
+`build_worker_env`, `ProcessSupervisor`, bounded stream capture, Pi JSON
+summary validation, and `ExecutionEvidenceJournal.append` authority.
+
+A repository-external observer recorded only sanitized process/protocol facts
+and enforced exclusive durable attempt/process markers. It did not replace
+the probe validator or construct a VERIFIED row. The probe used a disposable
+external-disk workspace, not an owner repository. An isolated Pi settings
+directory disabled session retries, provider retries (`maxRetries=0`), and
+automatic compaction; Pi's own SettingsManager confirmed those values before
+inference. Its auth path was only a temporary reference to the existing CLI
+auth store; credential values were neither read by the observer nor copied.
+The settings directory and reference were removed after the worker exited.
+
+| Verification fact | Observed result |
+| --- | --- |
+| Exact target | `pi-minimax-cn-coding-plan-MiniMax-M3` |
+| Real verification attempts / Pi worker processes | 1 / 1 |
+| Worker PID / process group | 82386 / 82386 |
+| OS exit | 0 |
+| Pi JSON protocol | VALID |
+| Actual runtime / provider / model | `pi` / `minimax-cn` / `MiniMax-M3` |
+| Final stop reason | `stop` |
+| Extension errors | 0 |
+| Tool start / end count | 0 / 0 |
+| Expected canonical probe marker | PRESENT |
+| Output truncation | NO |
+| Durable evidence ID | `exec-verify-0abd3c01892bb7e04f07d276` |
+| Evidence observation time | 2026-09-13T12:12:16.193526Z |
+| Evidence result / reason | VERIFIED / REAL_PI_WORKER_PROBE_SUCCEEDED |
+| Automatic retries / fallback | 0 / NO |
+
+The canonical marker was
+`PERSONAL-AI-ORCHESTRATOR-PI-EXECUTION-PROBE-OK`. The worker's tool allowlist
+excluded bash, powershell, webfetch and pao_delegate. No delegation broker or
+child was created. Raw streams were held only in bounded memory for the
+canonical validator and were not persisted or committed.
+
+### Post-verification gate and cleanup
+
+The live product providers projection now reports execution_verified=true
+and runtime_available=true for the exact target. The normal launch validator
+passes using the newly journaled product evidence. Auth was rechecked as READY.
+The same persisted quota snapshot remained current and launchable during the
+post-verification check (about 36 seconds old), with no shared-pool blocker.
+No second quota refresh or quota-consumption attribution was performed.
+
+Campaign GET remains HTTP 200 / OFF / consumed=0. Campaign parent workers,
+child workers and total workers used are all **0**; its original maximums
+remain **3 / 3 / 6**, with three observations still unused. The single
+re-verification worker is accounted separately. No Observation 1 was launched.
+
+The exact verification PID and its owned process group were both absent after
+exit; orphan processes=0. Product task/run/workspace counts stayed 34/7/7.
+RUNNING rows, active run rows and held writers remained 0/0/0. Production source
+HEAD and clean status were unchanged. No credential values were exposed.
+
+### Evidence validation and status
+
+Sanitized evidence is in `pi5b3g-2026-09-13/exact-target-reverification/`:
+preflight, verification result, post-verification preflight, cleanup, retry
+policy and separate worker budget. Local validation covers evidence
+consistency, existing `assert_sanitized` on all committed JSON, preservation
+of previous evidence bytes, and `git diff --check`. No full local pytest,
+Swift tests, OpenCode regression, or full Ruff was run; source code did not
+change. Exact-head CI for the evidence commit is recorded on PR #53.
+
+Runtime verification and post-verification preflight succeeded. Once that
+evidence commit's exact-head CI is green, the applicable status is
+`PI_5B3G_EXACT_TARGET_REVERIFICATION_COMPLETE_CAMPAIGN_READY`.
+This is readiness at the recorded observation time, not a campaign execution
+or enforcement approval. Any subsequent campaign must repeat current quota
+and host checks. PR #53 remains OPEN / DRAFT and must not be merged. The real
+campaign is not started by this task.
