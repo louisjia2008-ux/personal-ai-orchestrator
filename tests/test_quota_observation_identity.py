@@ -267,7 +267,8 @@ def test_default_collectors_use_source_identity_and_region(monkeypatch):
         "zai-coding-plan", "minimax-coding-plan", PROVIDER, "opencode",
     }
     for provider in set(collectors) - {"opencode"}:
-        assert collectors[provider]._quota_pool_id == QUOTA_SOURCE_BY_PROVIDER[provider].quota_pool_id
+        expected_pool = QUOTA_SOURCE_BY_PROVIDER[provider].quota_pool_id
+        assert collectors[provider]._quota_pool_id == expected_pool
     assert "minimaxi.com" in collectors[PROVIDER]._endpoint
     assert "minimax.io" in collectors["minimax-coding-plan"]._endpoint
 
