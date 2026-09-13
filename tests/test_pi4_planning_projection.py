@@ -13,7 +13,6 @@ from personal_ai_orchestrator.model_registry import (
     ModelRegistry,
     ModelSKU,
     Provider,
-    QuotaWindowKind,
 )
 from personal_ai_orchestrator.quota_availability import (
     QuotaAvailabilityJournal,
@@ -22,6 +21,7 @@ from personal_ai_orchestrator.quota_availability import (
     observe_success,
 )
 from personal_ai_orchestrator.scheduler import RoutingObjective
+from tests.quota_identity_fixtures import bind, snapshot
 
 
 def _registry() -> ModelRegistry:
@@ -65,12 +65,14 @@ def _registry() -> ModelRegistry:
             execution_verified=True,
         ),
     }
-    return ModelRegistry(
+    registry = ModelRegistry(
         providers={minimax.id: minimax, alternate.id: alternate},
         accounts={mm_account.id: mm_account, alt_account.id: alt_account},
         models={mm_model.id: mm_model, alt_model.id: alt_model},
         execution_targets=targets,
     )
+
+    return bind(registry, alt_model.id, "alternate-plan", datetime(2026, 1, 1, tzinfo=UTC))
 
 
 class _ExecutionEvidence:
@@ -83,26 +85,17 @@ class _ExecutionEvidence:
 
 class _QuotaRefresh:
     def __init__(self, now: datetime) -> None:
-        window = SimpleNamespace(
-            window_kind=QuotaWindowKind.FIVE_HOUR,
-            window_started_at=now - timedelta(hours=1),
-            reset_at=now + timedelta(hours=4),
-            used_fraction=0.2,
-            remaining_fraction=0.8,
-        )
-        self._observations = (
-            SimpleNamespace(
-                provider_id="minimax-cn-coding-plan",
-                snapshot=SimpleNamespace(windows=(window,)),
-            ),
-            SimpleNamespace(
-                provider_id="alternate-plan",
-                snapshot=SimpleNamespace(windows=(window,)),
-            ),
-        )
+        self._snapshots = {
+            pool: snapshot(pool, now) for pool in ("minimax-token-plan-cn", "alternate-plan")
+        }
 
     def observations(self):
-        return self._observations
+        return tuple(SimpleNamespace(provider_id=p) for p in (
+            "minimax-cn-coding-plan", "alternate-plan",
+        ))
+
+    def snapshot_for_pool(self, pool):
+        return self._snapshots.get(pool)
 
 
 def _service(

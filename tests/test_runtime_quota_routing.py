@@ -73,7 +73,7 @@ def test_active_pool_blocker_survives_newer_unknown(tmp_path: Path) -> None:
         unknown_availability(
             execution_target_id="pi-minimax-cn-coding-plan-MiniMax-M3",
             provider_id="minimax-cn-coding-plan",
-            quota_pool_id="minimax-cn-coding-plan",
+            quota_pool_id="minimax-token-plan-cn",
             observed_at=now - timedelta(minutes=1),
         )
     )
@@ -81,7 +81,7 @@ def test_active_pool_blocker_survives_newer_unknown(tmp_path: Path) -> None:
     effective = active_shared_pool_blocker(
         journal,
         provider_id="minimax-cn-coding-plan",
-        quota_pool_id="minimax-cn-coding-plan",
+        quota_pool_id="minimax-token-plan-cn",
         now=now,
     )
 
@@ -98,7 +98,7 @@ def test_newer_success_releases_older_shared_pool_blocker(tmp_path: Path) -> Non
             None,
             execution_target_id="minimax-cn-coding-plan-MiniMax-M3",
             provider_id="minimax-cn-coding-plan",
-            quota_pool_id="minimax-cn-coding-plan",
+            quota_pool_id="minimax-token-plan-cn",
             observed_at=now - timedelta(minutes=2),
             sanitized_reason_code="USAGE_LIMIT",
         )
@@ -108,7 +108,7 @@ def test_newer_success_releases_older_shared_pool_blocker(tmp_path: Path) -> Non
             None,
             execution_target_id="pi-minimax-cn-coding-plan-MiniMax-M3",
             provider_id="minimax-cn-coding-plan",
-            quota_pool_id="minimax-cn-coding-plan",
+            quota_pool_id="minimax-token-plan-cn",
             observed_at=now - timedelta(minutes=1),
         )
     )
@@ -117,7 +117,7 @@ def test_newer_success_releases_older_shared_pool_blocker(tmp_path: Path) -> Non
         active_shared_pool_blocker(
             journal,
             provider_id="minimax-cn-coding-plan",
-            quota_pool_id="minimax-cn-coding-plan",
+            quota_pool_id="minimax-token-plan-cn",
             now=now,
         )
         is None
@@ -132,7 +132,7 @@ def test_expired_shared_cooldown_does_not_block_runtime_switch(tmp_path: Path) -
             None,
             execution_target_id="minimax-cn-coding-plan-MiniMax-M3",
             provider_id="minimax-cn-coding-plan",
-            quota_pool_id="minimax-cn-coding-plan",
+            quota_pool_id="minimax-token-plan-cn",
             observed_at=observed,
             sanitized_reason_code="USAGE_LIMIT",
             minimum_cooldown_seconds=60,
@@ -143,7 +143,7 @@ def test_expired_shared_cooldown_does_not_block_runtime_switch(tmp_path: Path) -
         active_shared_pool_blocker(
             journal,
             provider_id="minimax-cn-coding-plan",
-            quota_pool_id="minimax-cn-coding-plan",
+            quota_pool_id="minimax-token-plan-cn",
             now=datetime.now(UTC),
         )
         is None
@@ -164,7 +164,7 @@ def test_runtime_router_blocks_pi_when_opencode_sibling_pool_is_blocked(
             None,
             execution_target_id="minimax-cn-coding-plan-MiniMax-M3",
             provider_id="minimax-cn-coding-plan",
-            quota_pool_id="minimax-cn-coding-plan",
+            quota_pool_id="minimax-token-plan-cn",
             observed_at=now,
             sanitized_reason_code="USAGE_LIMIT",
         )
@@ -232,7 +232,7 @@ def test_runtime_router_allows_pi_after_newer_pool_success(
             None,
             execution_target_id="minimax-cn-coding-plan-MiniMax-M3",
             provider_id="minimax-cn-coding-plan",
-            quota_pool_id="minimax-cn-coding-plan",
+            quota_pool_id="minimax-token-plan-cn",
             observed_at=now - timedelta(minutes=2),
             sanitized_reason_code="USAGE_LIMIT",
         )
@@ -242,7 +242,7 @@ def test_runtime_router_allows_pi_after_newer_pool_success(
             None,
             execution_target_id="pi-minimax-cn-coding-plan-MiniMax-M3",
             provider_id="minimax-cn-coding-plan",
-            quota_pool_id="minimax-cn-coding-plan",
+            quota_pool_id="minimax-token-plan-cn",
             observed_at=now - timedelta(minutes=1),
         )
     )

@@ -36,10 +36,9 @@ from personal_ai_orchestrator.pi_runtime import PiRuntimeConfig
 from personal_ai_orchestrator.policy_snapshot import PolicySnapshotJournal
 from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryManager
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
-from personal_ai_orchestrator.quota_collectors.minimax import MiniMaxQuotaCollector
 from personal_ai_orchestrator.quota_collectors.unmetered import UnmeteredQuotaCollector
-from personal_ai_orchestrator.quota_collectors.zai import ZAIQuotaCollector
-from personal_ai_orchestrator.quota_refresh import QuotaRefreshService
+from personal_ai_orchestrator.quota_credentials import SecretValue
+from personal_ai_orchestrator.quota_refresh import QUOTA_SOURCES, QuotaRefreshService
 from personal_ai_orchestrator.routing_service import RoutingService
 from personal_ai_orchestrator.runtime_config import RuntimeConfig
 from personal_ai_orchestrator.runtime_dispatch_executor import RuntimeDispatchExecutor
@@ -240,15 +239,14 @@ def default_quota_collectors() -> dict[str, object]:
     """
 
     collectors: dict[str, object] = {}
-    zai_token = os.environ.get("ZAI_API_KEY")
-    if zai_token:
-        collectors["zai-coding-plan"] = ZAIQuotaCollector(authorization_token=zai_token)
-    minimax_token = os.environ.get("MINIMAX_API_KEY")
-    if minimax_token:
-        collectors["minimax-coding-plan"] = MiniMaxQuotaCollector(bearer_token=minimax_token)
-        collectors["minimax-cn-coding-plan"] = MiniMaxQuotaCollector(
-            bearer_token=minimax_token
-        )
+    for spec in QUOTA_SOURCES:
+        if spec.provider_id not in {
+            "zai-coding-plan", "minimax-coding-plan", "minimax-cn-coding-plan",
+        }:
+            continue
+        token = os.environ.get(spec.credential_env_var)
+        if token:
+            collectors[spec.provider_id] = spec.factory(SecretValue(token), spec.quota_pool_id)
     # M1 WP4: the opencode free-model family. The collector is keyed
     # by ``provider_id``; the dispatch executor / scheduler look up
     # the collector via ``provider_id``, not ``pool_id``. The

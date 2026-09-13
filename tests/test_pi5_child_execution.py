@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,7 +10,6 @@ import pytest
 from personal_ai_orchestrator.control_api import ControlPlaneError
 from personal_ai_orchestrator.dispatch_initiator import initiate_owner_dispatch
 from personal_ai_orchestrator.dispatch_recommendation_service import DispatchRecommendationService
-from personal_ai_orchestrator.model_registry import QuotaWindowKind
 from personal_ai_orchestrator.pi5_broker import (
     DelegationBrokerContext,
     DelegationBrokerSession,
@@ -27,26 +26,17 @@ from personal_ai_orchestrator.safety_kernel import (
     TaskState,
     expected_source_state_for_dispatch_authority,
 )
+from tests.quota_identity_fixtures import snapshot
 from tests.test_pi4_planning_projection import _ExecutionEvidence, _service
 from tests.test_pi_dispatch_executor import TARGET_ID, _executor, _registry, _reserve
 
 
 def _recommendation_factory(executor):
     evidence = _ExecutionEvidence(datetime.now(UTC))
-    window = SimpleNamespace(
-        window_kind=QuotaWindowKind.FIVE_HOUR,
-        window_started_at=datetime.now(UTC),
-        reset_at=datetime.now(UTC) + timedelta(hours=5),
-        used_fraction=0.0,
-        remaining_fraction=0.8,
-    )
+    quota = snapshot("zai-coding-plan", datetime.now(UTC))
     refresh = SimpleNamespace(
-        observations=lambda: [
-            SimpleNamespace(
-                provider_id="zai-coding-plan",
-                snapshot=SimpleNamespace(windows=[window]),
-            )
-        ]
+        observations=lambda: (SimpleNamespace(provider_id="zai-coding-plan"),),
+        snapshot_for_pool=lambda pool: quota if pool == quota.quota_pool_id else None,
     )
 
     def recommendation(child_store):

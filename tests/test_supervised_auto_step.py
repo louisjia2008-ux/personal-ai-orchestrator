@@ -13,7 +13,6 @@ import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
 
 from personal_ai_orchestrator.control_api import ControlPlaneService
 from personal_ai_orchestrator.execution_evidence import (
@@ -24,6 +23,7 @@ from personal_ai_orchestrator.model_registry import (
     EvidenceConfidence,
     EvidenceSource,
     EvidenceSourceType,
+    QuotaSnapshot,
     QuotaState,
     QuotaWindowKind,
     QuotaWindowSnapshot,
@@ -47,12 +47,21 @@ from personal_ai_orchestrator.supervised_auto_step import (
     supervised_auto_routing_request_id,
 )
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
-from tests.test_dispatch_initiator import _make_repo, _registry
+from tests.quota_identity_fixtures import bind
+from tests.test_dispatch_initiator import _make_repo
+from tests.test_dispatch_initiator import _registry as _base_registry
 
 NOW = datetime.now(UTC) + timedelta(hours=2)
 #: Timestamps for evidence / quota observations: recent past relative to
 #: the fake NOW anchor so freshness gates pass deterministically.
-OBSERVED_AT = NOW - timedelta(hours=1)
+OBSERVED_AT = NOW - timedelta(minutes=1)
+
+
+def _registry():
+    registry = _base_registry()
+    for model_id in registry.models:
+        registry = bind(registry, model_id, "pool", NOW - timedelta(days=1))
+    return registry
 
 
 class _FakeQuotaRefresh:
@@ -65,6 +74,11 @@ class _FakeQuotaRefresh:
         if self._observation is None:
             return ()
         return (self._observation,)
+
+    def snapshot_for_pool(self, pool):
+        if self._observation is not None and self._observation.quota_pool_id == pool:
+            return self._observation.snapshot
+        return None
 
 
 class _FakeExecutionSupervisor:
@@ -127,8 +141,10 @@ def _observation(
         confidence=EvidenceConfidence.EXACT,
         source=source,
     )
-    snapshot = SimpleNamespace(
-        windows=[window],
+    snapshot = QuotaSnapshot(
+        quota_pool_id="pool", observed_at=now, source=source,
+        state=QuotaState.AVAILABLE, confidence=EvidenceConfidence.EXACT,
+        windows=(window,),
     )
     return QuotaProviderObservation(
         provider_id="minimax",
@@ -322,7 +338,7 @@ def test_hard_gate_quota_state_not_auto_ok_skips(tmp_path) -> None:
             execution_target_id="m3-sub",
             provider_id="minimax",
             quota_pool_id="pool",
-            observed_at=OBSERVED_AT,
+            observed_at=NOW - timedelta(hours=1),
             sanitized_reason_code="TEST",
         )
     )

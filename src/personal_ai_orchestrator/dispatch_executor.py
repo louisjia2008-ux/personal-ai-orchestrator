@@ -72,6 +72,7 @@ from personal_ai_orchestrator.quota_collectors.base import (
     QuotaCollectionResult,
     QuotaCollectionStatus,
 )
+from personal_ai_orchestrator.runtime_quota_routing import quota_pool_id_for_target
 from personal_ai_orchestrator.safety_kernel import (
     OwnerDispatchRecord,
     OwnerDispatchStatus,
@@ -1354,7 +1355,11 @@ class OwnerDispatchExecutor:
         )
         is_unmetered = bool(family and family.pool_kind == "unmetered")
         previous = self._quota_availability_journal.load(execution_target_id)
-        quota_pool_id = provider_id
+        quota_pool_id = quota_pool_id_for_target(
+            self._registry_provider(), execution_target_id=execution_target_id, now=observed_at,
+        )
+        if quota_pool_id is None:
+            return None
         if is_unmetered:
             self._quota_availability_journal.save(
                 _observe_rate_limited(
@@ -1421,7 +1426,17 @@ class OwnerDispatchExecutor:
         now = datetime.now(UTC)
         provider_id = self._provider_id(dispatch)
         execution_target_id = dispatch.execution_target_id
-        quota_pool_id = provider_id
+        quota_pool_id = quota_pool_id_for_target(
+            self._registry_provider(), execution_target_id=execution_target_id, now=now,
+        )
+        if quota_pool_id is None:
+            return QuotaAdmission(
+                admitted=False, failure_code="QUOTA_BINDING_UNKNOWN", collected=False,
+                evidence=unknown_availability(
+                    execution_target_id=execution_target_id, provider_id=provider_id,
+                    quota_pool_id="unbound", observed_at=now,
+                ),
+            )
 
         previous = self._quota_availability_journal.load(execution_target_id)
         # Definitive exhaustions short-circuit before any observation: they
@@ -1466,6 +1481,13 @@ class OwnerDispatchExecutor:
                 )
         else:
             result: QuotaCollectionResult = collector.collect()
+            # A collector cannot silently redirect an explicitly bound target
+            # to an unrelated balance. Unnamed legacy results cannot prove identity.
+            if (
+                result.snapshot is not None
+                and result.snapshot.quota_pool_id != quota_pool_id
+            ):
+                result = QuotaCollectionResult(status=QuotaCollectionStatus.UNKNOWN)
             evidence = self._snapshot_to_availability(
                 result,
                 previous=previous,

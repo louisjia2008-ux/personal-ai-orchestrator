@@ -96,8 +96,9 @@ class QuotaRefreshReason(StrEnum):
 class QuotaSourceSpec:
     """A documented read-only quota source for one connected provider surface.
 
-    ``quota_pool_id`` is stable per provider surface so the last-known-good
-    cache file, the replay journal, and the owner-facing card all agree.
+    ``quota_pool_id`` identifies the consumption pool, not the provider surface.
+    Multiple surfaces may explicitly share it; the last-known-good cache,
+    replay journal, admission, and recommendation use that same identity.
     """
 
     provider_id: str
@@ -159,7 +160,7 @@ QUOTA_SOURCES: tuple[QuotaSourceSpec, ...] = (
     ),
     QuotaSourceSpec(
         provider_id="minimax-cn-coding-plan",
-        quota_pool_id="minimax-coding-plan-cn",
+        quota_pool_id="minimax-token-plan-cn",
         plan_id="coding-plan",
         plan_display_name="MiniMax Coding Plan",
         credential_env_var="MINIMAX_API_KEY",
@@ -177,7 +178,7 @@ QUOTA_SOURCES: tuple[QuotaSourceSpec, ...] = (
     ),
     QuotaSourceSpec(
         provider_id="minimax-coding-plan",
-        quota_pool_id="minimax-coding-plan-global",
+        quota_pool_id="minimax-token-plan-global",
         plan_id="coding-plan",
         plan_display_name="MiniMax Coding Plan",
         credential_env_var="MINIMAX_API_KEY",
@@ -216,6 +217,9 @@ def has_readonly_quota_source(provider_id: str) -> bool:
 
 
 def quota_pool_id_for(provider_id: str) -> str | None:
+    # OpenCode explicitly defines its free-model pool under this identity.
+    if provider_id == "opencode":
+        return "opencode"
     spec = QUOTA_SOURCE_BY_PROVIDER.get(provider_id)
     return spec.quota_pool_id if spec is not None else None
 
@@ -371,6 +375,17 @@ class QuotaRefreshService:
     # Read path
     # ------------------------------------------------------------------
 
+    def snapshot_for_pool(self, quota_pool_id: str) -> QuotaSnapshot | None:
+        """Read a canonical binding's persisted observation without a refresh."""
+        try:
+            snapshot = self._cache.load(quota_pool_id)
+        except (OSError, ValueError):
+            return None
+        # Never interpret a misplaced cache record as evidence for this pool.
+        if snapshot is not None and snapshot.quota_pool_id == quota_pool_id:
+            return snapshot
+        return None
+
     def observations(self) -> tuple[QuotaProviderObservation, ...]:
         """Latest quota truth for every currently connected provider.
 
@@ -386,13 +401,13 @@ class QuotaRefreshService:
     def _observation_for(self, provider_id: str) -> QuotaProviderObservation:
         spec = QUOTA_SOURCE_BY_PROVIDER.get(provider_id)
         pool_id = self._pool_id_for(provider_id)
-        snapshot = self._cache.load(pool_id) if pool_id else None
+        snapshot = self.snapshot_for_pool(pool_id) if pool_id else None
         projection = self._projection_cache.load(pool_id) if pool_id else None
         if snapshot is None:
             with self._lock:
                 fallback = self._observed_pool_id.get(provider_id)
             if fallback is not None and fallback != pool_id:
-                snapshot = self._cache.load(fallback)
+                snapshot = self.snapshot_for_pool(fallback)
                 if snapshot is not None:
                     pool_id = fallback
                     projection = self._projection_cache.load(fallback)
