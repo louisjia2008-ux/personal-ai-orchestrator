@@ -1,6 +1,6 @@
 # PI-5B3D Delegation Enforcement-Readiness Evaluation
 
-Status: `PI_5B3D_SCOPE_FROZEN_IMPLEMENTATION_PENDING`
+Status: `PI_5B3D_READINESS_EVALUATOR_COMPLETE`
 
 Tracking: #45 (parent #37)
 
@@ -61,7 +61,7 @@ Unknown or contradictory evidence fails closed.
 
 ## Reporting
 
-The report must include at least:
+The report includes:
 
 - status: `NOT_READY` or `READY_FOR_LIMITED_EXPERIMENT`;
 - deterministic input digest;
@@ -78,7 +78,7 @@ The report must include at least:
 - blocking reason codes;
 - non-blocking advisories.
 
-No ratio, utility score, or expected-quality-gain estimate may be invented when the source evidence does not provide it.
+No ratio, utility score, or expected-quality-gain estimate is invented when the source evidence does not provide it.
 
 ## Pool coverage
 
@@ -86,13 +86,13 @@ Same-pool and different-pool behavior are counted separately. A host policy may 
 
 ## Quota-survival semantics
 
-PI-5B3C currently records quota-before / quota-after identifiers only when comparable evidence exists. PI-5B3D does not infer quota survival from unrelated snapshots or from current quota state.
+PI-5B3C records quota-before / quota-after identifiers only when comparable evidence exists. PI-5B3D does not infer quota survival from unrelated snapshots or from current quota state.
 
 When `require_quota_comparability=true`, any sample without both comparable identifiers is incomplete. This is intentionally conservative and may keep the system `NOT_READY` until a later campaign captures the needed evidence.
 
 ## Acceptance matrix
 
-Synthetic tests must prove:
+Synthetic tests prove:
 
 1. no policy => NOT_READY;
 2. no SHADOW evidence => NOT_READY;
@@ -108,5 +108,16 @@ Synthetic tests must prove:
 12. input order does not change the digest/report;
 13. existing SHADOW/outcome files are never modified;
 14. CI passes with zero real worker/model calls.
+
+## Verification
+
+Implementation head `ba3a6caee5b680b06bb78314aca4f455d0892c5a` passed exact-head CI #341 (`34749531380`):
+
+- Ruff: PASS;
+- Python: 1176 passed, 4 skipped;
+- exact base/head diff hygiene: PASS;
+- OpenCode adapter: PASS;
+- macOS Swift build: PASS;
+- real worker/model calls: 0.
 
 Completion of PI-5B3D means the readiness evaluator exists and is verified. It does **not** mean the real accumulated evidence is ready, and it does **not** authorize production enforcement.
