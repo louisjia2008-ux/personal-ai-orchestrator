@@ -53,7 +53,10 @@ def pool_evidence(
     provider_id: str,
     quota_pool_id: str,
 ) -> tuple[QuotaAvailabilityEvidence, ...]:
-    snapshot = journal.snapshot()
+    try:
+        snapshot = journal.snapshot()
+    except (OSError, TypeError, ValueError):
+        return ()
     if not isinstance(snapshot, dict):
         return ()
     rows: list[QuotaAvailabilityEvidence] = []
