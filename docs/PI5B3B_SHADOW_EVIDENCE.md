@@ -25,7 +25,9 @@ The record contains the complete `DelegationPolicyInput` and resulting versioned
 
 `DelegationShadowJournal` is append-only per parent-run/child identity, writes atomically with mode `0600`, and preserves the first observation on replay instead of time-shifting historical evidence after quota state changes.
 
-`PAODelegationChildPort` now has an optional shadow-journal hook immediately after host recommendation and before durable child dispatch. The hook is best-effort. Any build/write/audit failure is reduced to the fixed reason code `SHADOW_CAPTURE_FAILED` and **must not** block, reroute or retry the child.
+`PAODelegationChildPort` has a shadow-journal hook immediately after host recommendation and before durable child dispatch. The hook is best-effort. Any build/write/audit failure is reduced to the fixed reason code `SHADOW_CAPTURE_FAILED` and **must not** block, reroute or retry the child.
+
+`build_control_service` wires one `DelegationShadowJournal(runtime_state_root)` into the Pi child port whenever the Pi executor exists. Constructing the journal performs no I/O; the history directory is created only when a delegation observation is actually appended. Delegation itself remains feature-gated by the existing PI-5B2 runtime flag.
 
 ## Evidence gaps preserved honestly
 
@@ -55,9 +57,7 @@ This slice does not:
 - alter deterministic verifier authority;
 - authorize real model calls.
 
-The daemon-level default journal wiring is intentionally left for the next small commit after the host evidence/journal contract passes CI; the child port hook is optional, preserving byte/semantic behavior when no journal is supplied.
-
-## Acceptance for this checkpoint
+## Acceptance
 
 - a synthetic verified child can produce a replayable SHADOW record;
 - persisted JSON contains no child intent/reason prose;
@@ -66,4 +66,5 @@ The daemon-level default journal wiring is intentionally left for the next small
 - a SHADOW `DENY` does not prevent the ordinary child from reaching VERIFIED;
 - journal failure cannot change the child result and does not persist exception text;
 - repeated child replay does not rewrite the original observation;
-- exact-head CI must pass with zero real model calls before advancing to daemon-level shadow wiring.
+- daemon construction wires the journal without creating the history directory;
+- exact-head CI must pass with zero real model calls before PI-5B3B is marked complete.
