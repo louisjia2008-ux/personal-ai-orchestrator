@@ -431,10 +431,9 @@ def build_control_service(
         shadow_journal=ShadowEvidenceJournal(runtime_state_root),
         catalog_snapshot_id=config.catalog_snapshot_id,
     )
-    # One shared in-memory store is used by both the campaign control handler and
-    # the campaign-aware child evidence port. The dynamic attribute avoids
-    # granting campaign state any authority inside ControlPlaneService itself.
-    setattr(service, "_delegation_campaign_store", delegation_campaign)
+    # Deliberately not a ControlPlaneService authority field: both the wrapped
+    # UDS handler and campaign-aware evidence adapter share this host object.
+    service.__dict__["_delegation_campaign_store"] = delegation_campaign
     return service
 
 
@@ -490,7 +489,7 @@ def main(
             model_tiers_path=args.model_tiers_path,
             supervisor=supervisor,
         )
-        campaign = getattr(control_service, "_delegation_campaign_store")
+        campaign = control_service.__dict__["_delegation_campaign_store"]
         control_server = DelegationCampaignControlPlaneServer(
             control_service,
             args.control_socket,
