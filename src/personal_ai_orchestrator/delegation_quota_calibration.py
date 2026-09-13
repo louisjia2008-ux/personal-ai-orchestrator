@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 from datetime import datetime
@@ -60,7 +59,9 @@ class DelegationQuotaCalibrationJournal:
         self.directory = Path(root) / "delegation-quota-calibration"
 
     def path_for(self, observation_id: str) -> Path:
-        if not observation_id or any(part in observation_id for part in ("/", "\\", "..")):
+        if not observation_id or any(
+            part in observation_id for part in ("/", "\\", "..")
+        ):
             raise ValueError("unsafe delegation quota observation id")
         return self.directory / f"{observation_id}.json"
 
@@ -73,7 +74,9 @@ class DelegationQuotaCalibrationJournal:
                 target.read_text(encoding="utf-8")
             )
             if existing != record:
-                raise ValueError("delegation quota baseline identity already has different content")
+                raise ValueError(
+                    "delegation quota baseline identity already has different content"
+                )
             return target
         self.directory.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=self.directory)
@@ -96,7 +99,9 @@ class DelegationQuotaCalibrationJournal:
         path = self.path_for(observation_id)
         if not path.exists():
             return None
-        return DelegationQuotaBaselineRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        return DelegationQuotaBaselineRecord.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
 
 
 def _snapshot_windows(snapshot: Any) -> tuple[DelegationQuotaWindowBaseline, ...] | None:
@@ -123,7 +128,13 @@ def _snapshot_windows(snapshot: Any) -> tuple[DelegationQuotaWindowBaseline, ...
                 remaining_fraction=window.remaining_fraction,
             )
         )
-    rows.sort(key=lambda item: (item.window_id, item.window_kind, item.reset_at.isoformat()))
+    rows.sort(
+        key=lambda item: (
+            item.window_id,
+            item.window_kind,
+            item.reset_at.isoformat(),
+        )
+    )
     return tuple(rows)
 
 
@@ -164,19 +175,37 @@ def compare_quota_after(
     """Validate comparability only; never attribute the delta to the child."""
 
     if baseline is None:
-        return DelegationQuotaPairResult(comparable=False, reason=QuotaPairComparisonReason.BEFORE_MISSING)
+        return DelegationQuotaPairResult(
+            comparable=False,
+            reason=QuotaPairComparisonReason.BEFORE_MISSING,
+        )
     if after_snapshot is None:
-        return DelegationQuotaPairResult(comparable=False, reason=QuotaPairComparisonReason.AFTER_MISSING)
+        return DelegationQuotaPairResult(
+            comparable=False,
+            reason=QuotaPairComparisonReason.AFTER_MISSING,
+        )
     if after_snapshot.quota_pool_id != baseline.quota_pool_id:
-        return DelegationQuotaPairResult(comparable=False, reason=QuotaPairComparisonReason.POOL_MISMATCH)
+        return DelegationQuotaPairResult(
+            comparable=False,
+            reason=QuotaPairComparisonReason.POOL_MISMATCH,
+        )
     if after_snapshot.confidence is EvidenceConfidence.UNKNOWN:
-        return DelegationQuotaPairResult(comparable=False, reason=QuotaPairComparisonReason.UNKNOWN_CONFIDENCE)
+        return DelegationQuotaPairResult(
+            comparable=False,
+            reason=QuotaPairComparisonReason.UNKNOWN_CONFIDENCE,
+        )
     if after_snapshot.id == baseline.snapshot_id:
-        return DelegationQuotaPairResult(comparable=False, reason=QuotaPairComparisonReason.SNAPSHOT_ID_REUSED)
+        return DelegationQuotaPairResult(
+            comparable=False,
+            reason=QuotaPairComparisonReason.SNAPSHOT_ID_REUSED,
+        )
     try:
         observed_at = after_snapshot.observation_time()
     except Exception:
-        return DelegationQuotaPairResult(comparable=False, reason=QuotaPairComparisonReason.AFTER_MISSING)
+        return DelegationQuotaPairResult(
+            comparable=False,
+            reason=QuotaPairComparisonReason.AFTER_MISSING,
+        )
     if observed_at < baseline.observed_at:
         return DelegationQuotaPairResult(
             comparable=False,
@@ -184,9 +213,18 @@ def compare_quota_after(
         )
     after_windows = _snapshot_windows(after_snapshot)
     if after_windows is None:
-        return DelegationQuotaPairResult(comparable=False, reason=QuotaPairComparisonReason.IMPRECISE_WINDOW)
-    before_keys = tuple((w.window_id, w.window_kind, w.reset_at) for w in baseline.windows)
-    after_keys = tuple((w.window_id, w.window_kind, w.reset_at) for w in after_windows)
+        return DelegationQuotaPairResult(
+            comparable=False,
+            reason=QuotaPairComparisonReason.IMPRECISE_WINDOW,
+        )
+    before_keys = tuple(
+        (window.window_id, window.window_kind, window.reset_at)
+        for window in baseline.windows
+    )
+    after_keys = tuple(
+        (window.window_id, window.window_kind, window.reset_at)
+        for window in after_windows
+    )
     if before_keys != after_keys:
         return DelegationQuotaPairResult(
             comparable=False,
