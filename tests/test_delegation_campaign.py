@@ -139,7 +139,6 @@ async def test_campaign_off_or_out_of_scope_adds_zero_refresh_and_preserves_veri
     finally:
         store.close()
 
-    # Fresh fixture: active campaign, but project is outside the allowlist.
     store, _, base_port, _, plan, _ = _setup(tmp_path / "other", monkeypatch)
     before, after = _pair()
     refresh = _FakeRefresh(before, after)
@@ -185,8 +184,6 @@ async def test_admitted_campaign_consumes_one_slot_and_refreshes_once(tmp_path, 
         assert child.quota_before_snapshot_id == "quota-before"
         assert child.quota_after_snapshot_id == "quota-after"
 
-        # Existing observation remains admitted under EXHAUSTED but neither the
-        # budget nor read-only refresh count changes on replay/re-entry.
         assert (await port.execute_child(plan)).verified
         assert campaign.snapshot().consumed_observations == 1
         assert refresh.refresh_count == 1
@@ -201,7 +198,7 @@ def test_typed_campaign_control_surface_launches_nothing(tmp_path):
         state_db=tmp_path / "state.db",
         runtime_state_root=runtime_root,
     )
-    campaign = getattr(service, "_delegation_campaign_store")
+    campaign = service.__dict__["_delegation_campaign_store"]
     server = DelegationCampaignControlPlaneServer(
         service,
         tmp_path / "control.sock",
