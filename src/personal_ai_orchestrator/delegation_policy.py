@@ -1,11 +1,11 @@
 """Deterministic host-owned delegation admission policy.
 
-PI-5B3 deliberately starts with a small, explainable policy surface.  The
+PI-5B3 deliberately starts with a small, explainable policy surface. The
 policy answers whether host evidence is sufficient to justify a delegation
 request; it does not select a provider, launch a worker, grant repository
 permissions, or replace downstream quota/verification gates.
 
-The first slice intentionally avoids an opaque utility score.  Signals such as
+The first slice intentionally avoids an opaque utility score. Signals such as
 same-pool scarcity are recorded as reasons but do not become arbitrary numeric
 penalties until shadow evidence exists to calibrate them.
 """
@@ -17,6 +17,8 @@ from enum import StrEnum
 from pydantic import Field, model_validator
 
 from personal_ai_orchestrator.model_registry import RegistryModel
+
+PI5B3A_POLICY_VERSION = "pi5b3a-v1"
 
 
 class DelegationPolicyMode(StrEnum):
@@ -37,6 +39,7 @@ class DelegationVerdict(StrEnum):
 
 class DelegationReasonCode(StrEnum):
     FEATURE_DISABLED = "FEATURE_DISABLED"
+    POLICY_MODE_OFF = "POLICY_MODE_OFF"
     NO_ELIGIBLE_CHILD = "NO_ELIGIBLE_CHILD"
     REQUIRED_QUOTA_TRUTH_MISSING = "REQUIRED_QUOTA_TRUTH_MISSING"
     REQUIRED_BURN_ESTIMATE_MISSING = "REQUIRED_BURN_ESTIMATE_MISSING"
@@ -87,14 +90,15 @@ class DelegationPolicyInput(RegistryModel):
 
 
 class DelegationDecision(RegistryModel):
+    policy_version: str = PI5B3A_POLICY_VERSION
+    mode: DelegationPolicyMode
     verdict: DelegationVerdict
     reasons: tuple[DelegationReasonCode, ...]
-    enforceable: bool
 
     @model_validator(mode="after")
-    def validate_enforceable(self) -> DelegationDecision:
-        if self.verdict is DelegationVerdict.SHADOW_ONLY and self.enforceable:
-            raise ValueError("SHADOW_ONLY decisions cannot be enforceable")
+    def validate_version(self) -> DelegationDecision:
+        if self.policy_version != PI5B3A_POLICY_VERSION:
+            raise ValueError("unsupported delegation policy version")
         return self
 
 
@@ -113,24 +117,26 @@ def evaluate_delegation(
 ) -> DelegationDecision:
     """Return a deterministic constraint-first delegation recommendation.
 
-    Hard denials are evaluated before justification.  Passing the hard gates is
+    Hard denials are evaluated before justification. Passing the hard gates is
     not itself enough to spend a second worker: active ALLOW requires a host-owned
-    requirement or the existing failure-escalation threshold.  Otherwise the
+    requirement or the existing failure-escalation threshold. Otherwise the
     result remains SHADOW_ONLY so PAO can collect evidence without pretending a
     calibrated delegation-economics model exists.
+
+    Consumption semantics are intentionally explicit: SHADOW records the verdict
+    without changing PI-5B2 execution behavior; ENFORCE may proceed only for
+    ALLOW; OFF authorizes no delegation.
     """
 
     pool_reason = _pool_reason(facts.same_quota_pool_as_parent)
 
     def deny(reason: DelegationReasonCode) -> DelegationDecision:
         reasons = (reason,) + ((pool_reason,) if pool_reason is not None else ())
-        return DelegationDecision(
-            verdict=DelegationVerdict.DENY,
-            reasons=reasons,
-            enforceable=mode is DelegationPolicyMode.ENFORCE,
-        )
+        return DelegationDecision(mode=mode, verdict=DelegationVerdict.DENY, reasons=reasons)
 
-    if not facts.delegation_feature_enabled or mode is DelegationPolicyMode.OFF:
+    if mode is DelegationPolicyMode.OFF:
+        return deny(DelegationReasonCode.POLICY_MODE_OFF)
+    if not facts.delegation_feature_enabled:
         return deny(DelegationReasonCode.FEATURE_DISABLED)
     if facts.eligible_child_count == 0:
         return deny(DelegationReasonCode.NO_ELIGIBLE_CHILD)
@@ -166,20 +172,21 @@ def evaluate_delegation(
         for reason in reasons
     ):
         return DelegationDecision(
+            mode=mode,
             verdict=DelegationVerdict.ALLOW,
             reasons=tuple(reasons),
-            enforceable=mode is DelegationPolicyMode.ENFORCE,
         )
 
     reasons.append(DelegationReasonCode.INSUFFICIENT_JUSTIFICATION_FOR_ACTIVE_DELEGATION)
     return DelegationDecision(
+        mode=mode,
         verdict=DelegationVerdict.SHADOW_ONLY,
         reasons=tuple(reasons),
-        enforceable=False,
     )
 
 
 __all__ = [
+    "PI5B3A_POLICY_VERSION",
     "DelegationDecision",
     "DelegationPolicyInput",
     "DelegationPolicyMode",
