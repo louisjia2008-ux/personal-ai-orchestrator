@@ -44,7 +44,6 @@ from personal_ai_orchestrator.scheduler import (
 )
 from tests.test_pi5_child_execution import _setup
 
-
 NOW = datetime(2026, 9, 13, 8, 0, tzinfo=UTC)
 TARGET = "target-1"
 POOL = "pool-1"
