@@ -39,6 +39,17 @@ async def test_shadow_record_replays_without_changing_verified_execution(tmp_pat
         assert record.child_task_id == plan.child_task_id
         assert record.selected_child_execution_target_id == result.selected_execution_target_id
         assert record.facts.eligible_child_count >= 1
+        assert record.enforcement_ready is False
+
+        # The child-dispatch path has no canonical TaskProfile failure count.
+        # BLOCKED dispatch rows include policy/infra failures and must not be
+        # mislabelled as model-quality failures just to make escalation trigger.
+        assert record.facts.failure_count == 0
+        assert (
+            "task_profile_failure_count_not_available_in_child_dispatch_context"
+            in record.limitations
+        )
+
         # The current owner-dispatch recommender has no calibrated per-task burn
         # estimate. SHADOW must record that absence instead of manufacturing one.
         assert record.facts.predicted_child_burn_fraction is None
