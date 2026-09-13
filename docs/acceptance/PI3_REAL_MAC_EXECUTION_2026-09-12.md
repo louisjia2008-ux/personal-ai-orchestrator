@@ -1,5 +1,7 @@
 # PI-3 real Mac execution acceptance — 2026-09-12
 
+**Latest status (Attempt 3, 2026-09-13): PI_3_REAL_MAC_EXECUTION_ACCEPTANCE_COMPLETE.** Earlier sections below are preserved historical attempts; see the final semantic JSON section for current acceptance. PR #31 remains DRAFT and unmerged.
+
 FINAL_STATUS: PI_3_REAL_MAC_EXECUTION_ACCEPTANCE_BLOCKED_PROVIDER_ERROR
 
 | Field | Evidence |
@@ -80,3 +82,46 @@ The requested file was `PI3_MINIMAX_PRODUCT_OK` followed by LF. The worker wrote
 The product execution journal additionally records `exec-verify-753fb9b993b43a99588cf2c0` as VERIFIED / REAL_WORKER_DISPATCH_SUCCEEDED: this proves runtime execution, **not task correctness**. After dispatch, latest_verified_for_target returns this newer exact-target evidence with no stale fallback. Only the deterministic verifier controls task completion; task remains BLOCKED.
 
 New sanitized artifacts: [probe](pi3-2026-09-13/minimax-probe.json), [runtime execution](pi3-2026-09-13/product-execution.json), [original verifier result](pi3-2026-09-13/product-verification.json), [product audit and corrected offline check](pi3-2026-09-13/product-summary.json). Raw model output and auth contents are excluded. The original durable UNKNOWN remains in both the local journal and the prior committed artifact. No additional inference is authorized within this attempt; PR #31 stays DRAFT and unmerged.
+
+
+## Attempt 3 — semantic JSON product acceptance, 2026-09-13
+
+FINAL_STATUS: PI_3_REAL_MAC_EXECUTION_ACCEPTANCE_COMPLETE
+
+BASELINE_HEAD: `87abf7e4a8bc6c02b9a453a874890d99fd18fd6e` (remote fetched, worktree clean; baseline GitHub Python/OpenCode/macOS checks confirmed green). FINAL_HEAD is the documentation/evidence commit containing this section, resolvable using the command above.
+
+| Field | Result |
+| --- | --- |
+| PREVIOUS_EXACT_TARGET_EVIDENCE | exec-verify-036bf9e0fd346a32a23cf0df; no new probe |
+| PREVIOUS_PRODUCT_RUNTIME_EVIDENCE | exec-verify-753fb9b993b43a99588cf2c0; reused existing VERIFIED eligibility |
+| VERIFIER_OFFLINE_GOOD_FIXTURE | PASS: accepted |
+| VERIFIER_OFFLINE_BAD_FIXTURE_1 | PASS: wrong value rejected (exit 1) |
+| VERIFIER_OFFLINE_BAD_FIXTURE_2 | PASS: extra object key rejected (exit 1) |
+| VERIFIER_OFFLINE_BAD_FIXTURE_3 | PASS: invalid JSON rejected (exit 1) |
+| VERIFIER_OFFLINE_FORMATTING_FIXTURES | PASS: pretty JSON with and without LF accepted |
+| NEW_TASK_ID | pi3-minimax-json-product |
+| NEW_REQUEST_ID | submit: pi3-minimax-json-submit; dispatch: pi3-minimax-json-dispatch |
+| NEW_EXECUTION_TARGET | pi-minimax-cn-coding-plan-MiniMax-M3 |
+| NEW_RUNTIME | pi; worker protocol pi-json |
+| NEW_PROVIDER / NEW_MODEL | minimax-cn / MiniMax-M3 |
+| NEW_QUOTA_ADMISSION | AVAILABLE_OBSERVED / ESTIMATED; collected=true using unchanged PAO collector |
+| NEW_PI_PROTOCOL | Valid; exit 0; stopReason=stop; zero extension errors; no truncation/timeout |
+| NEW_VERIFIER_RESULT | PASS; pi3-semantic-json, diff check exit 0, exact-json-value exit 0 |
+| NEW_FINAL_TASK_STATE | VERIFIED |
+| NEW_EXECUTION_EVIDENCE | exec-verify-e6ad947964ec813e48c6de6b / VERIFIED |
+| NEW_VERIFICATION_EVIDENCE | verify-098307232e034a03f1636fae / passed=true |
+| OPENCODE_FALLBACK | NO; sole run uses exact Pi target and Pi argv/protocol |
+| WRITER_RELEASED | YES |
+| RUNNING_ROWS | 0 |
+| ORPHAN_PROCESS | NO; worker PID 33141 and its process group absent at post-run check |
+| MAIN_REPO_UNCHANGED | YES; clean, before/after HEAD f32c13d92eafa39b36029e9bb3cbbcdd74e1b340 |
+| REAL_MODEL_CALL_COUNT_THIS_ATTEMPT | 1 authorized product dispatch; no new probe, retry, or fallback (Pi may use multiple internal provider turns for its tool lifecycle) |
+| SOURCE_CODE_CHANGED | NO |
+| CREDENTIAL_VALUES_READ / EXPOSED | NO / NO by agent inspection; existing Pi and PAO authentication remain internal; no credential copy/bridge |
+| ZAI_GL5_3 | DEFERRED_QUOTA_EXHAUSTED; no ZAI calls |
+
+Before inference, the profile was serialized with Pydantic JSON generation, reloaded, and tested through the real DeterministicVerifier on six disposable Git fixtures, retaining the normal diff/path checks. Profile SHA-256 `cb722f101c537d3dfb03fd158590c3526968aa5d2e78619f66278fd4df594467` was frozen before dispatch and unchanged afterward. Only `pi3_acceptance.json` is allowed; json.loads must produce exactly `{"status":"PI3_MINIMAX_PRODUCT_ACCEPTANCE"}`. The resulting task changed only that file, with no unexpected paths, and its parsed value exactly matched. Whitespace and final LF are irrelevant to this new contract.
+
+The new disposable task used the real ControlPlaneClient/ControlPlaneServer and unchanged daemon build_control_service factory. Durable audit records show API submission and owner dispatch reservation, isolated worktree allocation, writer acquisition, quota admission, Pi process execution, RUNNING → WORKER_FINISHED → VERIFYING → VERIFIED, and writer release. Worker output had no completion authority. The earlier task pi3-minimax-product was read back as BLOCKED and was not mutated; all previous probe/verifier artifacts remain intact.
+
+Artifacts: [frozen profile](pi3-2026-09-13-semantic-json/verifier-profile.json), [offline self-tests](pi3-2026-09-13-semantic-json/verifier-selftest.json), [product audit and cleanup](pi3-2026-09-13-semantic-json/product-result.json), [host verifier](pi3-2026-09-13-semantic-json/verification-evidence.json), [runtime evidence](pi3-2026-09-13-semantic-json/execution-evidence.json), [actual JSON file](pi3-2026-09-13-semantic-json/pi3_acceptance.json). Raw response tails and writer tokens are excluded from the audit artifact. Acceptance sanity checks, artifact sanitization, and git diff --check passed. No broad test/lint, Swift, or OpenCode suite was rerun. Keep PR #31 DRAFT for owner review; do not merge.

@@ -1,0 +1,66 @@
+{
+  "profile_sha256": "cb722f101c537d3dfb03fd158590c3526968aa5d2e78619f66278fd4df594467",
+  "results": [
+    {
+      "fixture": "good",
+      "expected_pass": true,
+      "actual_pass": true,
+      "self_test": "PASS",
+      "stage_exit_codes": [
+        0,
+        0
+      ]
+    },
+    {
+      "fixture": "wrong",
+      "expected_pass": false,
+      "actual_pass": false,
+      "self_test": "PASS",
+      "stage_exit_codes": [
+        0,
+        1
+      ]
+    },
+    {
+      "fixture": "extra",
+      "expected_pass": false,
+      "actual_pass": false,
+      "self_test": "PASS",
+      "stage_exit_codes": [
+        0,
+        1
+      ]
+    },
+    {
+      "fixture": "invalid",
+      "expected_pass": false,
+      "actual_pass": false,
+      "self_test": "PASS",
+      "stage_exit_codes": [
+        0,
+        1
+      ]
+    },
+    {
+      "fixture": "formatted",
+      "expected_pass": true,
+      "actual_pass": true,
+      "self_test": "PASS",
+      "stage_exit_codes": [
+        0,
+        0
+      ]
+    },
+    {
+      "fixture": "formatted-lf",
+      "expected_pass": true,
+      "actual_pass": true,
+      "self_test": "PASS",
+      "stage_exit_codes": [
+        0,
+        0
+      ]
+    }
+  ],
+  "all_passed": true
+}
