@@ -1,6 +1,6 @@
 # PI-5B3F Operator-Controlled Bounded SHADOW Calibration Campaign
 
-Status: `PI_5B3F_SCOPE_FROZEN_IMPLEMENTATION_PENDING`
+Status: `PI_5B3F_BOUNDED_SHADOW_CAMPAIGN_COMPLETE`
 
 Tracking: #50 (parent #37)
 
@@ -26,7 +26,7 @@ Stopping a campaign rejects future observations immediately. Already-admitted ob
 
 ## Operator control plane
 
-Expose host-owned read/start/stop operations through the existing typed local control API. The surface reports only sanitized state:
+Host-owned read/start/stop operations are exposed through the existing typed local control API. The surface reports only sanitized state:
 
 - campaign id;
 - OFF / ACTIVE / EXHAUSTED / STOPPED;
@@ -52,7 +52,7 @@ The campaign gate may only enable the PI-5B3E evidence path. It cannot:
 
 ## Acceptance matrix
 
-Synthetic tests must prove:
+Synthetic tests prove:
 
 1. missing/corrupt state is OFF;
 2. start requires an explicit bounded budget;
@@ -68,4 +68,21 @@ Synthetic tests must prove:
 12. state contains no credentials/provider payloads/prompts;
 13. exact-head CI passes with zero real model calls.
 
-Completion of PI-5B3F authorizes only the bounded campaign control mechanism. Running a real campaign still requires separate explicit worker/model budget authorization.
+## Verification
+
+Implementation head `971a8351073d5c65c8d4bbece0b73f417d86f586` passed exact-head CI #360 (`34753366269`):
+
+- Ruff: PASS;
+- Python: 1190 passed, 4 skipped;
+- exact base/head diff hygiene: PASS;
+- OpenCode adapter: PASS;
+- macOS Swift build: PASS;
+- real worker/model calls: 0.
+
+The only prior CI blocker was an import-time Pydantic warning caused by naming the new campaign snapshot field `schema`; it was fixed by renaming that internal field to `schema_id` without changing campaign semantics.
+
+## Completion boundary
+
+PI-5B3F completes the **operator-controlled bounded SHADOW campaign mechanism only**. It does not start a real campaign, enable delegation enforcement, authorize paid usage, or grant any new task/worker authority.
+
+A real calibration campaign still requires a separate explicit worker/model budget authorization. Until such a campaign yields enough real SHADOW/outcome evidence and the read-only readiness evaluator reports readiness under an explicit host policy, production delegation enforcement remains disabled.
