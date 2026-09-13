@@ -139,6 +139,14 @@ with the affected focused modules.
 Repository lint and `git diff --check` pass. Historical acceptance files and
 frozen broker/tool/verifier/worktree sources are unchanged relative to baseline.
 Exact-head CI is checked on PR #36 after the focused commit is pushed.
+The first CI attempt caught an overlong new test assertion; a formatting-only
+follow-up corrected it. The next full CI run passed 1,131 tests and found one
+crash-recovery fixture that rebuilt an unbound registry and expected replanning
+from a 30-minute-old snapshot. That failure was reproduced locally. The fixture
+now reuses the explicitly bound test registry and provides a fresh offline
+snapshot at its simulated restart time; its lifecycle assertions and production
+freshness gates remain intact. The affected recovery module is retested locally
+before the final exact-head CI run.
 
 ## Readiness, not real acceptance
 
