@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from personal_ai_orchestrator.delegation_policy import (
     DelegationPolicyMode,
     DelegationReasonCode,
@@ -20,6 +22,7 @@ async def _run_with_shadow(tmp_path, monkeypatch):
     return store, port, plan, observations, journal, observation_id, result
 
 
+@pytest.mark.asyncio
 async def test_shadow_record_replays_without_changing_verified_execution(tmp_path, monkeypatch):
     store, port, plan, observations, journal, observation_id, result = await _run_with_shadow(
         tmp_path, monkeypatch
@@ -60,6 +63,7 @@ async def test_shadow_record_replays_without_changing_verified_execution(tmp_pat
         store.close()
 
 
+@pytest.mark.asyncio
 async def test_shadow_journal_failure_cannot_block_child_execution(tmp_path, monkeypatch):
     store, _, port, _, plan, observations = _setup(tmp_path, monkeypatch)
 
