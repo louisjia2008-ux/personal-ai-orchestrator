@@ -1,0 +1,41 @@
+{
+  "processes": [
+    {
+      "pid": 82386,
+      "pid_alive": false,
+      "group_alive": false
+    }
+  ],
+  "orphan_processes": 0,
+  "temporary_agent_directory_removed": true,
+  "broker_created": false,
+  "delegation_children": 0,
+  "counts_before": {
+    "tasks": 34,
+    "runs": 7,
+    "workspaces": 7,
+    "running_rows": 0,
+    "active_run_rows": 0,
+    "held_writers": 0
+  },
+  "counts_after": {
+    "tasks": 34,
+    "runs": 7,
+    "workspaces": 7,
+    "running_rows": 0,
+    "active_run_rows": 0,
+    "held_writers": 0
+  },
+  "source_before": {
+    "head": "64a45a3adaafb42cac2c6a55a3ac0db31c06f059",
+    "status": ""
+  },
+  "source_after": {
+    "head": "64a45a3adaafb42cac2c6a55a3ac0db31c06f059",
+    "status": ""
+  },
+  "credential_values_read": false,
+  "credential_values_exposed": false,
+  "campaign_workers_used": 0,
+  "reverification_workers_used": 1
+}
