@@ -7,6 +7,8 @@ This slice is offline-only and must consume zero real worker/model budget.
 ## Required checks
 
 - [ ] `DelegationPolicyMode.OFF` cannot authorize delegation.
+- [ ] Policy-off and feature-disabled reasons are distinguishable.
+- [ ] Every decision records the exact policy mode and `pi5b3a-v1` policy version.
 - [ ] Hard denial reasons precede positive justification.
 - [ ] Missing eligible child fails closed.
 - [ ] Missing required quota truth fails closed.
@@ -17,8 +19,6 @@ This slice is offline-only and must consume zero real worker/model budget.
 - [ ] Host-required delegation can produce `ALLOW` only after hard gates pass.
 - [ ] Existing failure-escalation threshold semantics can produce `ALLOW` only after hard gates pass.
 - [ ] Passing hard gates without a host justification produces `SHADOW_ONLY`.
-- [ ] `SHADOW_ONLY` is never enforceable.
-- [ ] `SHADOW` mode never marks a decision enforceable.
 - [ ] Same-pool vs different-pool identity is explanatory only in this slice.
 - [ ] The policy contract contains no provider/model/target special casing.
 - [ ] Identical inputs replay to identical decision JSON.
