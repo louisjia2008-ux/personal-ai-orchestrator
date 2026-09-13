@@ -16,12 +16,18 @@ from personal_ai_orchestrator.daemon_supervisor import (
     DaemonSupervisor,
     build_default_supervisor,
 )
+from personal_ai_orchestrator.delegation_evidence import (
+    DelegationOutcomeJournal,
+    resolve_delegation_policy,
+)
 from personal_ai_orchestrator.delegation_shadow import DelegationShadowJournal
 from personal_ai_orchestrator.dispatch_executor import (
     DispatchExecutorConfig,
     OwnerDispatchExecutor,
 )
-from personal_ai_orchestrator.dispatch_recommendation_service import DispatchRecommendationService
+from personal_ai_orchestrator.dispatch_recommendation_service import (
+    DispatchRecommendationService,
+)
 from personal_ai_orchestrator.execution_controller import reconcile_workspace_truth
 from personal_ai_orchestrator.execution_evidence import ExecutionEvidenceJournal
 from personal_ai_orchestrator.local_api import serve
@@ -107,11 +113,17 @@ def build_service(
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Personal AI Orchestrator Shadow routing daemon")
+    parser = argparse.ArgumentParser(
+        description="Personal AI Orchestrator Shadow routing daemon"
+    )
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--state-db", type=Path, required=True)
     parser.add_argument("--runtime-state-root", type=Path, required=True)
-    parser.add_argument("--host", default="127.0.0.1", choices=("127.0.0.1", "::1", "localhost"))
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        choices=("127.0.0.1", "::1", "localhost"),
+    )
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument(
         "--control-socket",
@@ -242,12 +254,17 @@ def default_quota_collectors() -> dict[str, object]:
     collectors: dict[str, object] = {}
     for spec in QUOTA_SOURCES:
         if spec.provider_id not in {
-            "zai-coding-plan", "minimax-coding-plan", "minimax-cn-coding-plan",
+            "zai-coding-plan",
+            "minimax-coding-plan",
+            "minimax-cn-coding-plan",
         }:
             continue
         token = os.environ.get(spec.credential_env_var)
         if token:
-            collectors[spec.provider_id] = spec.factory(SecretValue(token), spec.quota_pool_id)
+            collectors[spec.provider_id] = spec.factory(
+                SecretValue(token),
+                spec.quota_pool_id,
+            )
     # M1 WP4: the opencode free-model family. The collector is keyed
     # by ``provider_id``; the dispatch executor / scheduler look up
     # the collector via ``provider_id``, not ``pool_id``. The
@@ -308,8 +325,13 @@ def build_control_service(
     # field are how the owner sees the fallback fired.
     store = SafetyKernelStore(state_db)
     tier_table, model_tiers_source = load_model_tiers(
-        model_tiers_path, audit=store
+        model_tiers_path,
+        audit=store,
     )
+    scheduling_settings = SchedulingSettings(
+        runtime_state_root / "scheduling-settings.json"
+    )
+    task_profiles = {profile.task_id: profile for profile in config.task_profiles}
     execution_evidence_journal = ExecutionEvidenceJournal(runtime_state_root)
     if provider_registry_manager is not None:
         # Import candidates may cite a prior VERIFIED real worker execution. The
@@ -330,8 +352,7 @@ def build_control_service(
         )
         dispatch_config = DispatchExecutorConfig(
             repo_path=execution_repo,
-            worktree_root=worktree_root
-            or (runtime_state_root / "worktrees"),
+            worktree_root=worktree_root or (runtime_state_root / "worktrees"),
             opencode_bin=opencode_bin,
             verifier_profile=verifier_profile,
             worker_permission_config=worker_permission_config,
@@ -389,11 +410,14 @@ def build_control_service(
         ),
     )
     if pi_executor is not None:
+
         def child_runtime_available(target_id: str) -> bool:
             if target_id in config.runtime_availability:
                 return config.runtime_availability[target_id]
             return bool(provider_registry_manager.runtime_available(target_id))
 
+        delegation_shadow_journal = DelegationShadowJournal(runtime_state_root)
+        delegation_outcome_journal = DelegationOutcomeJournal(runtime_state_root)
         pi_executor.delegation_child_port = PAODelegationChildPort(
             state_db=state_db,
             executor=executor,
@@ -411,7 +435,19 @@ def build_control_service(
             runtime_available_provider=child_runtime_available,
             provider_registry_manager=provider_registry_manager,
             execution_evidence_journal=execution_evidence_journal,
-            delegation_shadow_journal=DelegationShadowJournal(runtime_state_root),
+            delegation_shadow_journal=delegation_shadow_journal,
+            delegation_outcome_journal=delegation_outcome_journal,
+            task_profile_provider=lambda task_id: task_profiles.get(task_id),
+            policy_resolution_provider=lambda child_store, parent_task: (
+                resolve_delegation_policy(
+                    store=child_store,
+                    task=parent_task,
+                    global_policy=config.policy,
+                    project_policy_overrides=dict(config.project_policy_overrides),
+                    task_policy_overrides=dict(config.task_policy_overrides),
+                    scheduling_settings=scheduling_settings,
+                )
+            ),
         )
     return ControlPlaneService(
         registry=registry,
@@ -421,12 +457,8 @@ def build_control_service(
         verification_journal=VerificationEvidenceJournal(runtime_state_root),
         quota_availability_journal=QuotaAvailabilityJournal(runtime_state_root),
         provider_registry_manager=provider_registry_manager,
-        owner_execution=OwnerExecutionSettings(
-            runtime_state_root / "owner-execution.json"
-        ),
-        scheduling_settings=SchedulingSettings(
-            runtime_state_root / "scheduling-settings.json"
-        ),
+        owner_execution=OwnerExecutionSettings(runtime_state_root / "owner-execution.json"),
+        scheduling_settings=scheduling_settings,
         execution_evidence_journal=execution_evidence_journal,
         dispatch_executor=executor,
         quota_refresh_service=quota_refresh_service,
@@ -549,7 +581,9 @@ def main(
 
         signal.signal(signal.SIGTERM, _stop)
         supervisor_thread = threading.Thread(
-            target=supervisor.run, args=(stop,), daemon=True
+            target=supervisor.run,
+            args=(stop,),
+            daemon=True,
         )
         supervisor_thread.start()
         try:
@@ -570,7 +604,9 @@ def main(
     # loopback API is up; SIGINT/SIGTERM handled inside ``serve``.
     supervisor_stop = threading.Event()
     supervisor_thread = threading.Thread(
-        target=supervisor.run, args=(supervisor_stop,), daemon=True
+        target=supervisor.run,
+        args=(supervisor_stop,),
+        daemon=True,
     )
     supervisor_thread.start()
     try:
