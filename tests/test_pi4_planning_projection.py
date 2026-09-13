@@ -105,7 +105,10 @@ class _QuotaRefresh:
         return self._observations
 
 
-def _service(tmp_path: Path, now: datetime) -> tuple[DispatchRecommendationService, QuotaAvailabilityJournal]:
+def _service(
+    tmp_path: Path,
+    now: datetime,
+) -> tuple[DispatchRecommendationService, QuotaAvailabilityJournal]:
     journal = QuotaAvailabilityJournal(tmp_path)
     service = DispatchRecommendationService(
         SimpleNamespace(record_system_event=lambda *_args, **_kwargs: None),
