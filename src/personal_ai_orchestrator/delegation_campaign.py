@@ -34,7 +34,7 @@ class DelegationCampaignState(StrEnum):
 
 
 class DelegationCampaignSnapshot(RegistryModel):
-    schema: str = SCHEMA
+    schema_id: str = SCHEMA
     campaign_id: str | None = None
     state: DelegationCampaignState = DelegationCampaignState.OFF
     max_observations: int | None = Field(default=None, ge=1, le=MAX_CAMPAIGN_OBSERVATIONS)
@@ -77,7 +77,7 @@ class DelegationCalibrationCampaignStore:
             assert_sanitized(snapshot.model_dump(mode="json"))
         except (OSError, ValueError, json.JSONDecodeError):
             return self._off("CAMPAIGN_STATE_INVALID")
-        if snapshot.schema != SCHEMA:
+        if snapshot.schema_id != SCHEMA:
             return self._off("CAMPAIGN_SCHEMA_UNSUPPORTED")
         if snapshot.state is DelegationCampaignState.ACTIVE:
             if (
