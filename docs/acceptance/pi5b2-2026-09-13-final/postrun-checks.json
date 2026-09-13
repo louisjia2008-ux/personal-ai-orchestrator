@@ -1,0 +1,308 @@
+{
+  "final_status": "PI_5B2_REAL_MAC_DELEGATION_ACCEPTANCE_COMPLETE",
+  "checks": {
+    "one_parent_one_child_attempt": true,
+    "two_real_worker_processes": true,
+    "expected_parent_runtime": true,
+    "pi_version_0851": true,
+    "one_real_delegation": true,
+    "tool_correlated_to_broker": true,
+    "model_request_has_no_authority_fields": true,
+    "broker_completed_real_verified_child": true,
+    "host_selected_child": true,
+    "parent_running_at_child_creation": true,
+    "host_child_depth_and_prohibition": true,
+    "actual_recommendation_read_recorded": true,
+    "canonical_pool_identity": true,
+    "persisted_source": true,
+    "applicable_observation": true,
+    "cold_process_no_ephemeral_identity": true,
+    "snapshot_bytes_match_runtime_read": true,
+    "one_current_pool_snapshot": true,
+    "both_startup_admissions_passed": true,
+    "same_parent_child_canonical_pool": true,
+    "both_shared_pool_gates_passed": true,
+    "actual_distinct_writers": true,
+    "actual_distinct_worktrees": true,
+    "neither_worker_targets_fixture_main": true,
+    "parent_running_with_child": true,
+    "one_writer_per_active_task": true,
+    "child_delegation_not_model_visible": true,
+    "actual_child_authority": true,
+    "child_has_only_guard_extension": true,
+    "no_grandchild": true,
+    "parent_running_when_child_verified": true,
+    "parent_received_production_tool_result": true,
+    "parent_wrote_only_after_verified_tool_result": true,
+    "only_required_file_tools_used": true,
+    "both_workers_successful_protocol": true,
+    "both_canonical_verified_tasks": true,
+    "frozen_verifier_profiles": true,
+    "both_real_verifiers_passed": true,
+    "verifier_profile_hashes_frozen": true,
+    "no_fallback": true,
+    "retries_compaction_disabled": true,
+    "source_unchanged_during_worker_run": true,
+    "source_still_baseline_before_evidence": true,
+    "fixture_main_head_unchanged": true,
+    "fixture_main_status_unchanged": true,
+    "supervisor_owns_no_process": true,
+    "no_owned_pid_ppid_pgid_remaining": true,
+    "broker_resources_removed": true,
+    "all_cleanup_counts_zero": true,
+    "all_persisted_writer_fields_cleared": true,
+    "temporary_auth_was_reference_only": true,
+    "temporary_runtime_removed": true,
+    "offline_selftest_fixtures_removed": true
+  },
+  "passed": 53,
+  "failed": 0,
+  "cleanup": {
+    "running_rows": 0,
+    "active_run_rows": 0,
+    "writer_locks_remaining": 0,
+    "nonterminal_task_rows": 0,
+    "orphan_processes": 0,
+    "temporary_broker_sockets_remaining": 0,
+    "fixture_git_locks_remaining": 0
+  },
+  "workspaces": [
+    {
+      "task_id": "pi5b2-final-parent",
+      "worktree_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent",
+      "base_sha": "0431845631c193ef9c1a63108cc2a954d44ea827",
+      "writer_released": true,
+      "writer_acquired_at_cleared": true
+    },
+    {
+      "task_id": "pi5-child-fde92b4ef8466950ec06",
+      "worktree_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5-child-fde92b4ef8466950ec06",
+      "base_sha": "0431845631c193ef9c1a63108cc2a954d44ea827",
+      "writer_released": true,
+      "writer_acquired_at_cleared": true
+    }
+  ],
+  "verifiers": [
+    {
+      "profile": "pi5b2-child-semantic-json",
+      "passed": true,
+      "evidence_id": "verify-4ce5d0196a8a96be218ce52e",
+      "changed_paths": [
+        "pi5_child_result.json"
+      ],
+      "unexpected_paths": [],
+      "failure_reason": null,
+      "stages": [
+        {
+          "name": "git diff --check",
+          "argv": [
+            "git",
+            "diff",
+            "--check",
+            "0431845631c193ef9c1a63108cc2a954d44ea827",
+            "--"
+          ],
+          "returncode": 0
+        },
+        {
+          "name": "exact-semantic-json",
+          "argv": [
+            "/Users/louisjia/Developer/pao-p4-full-dashboard/.venv/bin/python",
+            "-c",
+            "import json\nfrom pathlib import Path\nobj=json.loads(Path('pi5_child_result.json').read_text())\nassert obj == {'status': 'PI5_CHILD_VERIFIED'}\n"
+          ],
+          "returncode": 0
+        }
+      ]
+    },
+    {
+      "profile": "pi5b2-parent-semantic-json",
+      "passed": true,
+      "evidence_id": "verify-b71ae3a20425c2032cd19f79",
+      "changed_paths": [
+        "pi5_parent_result.json"
+      ],
+      "unexpected_paths": [],
+      "failure_reason": null,
+      "stages": [
+        {
+          "name": "git diff --check",
+          "argv": [
+            "git",
+            "diff",
+            "--check",
+            "0431845631c193ef9c1a63108cc2a954d44ea827",
+            "--"
+          ],
+          "returncode": 0
+        },
+        {
+          "name": "exact-semantic-json",
+          "argv": [
+            "/Users/louisjia/Developer/pao-p4-full-dashboard/.venv/bin/python",
+            "-c",
+            "import json\nfrom pathlib import Path\nobj=json.loads(Path('pi5_parent_result.json').read_text())\nassert obj == {'status': 'PI5_PARENT_VERIFIED', 'child_verified': True}\nassert obj[\"child_verified\"] is True\n"
+          ],
+          "returncode": 0
+        }
+      ]
+    }
+  ],
+  "lifecycle_timeline": [
+    {
+      "task_id": "pi5b2-final-parent",
+      "event_type": "TASK_STATE_CHANGED",
+      "created_at": "2026-09-13T06:01:28.135003+00:00",
+      "payload": {
+        "from": "SUBMITTED",
+        "reason": "owner initiated execution dispatch reserved",
+        "state_version": 1,
+        "to": "READY"
+      }
+    },
+    {
+      "task_id": "pi5b2-final-parent",
+      "event_type": "RUN_STARTED",
+      "created_at": "2026-09-13T06:01:28.352680+00:00",
+      "payload": {
+        "pid": 63303,
+        "run_id": "run-owner-dispatch-pi5b2-final-parent-dispatch",
+        "worker_id": "pi-minimax-cn-coding-plan-MiniMax-M3"
+      }
+    },
+    {
+      "task_id": "pi5b2-final-parent",
+      "event_type": "TASK_STATE_CHANGED",
+      "created_at": "2026-09-13T06:01:28.352691+00:00",
+      "payload": {
+        "from": "READY",
+        "reason": "host-supervised owner dispatch worker started",
+        "state_version": 2,
+        "to": "RUNNING"
+      }
+    },
+    {
+      "task_id": "pi5-child-fde92b4ef8466950ec06",
+      "event_type": "TASK_STATE_CHANGED",
+      "created_at": "2026-09-13T06:01:33.372000+00:00",
+      "payload": {
+        "from": "SUBMITTED",
+        "reason": "owner initiated execution dispatch reserved",
+        "state_version": 1,
+        "to": "READY"
+      }
+    },
+    {
+      "task_id": "pi5-child-fde92b4ef8466950ec06",
+      "event_type": "RUN_STARTED",
+      "created_at": "2026-09-13T06:01:33.579854+00:00",
+      "payload": {
+        "pid": 63332,
+        "run_id": "run-owner-dispatch-pi5-child-dispatch-pi5-child-fde92b4ef8466950ec06",
+        "worker_id": "pi-minimax-cn-coding-plan-MiniMax-M3"
+      }
+    },
+    {
+      "task_id": "pi5-child-fde92b4ef8466950ec06",
+      "event_type": "TASK_STATE_CHANGED",
+      "created_at": "2026-09-13T06:01:33.579863+00:00",
+      "payload": {
+        "from": "READY",
+        "reason": "host-supervised owner dispatch worker started",
+        "state_version": 2,
+        "to": "RUNNING"
+      }
+    },
+    {
+      "task_id": "pi5-child-fde92b4ef8466950ec06",
+      "event_type": "RUN_FINISHED",
+      "created_at": "2026-09-13T06:01:37.727279+00:00",
+      "payload": {
+        "run_id": "run-owner-dispatch-pi5-child-dispatch-pi5-child-fde92b4ef8466950ec06",
+        "status": "FINISHED"
+      }
+    },
+    {
+      "task_id": "pi5-child-fde92b4ef8466950ec06",
+      "event_type": "TASK_STATE_CHANGED",
+      "created_at": "2026-09-13T06:01:37.727292+00:00",
+      "payload": {
+        "from": "RUNNING",
+        "reason": "worker process finished; deterministic verification still required",
+        "state_version": 3,
+        "to": "WORKER_FINISHED"
+      }
+    },
+    {
+      "task_id": "pi5-child-fde92b4ef8466950ec06",
+      "event_type": "TASK_STATE_CHANGED",
+      "created_at": "2026-09-13T06:01:37.727557+00:00",
+      "payload": {
+        "from": "WORKER_FINISHED",
+        "reason": "host deterministic verification started",
+        "state_version": 4,
+        "to": "VERIFYING"
+      }
+    },
+    {
+      "task_id": "pi5-child-fde92b4ef8466950ec06",
+      "event_type": "TASK_STATE_CHANGED",
+      "created_at": "2026-09-13T06:01:37.781353+00:00",
+      "payload": {
+        "from": "VERIFYING",
+        "reason": "deterministic verification passed: verify-4ce5d0196a8a96be218ce52e",
+        "state_version": 5,
+        "to": "VERIFIED"
+      }
+    },
+    {
+      "task_id": "pi5b2-final-parent",
+      "event_type": "RUN_FINISHED",
+      "created_at": "2026-09-13T06:01:41.833393+00:00",
+      "payload": {
+        "run_id": "run-owner-dispatch-pi5b2-final-parent-dispatch",
+        "status": "FINISHED"
+      }
+    },
+    {
+      "task_id": "pi5b2-final-parent",
+      "event_type": "TASK_STATE_CHANGED",
+      "created_at": "2026-09-13T06:01:41.833404+00:00",
+      "payload": {
+        "from": "RUNNING",
+        "reason": "worker process finished; deterministic verification still required",
+        "state_version": 3,
+        "to": "WORKER_FINISHED"
+      }
+    },
+    {
+      "task_id": "pi5b2-final-parent",
+      "event_type": "TASK_STATE_CHANGED",
+      "created_at": "2026-09-13T06:01:41.833654+00:00",
+      "payload": {
+        "from": "WORKER_FINISHED",
+        "reason": "host deterministic verification started",
+        "state_version": 4,
+        "to": "VERIFYING"
+      }
+    },
+    {
+      "task_id": "pi5b2-final-parent",
+      "event_type": "TASK_STATE_CHANGED",
+      "created_at": "2026-09-13T06:01:41.886838+00:00",
+      "payload": {
+        "from": "VERIFYING",
+        "reason": "deterministic verification passed: verify-b71ae3a20425c2032cd19f79",
+        "state_version": 5,
+        "to": "VERIFIED"
+      }
+    }
+  ],
+  "observed_assistant_responses": {
+    "parent": 3,
+    "child": 2
+  },
+  "provider_http_request_count": "UNKNOWN: transport-level counts are not exposed by captured protocol; retries disabled",
+  "task_lock_semantics": "No separate task-lock table; workspace writer locks and active task/run ownership are cleared.",
+  "harness_sha256": "c8dfe267b998047612dca3796234142f146df88828ea046846e1248a89169532"
+}
