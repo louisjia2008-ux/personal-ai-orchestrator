@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from personal_ai_orchestrator.delegation_policy import (
+    PI5B3A_POLICY_VERSION,
     DelegationPolicyInput,
     DelegationPolicyMode,
     DelegationReasonCode,
@@ -58,19 +59,25 @@ def _admissible(**overrides):
 def test_hard_denials_precede_positive_justification(facts, reason):
     facts = facts.model_copy(update={"host_required": True, "failure_count": 99})
     decision = evaluate_delegation(facts, mode=DelegationPolicyMode.ENFORCE)
+    assert decision.mode is DelegationPolicyMode.ENFORCE
     assert decision.verdict is DelegationVerdict.DENY
     assert decision.reasons[0] is reason
-    assert decision.enforceable is True
 
 
-def test_off_mode_denies_even_when_feature_flag_and_host_requirement_are_true():
+def test_off_mode_is_distinct_from_disabled_feature():
     decision = evaluate_delegation(
         _admissible(host_required=True),
         mode=DelegationPolicyMode.OFF,
     )
+    assert decision.mode is DelegationPolicyMode.OFF
     assert decision.verdict is DelegationVerdict.DENY
-    assert decision.reasons[0] is DelegationReasonCode.FEATURE_DISABLED
-    assert decision.enforceable is False
+    assert decision.reasons[0] is DelegationReasonCode.POLICY_MODE_OFF
+
+    disabled = evaluate_delegation(
+        _admissible(delegation_feature_enabled=False),
+        mode=DelegationPolicyMode.SHADOW,
+    )
+    assert disabled.reasons[0] is DelegationReasonCode.FEATURE_DISABLED
 
 
 def test_host_required_delegation_allows_without_inventing_economics_score():
@@ -83,7 +90,6 @@ def test_host_required_delegation_allows_without_inventing_economics_score():
         DelegationReasonCode.HOST_REQUIRED_DELEGATION,
         DelegationReasonCode.SHARED_QUOTA_POOL,
     )
-    assert decision.enforceable is True
 
 
 def test_failure_escalation_uses_existing_threshold_semantics():
@@ -105,16 +111,15 @@ def test_unjustified_request_remains_shadow_only_after_hard_gates_pass():
         DelegationReasonCode.DIFFERENT_QUOTA_POOL,
         DelegationReasonCode.INSUFFICIENT_JUSTIFICATION_FOR_ACTIVE_DELEGATION,
     )
-    assert decision.enforceable is False
 
 
-def test_shadow_mode_never_marks_allow_as_enforceable():
+def test_shadow_mode_records_allow_without_changing_the_verdict_contract():
     decision = evaluate_delegation(
         _admissible(host_required=True),
         mode=DelegationPolicyMode.SHADOW,
     )
+    assert decision.mode is DelegationPolicyMode.SHADOW
     assert decision.verdict is DelegationVerdict.ALLOW
-    assert decision.enforceable is False
 
 
 def test_same_pool_is_explanatory_not_an_uncalibrated_automatic_denial():
@@ -126,7 +131,7 @@ def test_same_pool_is_explanatory_not_an_uncalibrated_automatic_denial():
     assert DelegationReasonCode.SHARED_QUOTA_POOL in decision.reasons
 
 
-def test_fixed_inputs_replay_to_the_same_decision():
+def test_fixed_inputs_replay_to_the_same_versioned_decision():
     facts = _admissible(
         host_required=True,
         same_quota_pool_as_parent=False,
@@ -135,6 +140,7 @@ def test_fixed_inputs_replay_to_the_same_decision():
     )
     first = evaluate_delegation(facts, mode=DelegationPolicyMode.SHADOW)
     second = evaluate_delegation(facts, mode=DelegationPolicyMode.SHADOW)
+    assert first.policy_version == PI5B3A_POLICY_VERSION
     assert first.model_dump(mode="json") == second.model_dump(mode="json")
 
 
