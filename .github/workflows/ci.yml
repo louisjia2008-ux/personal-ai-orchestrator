@@ -33,7 +33,12 @@ jobs:
       - name: Lint
         run: python -m ruff check .
 
+      - name: Install pinned Pi SDK for offline activation contract
+        run: npm install --prefix "$RUNNER_TEMP/pi0851" --no-save @earendil-works/pi-coding-agent@0.85.1
+
       - name: Test
+        env:
+          PAO_PI_SDK_ROOT: ${{ runner.temp }}/pi0851/node_modules/@earendil-works/pi-coding-agent
         run: python -m pytest -q
 
       - name: Diff hygiene

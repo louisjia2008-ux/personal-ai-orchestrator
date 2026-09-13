@@ -15,6 +15,19 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from personal_ai_orchestrator.pi5_runtime import PI5_TOOL_NAME
+
+
+class PiDelegationActivationError(ValueError):
+    """Host preflight failed; no worker may start with partial delegation."""
+
+    code = "PI_DELEGATION_ACTIVATION_UNAVAILABLE"
+
+    def __init__(self, reason_code: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(f"{self.code}: {reason_code}")
+
+
 PI_PROTOCOL_ERROR_EXIT = 70
 PI_MAX_STDOUT_BYTES = 4 * 1024 * 1024
 PI_MAX_ERROR_MESSAGE_CHARS = 2048
@@ -239,12 +252,21 @@ def build_pi_json_argv(
     - no persistent session;
     - no project trust;
     - no discovered extensions/skills/templates/context files;
-    - only PAO's explicit guard extension is loaded;
+    - only host-seeded explicit extensions are loaded;
     - bash/powershell are absent from the active tool allowlist.
     """
 
     if config.delegation_enabled and delegation_tool_path is None:
-        raise ValueError("enabled delegation requires a host-seeded trusted tool")
+        raise PiDelegationActivationError("TRUSTED_TOOL_MISSING")
+    if config.delegation_enabled and any(
+        arg.split("=", 1)[0] in {
+            "--tools", "-t", "--exclude-tools", "--no-tools", "--no-builtin-tools",
+            "-e", "--extension", "--no-extensions", "--",
+        }
+        for arg in config.extra_args
+    ):
+        raise PiDelegationActivationError("CONFLICTING_TOOL_CONFIGURATION")
+    tools = PI_ALLOWED_TOOLS + ((PI5_TOOL_NAME,) if config.delegation_enabled else ())
     extensions = (
         ("-e", str(delegation_tool_path)) if config.delegation_enabled else ()
     )
@@ -262,7 +284,7 @@ def build_pi_json_argv(
         "--no-prompt-templates",
         "--no-context-files",
         "--tools",
-        ",".join(PI_ALLOWED_TOOLS),
+        ",".join(tools),
         "--model",
         model_ref,
         *config.extra_args,
