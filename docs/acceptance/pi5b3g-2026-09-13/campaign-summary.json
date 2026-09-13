@@ -1,0 +1,30 @@
+{
+  "final_status": "PI_5B3G_REAL_SHADOW_CAMPAIGN_BLOCKED_PREFLIGHT",
+  "baseline_head": "16e2f146241bebcbdb37a2b51023c02c01226fae",
+  "baseline_main": "64a45a3adaafb42cac2c6a55a3ac0db31c06f059",
+  "branch": "feat/pi-delegation-real-shadow-campaign-05b3g",
+  "pr": 53,
+  "pr_draft": true,
+  "campaign_id": null,
+  "campaign_started_by_this_attempt": false,
+  "campaign_final_state": "UNKNOWN_ENDPOINT_UNAVAILABLE",
+  "authorized_observations": 3,
+  "admitted_observations": 0,
+  "completed_observations": 0,
+  "fixture_created": false,
+  "enforcement_enabled_by_this_attempt": false,
+  "source_code_changed": false,
+  "real_owner_project_used": false,
+  "credential_values_read": false,
+  "credential_values_exposed": false,
+  "blockers": [
+    "CAMPAIGN_CONTROL_ENDPOINT_NOT_FOUND",
+    "PARENT_TARGET_ABSENT_FROM_HOST",
+    "PARENT_EXECUTION_EVIDENCE_ABSENT_IN_PRODUCT_RUNTIME"
+  ],
+  "quota_comparable_count": 0,
+  "readiness_status": "NOT_READY",
+  "offline_verifier_tests": "NOT_RUN_PRELAUNCH_HOST_GATE_BLOCKED",
+  "campaign_slot_accounting": "NOT_EXERCISED",
+  "next_action": "Reconcile the target Mac host with the frozen B3F control surface and existing verified parent target, then repeat read-only preflight. No inference probe, silent import, fallback, or production repair was performed."
+}

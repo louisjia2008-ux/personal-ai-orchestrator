@@ -1,0 +1,14 @@
+{
+  "observation": 2,
+  "state": "NOT_STARTED",
+  "parent_target_requested": "pi-minimax-cn-coding-plan-MiniMax-M3",
+  "parent_task_id": null,
+  "child_task_id": null,
+  "child_target": null,
+  "parent_verifier": "NOT_RUN",
+  "parent_final_state": "NOT_CREATED",
+  "child_verifier": "NOT_RUN",
+  "child_final_state": "NOT_CREATED",
+  "quota_pair": "NOT_CAPTURED",
+  "cleanup": "NO_OBSERVATION_RESOURCES_CREATED"
+}

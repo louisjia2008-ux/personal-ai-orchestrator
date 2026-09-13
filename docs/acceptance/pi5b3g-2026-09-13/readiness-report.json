@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "status": "NOT_READY",
+  "input_digest": "delegation-readiness-46b1e8e89018320a710b89a1c6f0d4a01e224054866691f10dcd1612343d9535",
+  "policy_supplied": true,
+  "min_complete_samples": 3,
+  "total_shadow_observations": 0,
+  "replayable_shadow_count": 0,
+  "enforcement_ready_shadow_count": 0,
+  "matched_child_outcome_count": 0,
+  "matched_parent_outcome_count": 0,
+  "complete_sample_count": 0,
+  "child_verified_count": 0,
+  "parent_verified_count": 0,
+  "quota_comparable_count": 0,
+  "same_pool_count": 0,
+  "different_pool_count": 0,
+  "unknown_pool_count": 0,
+  "blocking_reasons": [
+    "NO_SHADOW_EVIDENCE",
+    "INSUFFICIENT_COMPLETE_SAMPLES"
+  ],
+  "advisories": [
+    "NO_QUOTA_COMPARABLE_SAMPLES",
+    "SAME_POOL_NOT_OBSERVED",
+    "DIFFERENT_POOL_NOT_OBSERVED"
+  ],
+  "samples": []
+}
