@@ -1,6 +1,6 @@
 # PI-5B3 Delegation Decision Policy
 
-Status: `PI_5B3A_POLICY_CONTRACT_IN_PROGRESS`
+Status: `PI_5B3A_POLICY_CONTRACT_COMPLETE`
 
 Tracking: #37
 
@@ -80,18 +80,20 @@ This module does **not**:
 
 PI-5B2's broker, `DELEGATED_CHILD` authority, worktree isolation, single-writer enforcement, quota admission, and deterministic verifier remain unchanged.
 
-## Phase A acceptance gate
+## Phase A acceptance
 
-Before wiring this policy into the broker/child execution path:
+The implementation contract was validated on code head `fd4c1f23b946bcb0a26a1676dd25d219fa8e2f2a` by CI run `34743617828`: Python lint/tests/diff hygiene, OpenCode adapter checks, and macOS Swift build all passed. No real worker/model call was made by this slice.
 
-1. fixed inputs must replay to byte-equivalent decision JSON;
-2. decisions must record the exact policy mode and policy version;
-3. policy-off and feature-disabled reasons must remain distinguishable;
-4. hard denials must take precedence over positive justification;
-5. passing hard gates without host justification must remain `SHADOW_ONLY`;
-6. same-pool scarcity must remain explanatory rather than an uncalibrated hidden score;
-7. the contract must contain no provider/model special casing;
-8. CI must pass with zero real model calls.
+Validated properties:
+
+1. fixed inputs replay to byte-equivalent decision JSON;
+2. decisions record the exact policy mode and `pi5b3a-v1` policy version;
+3. policy-off and feature-disabled reasons remain distinguishable;
+4. hard denials take precedence over positive justification;
+5. passing hard gates without host justification remains `SHADOW_ONLY`;
+6. same-pool scarcity remains explanatory rather than an uncalibrated hidden score;
+7. the contract contains no provider/model/target special casing;
+8. PI-5B2 production runtime wiring remains unchanged.
 
 ## Planned next slices
 
