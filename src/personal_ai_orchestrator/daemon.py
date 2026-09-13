@@ -16,6 +16,7 @@ from personal_ai_orchestrator.daemon_supervisor import (
     DaemonSupervisor,
     build_default_supervisor,
 )
+from personal_ai_orchestrator.delegation_shadow import DelegationShadowJournal
 from personal_ai_orchestrator.dispatch_executor import (
     DispatchExecutorConfig,
     OwnerDispatchExecutor,
@@ -410,6 +411,7 @@ def build_control_service(
             runtime_available_provider=child_runtime_available,
             provider_registry_manager=provider_registry_manager,
             execution_evidence_journal=execution_evidence_journal,
+            delegation_shadow_journal=DelegationShadowJournal(runtime_state_root),
         )
     return ControlPlaneService(
         registry=registry,
