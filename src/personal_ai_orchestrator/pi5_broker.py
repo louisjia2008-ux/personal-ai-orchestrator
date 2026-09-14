@@ -30,6 +30,7 @@ from personal_ai_orchestrator.pi5_contract import (
     PI5_SCHEMA_VERSION,
     DelegationRequest,
 )
+from personal_ai_orchestrator.pi5_identity import delegation_child_task_id
 from personal_ai_orchestrator.pi5b3g_scope_validator import (
     PI5B3GScopeValidationResult,
     ScopeDecision,
@@ -136,17 +137,6 @@ class DelegationBrokerResponse(RegistryModel):
 
 class DelegationChildExecutionPort(Protocol):
     async def execute_child(self, plan: DelegationChildPlan) -> DelegationChildResult: ...
-
-
-def delegation_child_task_id(
-    *, parent_task_id: str, parent_run_id: str, ordinal: int
-) -> str:
-    """Mint a stable host child ID without trusting worker-supplied identity."""
-
-    digest = hashlib.sha256(
-        f"{parent_task_id}\x00{parent_run_id}\x00{ordinal}".encode()
-    ).hexdigest()[:20]
-    return f"pi5-child-{digest}"
 
 
 class DelegationBrokerSession:
