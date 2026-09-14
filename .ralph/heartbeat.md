@@ -3,3 +3,4 @@
 - 2026-09-14T00:44:00Z | RALPH_CONTINUE | T001 | PASS: mission contract and state validate | continue automatically to T002
 - 2026-09-14T01:02:00Z | RALPH_CONTINUE | T002 | PASS: defect and exact live old-daemon state revalidated | continue automatically to T003
 - 2026-09-14T01:17:00Z | RALPH_CONTINUE | T003 | PASS: deterministic old-source failure captured at handler Event.set | continue automatically to T004
+- 2026-09-14T01:29:00Z | RALPH_CONTINUE | T004 | PASS: scalar handler and ordinary-flow cleanup, 5 focused tests | continue automatically to T005

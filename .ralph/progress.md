@@ -23,3 +23,11 @@
 - Files changed: `tests/test_daemon_shutdown.py` and Ralph state.
 - Remaining risk: source is intentionally still failing the new design-property test until T004.
 - Next task: T004 replace handler Event mutation with scalar notification and ordinary-flow supervisor stop.
+
+## 2026-09-14T01:29:00Z — T004 minimal lock-safe SIGTERM repair
+
+- Changed: SIGTERM now assigns only a scalar shutdown flag; the main thread polls at 100 ms; `finally` restores SIGTERM, sets the supervisor Event, joins, stops the server, and closes both stores. Product regression now reopens SQLite and immediately restarts the same state location.
+- Verification: PASS — 5 focused lifecycle tests passed on the host; focused Ruff and `git diff --check` passed.
+- Files changed: `src/personal_ai_orchestrator/daemon.py`, `tests/test_daemon_shutdown.py`, `tests/test_product_daemon.py`, and Ralph state.
+- Remaining risk: broader Python/Swift/control/campaign suites and real PyInstaller behavior remain unproven.
+- Next task: T005 run targeted and broad project verification.
