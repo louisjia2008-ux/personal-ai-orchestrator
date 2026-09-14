@@ -10,3 +10,4 @@
 - 2026-09-14T02:23:20Z | RALPH_CONTINUE | T008 | PASS: old stuck daemon retired once; repaired canonical SIGTERM/restart passed | continue automatically to T009
 - 2026-09-14T02:55:40Z | RALPH_BLOCKED | T009 | dynamic child intent rejected before forwarding; 1 parent, 0 child, no retry; cleanup and product restore pass | stop
 - 2026-09-14T03:05:00Z | RALPH_CONTINUE | T011 | new owner authorization resolves blocker; mission re-locked to offline validator hardening and a separate new campaign | continue automatically with read-only inventory
+- 2026-09-14T03:12:00Z | RALPH_CONTINUE | T011 | PASS: broad-regex gate and all surrounding rules/coverage/negation risks inventoried without source changes | continue automatically to T012 offline corpus

@@ -71,3 +71,11 @@
 - Cleanup: PASS — campaign STOPPED, parent/orphans/broker resources 0, fixture unchanged, DB 0/0/0 and quick-check ok, exact repaired product restored healthy with one canonical owner.
 - Files changed: sanitized acceptance evidence and Ralph state only. Raw generated strings and provider transcripts were not retained or committed.
 - Blocker: a campaign safety invariant rejected the first authorized attempt. No retry budget remains for that observation and no later observation may start under the stop-on-invariant contract.
+
+## 2026-09-14T03:12:00Z — T011 scope-validator inventory
+
+- Changed: documented every current external semantic rule, structured argument/authority boundary, rejection/forwarding order, campaign claim boundary, existing coverage, and safe-negation false-positive surface.
+- Verification: PASS — exact source/test line evidence confirms the live gate is a single broad regex plus positive checks, not a parser/classifier; production broker has no semantic gate; no source/test change was made.
+- Files changed: `.ralph/artifacts/t011-scope-validator-inventory.md` and Ralph state only.
+- Remaining risk: current gate has no permanent corpus and cannot emit a deterministic RULE_ID/category/stage.
+- Next task: T012 encode and run the complete offline adversarial corpus against the faithful baseline.

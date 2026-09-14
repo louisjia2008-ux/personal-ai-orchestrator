@@ -1,16 +1,16 @@
 # Current task
 
-T011 — Inventory current dynamic scope validation chain
+T012 — Build offline adversarial scope corpus
 
 Acceptance:
 
-- Read the exact current pao_delegate schema, external campaign validator, broker/child forwarding, rejection sanitization, and campaign admission implementation.
-- Document every forbidden rule with RULE_ID, field, match type/category, fail behavior, current coverage, and safe-negation risk.
-- Make no validator or production-code change during this task and do not infer the previous rejected phrase.
+- Add a deterministic local corpus covering safe exact/wording/negation, unsafe authority/file/tool/delegation/retry/fallback/injection, and ambiguous fail-closed inputs.
+- Encode expected ALLOW or exact rejection category without calling any external model.
+- Run the corpus against a faithful baseline of the current external validator and record its false-positive/false-negative gaps before implementation changes.
 
 Verification:
 
-- `.ralph/artifacts/t011-scope-validator-inventory.md` is complete and supported by exact file/line references.
-- Git diff outside Ralph state contains no source/test changes.
+- Corpus includes every owner-required category and deterministic case identifiers.
+- Offline baseline report demonstrates current behavior and is sanitized.
 
-Intended file scope: `.ralph/` only. All source, tests, frozen verifier artifacts, campaign state, and canonical runtime remain unchanged.
+Intended file scope: new test/corpus fixtures plus `.ralph/` evidence only. Production source and frozen verifier artifacts remain unchanged; no model/provider calls.
