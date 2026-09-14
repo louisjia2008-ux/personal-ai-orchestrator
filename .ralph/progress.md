@@ -170,3 +170,11 @@
 - Files changed: Ralph mission/state files only.
 - Remaining risk: the exact exception boundary, event-loop/process ownership ordering, historical launch-contract delta, and root cause are not yet proven.
 - Next task: T024 trace and reconstruct the spawn path read-only.
+
+## 2026-09-14T06:18:54Z — T024 parent spawn-path inventory
+
+- Changed: documented the exact target/thread/runtime/broker/argv/env/cwd/subprocess/session/durable-run/protocol and cleanup ordering, plus the authoritative Campaign C audit and successful Campaign A comparison.
+- Verification: PASS — durable run registration is after subprocess creation; the generic spawn boundary includes post-create supervisor-wrapper exceptions; Campaign C has a created transient process but no run row.
+- Files changed: `.ralph/artifacts/t024-spawn-path-inventory.md` and Ralph state only; no production source, historical state, or model call.
+- Root-cause lead: the external budget wrapper's old task-prefix role classifier treats the new campaign-scoped parent task as a child and enters child-only accounting after `ProcessSupervisor.start` returns.
+- Next task: T025 reproduce that exact ordering with a local worker and add sanitized stage observability.

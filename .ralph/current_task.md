@@ -1,15 +1,16 @@
 # Current task
 
-T024 — trace and reconstruct parent worker spawn contract
+T025 — add spawn observability and prove root cause offline
 
 Acceptance:
 
-- Map target resolution, executable/argv/env/cwd construction, subprocess/session/pipe creation, durable run registration, protocol startup, monitoring, exception translation, and cleanup ordering.
-- Reconstruct Campaign C Observation 1 using canonical historical state and sanitized evidence.
-- Compare the failed launch contract with repository evidence for a previously successful parent launch without sending any model prompt.
+- Add sanitized, deterministic spawn-stage diagnostics without environment values, raw prompts, credentials, or provider transcripts.
+- Reproduce the Campaign C failure through the same `ProcessSupervisor.start` and post-create campaign wrapper ordering using only a local fake worker.
+- Prove one precise root-cause classification and the child-created/ownership/cleanup facts.
 
 Verification:
 
-- A read-only inventory artifact cites exact source/schema/evidence and answers whether durable registration occurs before or after subprocess creation and what `WORKER_SPAWN_FAILED` currently covers.
+- Focused tests prove diagnostic stage/class/errno and post-create process observation without model egress.
+- Root-cause artifact records the deterministic reproduction and why the transient PID does not prove provider egress.
 
-Only the T024 Ralph inventory/state may change; production source remains untouched.
+No model call. Production changes are limited to spawn observability and exact post-create cleanup plumbing required by the proven defect.
