@@ -13,7 +13,7 @@
   ],
   "max_iterations": 28,
   "current_iteration": 17,
-  "status": "running",
+  "status": "blocked",
   "tasks": [
     {"id":"T001","title":"Phase 0 mission lock","type":"planning","status":"done","priority":"high","dependencies":[],"acceptance":["Required Ralph state exists and locks the full user goal"],"verification":["test -s .ralph/task_brief.md && python3 -m json.tool .ralph/tasks.json"],"files_expected":[".ralph/*"],"attempts":0,"last_error":"","notes":"Dedicated worktree created from exact PR #53 head."},
     {"id":"T002","title":"Inventory source lifecycle and live topology","type":"analysis","status":"done","priority":"high","dependencies":["T001"],"acceptance":["Repo map records exact implementations, tests, build paths, branch lineage, and read-only live state"],"verification":["test -s .ralph/artifacts/repo_map.md"],"files_expected":[".ralph/artifacts/repo_map.md"],"attempts":0,"last_error":"","notes":"Defective source pattern unchanged from deployed 64a45a3; exact live old process and zero DB accounting revalidated."},
@@ -36,12 +36,12 @@
     {"id":"T019","title":"Implement and prove campaign-scoped identities","type":"implementation","status":"done","priority":"high","dependencies":["T018"],"acceptance":["Small validated deterministic identity scheme covers parent and child paths; required unit and canonical integration matrix passes without provider calls"],"verification":["Focused identity, canonical admission, campaign, broker, child, and state-store tests pass"],"files_expected":["src/personal_ai_orchestrator/*","tests/*"],"attempts":0,"last_error":"","notes":"PASS: v1 factory, named production child helpers, 57 focused and 74 remaining relevant tests, focused Ruff, canonical UDS replay/conflict test; no provider calls or unrelated semantic change."},
     {"id":"T020","title":"Verify and remotely checkpoint identity repair","type":"verification","status":"done","priority":"high","dependencies":["T019"],"acceptance":["Relevant and full Python plus Ruff pass; identity fix is separately committed, normally pushed, and exact-head CI green before model use"],"verification":["Local checks and PR #54 exact-head required CI pass"],"files_expected":[".ralph/artifacts/t020-identity-verification.md"],"attempts":0,"last_error":"","notes":"PASS: identity fix 885f006; complete 93-file inventory 1260 passed/1 skipped; Ruff/diff/sanitization pass; pushed head 69a996c; exact PR #54 Python/macOS Swift/OpenCode CI green."},
     {"id":"T021","title":"Execute third bounded PI-5B3G campaign","type":"acceptance","status":"failed_blocked","priority":"high","dependencies":["T020"],"acceptance":["Fresh campaign and pre-dispatch ID assertions; exactly three sequential observations at 3/3/6; zero retry/fallback/grandchild; clean terminal state and restored healthy product, or first authorized blocker"],"verification":["Authoritative sanitized campaign/process/verifier/DB/identity evidence"],"files_expected":["docs/acceptance/*"],"attempts":1,"last_error":"Observation 1 canonical admission succeeded, but the single authorized parent launch attempt ended WORKER_SPAWN_FAILED: RuntimeError before a durable run; campaign stopped with no retry.","notes":"Identity preflight proved all 30 IDs absent and no conflict occurred. Campaign 4c61456b... is terminal STOPPED; no later observation may start under this authorization."},
-    {"id":"T022","title":"Finalize identity campaign evidence and CI","type":"delivery","status":"in_progress","priority":"high","dependencies":["T021"],"acceptance":["Three campaign histories remain separate; sanitized evidence committed/pushed; exact final-head CI green; Draft PR unmerged"],"verification":["Remote/local/PR head match, required CI pass, clean worktree, no raw transcripts or credentials"],"files_expected":[".ralph/final_report.md","docs/acceptance/*"],"attempts":0,"last_error":"","notes":"Finalize sanitized blocked-run evidence and exact-head CI; no campaign retry."}
+    {"id":"T022","title":"Finalize identity campaign evidence and CI","type":"delivery","status":"done","priority":"high","dependencies":["T021"],"acceptance":["Three campaign histories remain separate; sanitized evidence committed/pushed; exact final-head CI green; Draft PR unmerged"],"verification":["Remote/local/PR head match, required CI pass, clean worktree, no raw transcripts or credentials"],"files_expected":[".ralph/final_report.md","docs/acceptance/*"],"attempts":0,"last_error":"","notes":"PASS: sanitized evidence commit 984c801 pushed normally; exact-head Python, macOS Swift, and OpenCode CI green; no campaign retry; Draft PR remains unmerged."}
   ],
   "blockers": ["PI5B3G_PARENT_WORKER_SPAWN_FAILED"],
   "last_failed_task": "T021",
   "no_diff_iterations": 0,
   "created_at": "2026-09-14T00:41:16Z",
-  "last_successful_task": "T020",
-  "updated_at": "2026-09-14T05:51:00Z"
+  "last_successful_task": "T022",
+  "updated_at": "2026-09-14T05:54:00Z"
 }

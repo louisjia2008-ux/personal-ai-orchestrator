@@ -22,3 +22,4 @@
 - 2026-09-14T05:43:00Z | RALPH_CONTINUE | T020 | LOCAL PASS: identity commit 885f006, 1260 Python passed/1 skipped, Ruff and sanitization pass | continue automatically to normal push and exact-head CI; no model use yet
 - 2026-09-14T05:50:00Z | RALPH_CONTINUE | T020 | REMOTE PASS: exact head 69a996c, PR #54 OPEN/DRAFT, Python/macOS Swift/OpenCode green | continue automatically to T021 gated third campaign
 - 2026-09-14T05:51:00Z | RALPH_CONTINUE | T021 | identity PASS; one parent launch attempt failed WORKER_SPAWN_FAILED before durable run; campaign stopped, cleanup and product restore PASS | continue only to T022 sanitized evidence and exact-head CI; no retry
+- 2026-09-14T05:54:00Z | RALPH_BLOCKED | T022 | sanitized evidence 984c801 pushed; exact-head Python/macOS Swift/OpenCode CI PASS; Draft PR unmerged | stop: parent launch budget consumed, fresh authorization required for any future live attempt

@@ -1,15 +1,15 @@
 # Current task
 
-T022 — finalize identity campaign evidence and CI
+T022 — finalized; Ralph blocked
 
 Acceptance:
 
-- Preserve all three terminal campaign histories separately.
-- Record the successful identity repair and the third campaign's first parent worker-spawn blocker without raw provider transcripts or credential values.
-- Commit and normally push sanitized evidence, wait for exact-head CI, keep Draft PR #54 unmerged, and leave the repaired product healthy.
+- All three terminal campaign histories are separately preserved.
+- Sanitized evidence commit `984c801` was normally pushed and exact-head CI passed.
+- Draft PR #54 remains open, Draft, and unmerged; the repaired product is healthy.
 
 Verification:
 
-- JSON parses, sanitization/secret/diff checks pass, local and remote branch heads match, all required CI jobs pass, and the worktree is clean.
+- Python, macOS Swift, and OpenCode checks passed on exact evidence head `984c801`; sanitization/secret/diff checks passed.
 
-T021 is terminal `failed_blocked`: its single authorized launch attempt is consumed. No campaign retry or later observation is permitted in T022.
+Ralph is terminal `RALPH_BLOCKED` at `BLOCKED_PI_5B3G_PARENT_WORKER_SPAWN_FAILED`. The single authorized launch attempt is consumed; no campaign retry or later observation is permitted.
