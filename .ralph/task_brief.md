@@ -1,28 +1,28 @@
-# PAO daemon graceful SIGTERM and PI-5B3G mission lock
+# PAO PI-5B3G scope-validator hardening and new campaign mission lock
 
 ## User Goal
 
-Repair the real Personal AI Orchestrator production daemon so SIGTERM causes lock-safe graceful shutdown, prove the repair in the actual packaged PyInstaller helper and canonical live product, then resume the existing three-observation PI-5B3G real SHADOW campaign without weakening any safety or verifier contract.
+Preserve the completed daemon lifecycle repair and previous failed PI-5B3G campaign, make the dynamic child semantic-scope validator strict, deterministic, and diagnosable using offline evidence, then run one newly authorized three-observation PI-5B3G SHADOW campaign without weakening verifier, routing, quota, or delegation safety.
 
 ## Final Deliverable
 
-A focused lifecycle repair on `fix/pao-daemon-graceful-sigterm`, permanent regression coverage, packaged and live shutdown/restart evidence, and either completed PI-5B3G evidence or an honest unrelated blocker report, committed and normally pushed with exact-head CI evidence.
+A permanent repository-owned scope validator with an adversarial offline corpus, stable sanitized rule traces, tests proving child execution is unreachable after rejection, a separately committed/pushed exact-head-CI-green validator checkpoint, and either three successful new real observations or an honest new-campaign blocker report followed by canonical product restoration and final exact-head CI.
 
 ## Success Criteria
 
-- The signal handler performs only minimal signal notification and no lock-backed cleanup.
-- Normal main-thread control flow performs supervisor, control-server, socket, and store cleanup.
-- Automated tests cover SIGTERM, SIGINT/KeyboardInterrupt, signal restoration, cleanup location, bounded exit, socket removal, DB reuse, and immediate restart.
-- The newly built real PyInstaller onefile helper passes parent-route and child-route SIGTERM acceptance, including at least three complete start/health/stop/cleanup/restart cycles.
-- The old canonical daemon is retired only under the resumed prompt's new exact one-SIGKILL-to-serving-child authorization after the repair is remotely preserved, exact-head CI passes, and every live identity/idle gate matches.
-- The fixed canonical product passes real SIGTERM and restart acceptance with one socket owner and healthy DB/accounting.
-- PI-5B3G runs exactly three sequential SHADOW observations with at most three parents, three children, six workers, no retries/fallback/grandchildren, unchanged frozen verifier hashes, and clean terminal accounting; or stops for a new unrelated blocker.
-- Evidence records old/new build identities, exact commands/results, commits, pushed HEAD, PR, and CI for that exact HEAD without exposing credentials.
+- Existing daemon lifecycle evidence and old failed campaign evidence remain byte-preserved.
+- Phase A enumerates every current validation/forwarding/accounting rule without source changes or unsupported inference about the previous raw intent.
+- A deterministic offline corpus covers safe exact, safe negated, unsafe authority/file/tool/delegation/retry/fallback/injection, and ambiguous fail-closed cases.
+- A repository-owned validator positively proves the one-file/one-marker/one-observation scope, distinguishes supported negation from positive capability requests, emits stable version/rule/category/stage evidence, and never uses an LLM classifier.
+- Tests prove every owner-required case, deterministic rule IDs, no raw transcript evidence, and no child execution/worker after rejection.
+- Validator changes pass targeted/relevant tests, full Python and Ruff when production Python changes, then are committed, normally pushed, and exact-head CI passes before any MiniMax call.
+- A new campaign ID runs exactly three sequential SHADOW observations with at most three new parents, three new children, six new workers, no retries/fallback/grandchildren, unchanged frozen verifier hashes, and clean terminal accounting; otherwise it stops at the first new live invariant failure.
+- Final evidence separates historical failure, offline hardening, and the new campaign without credentials or raw provider transcripts; the normal repaired product is restored healthy and final exact-head CI passes.
 
 ## Non-Goals
 
-- No asyncio rewrite, UI redesign, campaign-semantic workaround, verifier weakening, provider fallback, production ACTIVE enablement, merge, force push, unrelated refactor, or unrelated project access.
-- No SIGKILL except the one newly authorized forced recovery signal to the re-verified old `64a45a3` serving child. No process-group shutdown as normal lifecycle, broad `pkill`/`killall`, parent signal, replacement-child signal, or deletion of a live-owned socket.
+- No daemon lifecycle redesign or repeated packaged acceptance unless directly related production lifecycle code changes.
+- No UI redesign, LLM safety classifier, validator deletion/always-allow path, previous-hash whitelist, provider-dependent validation, frozen verifier change, provider fallback, production enforcement, merge, force push, unrelated refactor, or unrelated project access.
 
 ## Constraints
 
@@ -30,8 +30,9 @@ A focused lifecycle repair on `fix/pao-daemon-graceful-sigterm`, permanent regre
 - Use disposable state for reproduction and packaged acceptance before canonical state.
 - Fail closed on ambiguous PID/socket/DB/quota/verifier/accounting state.
 - Do not print credential values or infer live truth from stale evidence.
-- A real campaign observation consumes its budget even if it blocks; no automatic retry.
-- Build, promotion, campaign, push, CI, the one old-child SIGKILL, and exact stale-socket unlink are authorized only within this prompt's exact scope and gates.
+- The previous failed parent remains consumed and historical. The new authorization permits at most three new parents and three new children; any rejected live parent stops the new campaign without retry or later observation.
+- Offline work must finish, be committed, normally pushed, and pass exact-head CI before any new model call.
+- New campaign egress, normal repaired-daemon SIGTERM transition, product restore, normal pushes, and CI observation are authorized only within this prompt's exact gates.
 
 ## Assumptions
 
@@ -41,12 +42,10 @@ A focused lifecycle repair on `fix/pao-daemon-graceful-sigterm`, permanent regre
 
 ## Risk Areas
 
-- Python signal reentrancy and PyInstaller onefile parent/child forwarding.
-- Cleanup ordering across supervisor, HTTP servers, Unix socket, SQLite stores, and Swift lifecycle ownership.
-- Accidentally signaling an unrelated or replacement production process.
-- Stale socket path versus live socket ownership.
-- Mixing old-build evidence with the fixed build or consuming unauthorized provider calls.
-- Ambiguous campaign accounting, quota pool identity, or frozen verifier drift.
+- False acceptance from lexical negation handling, false rejection from broad token bans, ambiguous multi-clause polarity, and unstable rule ordering.
+- Leaking raw dynamic prompts through audit/evidence while improving rejection diagnosis.
+- Reaching child execution before ALLOW or losing campaign budget/isolation/accounting truth.
+- Mixing previous failed campaign accounting with the new budget, quota drift, frozen verifier drift, or concurrent canonical owners.
 
 ## Execution Plan
 
@@ -55,8 +54,10 @@ A focused lifecycle repair on `fix/pao-daemon-graceful-sigterm`, permanent regre
 3. Broader verification: run lifecycle/control/delegation/database/Swift checks and the repository-required broader suite. Modify only test evidence if needed. Roll back only task-owned test/evidence changes on irreparable failure.
 4. Packaged acceptance: build the real app/helper, record identity, and run isolated parent/child signal routes plus repeated cycles. Modify build outputs/evidence only. Do not promote if any gate fails.
 5. Remote checkpoint and canonical promotion: normally push the verified repair, require exact-head CI green, rebuild that exact head, re-identify live processes and idle/accounting state, use the single authorized old-child SIGKILL only if every old-build condition matches, unlink only the exact stale unowned socket if required, install/start via normal product path, and prove SIGTERM/restart. Stop without improvisation on ambiguity or failure.
-6. PI-5B3G: refresh quota/verifier/fixture/campaign truth, run exactly three sequential authorized SHADOW observations, then prove terminal cleanup and post-campaign lifecycle. Stop at the first contract blocker without retry.
-7. Evidence and delivery: commit meaningful milestones, push normally, update/create Draft PR as appropriate, and wait for CI on exact pushed HEAD. Do not merge.
+6. Scope-validator recovery: inventory the current external/production validation chain; build the offline corpus; implement the smallest repository-owned deterministic validator and sanitized trace; run targeted, relevant, full Python, and Ruff verification.
+7. Pre-live checkpoint: inspect diff/secrets, commit validator hardening separately, normally push, and require exact-head CI green before any MiniMax worker.
+8. New PI-5B3G campaign: refresh all live gates, gracefully stop the normal daemon, create a new campaign ID, run exactly three sequential authorized observations, and stop without retry on the first invariant failure.
+9. Cleanup and delivery: close admission, prove terminal accounting, restore the repaired product, commit only sanitized evidence, push normally, wait for final exact-head CI, and do not merge.
 
 ## Drift Guard
 

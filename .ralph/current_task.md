@@ -1,13 +1,16 @@
 # Current task
 
-T009 — BLOCKED: dynamic PI-5B3G child scope rejected
+T011 — Inventory current dynamic scope validation chain
 
 Acceptance:
 
-- Preserve the stopped campaign result after Observation 1's generated child intent failed the owner-authorized semantic-scope gate. Do not retry or start Observations 2/3 without a new explicit budget and direction.
+- Read the exact current pao_delegate schema, external campaign validator, broker/child forwarding, rejection sanitization, and campaign admission implementation.
+- Document every forbidden rule with RULE_ID, field, match type/category, fail behavior, current coverage, and safe-negation risk.
+- Make no validator or production-code change during this task and do not infer the previous rejected phrase.
 
 Verification:
 
-- Evidence records one parent, zero children, zero retry/fallback/grandchild, stopped admission, complete terminal cleanup, and healthy restoration of the repaired canonical product.
+- `.ralph/artifacts/t011-scope-validator-inventory.md` is complete and supported by exact file/line references.
+- Git diff outside Ralph state contains no source/test changes.
 
-Intended file scope: sanitized blocker evidence and delivery only. Frozen verifier semantics and production source remain unchanged; raw generated strings and provider transcripts remain uncommitted.
+Intended file scope: `.ralph/` only. All source, tests, frozen verifier artifacts, campaign state, and canonical runtime remain unchanged.

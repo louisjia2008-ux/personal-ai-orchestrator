@@ -1,18 +1,19 @@
 {
   "version": "0.1",
   "project": "personal-ai-orchestrator",
-  "goal_summary": "Repair and prove packaged/live PAO SIGTERM lifecycle, then finish PI-5B3G.",
+  "goal_summary": "Preserve the daemon repair, harden PI-5B3G scope validation offline, then run one new bounded campaign.",
   "acceptance_criteria": [
     "Lock-safe SIGTERM handler with ordinary-flow cleanup",
     "Automated lifecycle regressions and broader suite pass",
     "Real packaged helper passes parent/child SIGTERM and restart cycles",
     "Canonical product passes SIGTERM/restart",
-    "PI-5B3G completes or has a new unrelated blocker",
+    "Deterministic diagnosable child-scope validator passes the adversarial corpus",
+    "A new PI-5B3G campaign completes or stops at the first new safety blocker",
     "Exact pushed HEAD and CI evidence recorded"
   ],
   "max_iterations": 20,
-  "current_iteration": 9,
-  "status": "blocked",
+  "current_iteration": 10,
+  "status": "running",
   "tasks": [
     {"id":"T001","title":"Phase 0 mission lock","type":"planning","status":"done","priority":"high","dependencies":[],"acceptance":["Required Ralph state exists and locks the full user goal"],"verification":["test -s .ralph/task_brief.md && python3 -m json.tool .ralph/tasks.json"],"files_expected":[".ralph/*"],"attempts":0,"last_error":"","notes":"Dedicated worktree created from exact PR #53 head."},
     {"id":"T002","title":"Inventory source lifecycle and live topology","type":"analysis","status":"done","priority":"high","dependencies":["T001"],"acceptance":["Repo map records exact implementations, tests, build paths, branch lineage, and read-only live state"],"verification":["test -s .ralph/artifacts/repo_map.md"],"files_expected":[".ralph/artifacts/repo_map.md"],"attempts":0,"last_error":"","notes":"Defective source pattern unchanged from deployed 64a45a3; exact live old process and zero DB accounting revalidated."},
@@ -22,13 +23,19 @@
     {"id":"T006","title":"Build and identify packaged macOS product","type":"build","status":"done","priority":"high","dependencies":["T005"],"acceptance":["Fresh app/helper build identity, SHA-256, architecture, and codesign status recorded"],"verification":["Real bundled Contents/Helpers/pao-daemon exists and is newly built"],"files_expected":[".ralph/artifacts/t006-packaged-build.md"],"attempts":0,"last_error":"","notes":"Release app embeds b1d6a66; helper SHA-256 ad00de62...f887; arm64; strict signatures pass."},
     {"id":"T007","title":"Prove isolated packaged signal matrix and restart cycles","type":"acceptance","status":"done","priority":"high","dependencies":["T006"],"acceptance":["Outer-parent and serving-child SIGTERM routes pass with socket/DB cleanup and at least three cycles"],"verification":["Packaged acceptance evidence has zero failed required checks"],"files_expected":["docs/acceptance/daemon-lifecycle-2026-09-14/",".ralph/artifacts/t007-packaged-acceptance.md"],"attempts":0,"last_error":"","notes":"Five cycles pass: parent route 3, child route 2, zero failures, zero SIGKILL, complete process/socket/DB cleanup and restart."},
     {"id":"T008","title":"Promote and prove canonical live lifecycle","type":"acceptance","status":"done","priority":"high","dependencies":["T007"],"acceptance":["Exact old daemon recovery, fixed build start, canonical SIGTERM, restart, and zero accounting gates pass"],"verification":["Exactly one healthy fixed daemon owns canonical socket after restart"],"files_expected":["docs/acceptance/*",".ralph/artifacts/*"],"attempts":0,"last_error":"","notes":"One exact old-child SIGKILL succeeded; stale socket was proven unowned and unlinked; rebuilt 3b9aaab canonical SIGTERM/restart passed with DB 0/0/0."},
-    {"id":"T009","title":"Execute bounded PI-5B3G SHADOW campaign","type":"acceptance","status":"blocked","priority":"high","dependencies":["T008"],"acceptance":["Exactly three sequential observations complete with 3 parent, 3 child, 0 retry/fallback/grandchild and zero terminal resources, or a new unrelated blocker is captured"],"verification":["Frozen verifier and authoritative campaign evidence pass"],"files_expected":["docs/acceptance/*"],"attempts":1,"last_error":"PI5B3G_GENERATED_SCOPE_REJECTED","notes":"Observation 1 parent invoked pao_delegate once; generated intent failed the owner-required forbidden-scope gate before child forwarding. Campaign stopped; 1 parent/0 child; no retry/fallback/grandchild; cleanup and product restore passed."},
-    {"id":"T010","title":"Finalize delivery and exact-head CI","type":"delivery","status":"pending","priority":"high","dependencies":["T009"],"acceptance":["Focused commits, normal push, Draft PR, exact-head CI, and final report are complete"],"verification":["Remote PR head equals local HEAD and required checks are terminal"],"files_expected":[".ralph/final_report.md","docs/acceptance/*"],"attempts":0,"last_error":"","notes":""}
+    {"id":"T009","title":"Execute bounded PI-5B3G SHADOW campaign","type":"acceptance","status":"failed_blocked","priority":"high","dependencies":["T008"],"acceptance":["Exactly three sequential observations complete with 3 parent, 3 child, 0 retry/fallback/grandchild and zero terminal resources, or a new unrelated blocker is captured"],"verification":["Frozen verifier and authoritative campaign evidence pass"],"files_expected":["docs/acceptance/*"],"attempts":1,"last_error":"PI5B3G_GENERATED_SCOPE_REJECTED","notes":"Historical campaign delegation-campaign-82fe8f1a311044ceb950fe9a659f34ff remains terminal. One parent/zero child, no retry/fallback/grandchild, cleanup and restore passed."},
+    {"id":"T010","title":"Finalize prior blocked delivery","type":"delivery","status":"skipped_with_reason","priority":"high","dependencies":["T009"],"acceptance":["Prior blocker evidence is preserved"],"verification":["Evidence commit a85006e and exact-head CI passed"],"files_expected":["docs/acceptance/*"],"attempts":0,"last_error":"","notes":"Superseded by the newly authorized scope-validator recovery and new campaign; prior evidence remains pushed and CI-green."},
+    {"id":"T011","title":"Inventory current dynamic scope validation chain","type":"analysis","status":"in_progress","priority":"high","dependencies":["T008"],"acceptance":["Every current argument/scope/forwarding/rejection/accounting rule is documented with coverage and negation risks without code changes"],"verification":["Inventory artifact exists and git diff outside Ralph state is empty"],"files_expected":[".ralph/artifacts/t011-scope-validator-inventory.md"],"attempts":0,"last_error":"","notes":"New owner authorization resolves the external decision blocker; begin read-only Phase A."},
+    {"id":"T012","title":"Build offline adversarial scope corpus","type":"test","status":"pending","priority":"high","dependencies":["T011"],"acceptance":["Corpus covers required safe, negated, unsafe, injection, and ambiguous categories with deterministic expected outcomes"],"verification":["Current validator baseline is run offline and failures are classified"],"files_expected":["tests/fixtures/*","tests/*"],"attempts":0,"last_error":"","notes":"No model calls."},
+    {"id":"T013","title":"Implement deterministic diagnosable scope validator","type":"implementation","status":"pending","priority":"high","dependencies":["T012"],"acceptance":["Positive scope proof, safe negation, fail-closed ambiguity, stable sanitized rule trace, and no child-after-reject tests pass"],"verification":["Targeted and campaign/delegation/security tests pass"],"files_expected":["src/personal_ai_orchestrator/*","tests/*"],"attempts":0,"last_error":"","notes":"Do not change frozen semantic verifier/profile."},
+    {"id":"T014","title":"Verify and remotely checkpoint validator","type":"verification","status":"pending","priority":"high","dependencies":["T013"],"acceptance":["Full required local verification, focused validator commit, normal push, and exact-head CI pass before model use"],"verification":["Full Python/Ruff plus exact-head CI"],"files_expected":["docs/acceptance/*",".ralph/artifacts/*"],"attempts":0,"last_error":"","notes":"No MiniMax call before done."},
+    {"id":"T015","title":"Execute new bounded PI-5B3G campaign","type":"acceptance","status":"pending","priority":"high","dependencies":["T014"],"acceptance":["New campaign ID completes 3 sequential observations at 3/3/6 and clean restore, or stops on first new invariant failure"],"verification":["Authoritative sanitized campaign/process/verifier/DB evidence"],"files_expected":["docs/acceptance/*"],"attempts":0,"last_error":"","notes":"New authorization; previous parent remains historical."},
+    {"id":"T016","title":"Finalize new campaign evidence and CI","type":"delivery","status":"pending","priority":"high","dependencies":["T015"],"acceptance":["Sanitized evidence, final report, normal push, exact-head CI, clean worktree, and unmerged Draft PR"],"verification":["Remote/local/PR head match and CI passes"],"files_expected":[".ralph/final_report.md","docs/acceptance/*"],"attempts":0,"last_error":"","notes":""}
   ],
-  "blockers": ["PI5B3G_GENERATED_SCOPE_REJECTED"],
+  "blockers": [],
   "last_successful_task": "T008",
   "last_failed_task": "T009",
   "no_diff_iterations": 0,
   "created_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T02:55:40Z"
+  "updated_at": "2026-09-14T03:05:00Z"
 }
