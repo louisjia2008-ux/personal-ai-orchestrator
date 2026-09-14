@@ -238,6 +238,15 @@
 ## 2026-09-14T07:52:00Z — T031 canonical lineage repair and offline proof
 
 - Changed: added a typed canonical `TASK_SUBMITTED` lineage resolver and `pi5b3g-child-lineage-v1` campaign ownership validator; TaskRecord/schema, accepted identity, scope validator, and spawn semantics remain unchanged.
+
+## 2026-09-14T08:39:00Z — T033 Campaign E complete and product restored
+
+- Preflight/transition: PASS — exact pre-live source/CI, repaired product, canonical DB 0/0/0, fixture and frozen hashes, scope/identity/lineage/spawn implementations, exact MiniMax target, refreshed exact quota, identity absence, and graceful canonical release all passed.
+- Campaign: PASS — fresh Campaign E `delegation-campaign-a42bd2a96d024dc39aa07645c83d32f0` completed exactly three sequential observations with three parents and three children.
+- Per observation: one parent, one `pao_delegate`, `ALLOW_EXACT_SCOPE`, one child, `ALLOW_CANONICAL_CHILD_LINEAGE`, child verifier PASS, sanitized broker verified result, parent verifier PASS, and normal process termination.
+- Global accounting: 3 completed, 3 parent, 3 child, 6 total, zero retry/fallback/grandchild, no overlap, no identity collision, no unexpected writer, and no state divergence.
+- Cleanup/restore: PASS — campaign EXHAUSTED, no campaign/orphan process or broker resource, fixture clean, DB quick-check ok and 0/0/0; exact repaired GUI/parent/child restored with one 0600 canonical socket owner, valid signature/helper hash, health ok, and advancing heartbeat.
+- Next task: T034 validate, commit, and normally push only curated evidence, then obtain exact-head CI before final Ralph closure.
 - Repair: committed separately as `f62d515`.
 - Verification: PASS — 36 focused; 180 relevant; full Python 1301 passed/1 skipped; Ruff, diff, sanitization, and secret scan passed.
 - Pipeline: local fake child reached process creation, durable run, canonical ownership PASS, protocol bootstrap/completion, verifier, and clean exit; injected post-durable lineage loss reaped the exact process and released run/writer state without retry.

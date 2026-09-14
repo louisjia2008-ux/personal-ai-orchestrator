@@ -1,49 +1,31 @@
-# Ralph final report — PI-5B3G spawn repair and Campaign D
+# Ralph final report — PI-5B3G child-lineage repair and Campaign E
 
-## Final status
+## Current status
 
-`BLOCKED_PI_5B3G_CHILD_WORKER_OWNERSHIP_REGISTRATION_FAILED`
+`AWAITING_FINAL_EVIDENCE_CI`
 
-## Completed engineering work
+## Engineering result
 
-- Preserved historical Campaigns A-C and all canonical rows.
-- Proved Campaign C's parent failure was `WORKER_POST_CREATE_ACCOUNTING_ROLE_MISCLASSIFIED` in the external campaign wrapper.
-- Added `pao-spawn-diagnostics-v1`, strict campaign worker-role parsing, exact post-create cleanup, durable-run/ownership fault repair, staged audits, and permanent fault-injection tests.
-- Kept accepted daemon lifecycle, scope-validator, identity, verifier, quota, retry, and fallback semantics unchanged.
-- Passed 297 relevant tests with 1 skip; full Python passed 1284 with 1 skip; Ruff passed; a real `pi --version` spawn-path smoke passed without model egress.
-- Spawn fix `57deff6` and exact pre-live head `19adaa95b698ae8d6e9f80abf9ec8fd5eb139b67` were normally pushed; exact-head Python, macOS Swift, and OpenCode CI passed before Campaign D.
-- Sanitized Campaign D evidence commit `ead8fa2` was normally pushed; exact-head Python passed in 1m55s, macOS Swift in 1m04s, and OpenCode in 19s. Draft PR #54 remains open, draft, and unmerged.
+Campaign D's external observer defect was reproduced without model calls: delegated lineage exists in canonical child `TASK_SUBMITTED` audit metadata, not as `TaskRecord` attributes. Commit `f62d515` adds a typed fail-closed store resolver and `pi5b3g-child-lineage-v1`, which validates exact child, parent task, parent run, campaign, and observation relationships from canonical metadata and host-owned identity maps without parsing identifiers.
 
-## Campaign D live result
+Offline verification passed 36 focused tests, 180 relevant tests, the full Python suite at 1301 passed with 1 skip, and Ruff. The fake child pipeline proved process creation, durable run registration, lineage ownership, protocol completion, and clean exit. Injected failure after durable registration reaped the exact child, made run/task state terminal, released the writer, and did not retry.
 
-All refreshed preflight, identity, quota, fixture, frozen-hash, product-health, and canonical-transition gates passed. Campaign D was created as `delegation-campaign-c129634a908548c497b7c5477851d764`.
+The repair and verification head `a5f652b6fddb6be51854c1d10398299de62db126` was normally pushed, matched Draft PR #54 exactly, and passed Python, macOS Swift, and OpenCode CI before live use.
 
-Observation 1 proved the repaired parent path live: the campaign-scoped parent was admitted, PID 99586 was created, its run was durably registered, ownership and protocol completed, it exited 0, and it invoked `pao_delegate` exactly once. The deterministic scope validator returned `ALLOW_EXACT_SCOPE` and the broker forwarded one child.
+## Campaign E
 
-The one child process, PID 99613, was created and durably registered. Before protocol bootstrap, the external Campaign D activation observer raised `AttributeError` at `DURABLE_RUN_REGISTERED`. Source inspection proves that child-only observer reads `TaskRecord.delegated_parent_task_id`, an attribute not present on `TaskRecord`; delegated lineage is stored in the child `TASK_SUBMITTED` audit metadata. The parent branch did not execute this defective access.
+Fresh Campaign E `delegation-campaign-a42bd2a96d024dc39aa07645c83d32f0` passed refreshed build, health, database, fixture, frozen verifier, scope-validator, identity, lineage, spawn, exact-target, quota, shared-pool, process, and identity-absence gates. The repaired normal daemon released canonical state through its proven graceful SIGTERM path before the campaign host began.
 
-The executor's emergency repair terminated and reaped the exact child with signal 9, failed its run, released its writer, and returned a sanitized blocked result. The parent correctly created no parent artifact and became terminal `BLOCKED`. Campaign D stopped immediately. No retry, fallback, grandchild, Observation 2, or Observation 3 occurred.
+All three observations ran sequentially. Each used one MiniMax-M3 parent, one `pao_delegate`, deterministic `ALLOW_EXACT_SCOPE`, one broker-launched MiniMax-M3 child, canonical `ALLOW_CANONICAL_CHILD_LINEAGE`, a frozen-verifier-approved child artifact, a sanitized verified broker result, and a frozen-verifier-approved parent artifact. All six workers exited normally.
 
-## Accounting, cleanup, and restore
+Campaign E is terminal `EXHAUSTED / BUDGET_EXHAUSTED` with 3 completed observations, 3 parents, 3 children, and 6 total workers. Automatic retries are 0, automatic fallback is false, and grandchildren are 0.
 
-- admitted observations: 1
-- completed observations: 0
-- parent workers: 1
-- child workers: 1
-- total workers: 2
-- automatic retries: 0
-- fallback: no
-- grandchildren: 0
-- campaign: `STOPPED / OWNER_STOPPED`
-- campaign/orphan processes: 0
-- SQLite quick-check: `ok`
-- RUNNING/ACTIVE/HELD: `0/0/0`
-- fixture: clean at `d764edb4ca65c8ce5f77fcb2964d320ac3a503b9`
+## Cleanup and restore
 
-The repaired normal PAO product is restored with one GUI, one PyInstaller parent, one serving child, one `0600` canonical socket owner, health `ok`, advancing heartbeat, expected build/helper identity, valid code signature, and healthy idle canonical state.
+Campaign processes and orphans are zero; broker sockets/directories are absent; the fixture is clean at `d764edb4ca65c8ce5f77fcb2964d320ac3a503b9`; SQLite quick-check is `ok`; RUNNING/ACTIVE/HELD are `0/0/0`.
 
-## Evidence and remaining issue
+The repaired normal product is restored from build `3b9aaab83d87a2c32adf17e5f3a4afbbfdf16b7e` with one GUI, one PyInstaller parent, one serving child, one canonical `0600` socket owner, health `ok`, advancing heartbeat, strict code-sign validation, expected helper hash, healthy SQLite, and no campaign state owner.
 
-Campaign D's sanitized evidence is in `docs/acceptance/pi5b3g-spawn-v1-2026-09-14/` and its companion Markdown report. Campaigns A-C remain separate and unchanged. No raw provider transcript, raw dynamic intent, environment value, or credential value is committed.
+## Delivery gate
 
-Remaining issue: the external campaign harness must obtain child lineage through a supported store/audit contract rather than a nonexistent `TaskRecord` attribute, then pass offline tests and a new exact-head CI gate. Campaign D is consumed and grants no retry.
+Curated evidence is prepared under `docs/acceptance/pi5b3g-lineage-v1-2026-09-14/`. It retains the exact fixed owner-approved prompts and dynamic argument hashes/lengths, but no raw provider transcript, raw dynamic intent/reason, provider output content, environment value, or credential value. Final completion remains gated on evidence commit, normal push, and exact-head CI; Draft PR #54 must remain unmerged.
