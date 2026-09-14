@@ -1,13 +1,13 @@
 # Current task
 
-T005 — Run targeted and broad project verification
+T007 — Prove isolated packaged signal matrix and restart cycles
 
 Acceptance:
 
-- Relevant Python lifecycle/control/campaign/database/process, Ruff, OpenCode adapter, Swift, and broader suites are recorded and pass or an honest blocker is recorded.
+- The real bundled one-file helper passes outer-parent and serving-child SIGTERM routes, ordinary cleanup, and at least three complete start/health/shutdown/restart cycles in a disposable home.
 
 Verification:
 
-- Commands are taken from `.github/workflows/ci.yml` plus targeted lifecycle suites.
+- Packaged acceptance evidence has zero failed required checks, no SIGKILL, and no surviving process/socket/database ownership.
 
-Intended file scope: `.ralph/artifacts/*` and `.ralph/*` only; project sources are read-only unless verification exposes a repairable regression.
+Intended file scope: a reusable packaged acceptance harness plus `docs/acceptance/*` and `.ralph/*`; canonical live state remains untouched.

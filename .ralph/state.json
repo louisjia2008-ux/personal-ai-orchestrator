@@ -2,16 +2,16 @@
   "version": "0.1",
   "status": "running",
   "completion": "RALPH_CONTINUE",
-  "current_iteration": 5,
-  "current_task_id": "T005",
-  "last_task_id": "T005",
+  "current_iteration": 7,
+  "current_task_id": "T007",
+  "last_task_id": "T006",
   "last_verification": {
     "status": "PASS",
-    "command": "CI-equivalent full Python, Ruff, OpenCode adapter, swift build, and swift test commands recorded in t005-verification.md",
-    "summary": "PASS: 1196 Python tests, full Ruff, 17 adapter tests, Swift build, and 441 Swift tests."
+    "command": "build_app_bundle.sh plus embedded identity, SHA-256, file, and codesign checks recorded in t006-packaged-build.md",
+    "summary": "PASS: Release app embeds b1d6a66; arm64 helper and deep app signatures validate."
   },
   "blockers": [],
   "no_diff_iterations": 0,
   "started_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T01:30:00Z"
+  "updated_at": "2026-09-14T01:31:00Z"
 }
