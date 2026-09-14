@@ -247,6 +247,13 @@
 - Global accounting: 3 completed, 3 parent, 3 child, 6 total, zero retry/fallback/grandchild, no overlap, no identity collision, no unexpected writer, and no state divergence.
 - Cleanup/restore: PASS — campaign EXHAUSTED, no campaign/orphan process or broker resource, fixture clean, DB quick-check ok and 0/0/0; exact repaired GUI/parent/child restored with one 0600 canonical socket owner, valid signature/helper hash, health ok, and advancing heartbeat.
 - Next task: T034 validate, commit, and normally push only curated evidence, then obtain exact-head CI before final Ralph closure.
+
+## 2026-09-14T08:43:00Z — T034/T035 sanitized delivery and exact-head CI
+
+- Evidence: PASS — curated Campaign E JSON/Markdown, Ralph state, JSON parsing, PAO `assert_sanitized`, consistency assertions, diff check, and secret/transcript-marker scan passed; evidence commit `7a73fbc` was normally pushed.
+- CI: PASS — exact evidence head matched local, remote branch, and Draft PR #54; Python passed in 1m58s, macOS Swift in 59s, and OpenCode in 17s.
+- Closure: final Ralph completion record is normally pushed and rechecked on its exact head. PR #54 remains OPEN/DRAFT/unmerged.
+- Final status: `PI_5B3G_COMPLETE_AFTER_CHILD_LINEAGE_REPAIR`.
 - Repair: committed separately as `f62d515`.
 - Verification: PASS — 36 focused; 180 relevant; full Python 1301 passed/1 skipped; Ruff, diff, sanitization, and secret scan passed.
 - Pipeline: local fake child reached process creation, durable run, canonical ownership PASS, protocol bootstrap/completion, verifier, and clean exit; injected post-durable lineage loss reaped the exact process and released run/writer state without retry.
