@@ -25,3 +25,4 @@
 - 2026-09-14T05:54:00Z | RALPH_BLOCKED | T022 | sanitized evidence 984c801 pushed; exact-head Python/macOS Swift/OpenCode CI PASS; Draft PR unmerged | stop: parent launch budget consumed, fresh authorization required for any future live attempt
 - 2026-09-14T06:10:00Z | RALPH_CONTINUE | T023 | new owner authorization re-locks offline spawn recovery and gated Campaign D; no source/model action yet | validate mission lock, then continue automatically to T024
 - 2026-09-14T06:11:00Z | RALPH_CONTINUE | T023 | PASS: mission JSON/diff and offline-first boundaries validated; Campaigns A-C immutable | continue automatically to T024 read-only spawn trace
+- 2026-09-14T06:18:54Z | RALPH_CONTINUE | T024 | PASS: process create precedes durable run; Campaign C delta isolated to stale post-create role accounting | continue automatically to T025 offline reproduction and diagnostics
