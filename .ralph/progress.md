@@ -202,3 +202,13 @@
 - Remote verification: PASS — exact Draft PR #54 head matched; Python 1m57s, macOS Swift 57s, and OpenCode 17s all passed; PR remains open/draft/unmerged.
 - Model accounting: zero provider prompts or Campaign D workers during diagnosis/repair/checkpoint.
 - Next task: push and green this evidence-only transition, then T028 refresh every live preflight and execute only the fresh authorized Campaign D.
+
+## 2026-09-14T07:06:00Z — T028 Campaign D stopped at child ownership registration
+
+- Preflight/transition: PASS — exact source and prior CI, repaired product/build/heartbeat, canonical DB 0/0/0 and quick-check, fixture/verifier/validator/identity hashes, MiniMax auth/exact quota/shared-pool gates, identity absence, and graceful canonical release all passed.
+- Parent spawn repair: PASS LIVE — Campaign D `delegation-campaign-c129634a908548c497b7c5477851d764` Observation 1 admitted a campaign-scoped parent; PID 99586 was created, durably registered, marked running, completed valid Pi JSON protocol with exit 0, and invoked `pao_delegate` exactly once.
+- Scope/broker: PASS to child-forward boundary — deterministic `ALLOW_EXACT_SCOPE`; one child task and process only; no retry, fallback, or grandchild.
+- First blocker: child PID 99613 reached a durable run, then the external Campaign D activation observer raised `AttributeError` at `DURABLE_RUN_REGISTERED` before protocol bootstrap. Source proves the observer reads absent `TaskRecord.delegated_parent_task_id`; lineage exists only in audit metadata.
+- Cleanup: PASS — exact child reaped by emergency repair with signal 9; both tasks terminal BLOCKED; Campaign D STOPPED after one admitted/zero completed observation; campaign processes 0; DB quick-check ok and 0/0/0; fixture clean.
+- Product restore: PASS — one GUI/PyInstaller parent/serving child, one 0600 canonical socket owner, expected signed build/helper, health ok, and heartbeat advanced.
+- Next task: T029 preserve sanitized blocker evidence, normally push it, and wait for exact-head CI. Campaign D is consumed; no live retry is authorized.

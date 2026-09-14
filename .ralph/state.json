@@ -2,16 +2,18 @@
   "version": "0.1",
   "status": "running",
   "completion": "RALPH_CONTINUE",
-  "current_iteration": 20,
-  "current_task_id": "T028",
-  "last_task_id": "T027",
+  "current_iteration": 21,
+  "current_task_id": "T029",
+  "last_task_id": "T028",
   "last_verification": {
-    "status": "PASS",
-    "command": "python3 -m json.tool .ralph/state.json and .ralph/tasks.json; git diff --check",
-    "summary": "PASS: spawn repair 57deff6 and exact pushed head 8fe8394 passed full local Python/Ruff and exact PR #54 Python/macOS Swift/OpenCode CI; no model call consumed."
+    "status": "BLOCKED_AS_DESIGNED",
+    "command": "canonical audit/run/task/campaign/process/DB and restored-product inspection",
+    "summary": "Campaign D stopped without retry after Observation 1 child ownership registration raised AttributeError at DURABLE_RUN_REGISTERED; cleanup and repaired product restore passed."
   },
-  "blockers": [],
+  "blockers": [
+    "CAMPAIGN_HARNESS_CHILD_LINEAGE_ATTRIBUTE_ACCESS_FAILED"
+  ],
   "no_diff_iterations": 0,
   "started_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T06:48:00Z"
+  "updated_at": "2026-09-14T07:06:00Z"
 }
