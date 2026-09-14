@@ -1,15 +1,16 @@
 # Current task
 
-T030 — inventory canonical delegated-child lineage
+T031 — implement canonical delegated-child lineage access
 
 Acceptance:
 
-- Trace TaskRecord/schema, child submission, `TASK_SUBMITTED` lineage metadata, store/audit APIs, observation/campaign linkage, and Campaign D observer.
-- Document source of truth, persistence, supported API gap, keys, uniqueness/ambiguity behavior, and fail-closed repair boundary without source changes.
+- Add a small typed repository-owned resolver over canonical `TASK_SUBMITTED` metadata.
+- Add a PI-5B3G ownership validator using host-owned campaign identity mappings.
+- Reproduce the old AttributeError and prove valid plus fail-closed lineage cases offline.
 
 Verification:
 
-- Inventory artifact cites exact source and tests.
-- Git diff contains only Ralph/inventory evidence; no model call or canonical mutation.
+- Focused permanent tests pass with stable sanitized diagnostics.
+- Accepted identity/scope/spawn/verifier sources remain unchanged.
 
 Campaign D remains consumed and terminal. Campaign E cannot start before T031-T033 pass.
