@@ -12,6 +12,7 @@
 - Kept accepted daemon lifecycle, scope-validator, identity, verifier, quota, retry, and fallback semantics unchanged.
 - Passed 297 relevant tests with 1 skip; full Python passed 1284 with 1 skip; Ruff passed; a real `pi --version` spawn-path smoke passed without model egress.
 - Spawn fix `57deff6` and exact pre-live head `19adaa95b698ae8d6e9f80abf9ec8fd5eb139b67` were normally pushed; exact-head Python, macOS Swift, and OpenCode CI passed before Campaign D.
+- Sanitized Campaign D evidence commit `ead8fa2` was normally pushed; exact-head Python passed in 1m55s, macOS Swift in 1m04s, and OpenCode in 19s. Draft PR #54 remains open, draft, and unmerged.
 
 ## Campaign D live result
 
