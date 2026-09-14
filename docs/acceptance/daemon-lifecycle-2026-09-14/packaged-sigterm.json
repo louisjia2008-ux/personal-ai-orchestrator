@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "helper": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon",
+  "home": "/private/tmp/pao-packaged-g_im86ld",
+  "cycles_requested": 5,
+  "routes": [
+    "parent",
+    "child",
+    "parent",
+    "child",
+    "parent"
+  ],
+  "cycles": [
+    {
+      "cycle": 1,
+      "route": "parent",
+      "parent": {
+        "pid": 5280,
+        "ppid": 5268,
+        "pgid": 5268,
+        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+      },
+      "child": {
+        "pid": 5281,
+        "ppid": 5280,
+        "pgid": 5268,
+        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+      },
+      "signal_target_pid": 5280,
+      "signal_count": 1,
+      "signal": "SIGTERM",
+      "health_status": "ok",
+      "socket_path": "/private/tmp/pao-packaged-g_im86ld/Library/Caches/Personal AI Orchestrator/control.sock",
+      "socket_owners_before": [
+        5281
+      ],
+      "socket_owners_after": [],
+      "socket_exists_after": false,
+      "parent_returncode": 0,
+      "parent_present_after": false,
+      "child_present_after": false,
+      "database": {
+        "quick_check": "ok",
+        "running_rows": 0,
+        "active_runs": 0,
+        "held_writers": 0
+      },
+      "startup_and_shutdown_seconds": 12.952,
+      "stdout_log": "/private/tmp/pao-packaged-g_im86ld/cycle-01.stdout.log",
+      "stderr_log": "/private/tmp/pao-packaged-g_im86ld/cycle-01.stderr.log",
+      "result": "PASS"
+    },
+    {
+      "cycle": 2,
+      "route": "child",
+      "parent": {
+        "pid": 5399,
+        "ppid": 5268,
+        "pgid": 5268,
+        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+      },
+      "child": {
+        "pid": 5401,
+        "ppid": 5399,
+        "pgid": 5268,
+        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+      },
+      "signal_target_pid": 5401,
+      "signal_count": 1,
+      "signal": "SIGTERM",
+      "health_status": "ok",
+      "socket_path": "/private/tmp/pao-packaged-g_im86ld/Library/Caches/Personal AI Orchestrator/control.sock",
+      "socket_owners_before": [
+        5401
+      ],
+      "socket_owners_after": [],
+      "socket_exists_after": false,
+      "parent_returncode": 0,
+      "parent_present_after": false,
+      "child_present_after": false,
+      "database": {
+        "quick_check": "ok",
+        "running_rows": 0,
+        "active_runs": 0,
+        "held_writers": 0
+      },
+      "startup_and_shutdown_seconds": 6.994,
+      "stdout_log": "/private/tmp/pao-packaged-g_im86ld/cycle-02.stdout.log",
+      "stderr_log": "/private/tmp/pao-packaged-g_im86ld/cycle-02.stderr.log",
+      "result": "PASS"
+    },
+    {
+      "cycle": 3,
+      "route": "parent",
+      "parent": {
+        "pid": 5431,
+        "ppid": 5268,
+        "pgid": 5268,
+        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+      },
+      "child": {
+        "pid": 5432,
+        "ppid": 5431,
+        "pgid": 5268,
+        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+      },
+      "signal_target_pid": 5431,
+      "signal_count": 1,
+      "signal": "SIGTERM",
+      "health_status": "ok",
+      "socket_path": "/private/tmp/pao-packaged-g_im86ld/Library/Caches/Personal AI Orchestrator/control.sock",
+      "socket_owners_before": [
+        5432
+      ],
+      "socket_owners_after": [],
+      "socket_exists_after": false,
+      "parent_returncode": 0,
+      "parent_present_after": false,
+      "child_present_after": false,
+      "database": {
+        "quick_check": "ok",
+        "running_rows": 0,
+        "active_runs": 0,
+        "held_writers": 0
+      },
+      "startup_and_shutdown_seconds": 6.842,
+      "stdout_log": "/private/tmp/pao-packaged-g_im86ld/cycle-03.stdout.log",
+      "stderr_log": "/private/tmp/pao-packaged-g_im86ld/cycle-03.stderr.log",
+      "result": "PASS"
+    },
+    {
+      "cycle": 4,
+      "route": "child",
+      "parent": {
+        "pid": 5458,
+        "ppid": 5268,
+        "pgid": 5268,
+        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+      },
+      "child": {
+        "pid": 5459,
+        "ppid": 5458,
+        "pgid": 5268,
+        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+      },
+      "signal_target_pid": 5459,
+      "signal_count": 1,
+      "signal": "SIGTERM",
+      "health_status": "ok",
+      "socket_path": "/private/tmp/pao-packaged-g_im86ld/Library/Caches/Personal AI Orchestrator/control.sock",
+      "socket_owners_before": [
+        5459
+      ],
+      "socket_owners_after": [],
+      "socket_exists_after": false,
+      "parent_returncode": 0,
+      "parent_present_after": false,
+      "child_present_after": false,
+      "database": {
+        "quick_check": "ok",
+        "running_rows": 0,
+        "active_runs": 0,
+        "held_writers": 0
+      },
+      "startup_and_shutdown_seconds": 6.834,
+      "stdout_log": "/private/tmp/pao-packaged-g_im86ld/cycle-04.stdout.log",
+      "stderr_log": "/private/tmp/pao-packaged-g_im86ld/cycle-04.stderr.log",
+      "result": "PASS"
+    },
+    {
+      "cycle": 5,
+      "route": "parent",
+      "parent": {
+        "pid": 5498,
+        "ppid": 5268,
+        "pgid": 5268,
+        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+      },
+      "child": {
+        "pid": 5499,
+        "ppid": 5498,
+        "pgid": 5268,
+        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+      },
+      "signal_target_pid": 5498,
+      "signal_count": 1,
+      "signal": "SIGTERM",
+      "health_status": "ok",
+      "socket_path": "/private/tmp/pao-packaged-g_im86ld/Library/Caches/Personal AI Orchestrator/control.sock",
+      "socket_owners_before": [
+        5499
+      ],
+      "socket_owners_after": [],
+      "socket_exists_after": false,
+      "parent_returncode": 0,
+      "parent_present_after": false,
+      "child_present_after": false,
+      "database": {
+        "quick_check": "ok",
+        "running_rows": 0,
+        "active_runs": 0,
+        "held_writers": 0
+      },
+      "startup_and_shutdown_seconds": 6.843,
+      "stdout_log": "/private/tmp/pao-packaged-g_im86ld/cycle-05.stdout.log",
+      "stderr_log": "/private/tmp/pao-packaged-g_im86ld/cycle-05.stderr.log",
+      "result": "PASS"
+    }
+  ],
+  "sigkill_used": false,
+  "result": "PASS",
+  "cycles_passed": 5,
+  "parent_route_passes": 3,
+  "child_route_passes": 2
+}

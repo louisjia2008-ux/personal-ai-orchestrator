@@ -11,7 +11,7 @@
     "Exact pushed HEAD and CI evidence recorded"
   ],
   "max_iterations": 20,
-  "current_iteration": 7,
+  "current_iteration": 8,
   "status": "running",
   "tasks": [
     {"id":"T001","title":"Phase 0 mission lock","type":"planning","status":"done","priority":"high","dependencies":[],"acceptance":["Required Ralph state exists and locks the full user goal"],"verification":["test -s .ralph/task_brief.md && python3 -m json.tool .ralph/tasks.json"],"files_expected":[".ralph/*"],"attempts":0,"last_error":"","notes":"Dedicated worktree created from exact PR #53 head."},
@@ -20,15 +20,15 @@
     {"id":"T004","title":"Implement minimal lock-safe SIGTERM repair","type":"implementation","status":"done","priority":"high","dependencies":["T003"],"acceptance":["SIGTERM/SIGINT request shutdown without lock-backed handler work and cleanup/restart tests pass"],"verification":["Focused lifecycle test command passes"],"files_expected":["src/personal_ai_orchestrator/daemon.py","tests/test_daemon_shutdown.py","tests/test_product_daemon.py"],"attempts":0,"last_error":"","notes":"SIGTERM handler now performs only a nonlocal bool assignment; supervisor Event.set and all cleanup run in finally. Five focused tests and Ruff pass."},
     {"id":"T005","title":"Run targeted and broad project verification","type":"verification","status":"done","priority":"high","dependencies":["T004"],"acceptance":["Relevant Python, control, campaign, DB, process, Swift, lint, and broader checks are recorded"],"verification":["Required repository test commands pass or an honest blocker is recorded"],"files_expected":[".ralph/artifacts/t005-verification.md","tests/test_daemon_tick_integration.py"],"attempts":0,"last_error":"","notes":"175 targeted pass; 1196 full Python pass; Ruff pass; OpenCode 17 pass; Swift build and 441 tests pass."},
     {"id":"T006","title":"Build and identify packaged macOS product","type":"build","status":"done","priority":"high","dependencies":["T005"],"acceptance":["Fresh app/helper build identity, SHA-256, architecture, and codesign status recorded"],"verification":["Real bundled Contents/Helpers/pao-daemon exists and is newly built"],"files_expected":[".ralph/artifacts/t006-packaged-build.md"],"attempts":0,"last_error":"","notes":"Release app embeds b1d6a66; helper SHA-256 ad00de62...f887; arm64; strict signatures pass."},
-    {"id":"T007","title":"Prove isolated packaged signal matrix and restart cycles","type":"acceptance","status":"pending","priority":"high","dependencies":["T006"],"acceptance":["Outer-parent and serving-child SIGTERM routes pass with socket/DB cleanup and at least three cycles"],"verification":["Packaged acceptance evidence has zero failed required checks"],"files_expected":["docs/acceptance/*",".ralph/artifacts/*"],"attempts":0,"last_error":"","notes":""},
+    {"id":"T007","title":"Prove isolated packaged signal matrix and restart cycles","type":"acceptance","status":"done","priority":"high","dependencies":["T006"],"acceptance":["Outer-parent and serving-child SIGTERM routes pass with socket/DB cleanup and at least three cycles"],"verification":["Packaged acceptance evidence has zero failed required checks"],"files_expected":["docs/acceptance/daemon-lifecycle-2026-09-14/",".ralph/artifacts/t007-packaged-acceptance.md"],"attempts":0,"last_error":"","notes":"Five cycles pass: parent route 3, child route 2, zero failures, zero SIGKILL, complete process/socket/DB cleanup and restart."},
     {"id":"T008","title":"Promote and prove canonical live lifecycle","type":"acceptance","status":"pending","priority":"high","dependencies":["T007"],"acceptance":["Exact old daemon recovery, fixed build start, canonical SIGTERM, restart, and zero accounting gates pass"],"verification":["Exactly one healthy fixed daemon owns canonical socket after restart"],"files_expected":["docs/acceptance/*",".ralph/artifacts/*"],"attempts":0,"last_error":"","notes":""},
     {"id":"T009","title":"Execute bounded PI-5B3G SHADOW campaign","type":"acceptance","status":"pending","priority":"high","dependencies":["T008"],"acceptance":["Exactly three sequential observations complete with 3 parent, 3 child, 0 retry/fallback/grandchild and zero terminal resources, or a new unrelated blocker is captured"],"verification":["Frozen verifier and authoritative campaign evidence pass"],"files_expected":["docs/acceptance/*"],"attempts":0,"last_error":"","notes":""},
     {"id":"T010","title":"Finalize delivery and exact-head CI","type":"delivery","status":"pending","priority":"high","dependencies":["T009"],"acceptance":["Focused commits, normal push, Draft PR, exact-head CI, and final report are complete"],"verification":["Remote PR head equals local HEAD and required checks are terminal"],"files_expected":[".ralph/final_report.md","docs/acceptance/*"],"attempts":0,"last_error":"","notes":""}
   ],
   "blockers": [],
-  "last_successful_task": "T006",
+  "last_successful_task": "T007",
   "last_failed_task": null,
   "no_diff_iterations": 0,
   "created_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T01:31:00Z"
+  "updated_at": "2026-09-14T01:32:00Z"
 }

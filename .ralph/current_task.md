@@ -1,13 +1,13 @@
 # Current task
 
-T007 — Prove isolated packaged signal matrix and restart cycles
+T008 — Promote and prove canonical live lifecycle
 
 Acceptance:
 
-- The real bundled one-file helper passes outer-parent and serving-child SIGTERM routes, ordinary cleanup, and at least three complete start/health/shutdown/restart cycles in a disposable home.
+- The exact old stuck daemon is re-identified and retired only under the prompt's one-SIGINT authorization, then the fixed build is launched on canonical state and passes real SIGTERM plus normal restart.
 
 Verification:
 
-- Packaged acceptance evidence has zero failed required checks, no SIGKILL, and no surviving process/socket/database ownership.
+- Exactly one healthy fixed daemon owns the canonical socket after restart; DB/accounting and socket invariants remain healthy throughout.
 
-Intended file scope: a reusable packaged acceptance harness plus `docs/acceptance/*` and `.ralph/*`; canonical live state remains untouched.
+Intended file scope: canonical process lifecycle actions explicitly authorized by the prompt and new evidence only; no campaign begins in this task.

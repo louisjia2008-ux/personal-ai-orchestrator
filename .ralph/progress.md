@@ -47,3 +47,11 @@
 - Files changed: generated ignored build outputs and Ralph evidence only.
 - Remaining risk: real one-file parent/child SIGTERM behavior and repeated restart are not yet exercised.
 - Next task: T007 prove the isolated packaged signal matrix and restart cycles.
+
+## 2026-09-14T01:32:00Z — T007 isolated packaged signal matrix
+
+- Changed: added a reusable real-helper harness and recorded immutable machine-readable and human-readable packaged acceptance evidence.
+- Verification: PASS — five cycles on one disposable state; three outer-parent SIGTERM routes and two serving-child routes; zero failed required checks; no SIGKILL; every socket/process/DB/restart gate passed.
+- Files changed: packaged acceptance harness, `docs/acceptance/daemon-lifecycle-2026-09-14/`, and Ralph evidence/state.
+- Remaining risk: the canonical old stuck daemon has not yet been retired or replaced; canonical live state is untouched.
+- Next task: T008 re-identify and gate the old live daemon, use the one authorized direct-child SIGINT only if every condition still matches, then promote and prove the fixed build.
