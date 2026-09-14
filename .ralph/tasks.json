@@ -11,12 +11,12 @@
     "Exact pushed HEAD and CI evidence recorded"
   ],
   "max_iterations": 20,
-  "current_iteration": 2,
+  "current_iteration": 3,
   "status": "running",
   "tasks": [
     {"id":"T001","title":"Phase 0 mission lock","type":"planning","status":"done","priority":"high","dependencies":[],"acceptance":["Required Ralph state exists and locks the full user goal"],"verification":["test -s .ralph/task_brief.md && python3 -m json.tool .ralph/tasks.json"],"files_expected":[".ralph/*"],"attempts":0,"last_error":"","notes":"Dedicated worktree created from exact PR #53 head."},
     {"id":"T002","title":"Inventory source lifecycle and live topology","type":"analysis","status":"done","priority":"high","dependencies":["T001"],"acceptance":["Repo map records exact implementations, tests, build paths, branch lineage, and read-only live state"],"verification":["test -s .ralph/artifacts/repo_map.md"],"files_expected":[".ralph/artifacts/repo_map.md"],"attempts":0,"last_error":"","notes":"Defective source pattern unchanged from deployed 64a45a3; exact live old process and zero DB accounting revalidated."},
-    {"id":"T003","title":"Add deterministic old-behavior reproduction boundary","type":"test","status":"pending","priority":"high","dependencies":["T002"],"acceptance":["A disposable regression test distinguishes unsafe handler work from ordinary-flow cleanup"],"verification":["Focused reproduction test demonstrates the old implementation defect or contract violation"],"files_expected":["tests/*"],"attempts":0,"last_error":"","notes":""},
+    {"id":"T003","title":"Add deterministic old-behavior reproduction boundary","type":"test","status":"done","priority":"high","dependencies":["T002"],"acceptance":["A disposable regression test distinguishes unsafe handler work from ordinary-flow cleanup"],"verification":["Focused reproduction test demonstrates the old implementation defect or contract violation"],"files_expected":["tests/test_daemon_shutdown.py"],"attempts":0,"last_error":"","notes":"Deterministic simulated delivery fails old source exactly at Event.set inside handler; disposable subprocess assertion also added and passes on unbundled Python 3.13."},
     {"id":"T004","title":"Implement minimal lock-safe SIGTERM repair","type":"implementation","status":"pending","priority":"high","dependencies":["T003"],"acceptance":["SIGTERM/SIGINT request shutdown without lock-backed handler work and cleanup/restart tests pass"],"verification":["Focused lifecycle test command passes"],"files_expected":["src/personal_ai_orchestrator/product_daemon.py","tests/*"],"attempts":0,"last_error":"","notes":""},
     {"id":"T005","title":"Run targeted and broad project verification","type":"verification","status":"pending","priority":"high","dependencies":["T004"],"acceptance":["Relevant Python, control, campaign, DB, process, Swift, lint, and broader checks are recorded"],"verification":["Required repository test commands pass or an honest blocker is recorded"],"files_expected":[".ralph/artifacts/*"],"attempts":0,"last_error":"","notes":""},
     {"id":"T006","title":"Build and identify packaged macOS product","type":"build","status":"pending","priority":"high","dependencies":["T005"],"acceptance":["Fresh app/helper build identity, SHA-256, architecture, and codesign status recorded"],"verification":["Real bundled Contents/Helpers/pao-daemon exists and is newly built"],"files_expected":[".ralph/artifacts/*"],"attempts":0,"last_error":"","notes":""},
@@ -26,9 +26,9 @@
     {"id":"T010","title":"Finalize delivery and exact-head CI","type":"delivery","status":"pending","priority":"high","dependencies":["T009"],"acceptance":["Focused commits, normal push, Draft PR, exact-head CI, and final report are complete"],"verification":["Remote PR head equals local HEAD and required checks are terminal"],"files_expected":[".ralph/final_report.md","docs/acceptance/*"],"attempts":0,"last_error":"","notes":""}
   ],
   "blockers": [],
-  "last_successful_task": "T002",
+  "last_successful_task": "T003",
   "last_failed_task": null,
   "no_diff_iterations": 0,
   "created_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T01:02:00Z"
+  "updated_at": "2026-09-14T01:17:00Z"
 }

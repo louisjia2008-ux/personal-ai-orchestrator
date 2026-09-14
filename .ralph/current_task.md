@@ -1,13 +1,13 @@
 # Current task
 
-T002 — Inventory source lifecycle and live topology
+T003 — Add deterministic old-behavior reproduction boundary
 
 Acceptance:
 
-- Repo map records exact implementations, tests, build paths, branch lineage, and read-only live state.
+- A disposable regression test proves control-only SIGTERM must exit cleanly within a bound and always cleans its owned subprocess on failure.
 
 Verification:
 
-- `test -s .ralph/artifacts/repo_map.md`
+- `.venv/bin/pytest -q tests/test_daemon_shutdown.py -k sigterm`
 
-Intended file scope: `.ralph/*` only; all source and live-system operations are read-only.
+Intended file scope: `tests/test_daemon_shutdown.py` and `.ralph/*` only.

@@ -15,3 +15,11 @@
 - Files changed: `.ralph/artifacts/repo_map.md` and Ralph state only.
 - Remaining risk: the live old daemon now owns the socket but rejects requests; no signal was sent.
 - Next task: T003 add a disposable control-only SIGTERM reproduction that always cleans its own subprocess.
+
+## 2026-09-14T01:17:00Z — T003 deterministic old-behavior reproduction
+
+- Changed: added a host subprocess SIGTERM assertion and a deterministic handler-context guard that simulates delivery during the main wait.
+- Verification: PASS as a reproduction boundary — the unbundled subprocess exits normally on host Python 3.13, while the deterministic test fails old source exactly because `_stop` calls `GuardedEvent.set()` inside handler context.
+- Files changed: `tests/test_daemon_shutdown.py` and Ralph state.
+- Remaining risk: source is intentionally still failing the new design-property test until T004.
+- Next task: T004 replace handler Event mutation with scalar notification and ordinary-flow supervisor stop.

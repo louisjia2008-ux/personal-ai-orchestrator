@@ -2,16 +2,16 @@
   "version": "0.1",
   "status": "running",
   "completion": "RALPH_CONTINUE",
-  "current_iteration": 2,
-  "current_task_id": "T002",
-  "last_task_id": "T002",
+  "current_iteration": 3,
+  "current_task_id": "T003",
+  "last_task_id": "T003",
   "last_verification": {
     "status": "PASS",
-    "command": "test -s .ralph/artifacts/repo_map.md",
-    "summary": "PASS: source, tests, build path, branch lineage, and refreshed live topology recorded."
+    "command": "uv run --offline --extra dev pytest -q tests/test_daemon_shutdown.py::test_control_only_signal_handler_avoids_event_set_and_cleanup",
+    "summary": "Expected red reproduction: old handler attempted GuardedEvent.set while signal handler context was active."
   },
   "blockers": [],
   "no_diff_iterations": 0,
   "started_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T01:02:00Z"
+  "updated_at": "2026-09-14T01:17:00Z"
 }
