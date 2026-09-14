@@ -101,4 +101,3 @@ was under this repository path containing spaces. Its test-only shebang is now
 - Pi dispatch/broker/delegation/campaign/scope/identity matrix under short
   `/tmp` socket paths: 154 passed, 1 skipped;
 - focused Ruff: pass.
-
