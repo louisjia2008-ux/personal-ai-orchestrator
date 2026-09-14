@@ -1,12 +1,12 @@
-# PAO PI-5B3G campaign identity repair and third campaign mission lock
+# PAO PI-5B3G parent worker spawn diagnosis, repair, and fourth campaign mission lock
 
 ## User Goal
 
-Preserve the completed daemon lifecycle repair, accepted scope validator, and both historical terminal PI-5B3G campaigns; repair static cross-campaign execution identities with deterministic campaign-scoped host identities; prove canonical idempotency and conflict safety offline; then run one newly authorized third three-observation PI-5B3G SHADOW campaign without weakening verifier, routing, quota, or delegation safety.
+Preserve the completed daemon, scope-validator, and campaign-identity repairs plus all three historical terminal campaigns; deterministically diagnose the Campaign C parent worker spawn failure offline; add sanitized stage-aware observability and the smallest proven repair; pass local and exact-head CI gates; then, and only then, run one newly authorized fourth three-observation PI-5B3G SHADOW campaign without weakening verifier, routing, quota, delegation, or identity safety.
 
 ## Final Deliverable
 
-A small repository-owned deterministic campaign identity scheme covering parent and child execution paths; offline unit and canonical-admission integration evidence; a separately committed, normally pushed, exact-head-CI-green identity checkpoint; and either three successful sequential observations in a fresh third campaign or the exact authorized blocker report, followed by canonical product restoration and final exact-head CI.
+A precise spawn-path trace and evidence-backed root-cause classification; repository-owned sanitized spawn-stage diagnostics; a minimal repair if a defect is proven; disposable no-egress reproductions and fault-injection cleanup tests; a separately committed, normally pushed, exact-head-CI-green spawn checkpoint; and either three successful sequential observations in fresh Campaign D or the exact authorized blocker report, followed by canonical product restoration and final exact-head CI.
 
 ## Success Criteria
 
@@ -21,12 +21,17 @@ A small repository-owned deterministic campaign identity scheme covering parent 
 - Same logical operation in one campaign reconstructs the same identity, while different campaigns, observations, roles, and shared-namespace operations cannot collide.
 - Historical static request rows remain immutable and canonical conflicting-request semantics remain fail-closed.
 - Parent and child identity paths are audited and every static cross-campaign PI-5B3G execution identity in scope is repaired before live model use.
+- Spawn-path evidence distinguishes process creation, exec/immediate exit, ownership registration, durable run persistence, protocol readiness, and terminal cleanup without raw environment values or provider transcripts.
+- An offline reproduction through the same PAO supervisor/executor infrastructure proves one precise root cause, or records `ROOT_CAUSE_NOT_PROVEN` and stops before live work.
+- Required spawn failure, happy-path, idempotency, cleanup, no-retry/fallback, and no-child tests pass before any live model use.
+- Spawn diagnostics and any minimal repair pass focused/relevant/full Python and Ruff, are separately committed and normally pushed, and exact-head CI is green before Campaign D.
 
 ## Non-Goals
 
 - No daemon lifecycle redesign or repeated packaged acceptance unless directly related production lifecycle code changes.
 - No UI redesign, LLM safety classifier, validator deletion/always-allow path, previous-hash whitelist, provider-dependent validation, frozen verifier change, provider fallback, production enforcement, merge, force push, unrelated refactor, or unrelated project access.
 - No redesign of the accepted `pi5b3g-child-scope-v2` validator and no deletion, mutation, reopening, or reuse of either historical campaign or canonical task/request/dispatch row.
+- No immediate Campaign D, no paid/model prompt for spawn diagnosis, no daemon/identity/scope/verifier/quota redesign, and no inference that a transient PID proves final exec or provider egress.
 
 ## Constraints
 
@@ -39,6 +44,8 @@ A small repository-owned deterministic campaign identity scheme covering parent 
 - New campaign egress, normal repaired-daemon SIGTERM transition, product restore, normal pushes, and CI observation are authorized only within this prompt's exact gates.
 - No MiniMax call may occur until the identity repair is tested, committed separately, normally pushed, and green in exact-head CI.
 - Generated identity components are host-owned, validated, deterministic, campaign-scoped, and may not be timestamp/PID/model controlled.
+- Offline diagnostics may retain temporary sanitized tracebacks/stderr only outside Git and must delete them before cleanup; environment values, auth files, provider transcripts, and credentials are never retained.
+- Campaigns A, B, and C remain terminal and immutable. Campaign D may start only after known root cause, passing offline acceptance, committed/pushed repair, and exact-head green CI.
 
 ## Assumptions
 
@@ -53,6 +60,7 @@ A small repository-owned deterministic campaign identity scheme covering parent 
 - Reaching child execution before ALLOW or losing campaign budget/isolation/accounting truth.
 - Mixing previous failed campaign accounting with the new budget, quota drift, frozen verifier drift, or concurrent canonical owners.
 - Accidentally repairing only the parent request ID while leaving a later child/task/dispatch collision, breaking same-campaign idempotency with random IDs, or weakening canonical request conflict behavior.
+- Collapsing post-fork, immediate-exit, event-loop ownership, durable registration, protocol bootstrap, or cleanup failures into generic `WORKER_SPAWN_FAILED`; recording secrets through argv/env diagnostics; or creating an orphan after a post-spawn failure.
 
 ## Execution Plan
 
@@ -68,6 +76,11 @@ A small repository-owned deterministic campaign identity scheme covering parent 
 10. Campaign identity recovery: trace campaign/task/request/dispatch/run/broker/child identifiers and canonical uniqueness constraints; implement the smallest deterministic campaign identity factory and dependent plumbing; prove unit, historical-conflict, reconstruction, canonical resubmission, and parent/child integration behavior offline.
 11. Identity checkpoint: run relevant and full Python/Ruff verification, inspect and secret-scan the diff, commit the identity repair separately, push normally, and require exact-head CI green before any model call.
 12. Third campaign: refresh all live gates, create a fresh campaign, precompute and prove all parent identities absent from canonical state, gracefully transition ownership, execute exactly three sequential authorized observations, stop on the first scope/identity/safety failure, restore the product, and preserve sanitized evidence with final exact-head CI.
+13. Spawn mission lock and trace: preserve Campaigns A-C, trace the exact executor/supervisor/durable-run ordering and reconstruct Campaign C's launch contract, comparing it with successful historical evidence without provider egress.
+14. Offline reproduction and observability: exercise the same PAO spawn infrastructure with fake/no-egress workers, add structured sanitized milestones, and prove a precise root cause or stop as `ROOT_CAUSE_NOT_PROVEN`.
+15. Minimal spawn repair and tests: repair only the proven defect, add the complete fault-injection/cleanup/idempotency/no-retry/no-fallback/no-child matrix, and optionally smoke-test a guaranteed no-egress Pi metadata mode.
+16. Spawn checkpoint: run focused/relevant/full Python and Ruff, inspect/sanitize, commit separately, push normally, and require exact-head CI green before model use.
+17. Fourth campaign and delivery: refresh all gates, create Campaign D, assert its spawn contract and identities, transition canonical ownership, execute three sequential observations without retry, clean up, restore the product, commit only sanitized evidence, and pass final exact-head CI.
 
 ## Drift Guard
 

@@ -1,19 +1,17 @@
 {
   "version": "0.1",
-  "status": "blocked",
-  "completion": "RALPH_BLOCKED",
-  "current_iteration": 18,
-  "current_task_id": "T022",
-  "last_task_id": "T022",
+  "status": "running",
+  "completion": "RALPH_CONTINUE",
+  "current_iteration": 20,
+  "current_task_id": "T024",
+  "last_task_id": "T023",
   "last_verification": {
     "status": "PASS",
-    "command": "git push origin fix/pao-daemon-graceful-sigterm; gh pr checks 54 --watch",
-    "summary": "PASS: sanitized evidence exact head 984c801; Python, macOS Swift, and OpenCode CI green; PR #54 OPEN/DRAFT and unmerged. Mission remains blocked only by the consumed live parent worker-spawn failure."
+    "command": "python3 -m json.tool .ralph/state.json and .ralph/tasks.json; git diff --check",
+    "summary": "PASS: offline-first spawn recovery and gated Campaign D mission are locked; Campaigns A-C and accepted daemon/scope/identity/verifier systems remain immutable."
   },
-  "blockers": [
-    "PI5B3G_PARENT_WORKER_SPAWN_FAILED"
-  ],
+  "blockers": [],
   "no_diff_iterations": 0,
   "started_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T05:54:00Z"
+  "updated_at": "2026-09-14T06:10:00Z"
 }

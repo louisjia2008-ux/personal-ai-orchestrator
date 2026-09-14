@@ -22,3 +22,10 @@
 20. T020: run focused/relevant/full verification, commit and push the identity checkpoint, and require exact-head CI green.
 21. T021: refresh preflight, create a third fresh campaign, assert identities absent, execute three sequential observations, clean up, and restore the product.
 22. T022: preserve sanitized identity/campaign evidence, final commit/push, exact-head CI, and acceptance report.
+23. T023: re-lock Ralph for the newly authorized offline spawn diagnosis/repair and gated Campaign D.
+24. T024: trace the exact parent spawn/durable-run/protocol path, reconstruct Campaign C safely, and compare prior successful launch evidence.
+25. T025: add sanitized stage-aware spawn diagnostics and reproduce the failure through the same PAO infrastructure without model egress.
+26. T026: implement the smallest proven spawn repair and the complete fault-injection/cleanup test matrix.
+27. T027: run focused/relevant/full verification, commit/push the spawn repair, and require exact-head CI green.
+28. T028: refresh live preflight, create Campaign D, assert identities/spawn contract, execute three sequential observations, clean up, and restore the product.
+29. T029: preserve sanitized Campaign D evidence, final commit/push, exact-head CI, and acceptance report.

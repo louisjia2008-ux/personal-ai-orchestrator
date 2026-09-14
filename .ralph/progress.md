@@ -162,3 +162,11 @@
 - Verification: PASS — Draft PR #54 exact head matched; Python passed in 1m49s, macOS Swift passed in 32s, and OpenCode passed in 13s.
 - Delivery: PASS — historical campaign evidence remains separate; no raw provider transcript/dynamic intent/credential value is committed; PR remains OPEN/DRAFT and unmerged.
 - Final state: `RALPH_BLOCKED` because the one authorized parent launch attempt was consumed at `WORKER_SPAWN_FAILED`; no live retry is authorized.
+
+## 2026-09-14T06:10:00Z — T023 parent worker spawn recovery mission lock
+
+- Changed: re-locked Ralph to the newly authorized offline spawn-path diagnosis, sanitized observability, minimal proven repair, exhaustive fault testing, exact-head CI, and only then a fresh Campaign D.
+- Verification: PASS — Ralph JSON parses, the new contract contains the required success/non-goal/risk/phase boundaries, and `git diff --check` passes; no production source or historical campaign state changed.
+- Files changed: Ralph mission/state files only.
+- Remaining risk: the exact exception boundary, event-loop/process ownership ordering, historical launch-contract delta, and root cause are not yet proven.
+- Next task: T024 trace and reconstruct the spawn path read-only.
