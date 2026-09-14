@@ -1,17 +1,17 @@
 {
   "version": "0.1",
-  "status": "running",
-  "completion": "RALPH_CONTINUE",
-  "current_iteration": 15,
-  "current_task_id": "T016",
-  "last_task_id": "T015",
+  "status": "blocked",
+  "completion": "RALPH_BLOCKED",
+  "current_iteration": 16,
+  "current_task_id": null,
+  "last_task_id": "T016",
   "last_verification": {
     "status": "PASS",
     "command": "live preflight, graceful daemon transition, new campaign start and canonical task submit",
     "summary": "BLOCKED SAFELY: new campaign fb69fd... created, but historical request ID conflicted before dispatch. 0 parent/0 child/0 model egress; campaign STOPPED; product restored healthy."
   },
-  "blockers": [],
+  "blockers": ["NEW_CAMPAIGN_REQUEST_ID_CONFLICT"],
   "no_diff_iterations": 0,
   "started_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T04:10:00Z"
+  "updated_at": "2026-09-14T04:15:00Z"
 }
