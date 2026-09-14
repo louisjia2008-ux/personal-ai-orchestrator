@@ -1,19 +1,17 @@
 # Current task
 
-T016 — Finalize blocked campaign evidence and CI
+None — terminal blocked state
 
 Acceptance:
 
-- Preserve sanitized evidence of the pre-worker request-ID conflict.
-- Prove campaign admission closed, zero workers/resources, and product restore.
-- Diff/JSON/sanitization/secret checks pass.
-- Normal-push only and wait for exact-head CI; PR remains Draft/unmerged.
+- T015 stopped at the first campaign safety invariant failure.
+- T016 sanitized evidence push and exact-head CI passed.
+- No campaign retry is authorized in this run.
 
 Verification:
 
-- Evidence parses and contains no raw provider transcript or credential value.
-- Local/remote/PR exact HEAD match.
-- Required GitHub checks pass on that exact SHA.
+- Final Ralph closure commit must be normally pushed and pass exact-head CI.
 
-Intended file scope: new blocker evidence and Ralph state only. Do not repair or
-retry the campaign-host identity defect in this run.
+Blocker: `NEW_CAMPAIGN_REQUEST_ID_CONFLICT`. A future separately authorized run
+must mint fresh canonical task/request/dispatch identities offline before any
+model dispatch.

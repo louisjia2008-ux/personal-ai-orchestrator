@@ -15,3 +15,4 @@
 - 2026-09-14T03:55:00Z | RALPH_CONTINUE | T013 | PASS: 44/44 corpus, 66 focused, 202 relevant, 1243 full; deterministic pre-child gate and sanitized trace | continue automatically to T014 checkpoint
 - 2026-09-14T04:01:30Z | RALPH_CONTINUE | T014 | PASS: validator commit 64ce05c pushed and exact-head CI green | continue to live preflight
 - 2026-09-14T04:10:00Z | RALPH_BLOCKED | T015 | new campaign request ID conflicted before dispatch; 0 workers/egress; stopped and product restored | finalize evidence and CI only
+- 2026-09-14T04:15:00Z | RALPH_BLOCKED | T016 | sanitized evidence 110edd6 pushed and exact-head CI green; final blocked report sealed | no retry

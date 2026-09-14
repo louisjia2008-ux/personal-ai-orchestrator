@@ -13,7 +13,7 @@
   ],
   "max_iterations": 20,
   "current_iteration": 15,
-  "status": "running",
+  "status": "blocked",
   "tasks": [
     {"id":"T001","title":"Phase 0 mission lock","type":"planning","status":"done","priority":"high","dependencies":[],"acceptance":["Required Ralph state exists and locks the full user goal"],"verification":["test -s .ralph/task_brief.md && python3 -m json.tool .ralph/tasks.json"],"files_expected":[".ralph/*"],"attempts":0,"last_error":"","notes":"Dedicated worktree created from exact PR #53 head."},
     {"id":"T002","title":"Inventory source lifecycle and live topology","type":"analysis","status":"done","priority":"high","dependencies":["T001"],"acceptance":["Repo map records exact implementations, tests, build paths, branch lineage, and read-only live state"],"verification":["test -s .ralph/artifacts/repo_map.md"],"files_expected":[".ralph/artifacts/repo_map.md"],"attempts":0,"last_error":"","notes":"Defective source pattern unchanged from deployed 64a45a3; exact live old process and zero DB accounting revalidated."},
@@ -30,12 +30,12 @@
     {"id":"T013","title":"Implement deterministic diagnosable scope validator","type":"implementation","status":"done","priority":"high","dependencies":["T012"],"acceptance":["Positive scope proof, safe negation, fail-closed ambiguity, stable sanitized rule trace, and no child-after-reject tests pass"],"verification":["Targeted and campaign/delegation/security tests pass"],"files_expected":["src/personal_ai_orchestrator/*","tests/*"],"attempts":0,"last_error":"","notes":"pi5b3g-child-scope-v2 passes all 44 corpus cases; opt-in broker gate consumes budget and rejects before child construction/port; stable transcript-free trace and fail-closed validator errors are tested."},
     {"id":"T014","title":"Verify and remotely checkpoint validator","type":"verification","status":"done","priority":"high","dependencies":["T013"],"acceptance":["Full required local verification, focused validator commit, normal push, and exact-head CI pass before model use"],"verification":["Full Python/Ruff plus exact-head CI"],"files_expected":["docs/acceptance/*",".ralph/artifacts/*"],"attempts":0,"last_error":"","notes":"Validator commit 64ce05c pushed normally; PR #54 exact head matched; Python, macOS Swift, and OpenCode CI all passed before live campaign transition."},
     {"id":"T015","title":"Execute new bounded PI-5B3G campaign","type":"acceptance","status":"failed_blocked","priority":"high","dependencies":["T014"],"acceptance":["New campaign ID completes 3 sequential observations at 3/3/6 and clean restore, or stops on first new invariant failure"],"verification":["Authoritative sanitized campaign/process/verifier/DB evidence"],"files_expected":["docs/acceptance/*"],"attempts":1,"last_error":"conflicting_request_id","notes":"New campaign fb69fd... was distinct and fresh but reused historical parent submit ID before dispatch. Canonical store rejected it; 0 parent/0 child/0 egress. Campaign stopped and product restored. No retry."},
-    {"id":"T016","title":"Finalize new campaign evidence and CI","type":"delivery","status":"in_progress","priority":"high","dependencies":["T015"],"acceptance":["Sanitized evidence, final report, normal push, exact-head CI, clean worktree, and unmerged Draft PR"],"verification":["Remote/local/PR head match and CI passes"],"files_expected":[".ralph/final_report.md","docs/acceptance/*"],"attempts":0,"last_error":"","notes":"Current task: commit sanitized blocker evidence, normal push, exact-head CI, final Ralph closure."}
+    {"id":"T016","title":"Finalize new campaign evidence and CI","type":"delivery","status":"done","priority":"high","dependencies":["T015"],"acceptance":["Sanitized evidence, final report, normal push, exact-head CI, clean worktree, and unmerged Draft PR"],"verification":["Remote/local/PR head match and CI passes"],"files_expected":[".ralph/final_report.md","docs/acceptance/*"],"attempts":0,"last_error":"","notes":"Sanitized evidence commit 110edd6 pushed normally and exact-head CI passed; final blocked closure is the only remaining commit."}
   ],
-  "blockers": [],
+  "blockers": ["NEW_CAMPAIGN_REQUEST_ID_CONFLICT"],
   "last_successful_task": "T014",
   "last_failed_task": "T015",
   "no_diff_iterations": 0,
   "created_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T04:10:00Z"
+  "updated_at": "2026-09-14T04:15:00Z"
 }
