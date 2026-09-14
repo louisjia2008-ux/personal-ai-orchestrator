@@ -31,3 +31,11 @@
 - Files changed: `src/personal_ai_orchestrator/daemon.py`, `tests/test_daemon_shutdown.py`, `tests/test_product_daemon.py`, and Ralph state.
 - Remaining risk: broader Python/Swift/control/campaign suites and real PyInstaller behavior remain unproven.
 - Next task: T005 run targeted and broad project verification.
+
+## 2026-09-14T01:30:00Z — T005 targeted and broad verification
+
+- Changed: hardened an existing daemon tick test to wait for actual HTTP health after socket bind; recorded all verification commands and results.
+- Verification: PASS — 175 targeted Python tests; 1196 full Python tests; Ruff; 17 OpenCode adapter tests; Swift build; 441 Swift tests.
+- Files changed: `tests/test_daemon_tick_integration.py`, `.ralph/artifacts/t005-verification.md`, and Ralph state.
+- Remaining risk: no packaged PyInstaller helper has yet been built from the fix.
+- Next task: T006 build and identify the real packaged macOS product.
