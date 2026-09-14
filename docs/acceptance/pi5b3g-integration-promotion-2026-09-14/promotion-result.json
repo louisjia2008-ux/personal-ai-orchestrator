@@ -190,8 +190,13 @@
     "campaign_f_started": false
   },
   "delivery": {
-    "evidence_commit": "PENDING",
-    "evidence_exact_head_ci": "PENDING",
+    "evidence_commit": "16dc91186ef4dc851beb7027480a584e7858b90a",
+    "evidence_exact_head_ci": {
+      "status": "PASS",
+      "python": "PASS_1M50S",
+      "macos_swift": "PASS_56S",
+      "opencode_adapter": "PASS_16S"
+    },
     "push_mode": "NORMAL_ONLY",
     "force_push": false,
     "additional_pr_merge": false
