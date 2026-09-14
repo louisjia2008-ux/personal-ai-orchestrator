@@ -2,16 +2,16 @@
   "version": "0.1",
   "status": "running",
   "completion": "IN_PROGRESS",
-  "current_iteration": 23,
-  "current_task_id": "T030",
-  "last_task_id": "T029",
+  "current_iteration": 24,
+  "current_task_id": "T031",
+  "last_task_id": "T030",
   "last_verification": {
     "status": "PASS",
-    "command": "git push origin fix/pao-daemon-graceful-sigterm; gh pr checks 54 --watch",
-    "summary": "PASS: sanitized Campaign D evidence exact head ead8fa2; Python, macOS Swift, and OpenCode CI green; PR #54 OPEN/DRAFT and unmerged. Mission remains blocked by the consumed child ownership-registration harness failure."
+    "command": "read-only source/schema/harness trace; git diff --check",
+    "summary": "PASS: canonical lineage is the child TASK_SUBMITTED audit payload; no typed resolver exists; campaign/observation validation can use the host-owned current-campaign identity map without parsing identifiers."
   },
   "blockers": [],
   "no_diff_iterations": 0,
   "started_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T07:20:00Z"
+  "updated_at": "2026-09-14T07:28:00Z"
 }

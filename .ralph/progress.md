@@ -226,3 +226,11 @@
 - Boundaries: Campaigns A-D remain terminal and immutable; accepted daemon, validator, identity, spawn, verifier, quota, retry, and fallback systems remain frozen absent direct regression evidence.
 - Verification pending: validate Ralph JSON/diff and commit this mission checkpoint before read-only T030 source tracing.
 - Next task: T030 inventory canonical TASK_SUBMITTED lineage semantics and reproduce the external observer defect offline.
+
+## 2026-09-14T07:28:00Z — T030 canonical delegated-child lineage inventory
+
+- Result: PASS — `TaskRecord` has no lineage fields; the canonical relationship is atomically persisted in the child `TASK_SUBMITTED` audit payload under `delegated_parent_task_id` and `delegated_parent_run_id`.
+- API gap: task-scoped decoded audit events are public, but no typed fail-closed lineage resolver exists.
+- Campaign validation: the external harness already owns the authoritative fresh-campaign observation identity objects; exact parent membership and observation checks require no identifier parsing.
+- Defect boundary: both child activation and later task reporting access absent TaskRecord fields; the activation access exactly explains the preserved post-durable/pre-protocol Campaign D failure.
+- Next task: T031 add the small canonical resolver, ownership validator, and deterministic regressions.
