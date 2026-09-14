@@ -1,15 +1,15 @@
 # Current task
 
-T018 — inventory canonical parent and child identities
+T019 — implement and prove campaign-scoped identities
 
 Acceptance:
 
-- Trace campaign, observation, task, request, dispatch, run, broker-call, delegation, and child identities from construction through persistence.
-- Classify uniqueness namespace, idempotency purpose, validation/length constraints, and model versus host ownership.
-- Identify every static cross-campaign PI-5B3G identity without changing production source.
+- Add a small validated deterministic `pi5b3g-campaign-identity-v1` factory.
+- Reuse named production child identity helpers rather than duplicated literals.
+- Add the required unit matrix and canonical control-plane admission/resubmission/conflict integration tests with no provider calls.
 
 Verification:
 
-- An inventory artifact cites exact source/schema/test evidence and records the minimal repair boundary.
+- Focused identity, canonical admission, child identity, campaign, and broker tests pass without changing unrelated semantics.
 
 No model calls or live daemon/campaign state changes are permitted in this task.
