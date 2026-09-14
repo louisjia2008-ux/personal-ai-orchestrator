@@ -7,6 +7,7 @@ import json
 import os
 import signal
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -508,26 +509,33 @@ def main(
     if args.control_only:
         if control_server is None:
             raise SystemExit("--control-only requires --control-socket")
-        stop = threading.Event()
+        supervisor_stop = threading.Event()
+        shutdown_requested = False
         previous_term = signal.getsignal(signal.SIGTERM)
 
-        def _stop(_signum, _frame) -> None:
-            stop.set()
+        def _request_shutdown(_signum, _frame) -> None:
+            # Python dispatches this handler on the main thread.  Keep it to a
+            # scalar assignment: Event.set(), logging, server shutdown and
+            # every other lock-backed cleanup operation belong below in the
+            # ordinary control flow.
+            nonlocal shutdown_requested
+            shutdown_requested = True
 
-        signal.signal(signal.SIGTERM, _stop)
+        signal.signal(signal.SIGTERM, _request_shutdown)
         supervisor_thread = threading.Thread(
             target=supervisor.run,
-            args=(stop,),
+            args=(supervisor_stop,),
             daemon=True,
         )
         supervisor_thread.start()
         try:
-            while not stop.wait(timeout=3600):
-                pass
+            while not shutdown_requested:
+                time.sleep(0.1)
         except KeyboardInterrupt:
             return 0
         finally:
             signal.signal(signal.SIGTERM, previous_term)
+            supervisor_stop.set()
             supervisor_thread.join(timeout=2.0)
             control_server.stop()
             if control_service is not None:

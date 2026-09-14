@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import stat
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -28,6 +29,11 @@ from personal_ai_orchestrator.pi5_contract import (
     PI5_MAX_REQUESTS_PER_PARENT_RUN,
     PI5_SCHEMA_VERSION,
     DelegationRequest,
+)
+from personal_ai_orchestrator.pi5_identity import delegation_child_task_id
+from personal_ai_orchestrator.pi5b3g_scope_validator import (
+    PI5B3GScopeValidationResult,
+    ScopeDecision,
 )
 from personal_ai_orchestrator.provider_acceptance import assert_sanitized
 
@@ -133,17 +139,6 @@ class DelegationChildExecutionPort(Protocol):
     async def execute_child(self, plan: DelegationChildPlan) -> DelegationChildResult: ...
 
 
-def delegation_child_task_id(
-    *, parent_task_id: str, parent_run_id: str, ordinal: int
-) -> str:
-    """Mint a stable host child ID without trusting worker-supplied identity."""
-
-    digest = hashlib.sha256(
-        f"{parent_task_id}\x00{parent_run_id}\x00{ordinal}".encode()
-    ).hexdigest()[:20]
-    return f"pi5-child-{digest}"
-
-
 class DelegationBrokerSession:
     """One parent-run delegation budget and idempotency domain."""
 
@@ -153,10 +148,15 @@ class DelegationBrokerSession:
         context: DelegationBrokerContext,
         child_port: DelegationChildExecutionPort,
         active: bool = True,
+        scope_validator: Callable[[DelegationRequest], PI5B3GScopeValidationResult]
+        | None = None,
+        scope_trace_sink: Callable[[PI5B3GScopeValidationResult], None] | None = None,
     ) -> None:
         self.active = active
         self.context = context
         self.child_port = child_port
+        self.scope_validator = scope_validator
+        self.scope_trace_sink = scope_trace_sink
         self._consumed = 0
         self._responses: dict[str, tuple[str, DelegationBrokerResponse]] = {}
         self._lock = asyncio.Lock()
@@ -201,6 +201,19 @@ class DelegationBrokerSession:
             # Consume the budget before execution so worker-triggered failures
             # cannot be retried indefinitely within one parent run.
             self._consumed += 1
+            if self.scope_validator is not None:
+                try:
+                    validation = self.scope_validator(request)
+                except Exception:
+                    response = self._reject(request, "SCOPE_VALIDATOR_ERROR")
+                    self._responses[request.tool_call_id] = (fingerprint, response)
+                    return response
+                if self.scope_trace_sink is not None:
+                    self.scope_trace_sink(validation)
+                if validation.decision is ScopeDecision.REJECT:
+                    response = self._reject(request, validation.rule_id)
+                    self._responses[request.tool_call_id] = (fingerprint, response)
+                    return response
             child_task_id = delegation_child_task_id(
                 parent_task_id=self.context.parent_task_id,
                 parent_run_id=self.context.parent_run_id,

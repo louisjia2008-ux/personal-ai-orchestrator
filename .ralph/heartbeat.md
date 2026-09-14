@@ -1,0 +1,35 @@
+# Heartbeat
+
+- 2026-09-14T00:44:00Z | RALPH_CONTINUE | T001 | PASS: mission contract and state validate | continue automatically to T002
+- 2026-09-14T01:02:00Z | RALPH_CONTINUE | T002 | PASS: defect and exact live old-daemon state revalidated | continue automatically to T003
+- 2026-09-14T01:17:00Z | RALPH_CONTINUE | T003 | PASS: deterministic old-source failure captured at handler Event.set | continue automatically to T004
+- 2026-09-14T01:29:00Z | RALPH_CONTINUE | T004 | PASS: scalar handler and ordinary-flow cleanup, 5 focused tests | continue automatically to T005
+- 2026-09-14T01:30:00Z | RALPH_CONTINUE | T005 | PASS: full Python, Ruff, OpenCode, Swift build/test | continue automatically to T006
+- 2026-09-14T01:31:00Z | RALPH_CONTINUE | T006 | PASS: real Release bundle identity and strict signatures verified | continue automatically to T007
+- 2026-09-14T01:32:00Z | RALPH_CONTINUE | T007 | PASS: five real-helper parent/child SIGTERM and restart cycles | continue automatically to T008
+- 2026-09-14T02:23:20Z | RALPH_CONTINUE | T008 | PASS: old stuck daemon retired once; repaired canonical SIGTERM/restart passed | continue automatically to T009
+- 2026-09-14T02:55:40Z | RALPH_BLOCKED | T009 | dynamic child intent rejected before forwarding; 1 parent, 0 child, no retry; cleanup and product restore pass | stop
+- 2026-09-14T03:05:00Z | RALPH_CONTINUE | T011 | new owner authorization resolves blocker; mission re-locked to offline validator hardening and a separate new campaign | continue automatically with read-only inventory
+- 2026-09-14T03:12:00Z | RALPH_CONTINUE | T011 | PASS: broad-regex gate and all surrounding rules/coverage/negation risks inventoried without source changes | continue automatically to T012 offline corpus
+- 2026-09-14T03:20:00Z | RALPH_CONTINUE | T012 | PASS: 44-case corpus exposes 6 false rejections and 12 false acceptances in historical regex | continue automatically to T013 implementation
+- 2026-09-14T03:55:00Z | RALPH_CONTINUE | T013 | PASS: 44/44 corpus, 66 focused, 202 relevant, 1243 full; deterministic pre-child gate and sanitized trace | continue automatically to T014 checkpoint
+- 2026-09-14T04:01:30Z | RALPH_CONTINUE | T014 | PASS: validator commit 64ce05c pushed and exact-head CI green | continue to live preflight
+- 2026-09-14T04:10:00Z | RALPH_BLOCKED | T015 | new campaign request ID conflicted before dispatch; 0 workers/egress; stopped and product restored | finalize evidence and CI only
+- 2026-09-14T04:15:00Z | RALPH_BLOCKED | T016 | sanitized evidence 110edd6 pushed and exact-head CI green; final blocked report sealed | no retry
+- 2026-09-14T04:59:52Z | RALPH_CONTINUE | T017 | PASS: identity-only mission and third-campaign gates locked; historical campaigns immutable | continue automatically to T018 read-only identity inventory
+- 2026-09-14T05:08:00Z | RALPH_CONTINUE | T018 | PASS: exact global namespaces, replay semantics, static parent defect, and transitively scoped child chain inventoried | continue automatically to T019 implementation and offline tests
+- 2026-09-14T05:24:00Z | RALPH_CONTINUE | T019 | PASS: deterministic v1 parent/child identities, canonical replay/conflict integration, 57 focused plus 74 relevant tests | continue automatically to T020 full verification and exact-head CI
+- 2026-09-14T05:43:00Z | RALPH_CONTINUE | T020 | LOCAL PASS: identity commit 885f006, 1260 Python passed/1 skipped, Ruff and sanitization pass | continue automatically to normal push and exact-head CI; no model use yet
+- 2026-09-14T05:50:00Z | RALPH_CONTINUE | T020 | REMOTE PASS: exact head 69a996c, PR #54 OPEN/DRAFT, Python/macOS Swift/OpenCode green | continue automatically to T021 gated third campaign
+- 2026-09-14T05:51:00Z | RALPH_CONTINUE | T021 | identity PASS; one parent launch attempt failed WORKER_SPAWN_FAILED before durable run; campaign stopped, cleanup and product restore PASS | continue only to T022 sanitized evidence and exact-head CI; no retry
+- 2026-09-14T05:54:00Z | RALPH_BLOCKED | T022 | sanitized evidence 984c801 pushed; exact-head Python/macOS Swift/OpenCode CI PASS; Draft PR unmerged | stop: parent launch budget consumed, fresh authorization required for any future live attempt
+- 2026-09-14T06:10:00Z | RALPH_CONTINUE | T023 | new owner authorization re-locks offline spawn recovery and gated Campaign D; no source/model action yet | validate mission lock, then continue automatically to T024
+- 2026-09-14T06:11:00Z | RALPH_CONTINUE | T023 | PASS: mission JSON/diff and offline-first boundaries validated; Campaigns A-C immutable | continue automatically to T024 read-only spawn trace
+- 2026-09-14T06:18:54Z | RALPH_CONTINUE | T024 | PASS: process create precedes durable run; Campaign C delta isolated to stale post-create role accounting | continue automatically to T025 offline reproduction and diagnostics
+- 2026-09-14T06:30:00Z | RALPH_CONTINUE | T025 | PASS: exact post-create role misclassification reproduced; v1 diagnostics and exact reap pass; no model egress | continue automatically to T026 fault matrix
+- 2026-09-14T06:40:25Z | RALPH_CONTINUE | T026 | PASS: minimal repair plus full relevant fault matrix; accepted identity/scope hashes unchanged | continue automatically to T027 full verification and remote checkpoint
+- 2026-09-14T06:48:00Z | RALPH_CONTINUE | T027 | PASS: repair 57deff6, local 1284/1 and Ruff, exact pushed 8fe8394 CI all green | checkpoint transition evidence, then continue automatically to T028 live preflight
+- 2026-09-14T07:20:00Z | RALPH_CONTINUE | T030 | new owner authorization re-locks offline child-lineage recovery and gated Campaign E; no source/model action yet | validate mission lock, then inventory canonical lineage
+- 2026-09-14T07:28:00Z | RALPH_CONTINUE | T030 | PASS: TASK_SUBMITTED metadata is canonical; host identity map can validate campaign/observation without ID parsing | continue automatically to T031 implementation
+- 2026-09-14T07:52:00Z | RALPH_CONTINUE | T031 | PASS: f62d515; 36 focused, 180 relevant, 1301 full/1 skip, Ruff; fake child pipeline and failure cleanup pass | continue automatically to T032 remote checkpoint
+- 2026-09-14T08:02:00Z | RALPH_CONTINUE | T032 | PASS: exact pushed 2b78bee Python/macOS Swift/OpenCode CI green; zero model calls | push and green transition evidence, then continue to T033 live preflight

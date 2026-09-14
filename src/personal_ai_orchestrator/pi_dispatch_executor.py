@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import tempfile
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -27,8 +28,10 @@ from personal_ai_orchestrator.pi5_broker import (
     DelegationChildExecutionPort,
     UnixDelegationBrokerServer,
 )
+from personal_ai_orchestrator.pi5_contract import DelegationRequest
 from personal_ai_orchestrator.pi5_runtime import PI5_TOOL_NAME
 from personal_ai_orchestrator.pi5_tool import pi5_socket_tool_source, seed_pi5_socket_tool
+from personal_ai_orchestrator.pi5b3g_scope_validator import PI5B3GScopeValidationResult
 from personal_ai_orchestrator.pi_runtime import (
     PI_ALLOWED_TOOLS,
     PI_MAX_STDOUT_BYTES,
@@ -40,7 +43,7 @@ from personal_ai_orchestrator.pi_runtime import (
     seed_pi_worktree_guard,
     summarize_pi_json_stream,
 )
-from personal_ai_orchestrator.process_supervisor import SupervisedProcess
+from personal_ai_orchestrator.process_supervisor import SpawnStage, SupervisedProcess
 from personal_ai_orchestrator.safety_kernel import (
     AUTHORITY_OWNER_INITIATED_EXECUTION,
     AUTHORITY_SUPERVISED_AUTO,
@@ -83,6 +86,16 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
         kwargs["config"] = replace(config, opencode_bin=runtime.pi_bin)
         self.pi_runtime = runtime
         self.delegation_child_port: DelegationChildExecutionPort | None = None
+        self.delegation_scope_validator_factory: (
+            Callable[
+                [DelegationBrokerContext],
+                Callable[[DelegationRequest], PI5B3GScopeValidationResult],
+            ]
+            | None
+        ) = None
+        self.delegation_scope_trace_sink: (
+            Callable[[PI5B3GScopeValidationResult], None] | None
+        ) = None
         self._delegation_brokers: dict[str, UnixDelegationBrokerServer] = {}
         super().__init__(**kwargs)  # type: ignore[arg-type]
 
@@ -179,18 +192,26 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
             ):
                 raise PiDelegationActivationError("HOST_DEPENDENCIES_UNAVAILABLE")
             policy_root = Path(tempfile.mkdtemp(prefix="pao-pi5-"))
+            broker_context = DelegationBrokerContext(
+                parent_task_id=task.task_id,
+                parent_run_id=f"run-{dispatch.dispatch_id}",
+                project_id=task.project_id,
+                base_sha=task.base_sha,
+                working_subpath=task.working_subpath,
+            )
+            scope_validator = (
+                None
+                if self.delegation_scope_validator_factory is None
+                else self.delegation_scope_validator_factory(broker_context)
+            )
             broker = UnixDelegationBrokerServer(
                 socket_path=policy_root / "broker.sock",
                 session=DelegationBrokerSession(
-                    context=DelegationBrokerContext(
-                        parent_task_id=task.task_id,
-                        parent_run_id=f"run-{dispatch.dispatch_id}",
-                        project_id=task.project_id,
-                        base_sha=task.base_sha,
-                        working_subpath=task.working_subpath,
-                    ),
+                    context=broker_context,
                     child_port=self.delegation_child_port,
                     active=False,
+                    scope_validator=scope_validator,
+                    scope_trace_sink=self.delegation_scope_trace_sink,
                 ),
             )
             self._delegation_brokers[dispatch.request_id] = broker
@@ -237,10 +258,19 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
                 "cwd": str(worktree.worktree_path),
             },
         )
+        env = build_worker_env()
+        self._audit_spawn(
+            store,
+            dispatch.task_id,
+            "PROCESS_CREATE_STARTED",
+            self._supervisor.inspect_contract(
+                argv, cwd=worktree.worktree_path, env=env
+            ).evolved(spawn_stage=SpawnStage.PROCESS_CREATE_STARTED),
+        )
         return await self._supervisor.start(
             argv,
             cwd=worktree.worktree_path,
-            env=build_worker_env(),
+            env=env,
         )
 
     @staticmethod
