@@ -33,3 +33,6 @@
 - 2026-09-14T07:28:00Z | RALPH_CONTINUE | T030 | PASS: TASK_SUBMITTED metadata is canonical; host identity map can validate campaign/observation without ID parsing | continue automatically to T031 implementation
 - 2026-09-14T07:52:00Z | RALPH_CONTINUE | T031 | PASS: f62d515; 36 focused, 180 relevant, 1301 full/1 skip, Ruff; fake child pipeline and failure cleanup pass | continue automatically to T032 remote checkpoint
 - 2026-09-14T08:02:00Z | RALPH_CONTINUE | T032 | PASS: exact pushed 2b78bee Python/macOS Swift/OpenCode CI green; zero model calls | push and green transition evidence, then continue to T033 live preflight
+- 2026-09-14T09:20:00Z | RALPH_CONTINUE | T036 | PASS: PR #54 reviewed/sanitized and merged only into verified base as 8a7eba9; integrated CI green | continue automatically to T037 product build and promotion
+- 2026-09-14T09:23:00Z | RALPH_CONTINUE | T037 | PASS: exact integrated Release build, canonical start, SIGTERM cleanup, and same-build restart | continue automatically to T038 no-egress infrastructure smoke
+- 2026-09-14T09:24:00Z | RALPH_CONTINUE | T038 | PASS: 146 deterministic tests plus verifier checks; zero model/provider calls | continue automatically to T039 sanitized evidence and exact-head CI
