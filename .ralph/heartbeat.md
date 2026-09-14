@@ -21,3 +21,4 @@
 - 2026-09-14T05:24:00Z | RALPH_CONTINUE | T019 | PASS: deterministic v1 parent/child identities, canonical replay/conflict integration, 57 focused plus 74 relevant tests | continue automatically to T020 full verification and exact-head CI
 - 2026-09-14T05:43:00Z | RALPH_CONTINUE | T020 | LOCAL PASS: identity commit 885f006, 1260 Python passed/1 skipped, Ruff and sanitization pass | continue automatically to normal push and exact-head CI; no model use yet
 - 2026-09-14T05:50:00Z | RALPH_CONTINUE | T020 | REMOTE PASS: exact head 69a996c, PR #54 OPEN/DRAFT, Python/macOS Swift/OpenCode green | continue automatically to T021 gated third campaign
+- 2026-09-14T05:51:00Z | RALPH_CONTINUE | T021 | identity PASS; one parent launch attempt failed WORKER_SPAWN_FAILED before durable run; campaign stopped, cleanup and product restore PASS | continue only to T022 sanitized evidence and exact-head CI; no retry
