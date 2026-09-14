@@ -35,3 +35,8 @@
 33. T033: normally push the lineage checkpoint and require exact-head Python/macOS Swift/OpenCode CI green.
 34. T034: refresh preflight, create Campaign E, run at most three sequential observations, clean up, and restore the product.
 35. T035: preserve sanitized Campaign E evidence, final commit/push, exact-head CI, and acceptance report.
+36. T040: perform the complete final PR #53 diff/sanitization/security review and merge the exact green head into main.
+37. T041: pin and verify the exact main merge commit with GitHub CI and local focused/full Python, Ruff, Swift, and OpenCode checks.
+38. T042: build a fresh exact-main Release app, safely retire the previous canonical daemon, and promote the new build.
+39. T043: run one canonical SIGTERM/restart smoke and the deterministic no-egress delegation verification; preserve Campaigns A-E and create no Campaign F.
+40. T044: make one sanitized documentation-only closure commit, push normally, and verify exact documentation-head CI without rebuilding the code-head product.

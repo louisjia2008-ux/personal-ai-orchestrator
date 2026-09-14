@@ -143,3 +143,20 @@ Use the existing production build script, normal non-force Git operations, a pro
 4. Run only deterministic no-egress infrastructure tests, record sanitized evidence, normally push, and wait for exact evidence-head CI.
 
 Rollback is a new normal revert commit or stopping for owner direction; never rewrite history. Drift guard: every remaining action must directly support integration, product promotion, sanitized evidence, or exact-head verification.
+
+# Mainline integration closure continuation
+
+## User Goal
+
+Finish the accepted PI-5B3G stack by merging exact PR #53 into main, verify the exact merge commit, build and promote a fresh main Release app, run one canonical SIGTERM/restart and deterministic no-egress delegation smoke, preserve Campaigns A-E without a Campaign F, and close with one sanitized documentation-only commit and exact-head CI.
+
+## Final Deliverable
+
+A healthy canonical PAO product built from main code head `563bf7a0a918e9864dc65ea06391b8dbe8649643`, with PR #53 merged, exact-main verification green, lifecycle and no-egress checks passed, and a single externally CI-verified documentation head.
+
+## Boundaries
+
+- No Campaign F, MiniMax/model/provider call, historical campaign mutation, unrelated PR merge, force push, or accepted subsystem redesign.
+- The unrelated private PAO process remains read-only and untouched.
+- The documentation-only closure commit does not change production code and therefore does not require rebuilding the already verified code-head product.
+- Rollback remains a new normal revert commit or an explicit stop; history is never rewritten.

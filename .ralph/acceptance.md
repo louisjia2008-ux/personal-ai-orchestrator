@@ -25,3 +25,8 @@
 - Full Python and Ruff pass; the focused lineage repair is committed, normally pushed, and exact-head CI passes before Campaign E.
 - Fresh Campaign E completes three sequential observations at 3 parent/3 child/6 total with zero retry/fallback/grandchild, or stops at the first precise live blocker.
 - Campaign E terminal cleanup, normal product restore, sanitized evidence, final normal push, and final exact-head CI pass without merge.
+- PR #53 exact-head review, sanitization, security scan, mergeability, required checks, and authorized merge into main pass with no unrelated merge.
+- The exact main merge commit passes GitHub CI plus local focused/full Python, Ruff, Swift, and OpenCode verification.
+- A fresh exact-main Release bundle is signed, promoted with one canonical owner, and passes one normal SIGTERM/socket/DB cleanup and exact-bundle restart.
+- No Campaign F, MiniMax call, model call, provider call, or historical campaign mutation occurs during mainline closure.
+- One documentation-only closure commit records distinct code and documentation heads; the running product remains built from the verified code head and the documentation head receives external exact-head CI.

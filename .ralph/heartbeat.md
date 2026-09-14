@@ -37,3 +37,4 @@
 - 2026-09-14T09:23:00Z | RALPH_CONTINUE | T037 | PASS: exact integrated Release build, canonical start, SIGTERM cleanup, and same-build restart | continue automatically to T038 no-egress infrastructure smoke
 - 2026-09-14T09:24:00Z | RALPH_CONTINUE | T038 | PASS: 146 deterministic tests plus verifier checks; zero model/provider calls | continue automatically to T039 sanitized evidence and exact-head CI
 - 2026-09-14T09:30:00Z | RALPH_DONE | T039 | PASS: sanitized evidence 16dc911 pushed and exact-head Python/macOS Swift/OpenCode CI green | complete; PR #53 remains Draft and unmerged
+- 2026-09-14T10:14:32Z | RALPH_DONE | T044 | PASS: PR #53 merged as 563bf7a; exact-main CI/tests, fresh Release promotion, canonical SIGTERM/restart, and no-egress closure passed | one documentation-only commit remains to push and externally verify; no rebuild loop
