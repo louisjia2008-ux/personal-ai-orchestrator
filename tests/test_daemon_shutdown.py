@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from personal_ai_orchestrator.control_client import ControlPlaneClient
+from personal_ai_orchestrator.control_client import ControlPlaneClient, ControlPlaneUnavailable
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.runtime_config import RuntimeConfig
 
@@ -266,7 +266,13 @@ def test_sigterm_shuts_control_only_daemon_down_cleanly() -> None:
         # supervisor tick is the observable readiness boundary after the
         # handler and supervisor thread have both started.
         client = ControlPlaneClient(socket_path)
-        while client.health().last_tick_at is None:
+        while True:
+            try:
+                health = client.health()
+            except ControlPlaneUnavailable:
+                health = None
+            if health is not None and health.last_tick_at is not None:
+                break
             if time.monotonic() > deadline:
                 raise AssertionError("daemon never completed a supervisor tick")
             time.sleep(0.05)

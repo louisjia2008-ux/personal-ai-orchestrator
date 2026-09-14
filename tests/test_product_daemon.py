@@ -1,5 +1,6 @@
 import json
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -416,16 +417,17 @@ def test_product_daemon_explicit_refresh_discovers_exactly_once(
 def test_product_daemon_bootstraps_runtime_and_serves_control_plane() -> None:
     home = _short_home("pao-product-")
     layout = default_application_support_layout(home)
+    command = [
+        sys.executable,
+        "-m",
+        "personal_ai_orchestrator.product_daemon",
+        "--home",
+        str(home),
+        "--port",
+        "0",
+    ]
     process = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "personal_ai_orchestrator.product_daemon",
-            "--home",
-            str(home),
-            "--port",
-            "0",
-        ],
+        command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -464,6 +466,51 @@ def test_product_daemon_bootstraps_runtime_and_serves_control_plane() -> None:
             process.wait(timeout=5)
 
     assert process.returncode == 0
+    assert not layout.socket_path.exists()
+
+    # Graceful shutdown must release every SQLite handle and leave no
+    # fabricated active control state.  Opening the DB here is a real
+    # post-cleanup check, not an assertion against the old connection.
+    with sqlite3.connect(layout.state_db) as connection:
+        assert connection.execute("SELECT count(*) FROM tasks WHERE state='RUNNING'").fetchone()[
+            0
+        ] == 0
+        assert connection.execute("SELECT count(*) FROM runs WHERE finished_at IS NULL").fetchone()[
+            0
+        ] == 0
+        assert connection.execute(
+            "SELECT count(*) FROM workspaces WHERE writer_token IS NOT NULL"
+        ).fetchone()[0] == 0
+        assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+
+    # The exact same daemon and state location must immediately restart.  A
+    # successful health request proves a stale pathname did not masquerade as
+    # a live socket.
+    restarted = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 15.0
+        while not layout.socket_path.exists():
+            if restarted.poll() is not None:
+                out, err = restarted.communicate(timeout=5)
+                raise AssertionError(f"restarted product daemon exited early: {out}\n{err}")
+            if time.monotonic() > deadline:
+                raise AssertionError("product daemon did not recreate the control socket")
+            time.sleep(0.1)
+        assert ControlPlaneClient(layout.socket_path).health().status == "ok"
+    finally:
+        if restarted.poll() is None:
+            restarted.send_signal(signal.SIGTERM)
+            restarted.communicate(timeout=15)
+        if restarted.poll() is None:  # pragma: no cover - defensive cleanup
+            restarted.kill()
+            restarted.wait(timeout=5)
+
+    assert restarted.returncode == 0
     assert not layout.socket_path.exists()
 
 
