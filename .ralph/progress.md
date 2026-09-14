@@ -113,3 +113,11 @@
 - Files changed: Ralph mission/state files only.
 - Remaining risk: the exact parent/child identity chain and canonical uniqueness namespaces still require read-only source/schema tracing.
 - Next task: T018 inventory every execution identity and canonical admission constraint before source changes.
+
+## 2026-09-14T05:08:00Z — T018 canonical identity inventory
+
+- Changed: documented the exact Observation 1 identity flow, SQLite namespaces, canonical replay/conflict semantics, broker session identity, production child derivations, API limits, all four static external-host identities, and the minimal repair boundary.
+- Verification: PASS — the artifact is present and whitespace-clean; no production or test source changed in T018.
+- Files changed: `.ralph/artifacts/t018-campaign-identity-inventory.md` and Ralph state only.
+- Remaining risk: the factory and canonical admission regressions are not yet implemented.
+- Next task: T019 add the deterministic factory, named child derivations, and offline unit/integration proof.

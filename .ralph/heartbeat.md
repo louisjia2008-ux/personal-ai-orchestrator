@@ -17,3 +17,4 @@
 - 2026-09-14T04:10:00Z | RALPH_BLOCKED | T015 | new campaign request ID conflicted before dispatch; 0 workers/egress; stopped and product restored | finalize evidence and CI only
 - 2026-09-14T04:15:00Z | RALPH_BLOCKED | T016 | sanitized evidence 110edd6 pushed and exact-head CI green; final blocked report sealed | no retry
 - 2026-09-14T04:59:52Z | RALPH_CONTINUE | T017 | PASS: identity-only mission and third-campaign gates locked; historical campaigns immutable | continue automatically to T018 read-only identity inventory
+- 2026-09-14T05:08:00Z | RALPH_CONTINUE | T018 | PASS: exact global namespaces, replay semantics, static parent defect, and transitively scoped child chain inventoried | continue automatically to T019 implementation and offline tests
