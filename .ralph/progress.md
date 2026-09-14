@@ -105,3 +105,11 @@
 - Worker/egress accounting: 0 parent, 0 child, 0 total, 0 outbound parent prompts, 0 scope validations, 0 retry/fallback/grandchild.
 - Cleanup PASS: new campaign STOPPED at 0 consumed; zero campaign process/worktree/broker/writer; repaired GUI/parent/child restored, sole socket owner, health ok, heartbeat advanced, DB ok and 0/0/0.
 - Next task: T016 commit sanitized blocker evidence, normal push, exact-head CI, and close Ralph as blocked.
+
+## 2026-09-14T04:59:52Z — T017 campaign identity mission lock
+
+- Changed: re-locked Ralph to the newly authorized identity-only repair while preserving both prior terminal campaigns and all historical canonical rows.
+- Verification: PASS — Ralph JSON parses, the diff is whitespace-clean, and the contract captures deterministic same-campaign idempotency, cross-campaign/observation/role/operation uniqueness, offline canonical integration, pre-model push/CI, fresh third-campaign bounds, and exact live stop statuses.
+- Files changed: Ralph mission/state files only.
+- Remaining risk: the exact parent/child identity chain and canonical uniqueness namespaces still require read-only source/schema tracing.
+- Next task: T018 inventory every execution identity and canonical admission constraint before source changes.
