@@ -137,3 +137,11 @@
 - Files changed after the identity commit: Ralph verification artifact/state only.
 - Remaining risk: normal push and exact pushed-head CI must pass before T020 can complete or any MiniMax call can occur.
 - Next task: push normally, verify PR #54 exact head, and wait for every required CI job.
+
+## 2026-09-14T05:50:00Z — T020 remote identity checkpoint
+
+- Changed: normally pushed the identity repair and local verification commits and observed the exact Draft PR head.
+- Verification: PASS — PR #54 is OPEN/DRAFT on the expected base and exact head `69a996c`; Python, macOS Swift, and OpenCode required jobs all passed.
+- Files changed: Ralph state only after the green remote checkpoint.
+- Remaining risk: the current live product, quota, fixture/verifier hashes, canonical ownership, and new identity absence must be freshly proven before model use.
+- Next task: T021 perform the full preflight and execute only the authorized fresh third campaign.
