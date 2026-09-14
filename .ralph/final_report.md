@@ -1,33 +1,31 @@
-# Ralph final report — PI-5B3G child-lineage repair and Campaign E
+# Ralph final report — PI-5B3G integration and product promotion
 
 ## Final status
 
-`PI_5B3G_COMPLETE_AFTER_CHILD_LINEAGE_REPAIR`
+`PI_5B3G_INTEGRATION_AND_PRODUCT_PROMOTION_COMPLETE`
 
-## Engineering result
+## Stack integration
 
-Campaign D's external observer defect was reproduced without model calls: delegated lineage exists in canonical child `TASK_SUBMITTED` audit metadata, not as `TaskRecord` attributes. Commit `f62d515` adds a typed fail-closed store resolver and `pi5b3g-child-lineage-v1`, which validates exact child, parent task, parent run, campaign, and observation relationships from canonical metadata and host-owned identity maps without parsing identifiers.
+The accepted PI-5B3G repair head `ed973da3f2deb18ebeca0013fc73d2e8d8543bc6` was reviewed as the complete 68-file PR #54 diff. Diff, JSON, acceptance sanitization, secret/transcript, fixture, runtime-artifact, and post-lineage source-mutation checks passed. GitHub reported the exact head mergeable and CI-green.
 
-Offline verification passed 36 focused tests, 180 relevant tests, the full Python suite at 1301 passed with 1 skip, and Ruff. The fake child pipeline proved process creation, durable run registration, lineage ownership, protocol completion, and clean exit. Injected failure after durable registration reaped the exact child, made run/task state terminal, released the writer, and did not retry.
+Only PR #54 was merged, into its verified base `feat/pi-delegation-real-shadow-campaign-05b3g`, as merge commit `8a7eba9b91348798339850355c026770892bb40d`. Integrated-head CI passed. Draft PR #53 remains open and unmerged; no next-stack merge was performed.
 
-The repair and verification head `a5f652b6fddb6be51854c1d10398299de62db126` was normally pushed, matched Draft PR #54 exactly, and passed Python, macOS Swift, and OpenCode CI before live use.
+## Product build and promotion
 
-## Campaign E
+The repository's normal Release build path produced the signed arm64 app from exact source `8a7eba9b91348798339850355c026770892bb40d`. The final packaged helper SHA-256 is `3208fcd9ac87828027507115f3a8acb792fe343588e176b1e75367db354091c9`; strict deep code-sign verification passed.
 
-Fresh Campaign E `delegation-campaign-a42bd2a96d024dc39aa07645c83d32f0` passed refreshed build, health, database, fixture, frozen verifier, scope-validator, identity, lineage, spawn, exact-target, quota, shared-pool, process, and identity-absence gates. The repaired normal daemon released canonical state through its proven graceful SIGTERM path before the campaign host began.
+Canonical promotion produced exactly one normal GUI, one PyInstaller parent, one serving child, and one owner of the canonical `0600` socket. `/v1/build` reported the exact integrated identity, health was `ok`, heartbeat advanced, SQLite quick-check was `ok`, and RUNNING/ACTIVE/HELD were `0/0/0`.
 
-All three observations ran sequentially. Each used one MiniMax-M3 parent, one `pao_delegate`, deterministic `ALLOW_EXACT_SCOPE`, one broker-launched MiniMax-M3 child, canonical `ALLOW_CANONICAL_CHILD_LINEAGE`, a frozen-verifier-approved child artifact, a sanitized verified broker result, and a frozen-verifier-approved parent artifact. All six workers exited normally.
+One normal SIGTERM was sent to the verified PyInstaller parent. Parent and child exited, socket ownership disappeared, the pathname was removed, and database state remained healthy at `0/0/0`. No SIGINT, SIGKILL, or process-group signal was used. The exact same bundle restarted normally and remained healthy.
 
-Campaign E is terminal `EXHAUSTED / BUDGET_EXHAUSTED` with 3 completed observations, 3 parents, 3 children, and 6 total workers. Automatic retries are 0, automatic fallback is false, and grandchildren are 0.
+## Delegation infrastructure smoke
 
-## Cleanup and restore
+The no-egress deterministic matrix passed 146 distinct identity, scope, spawn, lineage, ownership, fake-child, product-policy, and verifier-loading tests plus four explicit verifier tests. One Unix-socket test was blocked by sandbox EPERM and passed unchanged with host permissions. Frozen verifier hashes matched and its existing self-test passed 10/10.
 
-Campaign processes and orphans are zero; broker sockets/directories are absent; the fixture is clean at `d764edb4ca65c8ce5f77fcb2964d320ac3a503b9`; SQLite quick-check is `ok`; RUNNING/ACTIVE/HELD are `0/0/0`.
-
-The repaired normal product is restored from build `3b9aaab83d87a2c32adf17e5f3a4afbbfdf16b7e` with one GUI, one PyInstaller parent, one serving child, one canonical `0600` socket owner, health `ok`, advancing heartbeat, strict code-sign validation, expected helper hash, healthy SQLite, and no campaign state owner.
+No Campaign F was created. No MiniMax, model, or provider call occurred.
 
 ## Delivery
 
-Curated evidence is committed under `docs/acceptance/pi5b3g-lineage-v1-2026-09-14/`. It retains the exact fixed owner-approved prompts and dynamic argument hashes/lengths, but no raw provider transcript, raw dynamic intent/reason, provider output content, environment value, or credential value.
+Sanitized promotion evidence is under `docs/acceptance/pi5b3g-integration-promotion-2026-09-14/`. Evidence commit `16dc91186ef4dc851beb7027480a584e7858b90a` was normally pushed and passed exact-head CI: Python 1m50s, macOS Swift 56s, and OpenCode 16s.
 
-Evidence commit `7a73fbc` was normally pushed and exact-head CI passed: Python in 1m58s, macOS Swift in 59s, and OpenCode in 17s. The final Ralph closure was also normally pushed and verified on its exact head. Draft PR #54 remains open, draft, and unmerged.
+No raw provider transcript, raw dynamic prompt, credential value, provider output, or environment value was committed. The final Ralph closure is the only subsequent metadata commit and requires the same exact-head CI gate. PR #53 remains Draft and unmerged.

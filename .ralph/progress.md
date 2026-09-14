@@ -288,3 +288,10 @@
 - Frozen verifier: exact profile/implementation hashes and existing 10/10 self-test confirmed.
 - Egress: zero real model or provider calls; no Campaign F.
 - Next task: T039 validate, commit, normally push sanitized promotion evidence, then wait for exact-head CI.
+
+## 2026-09-14T09:30:00Z — T039 promotion evidence exact-head CI
+
+- Evidence: PASS — sanitized integration/promotion evidence commit `16dc91186ef4dc851beb7027480a584e7858b90a` was normally pushed to Draft PR #53.
+- CI: PASS — exact evidence head passed Python in 1m50s, macOS Swift in 56s, and OpenCode in 16s.
+- Boundary: PR #54 is merged only into its verified feature base; PR #53 remains OPEN/DRAFT/unmerged; no Campaign F or additional model/provider call occurred.
+- Final status: `PI_5B3G_INTEGRATION_AND_PRODUCT_PROMOTION_COMPLETE`.
