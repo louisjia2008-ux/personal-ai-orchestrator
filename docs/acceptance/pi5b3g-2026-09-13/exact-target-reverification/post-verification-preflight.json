@@ -1,0 +1,82 @@
+{
+  "observed_at": "2026-09-13T12:12:16.224110+00:00",
+  "build": {
+    "api_version": "v1",
+    "built_at": "2026-09-13T11:50:53Z",
+    "commit_sha": "64a45a3adaafb42cac2c6a55a3ac0db31c06f059",
+    "configuration": "Release",
+    "short_sha": "64a45a3"
+  },
+  "campaign_http_status": 200,
+  "campaign": {
+    "campaign_id": null,
+    "consumed_observations": 0,
+    "max_observations": null,
+    "project_ids": [],
+    "reason_code": "CAMPAIGN_OFF",
+    "remaining_observations": null,
+    "started_at": null,
+    "state": "OFF",
+    "stopped_at": null,
+    "updated_at": null
+  },
+  "target": {
+    "execution_target_id": "pi-minimax-cn-coding-plan-MiniMax-M3",
+    "model_sku_id": "minimax-cn-coding-plan/MiniMax-M3",
+    "runtime_id": "pi",
+    "enabled": true,
+    "execution_verified": true,
+    "execution_verified_stale": false,
+    "runtime_available": true,
+    "observed_availability": null,
+    "tier": "T1",
+    "tier_match_reason": "default",
+    "auth_kind": "env",
+    "pool_kind": "windowed"
+  },
+  "runtime_provider": "minimax-cn",
+  "latest_evidence": {
+    "evidence_id": "exec-verify-0abd3c01892bb7e04f07d276",
+    "provider_id": "minimax-cn-coding-plan",
+    "execution_target_id": "pi-minimax-cn-coding-plan-MiniMax-M3",
+    "model_sku_id": "minimax-cn-coding-plan/MiniMax-M3",
+    "observed_at": "2026-09-13T12:12:16.193526Z",
+    "verification_method": "REAL_WORKER_INVOCATION",
+    "result": "VERIFIED",
+    "reason_code": "REAL_PI_WORKER_PROBE_SUCCEEDED"
+  },
+  "launch_gate": {
+    "pass": true,
+    "reason": null
+  },
+  "quota": {
+    "pool": "minimax-token-plan-cn",
+    "state": "AVAILABLE",
+    "confidence": "EXACT",
+    "snapshot_id": "quota-519fee87-5e6f-40b3-8307-4040df47fcea",
+    "age_seconds": 36.015722,
+    "remaining_fractions": [
+      0.99,
+      0.33
+    ],
+    "shared_blocker": null,
+    "refresh_status": null,
+    "launchable": true
+  },
+  "counts": {
+    "tasks": 34,
+    "runs": 7,
+    "workspaces": 7,
+    "running_rows": 0,
+    "active_run_rows": 0,
+    "held_writers": 0
+  },
+  "production_source": {
+    "head": "64a45a3adaafb42cac2c6a55a3ac0db31c06f059",
+    "status": ""
+  },
+  "pi_version": "0.85.1",
+  "pi_auth": "READY",
+  "pi_model_present": true,
+  "pi_auth_rechecked_after_probe": true
+}

@@ -1,0 +1,56 @@
+{
+  "target": "pi-minimax-cn-coding-plan-MiniMax-M3",
+  "attempts": 1,
+  "real_reverification_workers": 1,
+  "automatic_retries": 0,
+  "automatic_fallback": false,
+  "campaign_workers_used": 0,
+  "processes": [
+    {
+      "pid": 82386,
+      "pgid": 82386,
+      "runtime": "pi",
+      "model_ref": "minimax-cn/MiniMax-M3",
+      "protocol": "pi-json",
+      "tools": [
+        "read",
+        "edit",
+        "write",
+        "grep",
+        "find",
+        "ls"
+      ],
+      "delegation_enabled": false,
+      "guard_extension_count": 1
+    }
+  ],
+  "os_exit": 0,
+  "pi_summary": {
+    "protocol_valid": true,
+    "session_seen": true,
+    "agent_start_seen": true,
+    "agent_end_seen": true,
+    "event_count": 17,
+    "tool_start_count": 0,
+    "tool_end_count": 0,
+    "extension_error_count": 0,
+    "final_provider": "minimax-cn",
+    "final_model": "MiniMax-M3",
+    "final_stop_reason": "stop"
+  },
+  "output_truncated": false,
+  "marker_present": true,
+  "identity_matches": true,
+  "stdout_bytes": 5699,
+  "stderr_bytes": 0,
+  "evidence": {
+    "evidence_id": "exec-verify-0abd3c01892bb7e04f07d276",
+    "provider_id": "minimax-cn-coding-plan",
+    "execution_target_id": "pi-minimax-cn-coding-plan-MiniMax-M3",
+    "model_sku_id": "minimax-cn-coding-plan/MiniMax-M3",
+    "observed_at": "2026-09-13T12:12:16.193526Z",
+    "verification_method": "REAL_WORKER_INVOCATION",
+    "result": "VERIFIED",
+    "reason_code": "REAL_PI_WORKER_PROBE_SUCCEEDED"
+  }
+}

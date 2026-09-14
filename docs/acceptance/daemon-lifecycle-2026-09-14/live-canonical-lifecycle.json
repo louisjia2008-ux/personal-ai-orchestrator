@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-09-14T02:23:20Z",
+  "repair_checkpoint": {
+    "branch": "fix/pao-daemon-graceful-sigterm",
+    "pushed_head": "3b9aaab83d87a2c32adf17e5f3a4afbbfdf16b7e",
+    "push_mode": "normal",
+    "ci_run_id": 34798471675,
+    "ci_result": "PASS",
+    "draft_pr": 54
+  },
+  "old_daemon": {
+    "build": "64a45a3adaafb42cac2c6a55a3ac0db31c06f059",
+    "helper_sha256": "979658a25f506ee19275afca7c36bbdc88e05f5d53cd26f4ca7edb42bbe76930",
+    "parent_pid": 71945,
+    "child_pid": 71946,
+    "previous_failures": [
+      "process_group_SIGTERM",
+      "direct_child_SIGTERM",
+      "direct_child_SIGINT"
+    ],
+    "authorized_action": "one_direct_child_SIGKILL",
+    "signals_sent_in_this_recovery": 1,
+    "child_result": "GONE",
+    "parent_reap_result": "REAPED_AND_EXITED",
+    "replacement_child": false,
+    "stale_socket_unlink_required": true,
+    "stale_socket_unlink_scope": "/Users/<user>/Library/Caches/Personal AI Orchestrator/control.sock"
+  },
+  "new_product": {
+    "source_head": "3b9aaab83d87a2c32adf17e5f3a4afbbfdf16b7e",
+    "built_at": "2026-09-14T02:15:33Z",
+    "configuration": "Release",
+    "helper_sha256": "2fd4500fb62110e3b9b83ce4265e8cb56a8d8aecdfd1f9b6318629cf6580e127",
+    "architecture": "arm64",
+    "codesign": "PASS_ADHOC_STRICT_AND_DEEP",
+    "app_path": "/Volumes/Taoruide外接/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app"
+  },
+  "canonical_acceptance": {
+    "initial_parent_pid": 20261,
+    "initial_child_pid": 20262,
+    "signal": "one_parent_SIGTERM",
+    "parent_exit": true,
+    "child_exit": true,
+    "socket_owner_disappeared": true,
+    "socket_path_removed": true,
+    "sigint_used": false,
+    "sigkill_used": false,
+    "restart": "PASS",
+    "restart_gui_pid": 21103,
+    "restart_parent_pid": 21105,
+    "restart_child_pid": 21106,
+    "restart_socket_owner_pid": 21106,
+    "socket_mode": "srw-------",
+    "health": "ok",
+    "build_identity_matches": true,
+    "helper_sha256_matches": true,
+    "database_quick_check": "ok",
+    "running_rows": 0,
+    "active_runs": 0,
+    "held_writers": 0
+  }
+}

@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from personal_ai_orchestrator.control_client import ControlPlaneClient
+from personal_ai_orchestrator.control_client import ControlPlaneClient, ControlPlaneUnavailable
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.runtime_config import RuntimeConfig
 
@@ -36,6 +36,19 @@ def _wait_for_socket(socket_path: Path, *, timeout_seconds: float) -> None:
             return
         time.sleep(0.05)
     raise AssertionError(f"daemon never created {socket_path}")
+
+
+def _wait_for_health(socket_path: Path, *, timeout_seconds: float):
+    """Wait past bind until the background HTTP server accepts requests."""
+
+    deadline = time.monotonic() + timeout_seconds
+    client = ControlPlaneClient(socket_path)
+    while time.monotonic() < deadline:
+        try:
+            return client.health()
+        except ControlPlaneUnavailable:
+            time.sleep(0.05)
+    raise AssertionError(f"daemon never served health on {socket_path}")
 
 
 def _parse_isoformat(value: str) -> datetime:
@@ -87,7 +100,7 @@ def test_daemon_tick_advances_last_tick_at_between_health_polls() -> None:
         _wait_for_socket(socket_path, timeout_seconds=15.0)
 
         client = ControlPlaneClient(socket_path)
-        first = client.health()
+        first = _wait_for_health(socket_path, timeout_seconds=15.0)
         first_tick_at_str = first.last_tick_at
         assert first_tick_at_str is not None, "first /v1/health had no last_tick_at"
         assert first.tick_interval_seconds == tick_interval_seconds
@@ -163,8 +176,7 @@ def test_daemon_health_poll_does_not_require_credential_handlers() -> None:
     )
     try:
         _wait_for_socket(socket_path, timeout_seconds=15.0)
-        client = ControlPlaneClient(socket_path)
-        health = client.health()
+        health = _wait_for_health(socket_path, timeout_seconds=15.0)
         assert health.status == "ok"
         assert health.api_version == "v1"
         assert [step.name for step in health.supervisor_steps] == ["heartbeat"]

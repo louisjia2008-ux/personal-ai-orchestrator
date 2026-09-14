@@ -1,0 +1,7 @@
+{
+  "session_retry_enabled": false,
+  "provider_max_retries": 0,
+  "compaction_enabled": false,
+  "auth_access": "EXISTING_CLI_REFERENCE_ONLY",
+  "settings_sha256": "7356b087f651fa061a3ead690cb6d0cdef0dfe240ff3e45d340705c2a2c0d8ff"
+}

@@ -1,0 +1,19 @@
+{
+  "reverification_attempts": 1,
+  "real_reverification_workers": 1,
+  "automatic_retries": 0,
+  "automatic_fallback": false,
+  "max_reverification_workers": 1,
+  "campaign_started": false,
+  "campaign_state": "OFF",
+  "campaign_consumed_observations": 0,
+  "campaign_parent_workers_used": 0,
+  "campaign_child_workers_used": 0,
+  "campaign_total_workers_used": 0,
+  "campaign_max_observations": 3,
+  "campaign_max_parent_workers": 3,
+  "campaign_max_child_workers": 3,
+  "campaign_max_total_workers": 6,
+  "budget_enforcement": "exclusive durable attempt and process markers before canonical probe and supervisor start",
+  "retry_policy_verified_with": "Pi 0.85.1 SettingsManager; session retry false, provider maxRetries 0, compaction false"
+}
