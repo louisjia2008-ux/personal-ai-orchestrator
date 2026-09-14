@@ -265,3 +265,26 @@
 - CI: PASS — OpenCode 17s, macOS Swift 55s, Python 1m47s.
 - Safety: no MiniMax/provider call, no canonical mutation, no merge, and all four historical campaigns remain terminal.
 - Next task: push and green this evidence-only transition, then T033 refresh all live preflight gates before Campaign E.
+
+## 2026-09-14T09:20:00Z — T036 PR #54 integration
+
+- Stack: `main` 64a45a3 <- Draft PR #53 feature branch 3f15e6d <- PR #54 accepted head ed973da.
+- Review: PASS — complete 68-file diff, diff/JSON/sanitization/secret/transcript/fixture/runtime-artifact checks, exact-head CI, and GitHub mergeability all passed.
+- Merge: PASS — only PR #54 merged into its verified base as `8a7eba9b91348798339850355c026770892bb40d`; integrated Python/macOS Swift/OpenCode CI passed.
+- Boundary: Draft PR #53 remains open and unmerged; no authorization exists for the next stack edge.
+
+## 2026-09-14T09:23:00Z — T037 integrated product promotion and lifecycle smoke
+
+- Build: PASS — normal Release path, exact integrated source/build identity 8a7eba9, version 1.0 build 1, arm64 helper, strict deep signature.
+- Preflight: PASS — no old normal product was live; canonical socket absent; DB quick-check ok and 0/0/0; no campaign process or alternate canonical owner.
+- Start: PASS — one GUI/parent/child, one 0600 canonical socket owner, exact `/v1/build`, health ok, heartbeat advancing.
+- Lifecycle: PASS — one SIGTERM to the verified helper parent; child/parent exited, socket unlinked, DB remained 0/0/0; no SIGINT/SIGKILL/group signal. GUI exited gracefully and the same exact bundle restarted healthy.
+- Private process: PID 41372 remains isolated on private `/var/folders` state/socket from another checkout and was left untouched.
+
+## 2026-09-14T09:24:00Z — T038 no-egress delegation smoke
+
+- Verification: PASS — 146 distinct deterministic identity/scope/spawn/lineage/ownership/fake-child/product-policy tests plus four explicit verifier tests.
+- Environment note: one UDS test was sandbox-blocked with EPERM and then passed with host permissions; no source failure.
+- Frozen verifier: exact profile/implementation hashes and existing 10/10 self-test confirmed.
+- Egress: zero real model or provider calls; no Campaign F.
+- Next task: T039 validate, commit, normally push sanitized promotion evidence, then wait for exact-head CI.

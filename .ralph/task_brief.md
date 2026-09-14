@@ -104,3 +104,42 @@ Reread this brief after every phase. Every action must directly serve the locked
 ## Git Safety
 
 Work only in `/Volumes/Taoruide外接/AI LLM TOOLS/pao-daemon-graceful-sigterm` on `fix/pao-daemon-graceful-sigterm`, based on `3f15e6d`. Inspect branch, status, diff, changed-file scope, and secret exposure before each commit. Use focused commits and normal push only. Never reset, clean, rebase, force-push, merge, delete unrelated worktrees, or modify the dirty parent repository. Rollback means reverting only task-owned edits with a new normal commit or stopping for owner direction; no history rewrite.
+# Integration and product-promotion closure continuation
+
+## User Goal
+
+Integrate the fully accepted PI-5B3G repair lineage by merging PR #54 only into its verified feature-branch base, build and run the normal macOS product from the resulting merge commit, prove canonical lifecycle and no-egress delegation infrastructure, and retain sanitized exact-head evidence without merging the next stacked PR.
+
+## Final Deliverable
+
+A merge-verified, exact-source Release app running on canonical PAO state, one real graceful SIGTERM/restart smoke, deterministic no-egress delegation verification, sanitized promotion evidence, and exact-head CI on the evidence commit.
+
+## Success Criteria
+
+- PR #54 is reviewed, sanitized, green, mergeable, and merged only into `feat/pi-delegation-real-shadow-campaign-05b3g`.
+- The actual stack and the separately gated PR #53 edge are documented.
+- The final app/helper is rebuilt from the integrated merge commit and exposes that exact build identity.
+- Exactly one normal GUI, PyInstaller parent, serving child, and canonical socket owner remain healthy after a graceful SIGTERM/restart smoke.
+- SQLite quick-check and RUNNING/ACTIVE/HELD remain `ok` and `0/0/0`.
+- Deterministic identity/scope/spawn/lineage/ownership/verifier tests pass without model egress.
+- Sanitized evidence is normally pushed and exact-head CI passes; PR #53 remains unmerged.
+
+## Non-Goals
+
+- No Campaign F or other real model execution.
+- No merge of PR #53 or unrelated PRs.
+- No redesign of accepted daemon, validator, identity, spawn, lineage, verifier, quota, retry, or fallback semantics.
+- No termination of an isolated private PAO process from another checkout.
+
+## Constraints and Assumptions
+
+Use the existing production build script, normal non-force Git operations, a project-local disposable environment, one direct SIGTERM to the verified helper parent, no SIGINT/SIGKILL, no secrets or raw dynamic prompts, and no canonical concurrent owner. The integrated merge tree is expected to equal the accepted PR #54 head tree.
+
+## Risk Areas and Execution Plan
+
+1. Verify stack/PR/diff/sanitization and merge only PR #54; stop on ambiguity or conflict.
+2. Wait for integrated-head CI, build/sign/identify the Release app, and stop on source/build mismatch.
+3. Verify canonical idleness/private-process isolation, promote the app, exercise SIGTERM/restart, and stop on ownership/DB/lifecycle failure.
+4. Run only deterministic no-egress infrastructure tests, record sanitized evidence, normally push, and wait for exact evidence-head CI.
+
+Rollback is a new normal revert commit or stopping for owner direction; never rewrite history. Drift guard: every remaining action must directly support integration, product promotion, sanitized evidence, or exact-head verification.
