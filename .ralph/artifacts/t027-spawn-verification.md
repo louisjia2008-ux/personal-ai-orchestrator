@@ -42,5 +42,12 @@ shebang now uses `/usr/bin/env python3`. Neither event involved model egress.
 
 ## Remote gate
 
-Pending normal push and exact-head required CI. No Campaign D or MiniMax prompt
-is permitted until this section is updated to PASS.
+PASS on exact pushed head `8fe8394a241a6b8c3cfedef407d912657c8dd577`:
+
+- Python: pass, 1m57s;
+- macOS Swift: pass, 57s;
+- OpenCode adapter: pass, 17s;
+- Draft PR #54 head matched exactly and remains open/draft/unmerged.
+
+The evidence-only transition commit created after this record must also be
+pushed and green before Campaign D so the live starting HEAD is unambiguous.
