@@ -5,3 +5,4 @@
 - 2026-09-14T01:17:00Z | RALPH_CONTINUE | T003 | PASS: deterministic old-source failure captured at handler Event.set | continue automatically to T004
 - 2026-09-14T01:29:00Z | RALPH_CONTINUE | T004 | PASS: scalar handler and ordinary-flow cleanup, 5 focused tests | continue automatically to T005
 - 2026-09-14T01:30:00Z | RALPH_CONTINUE | T005 | PASS: full Python, Ruff, OpenCode, Swift build/test | continue automatically to T006
+- 2026-09-14T01:31:00Z | RALPH_CONTINUE | T006 | PASS: real Release bundle identity and strict signatures verified | continue automatically to T007

@@ -39,3 +39,11 @@
 - Files changed: `tests/test_daemon_tick_integration.py`, `.ralph/artifacts/t005-verification.md`, and Ralph state.
 - Remaining risk: no packaged PyInstaller helper has yet been built from the fix.
 - Next task: T006 build and identify the real packaged macOS product.
+
+## 2026-09-14T01:31:00Z — T006 packaged macOS build
+
+- Changed: installed the declared PyInstaller packaging extra into the disposable project venv and built the real Release app/helper from committed HEAD.
+- Verification: PASS — embedded commit equals `b1d6a660be074ddff085f485835f8ec6e419e4d8`; helper SHA-256 is `ad00de62d72b1103109a2521f1cdbc920be19b89bf9dd3714ac697f814e0f887`; helper is arm64; strict helper and deep bundle signature checks pass.
+- Files changed: generated ignored build outputs and Ralph evidence only.
+- Remaining risk: real one-file parent/child SIGTERM behavior and repeated restart are not yet exercised.
+- Next task: T007 prove the isolated packaged signal matrix and restart cycles.
