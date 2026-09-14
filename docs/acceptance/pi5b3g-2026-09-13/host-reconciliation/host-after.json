@@ -1,0 +1,123 @@
+{
+  "observed_at": "2026-09-13T11:53:50.432095+00:00",
+  "pid": 71946,
+  "bootloader_pid": 71945,
+  "app_pid": 71928,
+  "argv": [
+    "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-product-main-64a45a3/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon"
+  ],
+  "cwd": "/Users/louisjia/Library/Application Support/Personal AI Orchestrator",
+  "binary": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-product-main-64a45a3/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon",
+  "binary_sha256": "979658a25f506ee19275afca7c36bbdc88e05f5d53cd26f4ca7edb42bbe76930",
+  "build": {
+    "api_version": "v1",
+    "built_at": "2026-09-13T11:50:53Z",
+    "commit_sha": "64a45a3adaafb42cac2c6a55a3ac0db31c06f059",
+    "configuration": "Release",
+    "short_sha": "64a45a3"
+  },
+  "config": "/Users/louisjia/Library/Application Support/Personal AI Orchestrator/runtime.json",
+  "state_db": "/Users/louisjia/Library/Application Support/Personal AI Orchestrator/state.sqlite3",
+  "runtime_state_root": "/Users/louisjia/Library/Application Support/Personal AI Orchestrator/runtime-state",
+  "control_socket": "/Users/louisjia/Library/Caches/Personal AI Orchestrator/control.sock",
+  "health": {
+    "api_version": "v1",
+    "last_tick_at": "2026-09-13T11:53:48.891218+00:00",
+    "model_tiers_source": "owner_file",
+    "status": "ok",
+    "supervisor_steps": [
+      {
+        "consecutive_failures": 0,
+        "in_backoff": false,
+        "last_duration_ms": 0.003917142748832703,
+        "last_run_at": "2026-09-13T11:53:48.891218+00:00",
+        "name": "heartbeat"
+      }
+    ],
+    "tick_interval_seconds": 5.0
+  },
+  "campaign_http_status": 200,
+  "campaign": {
+    "campaign_id": null,
+    "consumed_observations": 0,
+    "max_observations": null,
+    "project_ids": [],
+    "reason_code": "CAMPAIGN_OFF",
+    "remaining_observations": null,
+    "started_at": null,
+    "state": "OFF",
+    "stopped_at": null,
+    "updated_at": null
+  },
+  "target_projection": {
+    "execution_target_id": "pi-minimax-cn-coding-plan-MiniMax-M3",
+    "model_sku_id": "minimax-cn-coding-plan/MiniMax-M3",
+    "runtime_id": "pi",
+    "enabled": true,
+    "execution_verified": false,
+    "execution_verified_stale": false,
+    "runtime_available": true,
+    "observed_availability": null,
+    "tier": "T1",
+    "tier_match_reason": "default",
+    "auth_kind": "env",
+    "pool_kind": "windowed"
+  },
+  "runtime_provider_id": "minimax-cn",
+  "model_sku_id": "minimax-cn-coding-plan/MiniMax-M3",
+  "pi_registry_status": {
+    "discovery_state": "DISCOVERED",
+    "last_discovered_at": "2026-09-13T11:51:42.474937+00:00",
+    "provider_count": 2,
+    "configured_family_count": 2,
+    "execution_target_count": 10,
+    "catalog_snapshot_id": "pi-discovery:2026-09-13T11:51:42.474937+00:00",
+    "source_method": "pi_cli_inspection",
+    "last_error_code": null
+  },
+  "pi_discovery_mechanism": "product_daemon.resolve_dynamic_registry -> bootstrap_if_missing -> refresh -> discover_pi",
+  "latest_execution_evidence": null,
+  "launch_gate": {
+    "admitted": false,
+    "reason": "execution target has not been runtime-verified"
+  },
+  "quota": {
+    "provider_id": "minimax-cn-coding-plan",
+    "quota_pool_id": "minimax-token-plan-cn",
+    "observation_state": "AVAILABLE",
+    "confidence": "EXACT",
+    "snapshot_id": "quota-d53f8021-128a-4e00-89c9-bed75081b980",
+    "observation_time": "2026-09-13T11:53:50.418273+00:00",
+    "remaining_fractions": [
+      0.88,
+      0.33
+    ],
+    "shared_pool_blocker": null,
+    "launchable": true,
+    "read_only_refresh_count": 1,
+    "inference_calls": 0
+  },
+  "counts": {
+    "tasks": 34,
+    "runs": 7,
+    "workspaces": 7,
+    "running_rows": 0,
+    "active_run_rows": 0,
+    "held_writers": 0
+  },
+  "pi_auth": "READY",
+  "pi_version": "0.85.1",
+  "pi_model_present": true,
+  "real_model_calls": 0,
+  "real_workers": 0,
+  "campaign_started": false,
+  "execution_evidence_migrated": false,
+  "source_code_changed": false,
+  "archive_modules": {
+    "delegation_campaign": true,
+    "delegation_campaign_control": true,
+    "delegation_campaign_runtime": true,
+    "pi_provider_registry_manager": true
+  },
+  "campaign_aware_child_port_present": true
+}

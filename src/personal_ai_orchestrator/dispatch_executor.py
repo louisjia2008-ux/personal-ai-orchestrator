@@ -59,7 +59,13 @@ from personal_ai_orchestrator.execution_evidence import (
     build_execution_evidence,
 )
 from personal_ai_orchestrator.model_registry import ModelRegistry
-from personal_ai_orchestrator.process_supervisor import ProcessSupervisor, SupervisedProcess
+from personal_ai_orchestrator.process_supervisor import (
+    ProcessSpawnError,
+    ProcessSupervisor,
+    SpawnDiagnostics,
+    SpawnStage,
+    SupervisedProcess,
+)
 from personal_ai_orchestrator.quota_availability import (
     QuotaAvailabilityEvidence,
     QuotaAvailabilityJournal,
@@ -420,20 +426,57 @@ class OwnerDispatchExecutor:
             return
 
         # -- worker spawn + atomic RUNNING -------------------------------
+        spawn_observation = self._supervisor.begin_spawn_observation()
         try:
             supervised = await self._spawn_worker(store, dispatch, worktree)
         except Exception as error:
+            observed = self._supervisor.observed_process()
+            diagnostics = self._spawn_failure_diagnostics(error, observed)
+            if observed is not None:
+                exit_code = await self._supervisor.abort_unowned(observed)
+                diagnostics = diagnostics.evolved(
+                    child_exited_before_ownership=True,
+                    safe_exit_code=exit_code,
+                )
+            self._audit_spawn(
+                store,
+                dispatch.task_id,
+                "WORKER_SPAWN_FAILED_DETAIL",
+                diagnostics,
+            )
             self._fail_pre_worker(
                 store,
                 request_id,
                 writer_token=writer_token,
                 failure_code="WORKER_SPAWN_FAILED",
-                failure_reason=f"worker process could not be spawned: {type(error).__name__}",
+                failure_reason=(
+                    "worker process failed before durable ownership: "
+                    f"stage={diagnostics.spawn_stage.value} "
+                    f"exception={diagnostics.exception_class or type(error).__name__} "
+                    f"child_created={'yes' if diagnostics.child_created else 'no'}"
+                ),
             )
             store.close()
             return
+        finally:
+            self._supervisor.end_spawn_observation(spawn_observation)
+
+        self._audit_spawn(
+            store,
+            dispatch.task_id,
+            "PROCESS_CREATED",
+            self._supervised_spawn_diagnostics(supervised),
+        )
 
         run_id = f"run-{dispatch.dispatch_id}"
+        self._audit_spawn(
+            store,
+            dispatch.task_id,
+            "DURABLE_RUN_REGISTRATION_STARTED",
+            self._supervised_spawn_diagnostics(supervised).evolved(
+                spawn_stage=SpawnStage.DURABLE_RUN_REGISTRATION_STARTED,
+            ),
+        )
         try:
             store.start_dispatched_worker(
                 dispatch_id=dispatch.dispatch_id,
@@ -445,12 +488,23 @@ class OwnerDispatchExecutor:
                 pid=supervised.pid,
                 expected_state=expected_state,
             )
-            self._activate_worker_session(request_id)
         except Exception as error:
             # The child exists but is not durably owned: kill the exact
             # child before any state repair so no orphan process remains.
-            await self._supervisor.cancel(
+            exit_code = await self._supervisor.cancel(
                 supervised, grace_seconds=self.config.worker_grace_seconds
+            )
+            self._audit_spawn(
+                store,
+                dispatch.task_id,
+                "RUN_START_FAILED_DETAIL",
+                self._supervised_spawn_diagnostics(supervised).evolved(
+                    spawn_stage=SpawnStage.DURABLE_RUN_REGISTRATION_STARTED,
+                    exception_class=type(error).__name__,
+                    safe_errno=error.errno if isinstance(error, OSError) else None,
+                    child_exited_before_ownership=True,
+                    safe_exit_code=exit_code,
+                ),
             )
             self._fail_pre_worker(
                 store,
@@ -462,6 +516,15 @@ class OwnerDispatchExecutor:
             store.close()
             return
 
+        self._audit_spawn(
+            store,
+            dispatch.task_id,
+            "DURABLE_RUN_REGISTERED",
+            self._supervised_spawn_diagnostics(supervised).evolved(
+                spawn_stage=SpawnStage.DURABLE_RUN_REGISTERED,
+                durable_run_created=True,
+            ),
+        )
         execution = ActiveExecution(
             task_id=dispatch.task_id,
             request_id=request_id,
@@ -470,13 +533,69 @@ class OwnerDispatchExecutor:
             supervised=supervised,
             loop=asyncio.get_running_loop(),
         )
-        self.execution_supervisor.register(execution)
+        try:
+            self._activate_worker_session(request_id)
+            self.execution_supervisor.register(execution)
+        except Exception as error:
+            self._audit_spawn(
+                store,
+                dispatch.task_id,
+                "WORKER_OWNERSHIP_REGISTRATION_FAILED_DETAIL",
+                self._supervised_spawn_diagnostics(supervised).evolved(
+                    spawn_stage=SpawnStage.DURABLE_RUN_REGISTERED,
+                    exception_class=type(error).__name__,
+                    safe_errno=error.errno if isinstance(error, OSError) else None,
+                    durable_run_created=True,
+                ),
+            )
+            self._emergency_repair(
+                store,
+                request_id,
+                dispatch,
+                supervised,
+                run_id,
+                writer_token,
+                error=error,
+            )
+            store.close()
+            return
+        self._audit_spawn(
+            store,
+            dispatch.task_id,
+            "WORKER_RUNNING",
+            self._supervised_spawn_diagnostics(supervised).evolved(
+                spawn_stage=SpawnStage.WORKER_RUNNING,
+                durable_run_created=True,
+            ),
+        )
 
         # -- supervised worker lifecycle ---------------------------------
         real_invocation_succeeded = False
         worker_exit_code: int | None = None
         try:
+            self._audit_spawn(
+                store,
+                dispatch.task_id,
+                "PROTOCOL_BOOTSTRAP_STARTED",
+                self._supervised_spawn_diagnostics(supervised).evolved(
+                    spawn_stage=SpawnStage.PROTOCOL_BOOTSTRAP_STARTED,
+                    durable_run_created=True,
+                    protocol_bootstrap_started=True,
+                ),
+            )
             exit_code, stdout, stderr, truncated = await self._wait_for_worker(supervised)
+            self._audit_spawn(
+                store,
+                dispatch.task_id,
+                "PROTOCOL_BOOTSTRAP_COMPLETED",
+                self._supervised_spawn_diagnostics(supervised).evolved(
+                    spawn_stage=SpawnStage.PROTOCOL_BOOTSTRAP_COMPLETED,
+                    durable_run_created=True,
+                    protocol_bootstrap_started=True,
+                    protocol_bootstrap_completed=True,
+                    safe_exit_code=exit_code,
+                ),
+            )
             self._disable_worker_session(request_id)
             worker_exit_code = exit_code
             if (
@@ -834,6 +953,79 @@ class OwnerDispatchExecutor:
     # ------------------------------------------------------------------
     # internals
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _audit_spawn(
+        store: SafetyKernelStore,
+        task_id: str,
+        event_type: str,
+        diagnostics: SpawnDiagnostics,
+    ) -> None:
+        """Best-effort diagnostics must never change lifecycle correctness."""
+
+        try:
+            store._audit(task_id, event_type, diagnostics.as_dict())
+        except Exception:
+            pass
+
+    @staticmethod
+    def _supervised_spawn_diagnostics(supervised: Any) -> SpawnDiagnostics:
+        diagnostics = getattr(supervised, "spawn_diagnostics", None)
+        if isinstance(diagnostics, SpawnDiagnostics):
+            return diagnostics
+        empty_hash = hashlib.sha256(b"").hexdigest()
+        return SpawnDiagnostics(
+            spawn_stage=SpawnStage.PROCESS_CREATED,
+            executable_path_hash=empty_hash,
+            executable_exists=False,
+            executable_executable=False,
+            cwd_hash=empty_hash,
+            cwd_exists=False,
+            argv_count=0,
+            argv_shape=(),
+            env_key_names=(),
+            process_group_setup_stage="PROCESS_OBSERVED_BY_TEST_DOUBLE",
+            stdout_pipe_created=False,
+            stderr_pipe_created=False,
+            child_created=True,
+            child_pid_observed=getattr(supervised, "pid", None) is not None,
+        )
+
+    @staticmethod
+    def _spawn_failure_diagnostics(
+        error: Exception, observed: SupervisedProcess | None
+    ) -> SpawnDiagnostics:
+        if observed is not None:
+            return observed.spawn_diagnostics.evolved(
+                spawn_stage=SpawnStage.SPAWN_ADAPTER_POST_CREATE,
+                exception_class=type(error).__name__,
+                safe_errno=error.errno if isinstance(error, OSError) else None,
+            )
+        if isinstance(error, ProcessSpawnError):
+            return error.diagnostics
+        # Runtime-specific setup can fail before ProcessSupervisor sees argv.
+        # Persist no guessed path, argv, or environment data in that case.
+        empty_hash = hashlib.sha256(b"").hexdigest()
+        return SpawnDiagnostics(
+            spawn_stage=SpawnStage.CONTRACT_VALIDATED,
+            exception_class=type(error).__name__,
+            safe_errno=error.errno if isinstance(error, OSError) else None,
+            child_created=False,
+            child_pid_observed=False,
+            child_exited_before_ownership=False,
+            safe_exit_code=None,
+            executable_path_hash=empty_hash,
+            executable_exists=False,
+            executable_executable=False,
+            cwd_hash=empty_hash,
+            cwd_exists=False,
+            argv_count=0,
+            argv_shape=(),
+            env_key_names=(),
+            process_group_setup_stage="NOT_STARTED",
+            stdout_pipe_created=False,
+            stderr_pipe_created=False,
+        )
 
     def _emergency_repair(
         self,
@@ -1634,10 +1826,19 @@ class OwnerDispatchExecutor:
                 "cwd": str(worktree.worktree_path),
             },
         )
+        env = build_worker_env()
+        self._audit_spawn(
+            store,
+            dispatch.task_id,
+            "PROCESS_CREATE_STARTED",
+            self._supervisor.inspect_contract(
+                argv, cwd=worktree.worktree_path, env=env
+            ).evolved(spawn_stage=SpawnStage.PROCESS_CREATE_STARTED),
+        )
         return await self._supervisor.start(
             argv,
             cwd=worktree.worktree_path,
-            env=build_worker_env(),
+            env=env,
         )
 
     async def _wait_for_worker(

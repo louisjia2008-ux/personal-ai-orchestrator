@@ -1,0 +1,30 @@
+{
+  "observed_at": "2026-09-13T11:36:01.846296+00:00",
+  "host_surface": "existing_product_daemon_default_uds",
+  "runtime_state_source": "existing_product_application_support_runtime_state",
+  "health_http_status": 200,
+  "health": {
+    "api_version": "v1",
+    "status": "ok"
+  },
+  "providers_http_status": 200,
+  "provider_count": 5,
+  "parent_target": "pi-minimax-cn-coding-plan-MiniMax-M3",
+  "matching_targets": [],
+  "latest_parent_execution_evidence": null,
+  "campaign_get_http_status": 404,
+  "campaign_get_result": {
+    "error": "not_found"
+  },
+  "pi_version": "0.85.1",
+  "minimax_cn_auth_status": "ready",
+  "minimax_m3_catalog_present": true,
+  "quota_preflight": "NOT_RUN_EARLIER_HOST_GATE_BLOCKED",
+  "shared_quota_gate": "NOT_EVALUATED",
+  "blockers": [
+    "CAMPAIGN_CONTROL_ENDPOINT_NOT_FOUND",
+    "PARENT_TARGET_ABSENT_FROM_HOST"
+  ],
+  "campaign_start_requests": 0,
+  "worker_launches": 0
+}

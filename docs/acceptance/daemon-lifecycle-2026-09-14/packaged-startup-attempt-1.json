@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "helper": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon",
+  "home": "/private/tmp/pao-packaged-02aef3uo",
+  "cycles_requested": 5,
+  "routes": [
+    "parent",
+    "child",
+    "parent",
+    "child",
+    "parent"
+  ],
+  "cycles": [],
+  "sigkill_used": false,
+  "result": "FAIL",
+  "error_type": "AssertionError",
+  "error": "packaged helper never served health: [Errno 2] No such file or directory"
+}

@@ -1,0 +1,27 @@
+# Acceptance
+
+- Historical lifecycle and failed-campaign evidence remains preserved.
+- Current scope rules and validation/forwarding/accounting boundaries are inventoried before code changes.
+- Offline adversarial corpus and permanent tests cover all requested safe, negated, unsafe, injection, and ambiguous cases with stable rule IDs and fail-closed behavior.
+- Rejections retain only validator version, lengths, hashes, rule/category/stage, observation/filename, and child-forward/worker facts.
+- Repository-owned validator changes pass required tests/Ruff, are separately committed and normally pushed, and exact-head CI is green before live inference.
+- A new campaign ID completes three sequential observations at 3 parent/3 child/6 total with zero retry/fallback/grandchild, or stops on the first refined-scope/invariant failure.
+- Terminal campaign cleanup and restored repaired product health/heartbeat/DB/sole ownership pass.
+- Final sanitized evidence is normally pushed and exact-head CI is checked without merge.
+- Identity semantics and all parent/child identity generators are inventoried against canonical uniqueness constraints before implementation.
+- A deterministic host-owned scheme proves same-campaign reconstruction, cross-campaign/observation/role/operation uniqueness, immutable historical rows, and unchanged conflicting-request behavior.
+- Canonical offline integration proves one admission per same logical request and distinct successful Observation 1 admission in separate fresh campaigns without provider calls.
+- Identity-only code is separately committed, normally pushed, and exact-head CI is green before the third live campaign.
+- The third campaign uses a fresh ID, pre-dispatch collision assertions, exactly three sequential observations within 3 parent/3 child/6 total, zero retries/fallback/grandchildren, or stops at the first identity/scope/safety failure.
+- Campaign C remains immutable; its exact parent spawn path and launch contract are reconstructed and compared with prior successful parent execution evidence.
+- Sanitized diagnostics distinguish process-create start/result, PID observation, immediate exit, durable-run registration, protocol bootstrap, and cleanup without environment values, credentials, or provider transcripts.
+- A no-egress disposable reproduction through the same PAO spawn infrastructure yields one evidence-backed root-cause classification; unknown root cause blocks live execution.
+- The required spawn fault-injection/happy-path/cleanup/idempotency/no-retry/no-fallback/no-child matrix passes, followed by full Python, Ruff, a focused spawn commit, normal push, and exact-head CI.
+- A fresh Campaign D starts only after the offline gate and completes three sequential observations at 3/3/6 with zero retry/fallback/grandchild, or stops on the first structured post-repair blocker.
+- Campaigns A-D remain immutable and separately evidenced.
+- Canonical lineage source, persistence location, event/key, and supported API are documented before implementation.
+- A deterministic fail-closed lineage accessor rejects missing, ambiguous, missing-parent, parent-as-child, wrong-campaign, and wrong-observation relationships without ID parsing.
+- The historical Campaign D observer failure and the repaired observer are both proven offline, including child durable-run, ownership, protocol-bootstrap, terminal cleanup, and zero provider calls.
+- Full Python and Ruff pass; the focused lineage repair is committed, normally pushed, and exact-head CI passes before Campaign E.
+- Fresh Campaign E completes three sequential observations at 3 parent/3 child/6 total with zero retry/fallback/grandchild, or stops at the first precise live blocker.
+- Campaign E terminal cleanup, normal product restore, sanitized evidence, final normal push, and final exact-head CI pass without merge.
