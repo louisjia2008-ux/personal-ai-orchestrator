@@ -43,7 +43,7 @@ from personal_ai_orchestrator.pi_runtime import (
     seed_pi_worktree_guard,
     summarize_pi_json_stream,
 )
-from personal_ai_orchestrator.process_supervisor import SupervisedProcess
+from personal_ai_orchestrator.process_supervisor import SpawnStage, SupervisedProcess
 from personal_ai_orchestrator.safety_kernel import (
     AUTHORITY_OWNER_INITIATED_EXECUTION,
     AUTHORITY_SUPERVISED_AUTO,
@@ -258,10 +258,19 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
                 "cwd": str(worktree.worktree_path),
             },
         )
+        env = build_worker_env()
+        self._audit_spawn(
+            store,
+            dispatch.task_id,
+            "PROCESS_CREATE_STARTED",
+            self._supervisor.inspect_contract(
+                argv, cwd=worktree.worktree_path, env=env
+            ).evolved(spawn_stage=SpawnStage.PROCESS_CREATE_STARTED),
+        )
         return await self._supervisor.start(
             argv,
             cwd=worktree.worktree_path,
-            env=build_worker_env(),
+            env=env,
         )
 
     @staticmethod
