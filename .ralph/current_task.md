@@ -1,16 +1,16 @@
 # Current task
 
-T032 — remotely checkpoint delegated-child lineage repair
+T033 — gated fifth PI-5B3G campaign
 
 Acceptance:
 
-- Commit sanitized offline verification evidence.
-- Push normally and require Draft PR #54 exact-head Python/macOS Swift/OpenCode CI green.
-- Do not start Campaign E or send any MiniMax prompt before the remote gate passes.
+- Push and green this evidence-only transition.
+- Refresh every live product/database/fixture/verifier/validator/identity/lineage/quota/process gate.
+- Create a fresh Campaign E, validate its identities, gracefully release the canonical daemon, then execute at most three observations sequentially.
 
 Verification:
 
-- Local/remote/PR heads match the pushed checkpoint.
-- All required CI jobs pass on that exact head.
+- Exactly 3 parent and 3 child workers produce 3 externally verified observations with zero retry/fallback/grandchild, or the first authorized blocker stops execution.
+- Terminal campaign cleanup and repaired product restoration pass.
 
 Campaign D remains consumed and terminal. Campaign E cannot start before T031-T033 pass.

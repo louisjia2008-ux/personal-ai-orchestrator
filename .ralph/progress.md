@@ -242,3 +242,10 @@
 - Verification: PASS — 36 focused; 180 relevant; full Python 1301 passed/1 skipped; Ruff, diff, sanitization, and secret scan passed.
 - Pipeline: local fake child reached process creation, durable run, canonical ownership PASS, protocol bootstrap/completion, verifier, and clean exit; injected post-durable lineage loss reaped the exact process and released run/writer state without retry.
 - Next task: T032 commit sanitized verification evidence, push normally, and require exact-head CI before any live preflight.
+
+## 2026-09-14T08:02:00Z — T032 exact-head lineage checkpoint
+
+- Push: PASS — branch and Draft PR #54 matched `2b78bee3cd7a8b62f4d4285b1bd13b09629c2f2e`.
+- CI: PASS — OpenCode 17s, macOS Swift 55s, Python 1m47s.
+- Safety: no MiniMax/provider call, no canonical mutation, no merge, and all four historical campaigns remain terminal.
+- Next task: push and green this evidence-only transition, then T033 refresh all live preflight gates before Campaign E.
