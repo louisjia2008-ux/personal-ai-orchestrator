@@ -95,3 +95,13 @@
 - Safety: rejection consumes the bounded call and never reaches child execution; validator errors also fail closed. No raw dynamic arguments or provider transcripts are recorded.
 - Files changed: production Python broker/executor, dedicated validator module, permanent tests, and Ralph evidence/state. Frozen verifier/profile untouched; no model calls.
 - Next task: T014 repeat final full verification, secret/diff audit, focused commit, normal push, and exact-head CI.
+
+## 2026-09-14T04:10:00Z — T014 validator checkpoint and T015 live stop
+
+- T014 PASS: validator commit `64ce05c` pushed normally; Draft PR #54 exact head matched; Python, macOS Swift, and OpenCode CI passed.
+- Preflight PASS: exact historical STOPPED campaign, repaired product build/helper/health/socket, DB 0/0/0 and quick-check, fixture/verifier/validator hashes, MiniMax auth and exact quota, no shared blocker or campaign process.
+- Transition PASS: one normal SIGTERM to repaired PyInstaller parent retired parent/child and removed canonical socket; DB remained healthy and idle.
+- T015 BLOCKED before model use: new campaign `delegation-campaign-fb69fd7288714eeaacbb9e5550ab5c82` was created, then canonical task submission rejected reused historical request ID `pi5b3g-obs1-submit` with `conflicting_request_id`.
+- Worker/egress accounting: 0 parent, 0 child, 0 total, 0 outbound parent prompts, 0 scope validations, 0 retry/fallback/grandchild.
+- Cleanup PASS: new campaign STOPPED at 0 consumed; zero campaign process/worktree/broker/writer; repaired GUI/parent/child restored, sole socket owner, health ok, heartbeat advanced, DB ok and 0/0/0.
+- Next task: T016 commit sanitized blocker evidence, normal push, exact-head CI, and close Ralph as blocked.
