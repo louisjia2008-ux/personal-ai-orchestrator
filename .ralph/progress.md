@@ -55,3 +55,11 @@
 - Files changed: packaged acceptance harness, `docs/acceptance/daemon-lifecycle-2026-09-14/`, and Ralph evidence/state.
 - Remaining risk: the canonical old stuck daemon has not yet been retired or replaced; canonical live state is untouched.
 - Next task: T008 re-identify and gate the old live daemon, use the one authorized direct-child SIGINT only if every condition still matches, then promote and prove the fixed build.
+
+## 2026-09-14T02:23:20Z — T008 canonical recovery and live lifecycle
+
+- Changed: normally pushed the verified repair, waited for exact-head CI, rebuilt the exact HEAD, used the single newly authorized SIGKILL on the re-identified old serving child, removed only its proven-unowned stale socket, and promoted the repaired bundle.
+- Verification: PASS — old child and parent are gone with no replacement; the repaired canonical parent/child exited on one normal SIGTERM with socket cleanup and DB health; the exact repaired product restarted healthy with one socket owner and zero accounting.
+- Files changed: canonical lifecycle acceptance evidence and Ralph state only; production source is unchanged after the accepted build.
+- Remaining risk: PI-5B3G live quota and campaign execution remain pending.
+- Next task: T009 refresh all campaign preflight gates, transition ownership, and run exactly three sequential observations without retry or fallback.

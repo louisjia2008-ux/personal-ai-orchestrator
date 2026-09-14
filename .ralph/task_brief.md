@@ -14,7 +14,7 @@ A focused lifecycle repair on `fix/pao-daemon-graceful-sigterm`, permanent regre
 - Normal main-thread control flow performs supervisor, control-server, socket, and store cleanup.
 - Automated tests cover SIGTERM, SIGINT/KeyboardInterrupt, signal restoration, cleanup location, bounded exit, socket removal, DB reuse, and immediate restart.
 - The newly built real PyInstaller onefile helper passes parent-route and child-route SIGTERM acceptance, including at least three complete start/health/stop/cleanup/restart cycles.
-- The old canonical daemon is retired only under the prompt's exact one-SIGINT authorization if its identity and idle gates match.
+- The old canonical daemon is retired only under the resumed prompt's new exact one-SIGKILL-to-serving-child authorization after the repair is remotely preserved, exact-head CI passes, and every live identity/idle gate matches.
 - The fixed canonical product passes real SIGTERM and restart acceptance with one socket owner and healthy DB/accounting.
 - PI-5B3G runs exactly three sequential SHADOW observations with at most three parents, three children, six workers, no retries/fallback/grandchildren, unchanged frozen verifier hashes, and clean terminal accounting; or stops for a new unrelated blocker.
 - Evidence records old/new build identities, exact commands/results, commits, pushed HEAD, PR, and CI for that exact HEAD without exposing credentials.
@@ -22,7 +22,7 @@ A focused lifecycle repair on `fix/pao-daemon-graceful-sigterm`, permanent regre
 ## Non-Goals
 
 - No asyncio rewrite, UI redesign, campaign-semantic workaround, verifier weakening, provider fallback, production ACTIVE enablement, merge, force push, unrelated refactor, or unrelated project access.
-- No SIGKILL, process-group shutdown as normal lifecycle, broad `pkill`/`killall`, or deletion of a live-owned socket.
+- No SIGKILL except the one newly authorized forced recovery signal to the re-verified old `64a45a3` serving child. No process-group shutdown as normal lifecycle, broad `pkill`/`killall`, parent signal, replacement-child signal, or deletion of a live-owned socket.
 
 ## Constraints
 
@@ -31,7 +31,7 @@ A focused lifecycle repair on `fix/pao-daemon-graceful-sigterm`, permanent regre
 - Fail closed on ambiguous PID/socket/DB/quota/verifier/accounting state.
 - Do not print credential values or infer live truth from stale evidence.
 - A real campaign observation consumes its budget even if it blocks; no automatic retry.
-- Build, promotion, campaign, push, and CI actions are authorized only within this prompt's exact scope and gates.
+- Build, promotion, campaign, push, CI, the one old-child SIGKILL, and exact stale-socket unlink are authorized only within this prompt's exact scope and gates.
 
 ## Assumptions
 
@@ -54,7 +54,7 @@ A focused lifecycle repair on `fix/pao-daemon-graceful-sigterm`, permanent regre
 2. Minimal lifecycle repair: change the narrow signal-to-main-loop bridge and tests. Accept with focused behavioral tests and diff review. Roll back the focused patch if regression evidence fails.
 3. Broader verification: run lifecycle/control/delegation/database/Swift checks and the repository-required broader suite. Modify only test evidence if needed. Roll back only task-owned test/evidence changes on irreparable failure.
 4. Packaged acceptance: build the real app/helper, record identity, and run isolated parent/child signal routes plus repeated cycles. Modify build outputs/evidence only. Do not promote if any gate fails.
-5. Canonical promotion and lifecycle proof: re-identify live processes and idle/accounting state; use the single authorized SIGINT only if exact old-build conditions match; install/start via normal product path and prove SIGTERM/restart. Stop without improvisation on ambiguity or failure.
+5. Remote checkpoint and canonical promotion: normally push the verified repair, require exact-head CI green, rebuild that exact head, re-identify live processes and idle/accounting state, use the single authorized old-child SIGKILL only if every old-build condition matches, unlink only the exact stale unowned socket if required, install/start via normal product path, and prove SIGTERM/restart. Stop without improvisation on ambiguity or failure.
 6. PI-5B3G: refresh quota/verifier/fixture/campaign truth, run exactly three sequential authorized SHADOW observations, then prove terminal cleanup and post-campaign lifecycle. Stop at the first contract blocker without retry.
 7. Evidence and delivery: commit meaningful milestones, push normally, update/create Draft PR as appropriate, and wait for CI on exact pushed HEAD. Do not merge.
 
