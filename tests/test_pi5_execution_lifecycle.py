@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -34,6 +33,7 @@ def _enabled(tmp_path):
 @pytest.mark.asyncio
 async def test_broker_activation_and_every_cleanup_boundary(tmp_path, monkeypatch, failure):
     executor, db = _enabled(tmp_path)
+    child_port = executor.delegation_child_port
     captured = []
     original_spawn = executor._spawn_worker
     request = DelegationRequest(tool_call_id="early", ordinal=1, intent="test", reason="test")
@@ -98,6 +98,8 @@ async def test_broker_activation_and_every_cleanup_boundary(tmp_path, monkeypatc
         assert not broker.socket_path.exists()
         assert not broker.socket_path.parent.exists()
         assert (await broker.session.handle(request)).reason_code == "PARENT_SESSION_INACTIVE"
+    if failure in {"spawn", "run_start"}:
+        assert child_port.plans == []
 
 
 @pytest.mark.asyncio
@@ -149,7 +151,7 @@ console.log(JSON.stringify({ first, replay, denied }));
     worker = Path(executor.pi_runtime.pi_bin)
     # Fake Pi harness executes the actual seeded TypeScript tool through Node.
     # Child runs have only the guard extension, so they cannot request grandchildren.
-    worker.write_text(f"""#!{sys.executable}
+    worker.write_text(f"""#!/usr/bin/env python3
 import json, subprocess, sys
 from pathlib import Path
 args = sys.argv[1:]
