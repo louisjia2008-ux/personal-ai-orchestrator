@@ -170,6 +170,44 @@ class TaskRecord(FrozenModel):
     auto_reason: str | None = None
 
 
+class DelegatedTaskLineageRule(StrEnum):
+    RESOLVED = "DELEGATED_LINEAGE_RESOLVED"
+    CHILD_TASK_NOT_FOUND = "DELEGATED_LINEAGE_CHILD_TASK_NOT_FOUND"
+    TASK_SUBMISSION_MISSING = "DELEGATED_LINEAGE_TASK_SUBMISSION_MISSING"
+    TASK_SUBMISSION_AMBIGUOUS = "DELEGATED_LINEAGE_TASK_SUBMISSION_AMBIGUOUS"
+    METADATA_MISSING = "DELEGATED_LINEAGE_METADATA_MISSING"
+    METADATA_PARTIAL = "DELEGATED_LINEAGE_METADATA_PARTIAL"
+    METADATA_INVALID = "DELEGATED_LINEAGE_METADATA_INVALID"
+    PARENT_TASK_NOT_FOUND = "DELEGATED_LINEAGE_PARENT_TASK_NOT_FOUND"
+    PARENT_RUN_NOT_FOUND = "DELEGATED_LINEAGE_PARENT_RUN_NOT_FOUND"
+    PARENT_RUN_TASK_MISMATCH = "DELEGATED_LINEAGE_PARENT_RUN_TASK_MISMATCH"
+    TASK_CONTEXT_MISMATCH = "DELEGATED_LINEAGE_TASK_CONTEXT_MISMATCH"
+
+
+class DelegatedTaskLineage(FrozenModel):
+    """Canonical child-to-parent relationship recovered from submission audit."""
+
+    child_task_id: str = Field(min_length=1)
+    parent_task_id: str = Field(min_length=1)
+    parent_run_id: str = Field(min_length=1)
+
+
+class DelegatedTaskLineageError(ValueError):
+    """Stable, transcript-free failure from canonical lineage resolution."""
+
+    def __init__(
+        self,
+        rule_id: DelegatedTaskLineageRule,
+        *,
+        failure_category: str,
+        parent_found: bool = False,
+    ) -> None:
+        self.rule_id = rule_id
+        self.failure_category = failure_category
+        self.parent_found = parent_found
+        super().__init__(rule_id.value)
+
+
 class ProjectAvailability(StrEnum):
     ONLINE = "ONLINE"
     OFFLINE = "OFFLINE"
@@ -1157,6 +1195,117 @@ class SafetyKernelStore:
         if row is None:
             raise KeyError(task_id)
         return self._task_from_row(row)
+
+    def resolve_delegated_task_lineage(self, child_task_id: str) -> DelegatedTaskLineage:
+        """Resolve one delegated child through canonical submission metadata.
+
+        ``TaskRecord`` intentionally does not duplicate relationship metadata.
+        Delegation is established atomically by :meth:`submit_task` in the
+        child's append-only ``TASK_SUBMITTED`` audit payload. Resolution is
+        fail-closed: missing, malformed, partial, or duplicate submission
+        evidence is never guessed or inferred from identifier conventions.
+        """
+
+        try:
+            child = self.get_task(child_task_id)
+        except KeyError:
+            raise DelegatedTaskLineageError(
+                DelegatedTaskLineageRule.CHILD_TASK_NOT_FOUND,
+                failure_category="CHILD_TASK",
+            ) from None
+        try:
+            submissions = tuple(
+                event
+                for event in self.audit_events(child_task_id)
+                if event["event_type"] == "TASK_SUBMITTED"
+            )
+        except (json.JSONDecodeError, TypeError, ValueError):
+            raise DelegatedTaskLineageError(
+                DelegatedTaskLineageRule.METADATA_INVALID,
+                failure_category="LINEAGE_METADATA",
+            ) from None
+        if not submissions:
+            raise DelegatedTaskLineageError(
+                DelegatedTaskLineageRule.TASK_SUBMISSION_MISSING,
+                failure_category="TASK_SUBMISSION",
+            )
+        if len(submissions) != 1:
+            raise DelegatedTaskLineageError(
+                DelegatedTaskLineageRule.TASK_SUBMISSION_AMBIGUOUS,
+                failure_category="TASK_SUBMISSION",
+            )
+
+        payload = submissions[0]["payload"]
+        if not isinstance(payload, dict):
+            raise DelegatedTaskLineageError(
+                DelegatedTaskLineageRule.METADATA_INVALID,
+                failure_category="LINEAGE_METADATA",
+            )
+        parent_key = "delegated_parent_task_id"
+        run_key = "delegated_parent_run_id"
+        has_parent = parent_key in payload
+        has_run = run_key in payload
+        if not has_parent and not has_run:
+            raise DelegatedTaskLineageError(
+                DelegatedTaskLineageRule.METADATA_MISSING,
+                failure_category="NOT_DELEGATED_CHILD",
+            )
+        if has_parent != has_run:
+            raise DelegatedTaskLineageError(
+                DelegatedTaskLineageRule.METADATA_PARTIAL,
+                failure_category="LINEAGE_METADATA",
+            )
+        parent_task_id = payload[parent_key]
+        parent_run_id = payload[run_key]
+        if (
+            not isinstance(parent_task_id, str)
+            or not parent_task_id
+            or not isinstance(parent_run_id, str)
+            or not parent_run_id
+            or parent_task_id == child_task_id
+        ):
+            raise DelegatedTaskLineageError(
+                DelegatedTaskLineageRule.METADATA_INVALID,
+                failure_category="LINEAGE_METADATA",
+            )
+        try:
+            parent = self.get_task(parent_task_id)
+        except KeyError:
+            raise DelegatedTaskLineageError(
+                DelegatedTaskLineageRule.PARENT_TASK_NOT_FOUND,
+                failure_category="PARENT_TASK",
+            ) from None
+        run = self.connection.execute(
+            "SELECT task_id FROM runs WHERE run_id=?",
+            (parent_run_id,),
+        ).fetchone()
+        if run is None:
+            raise DelegatedTaskLineageError(
+                DelegatedTaskLineageRule.PARENT_RUN_NOT_FOUND,
+                failure_category="PARENT_RUN",
+                parent_found=True,
+            )
+        if run["task_id"] != parent_task_id:
+            raise DelegatedTaskLineageError(
+                DelegatedTaskLineageRule.PARENT_RUN_TASK_MISMATCH,
+                failure_category="PARENT_RUN",
+                parent_found=True,
+            )
+        if (
+            child.project_id != parent.project_id
+            or child.base_sha != parent.base_sha
+            or child.working_subpath != parent.working_subpath
+        ):
+            raise DelegatedTaskLineageError(
+                DelegatedTaskLineageRule.TASK_CONTEXT_MISMATCH,
+                failure_category="TASK_CONTEXT",
+                parent_found=True,
+            )
+        return DelegatedTaskLineage(
+            child_task_id=child_task_id,
+            parent_task_id=parent_task_id,
+            parent_run_id=parent_run_id,
+        )
 
     @staticmethod
     def _task_from_row(row: sqlite3.Row) -> TaskRecord:
@@ -2605,6 +2754,9 @@ class SafetyKernelStore:
 
 
 __all__ = [
+    "DelegatedTaskLineage",
+    "DelegatedTaskLineageError",
+    "DelegatedTaskLineageRule",
     "OwnerDispatchRecord",
     "OwnerDispatchStatus",
     "ProjectAvailability",
