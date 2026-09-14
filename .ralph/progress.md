@@ -145,3 +145,13 @@
 - Files changed: Ralph state only after the green remote checkpoint.
 - Remaining risk: the current live product, quota, fixture/verifier hashes, canonical ownership, and new identity absence must be freshly proven before model use.
 - Next task: T021 perform the full preflight and execute only the authorized fresh third campaign.
+
+## 2026-09-14T05:51:00Z — T021 identity-fixed campaign stopped at parent spawn
+
+- Changed: created fresh campaign `delegation-campaign-4c61456b20d84cb491d041e6c0cb88ed`, precomputed three complete parent/child identity bundles, and queried all 30 durable identities before model execution.
+- Identity verification: PASS — every identity was absent; Observation 1 task and dispatch were canonically admitted under campaign-scoped IDs without conflict.
+- Live result: BLOCKED AS DESIGNED — the one authorized parent launch attempt ended `WORKER_SPAWN_FAILED` with sanitized reason `RuntimeError` before a durable run, scope validation, delegation, or child. A transient process existed and is gone; model egress is conservatively UNKNOWN/NOT PROVEN. No retry and no later observation.
+- Cleanup: PASS — campaign STOPPED at 0 consumed; zero campaign/owned processes, no broker created, exact campaign worktree removed, fixture clean, SQLite quick-check ok and 0/0/0.
+- Product restore: PASS — exact repaired GUI/parent/child and sole canonical socket owner restored; expected helper hash/signature/build; health ok and heartbeat advanced.
+- Files changed: new sanitized third-campaign evidence and Ralph state only. Historical campaign evidence remains unchanged.
+- Next task: T022 commit/push sanitized blocker evidence and wait for exact-head CI; no campaign retry.

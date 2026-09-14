@@ -2,16 +2,18 @@
   "version": "0.1",
   "status": "running",
   "completion": "RALPH_CONTINUE",
-  "current_iteration": 17,
-  "current_task_id": "T021",
-  "last_task_id": "T020",
+  "current_iteration": 18,
+  "current_task_id": "T022",
+  "last_task_id": "T021",
   "last_verification": {
-    "status": "PASS",
-    "command": "git push origin fix/pao-daemon-graceful-sigterm; gh pr view/checks 54",
-    "summary": "PASS: exact pushed head 69a996c; PR #54 OPEN/DRAFT on expected base; Python, macOS Swift, and OpenCode jobs all green."
+    "status": "BLOCKED",
+    "command": "third campaign preflight, canonical submission, process/audit/DB cleanup, product restore",
+    "summary": "BLOCKED AS DESIGNED: all 30 identities were absent and canonical admission succeeded; the one authorized parent launch attempt failed WORKER_SPAWN_FAILED before a durable run. Campaign stopped; cleanup and product restore passed."
   },
-  "blockers": [],
+  "blockers": [
+    "PI5B3G_PARENT_WORKER_SPAWN_FAILED"
+  ],
   "no_diff_iterations": 0,
   "started_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T05:50:00Z"
+  "updated_at": "2026-09-14T05:51:00Z"
 }
