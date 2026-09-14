@@ -8,3 +8,4 @@
 - 2026-09-14T01:31:00Z | RALPH_CONTINUE | T006 | PASS: real Release bundle identity and strict signatures verified | continue automatically to T007
 - 2026-09-14T01:32:00Z | RALPH_CONTINUE | T007 | PASS: five real-helper parent/child SIGTERM and restart cycles | continue automatically to T008
 - 2026-09-14T02:23:20Z | RALPH_CONTINUE | T008 | PASS: old stuck daemon retired once; repaired canonical SIGTERM/restart passed | continue automatically to T009
+- 2026-09-14T02:55:40Z | RALPH_BLOCKED | T009 | dynamic child intent rejected before forwarding; 1 parent, 0 child, no retry; cleanup and product restore pass | stop

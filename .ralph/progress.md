@@ -63,3 +63,11 @@
 - Files changed: canonical lifecycle acceptance evidence and Ralph state only; production source is unchanged after the accepted build.
 - Remaining risk: PI-5B3G live quota and campaign execution remain pending.
 - Next task: T009 refresh all campaign preflight gates, transition ownership, and run exactly three sequential observations without retry or fallback.
+
+## 2026-09-14T02:55:40Z — T009 PI-5B3G stopped on dynamic scope gate
+
+- Changed: added a host-side pre-forward semantic scope gate for dynamic child intent/reason in the external campaign host; frozen verifier/profile and production source were unchanged.
+- Verification: BLOCKED AS DESIGNED — refreshed preflight passed; Observation 1 used one parent and one `pao_delegate`, but its intent failed the forbidden-scope check and was rejected before child forwarding. Child workers 0; later observations 0; retries/fallback/grandchildren 0.
+- Cleanup: PASS — campaign STOPPED, parent/orphans/broker resources 0, fixture unchanged, DB 0/0/0 and quick-check ok, exact repaired product restored healthy with one canonical owner.
+- Files changed: sanitized acceptance evidence and Ralph state only. Raw generated strings and provider transcripts were not retained or committed.
+- Blocker: a campaign safety invariant rejected the first authorized attempt. No retry budget remains for that observation and no later observation may start under the stop-on-invariant contract.
