@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING, Any
 from personal_ai_orchestrator.execution_controller import (
     validate_execution_target_launch,
 )
+from personal_ai_orchestrator.pi5_identity import delegation_child_dispatch_request_id
 from personal_ai_orchestrator.safety_kernel import (
     AUTHORITY_DELEGATED_CHILD,
     ProjectAvailability,
@@ -189,7 +190,7 @@ def initiate_owner_dispatch(
     if expected_source_state_for_dispatch_authority(authority) is not expected_state:
         raise ValueError("dispatch authority/source-state mismatch")
     if authority == AUTHORITY_DELEGATED_CHILD_EXECUTION:
-        if request_id != f"pi5-child-dispatch-{task.task_id}":
+        if request_id != delegation_child_dispatch_request_id(task.task_id):
             raise ValueError("invalid delegated child dispatch request id")
     dispatch_id = f"owner-dispatch-{request_id}"
     # Round 5 §5 — reserved internal namespace guard, BEFORE the durable

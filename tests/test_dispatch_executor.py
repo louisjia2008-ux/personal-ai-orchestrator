@@ -50,6 +50,7 @@ from personal_ai_orchestrator.model_registry import (
     QuotaState,
 )
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
+from personal_ai_orchestrator.process_supervisor import ProcessSupervisor
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
 from personal_ai_orchestrator.quota_collectors.base import (
     QuotaCollectionResult,
@@ -430,6 +431,244 @@ def test_worker_spawn_failure_blocks_without_ghost_running(tmp_path: Path) -> No
     finally:
         _close(snapshot)
     assert harness.main_unchanged()
+
+
+def test_post_create_spawn_adapter_failure_is_diagnosed_and_reaped(
+    tmp_path: Path,
+) -> None:
+    class BrokenAccountingSupervisor(ProcessSupervisor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.created_pid: int | None = None
+            self.start_calls = 0
+
+        async def start(self, argv, *, cwd, env=None):
+            self.start_calls += 1
+            process = await super().start(argv, cwd=cwd, env=env)
+            self.created_pid = process.pid
+            # Faithful Campaign C shape: wrapper accounting raises after the
+            # OS process is created but before the process is returned.
+            next(item for item in [] if item)
+            return process
+
+    worker = write_worker_script(
+        tmp_path / "bin", name="post-create-worker", sleep_seconds=30.0
+    )
+    harness = ExecutorHarness(tmp_path, worker_bin=worker)
+    supervisor = BrokenAccountingSupervisor()
+    harness.executor._supervisor = supervisor
+    request_id = harness.reserve()
+    harness.run(request_id)
+
+    snapshot = harness.snapshot()
+    try:
+        assert snapshot["task"].state is TaskState.BLOCKED
+        assert snapshot["run_status"] is None
+        assert snapshot["writer_token"] is None
+        assert snapshot["dispatch_status"] == "BLOCKED"
+        assert snapshot["dispatch_failure_code"] == "WORKER_SPAWN_FAILED"
+        dispatch = snapshot["store"].get_owner_dispatch_by_request_id(request_id)
+        assert "stage=SPAWN_ADAPTER_POST_CREATE" in (dispatch.failure_reason or "")
+        assert "exception=RuntimeError" in (dispatch.failure_reason or "")
+        assert "child_created=yes" in (dispatch.failure_reason or "")
+        details = [
+            event["payload"]
+            for event in snapshot["store"].audit_events("task-1")
+            if event["event_type"] == "WORKER_SPAWN_FAILED_DETAIL"
+        ]
+        assert len(details) == 1
+        assert details[0]["spawn_diagnostics_version"] == "pao-spawn-diagnostics-v1"
+        assert details[0]["spawn_stage"] == "SPAWN_ADAPTER_POST_CREATE"
+        assert details[0]["child_created"] is True
+        assert details[0]["child_pid_observed"] is True
+        assert details[0]["child_exited_before_ownership"] is True
+        assert details[0]["safe_exit_code"] == -9
+        assert details[0]["durable_run_created"] is False
+        assert details[0]["protocol_bootstrap_started"] is False
+        assert details[0]["protocol_bootstrap_completed"] is False
+        assert "PATH" in details[0]["env_key_names"]
+        assert "private-prompt-value" not in json.dumps(details[0])
+        snapshot["store"].assert_running_invariant("task-1")
+    finally:
+        _close(snapshot)
+
+    assert supervisor.created_pid is not None
+    assert supervisor.start_calls == 1
+    with pytest.raises(ProcessLookupError):
+        os.kill(supervisor.created_pid, 0)
+    assert supervisor.owned_pids() == ()
+    assert harness.executor.execution_supervisor.owned_task_ids() == ()
+    assert harness.main_unchanged()
+
+
+def test_environment_construction_failure_is_precreate_and_releases_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = ExecutorHarness(tmp_path)
+    request_id = harness.reserve()
+
+    def fail_environment(*args: object, **kwargs: object) -> dict[str, str]:
+        raise RuntimeError("injected environment construction failure")
+
+    monkeypatch.setattr(
+        "personal_ai_orchestrator.dispatch_executor.build_worker_env",
+        fail_environment,
+    )
+    harness.run(request_id)
+
+    snapshot = harness.snapshot()
+    try:
+        assert snapshot["task"].state is TaskState.BLOCKED
+        assert snapshot["run_status"] is None
+        assert snapshot["writer_token"] is None
+        assert snapshot["dispatch_failure_code"] == "WORKER_SPAWN_FAILED"
+        details = [
+            event["payload"]
+            for event in snapshot["store"].audit_events("task-1")
+            if event["event_type"] == "WORKER_SPAWN_FAILED_DETAIL"
+        ]
+        assert len(details) == 1
+        assert details[0]["spawn_stage"] == "CONTRACT_VALIDATED"
+        assert details[0]["exception_class"] == "RuntimeError"
+        assert details[0]["child_created"] is False
+        assert details[0]["env_key_names"] == []
+    finally:
+        _close(snapshot)
+    assert harness.executor._supervisor.owned_pids() == ()
+
+
+def test_happy_path_records_spawn_state_machine(tmp_path: Path) -> None:
+    harness = ExecutorHarness(tmp_path)
+    request_id = harness.reserve()
+    harness.run(request_id)
+
+    snapshot = harness.snapshot()
+    try:
+        events = [
+            event["event_type"] for event in snapshot["store"].audit_events("task-1")
+        ]
+        stages = [
+            "WORKER_ARGV_BUILT",
+            "PROCESS_CREATE_STARTED",
+            "PROCESS_CREATED",
+            "DURABLE_RUN_REGISTRATION_STARTED",
+            "RUN_STARTED",
+            "DURABLE_RUN_REGISTERED",
+            "WORKER_RUNNING",
+            "PROTOCOL_BOOTSTRAP_STARTED",
+            "PROTOCOL_BOOTSTRAP_COMPLETED",
+        ]
+        assert [event for event in events if event in stages] == stages
+        assert snapshot["task"].state is TaskState.VERIFIED
+        assert snapshot["run_status"] == "FINISHED"
+        assert snapshot["writer_token"] is None
+    finally:
+        _close(snapshot)
+
+
+def test_run_registration_failure_has_stage_and_cleans_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worker = write_worker_script(
+        tmp_path / "bin", name="run-registration-worker", sleep_seconds=30.0
+    )
+    harness = ExecutorHarness(tmp_path, worker_bin=worker)
+    request_id = harness.reserve()
+
+    def fail_start(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("injected durable start failure")
+
+    monkeypatch.setattr(SafetyKernelStore, "start_dispatched_worker", fail_start)
+    harness.run(request_id)
+
+    snapshot = harness.snapshot()
+    try:
+        assert snapshot["task"].state is TaskState.BLOCKED
+        assert snapshot["run_status"] is None
+        assert snapshot["writer_token"] is None
+        assert snapshot["dispatch_failure_code"] == "RUN_START_FAILED"
+        details = [
+            event["payload"]
+            for event in snapshot["store"].audit_events("task-1")
+            if event["event_type"] == "RUN_START_FAILED_DETAIL"
+        ]
+        assert len(details) == 1
+        assert details[0]["spawn_stage"] == "DURABLE_RUN_REGISTRATION_STARTED"
+        assert details[0]["exception_class"] == "RuntimeError"
+        assert details[0]["child_created"] is True
+        assert details[0]["child_exited_before_ownership"] is True
+        assert details[0]["durable_run_created"] is False
+    finally:
+        _close(snapshot)
+    assert harness.executor._supervisor.owned_pids() == ()
+
+
+def test_ownership_registration_failure_repairs_durable_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worker = write_worker_script(
+        tmp_path / "bin", name="ownership-registration-worker", sleep_seconds=30.0
+    )
+    harness = ExecutorHarness(tmp_path, worker_bin=worker)
+    request_id = harness.reserve()
+
+    def fail_register(execution: object) -> None:
+        raise RuntimeError("injected ownership registration failure")
+
+    monkeypatch.setattr(harness.executor.execution_supervisor, "register", fail_register)
+    harness.run(request_id)
+
+    snapshot = harness.snapshot()
+    try:
+        assert snapshot["task"].state is TaskState.BLOCKED
+        assert snapshot["run_status"] == "FAILED"
+        assert snapshot["writer_token"] is None
+        assert snapshot["dispatch_failure_code"] == "EXECUTOR_INTERNAL_ERROR"
+        details = [
+            event["payload"]
+            for event in snapshot["store"].audit_events("task-1")
+            if event["event_type"] == "WORKER_OWNERSHIP_REGISTRATION_FAILED_DETAIL"
+        ]
+        assert len(details) == 1
+        assert details[0]["spawn_stage"] == "DURABLE_RUN_REGISTERED"
+        assert details[0]["exception_class"] == "RuntimeError"
+        assert details[0]["durable_run_created"] is True
+        snapshot["store"].assert_running_invariant("task-1")
+    finally:
+        _close(snapshot)
+    assert harness.executor._supervisor.owned_pids() == ()
+    assert harness.executor.execution_supervisor.owned_task_ids() == ()
+
+
+def test_protocol_bootstrap_failure_records_started_not_completed(tmp_path: Path) -> None:
+    worker = write_worker_script(
+        tmp_path / "bin", name="protocol-bootstrap-worker", sleep_seconds=30.0
+    )
+    harness = ExecutorHarness(tmp_path, worker_bin=worker)
+    request_id = harness.reserve()
+
+    async def fail_protocol(_supervised: object) -> tuple[int, bytes, bytes, bool]:
+        raise RuntimeError("injected protocol bootstrap failure")
+
+    harness.executor._wait_for_worker = fail_protocol  # type: ignore[method-assign]
+    harness.run(request_id)
+
+    snapshot = harness.snapshot()
+    try:
+        events = snapshot["store"].audit_events("task-1")
+        assert any(
+            event["event_type"] == "PROTOCOL_BOOTSTRAP_STARTED" for event in events
+        )
+        assert not any(
+            event["event_type"] == "PROTOCOL_BOOTSTRAP_COMPLETED" for event in events
+        )
+        assert snapshot["task"].state is TaskState.BLOCKED
+        assert snapshot["run_status"] == "FAILED"
+        assert snapshot["writer_token"] is None
+        assert snapshot["dispatch_failure_code"] == "EXECUTOR_INTERNAL_ERROR"
+    finally:
+        _close(snapshot)
+    assert harness.executor._supervisor.owned_pids() == ()
 
 
 def test_worker_nonzero_exit_blocks_and_releases_lock(tmp_path: Path) -> None:

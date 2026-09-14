@@ -18,6 +18,8 @@ from personal_ai_orchestrator.pi5_broker import (
 )
 from personal_ai_orchestrator.pi5_child_execution import PAODelegationChildPort
 from personal_ai_orchestrator.pi5_contract import DelegationRequest
+from personal_ai_orchestrator.pi5_identity import CampaignExecutionIdentityFactory
+from personal_ai_orchestrator.pi5b3g_lineage import validate_pi5b3g_child_lineage
 from personal_ai_orchestrator.pi_runtime import PiRuntimeConfig, build_pi_json_argv
 from personal_ai_orchestrator.runtime_dispatch_executor import RuntimeDispatchExecutor
 from personal_ai_orchestrator.safety_kernel import (
@@ -28,7 +30,13 @@ from personal_ai_orchestrator.safety_kernel import (
 )
 from tests.quota_identity_fixtures import snapshot
 from tests.test_pi4_planning_projection import _ExecutionEvidence, _service
-from tests.test_pi_dispatch_executor import TARGET_ID, _executor, _registry, _reserve
+from tests.test_pi_dispatch_executor import (
+    TARGET_ID,
+    _executor,
+    _git,
+    _registry,
+    _reserve,
+)
 
 
 def _recommendation_factory(executor):
@@ -126,6 +134,125 @@ def _setup(tmp_path, monkeypatch):
     return store, executor, port, context, plan, observations
 
 
+def _setup_campaign_lineage(tmp_path, monkeypatch, *, corrupt_lineage=False):
+    campaign_id = "delegation-campaign-cccccccccccccccccccccccccccccccc"
+    identity = CampaignExecutionIdentityFactory(campaign_id).observation(1)
+    child_identity = identity.child(ordinal=1)
+    executor, repo, state_db = _executor(tmp_path, complete=True)
+    store = SafetyKernelStore(state_db)
+    base_sha = _git(repo, "rev-parse", "HEAD")
+    project = store.register_project(
+        project_id="project-pi",
+        display_name="Pi Fixture",
+        canonical_repo_root=str(repo),
+        git_root=str(repo),
+        default_branch="main",
+        last_known_head=base_sha,
+    )
+    parent = store.submit_task(
+        task_id=identity.parent_task_id,
+        request_id=identity.parent_submit_request_id,
+        project_id=project.project_id,
+        base_sha=base_sha,
+        intent="Create hello.txt",
+        scheduling_policy="BALANCED",
+    )
+    dispatch, _ = store.reserve_owner_dispatch(
+        dispatch_id=identity.parent_dispatch_id,
+        request_id=identity.parent_dispatch_request_id,
+        task_id=parent.task_id,
+        task_state_version=parent.state_version,
+        execution_target_id=TARGET_ID,
+        authority="OWNER_INITIATED_EXECUTION",
+    )
+    parent = store.transition_task(
+        parent.task_id,
+        TaskState.READY,
+        expected_version=parent.state_version,
+        reason="campaign fixture ready",
+    )
+    workspace, error = executor._prepare_worktree(store, dispatch)
+    assert workspace is not None and error is None
+    store.acquire_writer(parent.task_id, "parent-writer")
+    store.start_dispatched_worker(
+        dispatch_id=dispatch.dispatch_id,
+        task_id=parent.task_id,
+        expected_task_version=parent.state_version,
+        run_id=identity.parent_run_id,
+        worker_id=TARGET_ID,
+        writer_token="parent-writer",
+        pid=999999,
+    )
+    context = DelegationBrokerContext(
+        parent_task_id=parent.task_id,
+        parent_run_id=identity.parent_run_id,
+        project_id=project.project_id,
+        base_sha=base_sha,
+    )
+    plan = DelegationChildPlan(
+        **{
+            key: value
+            for key, value in vars(context).items()
+            if key not in ("parent_depth", "max_children")
+        },
+        child_task_id=child_identity.task_id,
+        ordinal=1,
+        intent="Create hello.txt",
+        reason="bounded child fixture",
+    )
+    router = RuntimeDispatchExecutor(
+        state_db=state_db,
+        registry_provider=_registry,
+        executors={"pi-json": executor},
+    )
+    port = PAODelegationChildPort(
+        state_db=state_db,
+        executor=router,
+        recommendation_factory=_recommendation_factory(executor),
+        registry_provider=_registry,
+        runtime_available_provider=lambda _: True,
+        timeout_seconds=5,
+    )
+    executor.pi_runtime = replace(executor.pi_runtime, delegation_enabled=True)
+    original_spawn = executor._spawn_worker
+    spawned = []
+
+    async def observed_spawn(child_store, child_dispatch, managed):
+        supervised = await original_spawn(child_store, child_dispatch, managed)
+        spawned.append(supervised)
+        return supervised
+
+    monkeypatch.setattr(executor, "_spawn_worker", observed_spawn)
+    original_activate = executor._activate_worker_session
+    lineage_results = []
+
+    def observed_activate(request_id):
+        observer_store = SafetyKernelStore(state_db)
+        try:
+            child_dispatch = observer_store.get_owner_dispatch_by_request_id(request_id)
+            if corrupt_lineage:
+                observer_store.connection.execute(
+                    "DELETE FROM audit_events WHERE task_id=? "
+                    "AND event_type='TASK_SUBMITTED'",
+                    (child_dispatch.task_id,),
+                )
+            validation = validate_pi5b3g_child_lineage(
+                store=observer_store,
+                child_task_id=child_dispatch.task_id,
+                expected=identity,
+                current_campaign_parents={identity.parent_task_id: identity},
+            )
+            lineage_results.append(validation)
+            if not validation.allowed:
+                raise RuntimeError(validation.rule_id)
+            original_activate(request_id)
+        finally:
+            observer_store.close()
+
+    monkeypatch.setattr(executor, "_activate_worker_session", observed_activate)
+    return store, executor, port, plan, identity, spawned, lineage_results
+
+
 def test_delegated_authority_and_unknown_fail_closed():
     expected = expected_source_state_for_dispatch_authority(AUTHORITY_DELEGATED_CHILD)
     assert expected is TaskState.READY
@@ -162,6 +289,69 @@ async def test_durable_verified_child_preserves_parent_and_idempotency(tmp_path,
         )
         assert dispatch.authority == AUTHORITY_DELEGATED_CHILD
         assert store.get_workspace("task-pi").writer_token == "parent-writer"
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_fake_child_pipeline_reaches_lineage_ownership_and_protocol(
+    tmp_path, monkeypatch
+):
+    store, _, port, plan, identity, spawned, lineage_results = _setup_campaign_lineage(
+        tmp_path, monkeypatch
+    )
+    try:
+        result = await port.execute_child(plan)
+        assert result.verified
+        assert len(spawned) == 1
+        assert spawned[0].process.returncode == 0
+        assert len(lineage_results) == 1 and lineage_results[0].allowed
+        assert lineage_results[0].resolved_parent_task_id == identity.parent_task_id
+        events = tuple(
+            event["event_type"] for event in store.audit_events(plan.child_task_id)
+        )
+        assert events.count("PROCESS_CREATED") == 1
+        assert events.count("DURABLE_RUN_REGISTERED") == 1
+        assert events.count("WORKER_RUNNING") == 1
+        assert events.count("PROTOCOL_BOOTSTRAP_STARTED") == 1
+        assert events.count("PROTOCOL_BOOTSTRAP_COMPLETED") == 1
+        assert store.get_task(plan.child_task_id).state is TaskState.VERIFIED
+        assert store.get_workspace(plan.child_task_id).writer_token is None
+        assert store.connection.execute(
+            "SELECT COUNT(*) FROM runs WHERE task_id=?",
+            (plan.child_task_id,),
+        ).fetchone()[0] == 1
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_lineage_failure_after_durable_run_reaps_process_and_releases_writer(
+    tmp_path, monkeypatch
+):
+    store, executor, port, plan, _, spawned, lineage_results = _setup_campaign_lineage(
+        tmp_path, monkeypatch, corrupt_lineage=True
+    )
+    try:
+        result = await port.execute_child(plan)
+        assert not result.verified
+        assert len(spawned) == 1
+        assert spawned[0].process.returncode is not None
+        assert len(lineage_results) == 1 and not lineage_results[0].allowed
+        assert lineage_results[0].rule_id == "DELEGATED_LINEAGE_TASK_SUBMISSION_MISSING"
+        child = store.get_task(plan.child_task_id)
+        assert child.state is TaskState.BLOCKED
+        assert store.get_workspace(plan.child_task_id).writer_token is None
+        run = store.connection.execute(
+            "SELECT status FROM runs WHERE task_id=?",
+            (plan.child_task_id,),
+        ).fetchone()
+        assert run is not None and run["status"] != "RUNNING"
+        assert executor.execution_supervisor.owned_task_ids() == ()
+        assert store.connection.execute(
+            "SELECT COUNT(*) FROM tasks WHERE task_id=?",
+            (plan.child_task_id,),
+        ).fetchone()[0] == 1
     finally:
         store.close()
 
