@@ -1,14 +1,13 @@
 # Current task
 
-T001 — Phase 0 mission lock
+T002 — Inventory source lifecycle and live topology
 
 Acceptance:
 
-- Required Ralph state exists and locks the full user goal.
+- Repo map records exact implementations, tests, build paths, branch lineage, and read-only live state.
 
 Verification:
 
-- `test -s .ralph/task_brief.md`
-- `python3 -m json.tool .ralph/tasks.json`
+- `test -s .ralph/artifacts/repo_map.md`
 
-Intended file scope: `.ralph/*` only.
+Intended file scope: `.ralph/*` only; all source and live-system operations are read-only.
