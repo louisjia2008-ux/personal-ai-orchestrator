@@ -4,3 +4,4 @@
 - 2026-09-14T01:02:00Z | RALPH_CONTINUE | T002 | PASS: defect and exact live old-daemon state revalidated | continue automatically to T003
 - 2026-09-14T01:17:00Z | RALPH_CONTINUE | T003 | PASS: deterministic old-source failure captured at handler Event.set | continue automatically to T004
 - 2026-09-14T01:29:00Z | RALPH_CONTINUE | T004 | PASS: scalar handler and ordinary-flow cleanup, 5 focused tests | continue automatically to T005
+- 2026-09-14T01:30:00Z | RALPH_CONTINUE | T005 | PASS: full Python, Ruff, OpenCode, Swift build/test | continue automatically to T006

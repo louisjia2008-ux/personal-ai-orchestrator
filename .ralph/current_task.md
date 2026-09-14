@@ -1,13 +1,13 @@
 # Current task
 
-T004 — Implement minimal lock-safe SIGTERM repair
+T005 — Run targeted and broad project verification
 
 Acceptance:
 
-- SIGTERM/SIGINT request shutdown without lock-backed handler work; ordinary-flow cleanup and focused lifecycle tests pass.
+- Relevant Python lifecycle/control/campaign/database/process, Ruff, OpenCode adapter, Swift, and broader suites are recorded and pass or an honest blocker is recorded.
 
 Verification:
 
-- `uv run --offline --extra dev pytest -q tests/test_daemon_shutdown.py tests/test_product_daemon.py -k 'shutdown or sigterm or sigint or bootstraps_runtime'`
+- Commands are taken from `.github/workflows/ci.yml` plus targeted lifecycle suites.
 
-Intended file scope: `src/personal_ai_orchestrator/daemon.py`, `tests/test_daemon_shutdown.py`, and `.ralph/*` only.
+Intended file scope: `.ralph/artifacts/*` and `.ralph/*` only; project sources are read-only unless verification exposes a repairable regression.
