@@ -87,3 +87,11 @@
 - Files changed: corpus fixture, offline baseline runner/report, and Ralph state only; no production source or frozen verifier change.
 - Remaining risk: expected rule/category semantics are not yet implemented in a repository-owned gate.
 - Next task: T013 implement positive proof, polarity-aware category rules, sanitized trace, and pre-child broker integration with permanent tests.
+
+## 2026-09-14T03:55:00Z — T013 deterministic diagnosable validator
+
+- Changed: added opt-in `pi5b3g-child-scope-v2`, ordered semantic categories, narrowly supported safe negations, positive single-file/JSON proof, transcript-free traces, executor policy-factory wiring, and pre-child broker rejection.
+- Verification: PASS — corpus 44/44; focused 66 passed; delegation/campaign 202 passed and 1 skipped; final full Python 1243 passed and 1 skipped; Ruff passed.
+- Safety: rejection consumes the bounded call and never reaches child execution; validator errors also fail closed. No raw dynamic arguments or provider transcripts are recorded.
+- Files changed: production Python broker/executor, dedicated validator module, permanent tests, and Ralph evidence/state. Frozen verifier/profile untouched; no model calls.
+- Next task: T014 repeat final full verification, secret/diff audit, focused commit, normal push, and exact-head CI.

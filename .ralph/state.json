@@ -2,16 +2,16 @@
   "version": "0.1",
   "status": "running",
   "completion": "RALPH_CONTINUE",
-  "current_iteration": 12,
-  "current_task_id": "T013",
-  "last_task_id": "T012",
+  "current_iteration": 13,
+  "current_task_id": "T014",
+  "last_task_id": "T013",
   "last_verification": {
     "status": "PASS",
-    "command": "python3 scripts/pi5b3g_scope_validator_baseline.py",
-    "summary": "PASS: 44-case corpus frozen; historical regex matched 26/44, with 6 safe-negation false rejections and 12 unsafe/ambiguous false acceptances; no model calls."
+    "command": "TMPDIR=/tmp PYTHONPATH=. /tmp/pao-venv/bin/python -m pytest -q && .venv/bin/ruff check .",
+    "summary": "PASS: corpus 44/44; focused 66/66; delegation/campaign 202 passed, 1 skipped; final full Python 1243 passed, 1 skipped; Ruff and sanitization checks passed."
   },
   "blockers": [],
   "no_diff_iterations": 0,
   "started_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T03:20:00Z"
+  "updated_at": "2026-09-14T03:55:00Z"
 }
