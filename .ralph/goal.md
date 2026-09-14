@@ -1,3 +1,3 @@
 # Goal
 
-Keep the verified daemon, scope-validator, campaign-identity, and spawn repairs unchanged; resolve delegated-child lineage through canonical persisted metadata; repair and prove the external child observer offline with fail-closed diagnostics and a fake child pipeline; pass a committed/pushed exact-head CI gate; then complete one freshly authorized fifth three-observation PI-5B3G SHADOW campaign with clean restoration and sanitized evidence, or stop at the first authorized live blocker.
+Keep the accepted daemon, validator, identity, spawn, lineage, verifier, and Campaigns A-E unchanged; complete the authorized final stack edge by reviewing and merging exact PR #53 into main; verify the resulting main code head locally and in CI; rebuild and promote a fresh Release product from that code head; prove one canonical SIGTERM/restart and no-egress delegation closure; then record one final documentation-only commit with exact-head CI and no rebuild loop.

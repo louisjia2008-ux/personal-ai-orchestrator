@@ -295,3 +295,12 @@
 - CI: PASS — exact evidence head passed Python in 1m50s, macOS Swift in 56s, and OpenCode in 16s.
 - Boundary: PR #54 is merged only into its verified feature base; PR #53 remains OPEN/DRAFT/unmerged; no Campaign F or additional model/provider call occurred.
 - Final status: `PI_5B3G_INTEGRATION_AND_PRODUCT_PROMOTION_COMPLETE`.
+
+## 2026-09-14T10:14:32Z — T040–T044 mainline integration closure
+
+- Review/merge: PASS — PR #53 exact head `2447292` was green, cleanly mergeable, sanitized, and completely security-reviewed with zero validated findings; it merged into main as `563bf7a` using a merge commit.
+- Exact-main verification: PASS — GitHub CI all jobs; local focused Python 198/198 on the host socket boundary, full Python 1301 passed/1 skipped/1 rerun, Ruff, Swift 441/441, and OpenCode 17/17 plus typecheck.
+- Build/promotion: PASS — fresh arm64 Release from `563bf7a`, helper SHA-256 `e1aad5af...`, strict deep signature, sole canonical GUI/parent/child/socket owner, health ok, heartbeat advancing, DB quick-check ok and 0/0/0.
+- Lifecycle: PASS — one SIGTERM to the verified new daemon parent removed parent/child/socket; no SIGINT/SIGKILL/group signal; exact bundle restart healthy.
+- Delegation closure: PASS — deterministic fake/no-egress paths passed; Campaigns A-E preserved, Campaign E remains EXHAUSTED 3/3, no Campaign F or additional model/provider call.
+- Delivery: one documentation-only commit distinguishes main code head from its own final documentation head and is normally pushed for external exact-head CI; no rebuild loop is required.
