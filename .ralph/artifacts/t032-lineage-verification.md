@@ -57,7 +57,14 @@
   released writer, zero registered execution, one spawn/no retry: PASS.
 - Automatic fallback: none present or introduced.
 
-## Remaining gate
+## Remote checkpoint
 
-Normal push and exact-head PR #54 Python/macOS Swift/OpenCode CI must pass before
-any Campaign E preflight, canonical daemon transition, or MiniMax prompt.
+- Normal push: PASS through exact head `2b78bee3cd7a8b62f4d4285b1bd13b09629c2f2e`.
+- Remote branch and Draft PR #54 head: exact match.
+- OpenCode adapter CI: PASS in 17 seconds.
+- macOS Swift CI: PASS in 55 seconds.
+- Python CI: PASS in 1 minute 47 seconds.
+- PR remains OPEN/DRAFT and unmerged.
+
+This evidence-only Ralph transition must itself be pushed and exact-head green
+before any Campaign E model prompt.
