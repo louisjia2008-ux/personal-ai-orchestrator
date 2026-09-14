@@ -1,17 +1,7 @@
 # Current task
 
-T034 — finalize sanitized Campaign E evidence and restore checkpoint
+Complete — `PI_5B3G_COMPLETE_AFTER_CHILD_LINEAGE_REPAIR`
 
-Acceptance:
+Campaign E completed all three sequential observations with exact 3 parent / 3 child / 6 total accounting, zero retry/fallback/grandchild, passing scope and canonical-lineage gates, passing frozen child/parent verifiers, complete cleanup, and healthy normal-product restore.
 
-- Preserve Campaigns A-D as immutable separate histories.
-- Validate and commit curated Campaign E evidence without raw provider transcripts, raw dynamic arguments, environment values, or credentials.
-- Normally push the evidence and require exact-head CI before final closure.
-
-Verification:
-
-- Campaign E remains terminal at 3/3 observations and 3 parent/3 child/6 total workers.
-- Campaign processes, broker resources, running rows, active runs, and held writers remain zero.
-- The exact repaired product remains healthy with one canonical socket owner and an advancing heartbeat.
-
-Campaign D remains consumed and terminal. Campaign E is complete; only sanitized delivery and exact-head CI remain.
+Sanitized evidence is committed and normally pushed. Exact-head CI is green. Historical Campaigns A-D remain terminal, separate, and immutable. Draft PR #54 remains open, draft, and unmerged.

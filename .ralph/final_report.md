@@ -1,8 +1,8 @@
 # Ralph final report — PI-5B3G child-lineage repair and Campaign E
 
-## Current status
+## Final status
 
-`AWAITING_FINAL_EVIDENCE_CI`
+`PI_5B3G_COMPLETE_AFTER_CHILD_LINEAGE_REPAIR`
 
 ## Engineering result
 
@@ -26,6 +26,8 @@ Campaign processes and orphans are zero; broker sockets/directories are absent; 
 
 The repaired normal product is restored from build `3b9aaab83d87a2c32adf17e5f3a4afbbfdf16b7e` with one GUI, one PyInstaller parent, one serving child, one canonical `0600` socket owner, health `ok`, advancing heartbeat, strict code-sign validation, expected helper hash, healthy SQLite, and no campaign state owner.
 
-## Delivery gate
+## Delivery
 
-Curated evidence is prepared under `docs/acceptance/pi5b3g-lineage-v1-2026-09-14/`. It retains the exact fixed owner-approved prompts and dynamic argument hashes/lengths, but no raw provider transcript, raw dynamic intent/reason, provider output content, environment value, or credential value. Final completion remains gated on evidence commit, normal push, and exact-head CI; Draft PR #54 must remain unmerged.
+Curated evidence is committed under `docs/acceptance/pi5b3g-lineage-v1-2026-09-14/`. It retains the exact fixed owner-approved prompts and dynamic argument hashes/lengths, but no raw provider transcript, raw dynamic intent/reason, provider output content, environment value, or credential value.
+
+Evidence commit `7a73fbc` was normally pushed and exact-head CI passed: Python in 1m58s, macOS Swift in 59s, and OpenCode in 17s. The final Ralph closure was also normally pushed and verified on its exact head. Draft PR #54 remains open, draft, and unmerged.
