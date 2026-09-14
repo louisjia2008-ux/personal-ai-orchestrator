@@ -212,3 +212,10 @@
 - Cleanup: PASS — exact child reaped by emergency repair with signal 9; both tasks terminal BLOCKED; Campaign D STOPPED after one admitted/zero completed observation; campaign processes 0; DB quick-check ok and 0/0/0; fixture clean.
 - Product restore: PASS — one GUI/PyInstaller parent/serving child, one 0600 canonical socket owner, expected signed build/helper, health ok, and heartbeat advanced.
 - Next task: T029 preserve sanitized blocker evidence, normally push it, and wait for exact-head CI. Campaign D is consumed; no live retry is authorized.
+
+## 2026-09-14T07:10:00Z — T029 sanitized blocker evidence and exact-head CI
+
+- Changed: committed Campaign D's transcript-free child-ownership blocker evidence as `ead8fa2` and normally pushed it to Draft PR #54.
+- Verification: PASS — JSON parsing, PAO `assert_sanitized`, diff check, and secret/transcript-marker scan passed; PR exact head matched; Python passed in 1m55s, macOS Swift in 1m04s, and OpenCode in 19s.
+- Delivery: PASS — Campaigns A-D remain separate; no raw transcript, raw dynamic intent, environment value, or credential value was committed; PR remains OPEN/DRAFT/unmerged.
+- Final state: `RALPH_BLOCKED` on `CAMPAIGN_HARNESS_CHILD_LINEAGE_ATTRIBUTE_ACCESS_FAILED`; Campaign D is terminal and no retry is authorized.

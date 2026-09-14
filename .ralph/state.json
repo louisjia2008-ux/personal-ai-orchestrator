@@ -1,19 +1,19 @@
 {
   "version": "0.1",
-  "status": "running",
-  "completion": "RALPH_CONTINUE",
-  "current_iteration": 21,
+  "status": "blocked",
+  "completion": "RALPH_BLOCKED",
+  "current_iteration": 22,
   "current_task_id": "T029",
-  "last_task_id": "T028",
+  "last_task_id": "T029",
   "last_verification": {
-    "status": "BLOCKED_AS_DESIGNED",
-    "command": "canonical audit/run/task/campaign/process/DB and restored-product inspection",
-    "summary": "Campaign D stopped without retry after Observation 1 child ownership registration raised AttributeError at DURABLE_RUN_REGISTERED; cleanup and repaired product restore passed."
+    "status": "PASS",
+    "command": "git push origin fix/pao-daemon-graceful-sigterm; gh pr checks 54 --watch",
+    "summary": "PASS: sanitized Campaign D evidence exact head ead8fa2; Python, macOS Swift, and OpenCode CI green; PR #54 OPEN/DRAFT and unmerged. Mission remains blocked by the consumed child ownership-registration harness failure."
   },
   "blockers": [
     "CAMPAIGN_HARNESS_CHILD_LINEAGE_ATTRIBUTE_ACCESS_FAILED"
   ],
   "no_diff_iterations": 0,
   "started_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T07:06:00Z"
+  "updated_at": "2026-09-14T07:10:00Z"
 }
