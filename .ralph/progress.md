@@ -129,3 +129,11 @@
 - Files changed: identity module, narrow broker/child/dispatch helper wiring, identity tests, canonical control-plane integration test, and Ralph evidence/state.
 - Remaining risk: full Python, repository-wide Ruff, secret/diff review, separate commit, normal push, and exact-head CI remain before live use.
 - Next task: T020 complete the full checkpoint and CI gate without model or live campaign execution.
+
+## 2026-09-14T05:43:00Z — T020 local full verification
+
+- Changed: committed identity repair as `885f006` and recorded complete local verification/sanitization evidence.
+- Verification: PASS locally — all 93 test files covered in bounded batches, 1260 passed and 1 skipped; one configured rerun passed; repository-wide Ruff and diff checks pass. One initial long-UDS-path environment failure passed after correctly applying `TMPDIR=/tmp` to pytest.
+- Files changed after the identity commit: Ralph verification artifact/state only.
+- Remaining risk: normal push and exact pushed-head CI must pass before T020 can complete or any MiniMax call can occur.
+- Next task: push normally, verify PR #54 exact head, and wait for every required CI job.
