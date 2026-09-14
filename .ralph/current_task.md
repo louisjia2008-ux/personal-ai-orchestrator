@@ -1,15 +1,15 @@
 # Current task
 
-T022 — finalized; Ralph blocked
+T024 — trace and reconstruct parent worker spawn contract
 
 Acceptance:
 
-- All three terminal campaign histories are separately preserved.
-- Sanitized evidence commit `984c801` was normally pushed and exact-head CI passed.
-- Draft PR #54 remains open, Draft, and unmerged; the repaired product is healthy.
+- Map target resolution, executable/argv/env/cwd construction, subprocess/session/pipe creation, durable run registration, protocol startup, monitoring, exception translation, and cleanup ordering.
+- Reconstruct Campaign C Observation 1 using canonical historical state and sanitized evidence.
+- Compare the failed launch contract with repository evidence for a previously successful parent launch without sending any model prompt.
 
 Verification:
 
-- Python, macOS Swift, and OpenCode checks passed on exact evidence head `984c801`; sanitization/secret/diff checks passed.
+- A read-only inventory artifact cites exact source/schema/evidence and answers whether durable registration occurs before or after subprocess creation and what `WORKER_SPAWN_FAILED` currently covers.
 
-Ralph is terminal `RALPH_BLOCKED` at `BLOCKED_PI_5B3G_PARENT_WORKER_SPAWN_FAILED`. The single authorized launch attempt is consumed; no campaign retry or later observation is permitted.
+Only the T024 Ralph inventory/state may change; production source remains untouched.

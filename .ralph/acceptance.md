@@ -13,3 +13,8 @@
 - Canonical offline integration proves one admission per same logical request and distinct successful Observation 1 admission in separate fresh campaigns without provider calls.
 - Identity-only code is separately committed, normally pushed, and exact-head CI is green before the third live campaign.
 - The third campaign uses a fresh ID, pre-dispatch collision assertions, exactly three sequential observations within 3 parent/3 child/6 total, zero retries/fallback/grandchildren, or stops at the first identity/scope/safety failure.
+- Campaign C remains immutable; its exact parent spawn path and launch contract are reconstructed and compared with prior successful parent execution evidence.
+- Sanitized diagnostics distinguish process-create start/result, PID observation, immediate exit, durable-run registration, protocol bootstrap, and cleanup without environment values, credentials, or provider transcripts.
+- A no-egress disposable reproduction through the same PAO spawn infrastructure yields one evidence-backed root-cause classification; unknown root cause blocks live execution.
+- The required spawn fault-injection/happy-path/cleanup/idempotency/no-retry/no-fallback/no-child matrix passes, followed by full Python, Ruff, a focused spawn commit, normal push, and exact-head CI.
+- A fresh Campaign D starts only after the offline gate and completes three sequential observations at 3/3/6 with zero retry/fallback/grandchild, or stops on the first structured post-repair blocker.
