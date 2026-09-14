@@ -1,13 +1,13 @@
 # Current task
 
-T008 — Promote and prove canonical live lifecycle
+T009 — Execute bounded PI-5B3G SHADOW campaign
 
 Acceptance:
 
-- The exact old stuck daemon is re-identified and retired only under the prompt's one-SIGINT authorization, then the fixed build is launched on canonical state and passes real SIGTERM plus normal restart.
+- Current build, campaign, quota, execution-evidence, fixture, frozen-verifier, and zero-owner gates pass; exactly three sequential SHADOW observations complete through the real parent-to-`pao_delegate`-to-child path with no retry, fallback, or grandchild.
 
 Verification:
 
-- Exactly one healthy fixed daemon owns the canonical socket after restart; DB/accounting and socket invariants remain healthy throughout.
+- Terminal evidence accounts for exactly three parents and three children, all six worker processes have exited, campaign admission is closed, and canonical DB/writer/process state is clean before the normal repaired product is restored.
 
-Intended file scope: canonical process lifecycle actions explicitly authorized by the prompt and new evidence only; no campaign begins in this task.
+Intended file scope: the already-prepared external campaign host, disposable fixture/worktrees, canonical runtime/database/socket, and sanitized evidence only. Frozen verifier semantics and production source remain unchanged.
