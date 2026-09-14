@@ -3,15 +3,15 @@
   "status": "running",
   "completion": "RALPH_CONTINUE",
   "current_iteration": 17,
-  "current_task_id": "T019",
-  "last_task_id": "T018",
+  "current_task_id": "T020",
+  "last_task_id": "T019",
   "last_verification": {
     "status": "PASS",
-    "command": "test -s .ralph/artifacts/t018-campaign-identity-inventory.md; git diff --check",
-    "summary": "PASS: all campaign/task/request/dispatch/run/broker/child identities, global constraints, replay semantics, static defects, and minimal repair boundary are traced."
+    "command": "57 focused identity/canonical/broker/child/dispatch tests; 74 campaign/lifecycle/store/scope tests; focused Ruff; git diff --check",
+    "summary": "PASS: deterministic campaign-scoped parent/child identities and actual canonical replay/conflict integration are implemented without model calls."
   },
   "blockers": [],
   "no_diff_iterations": 0,
   "started_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T05:08:00Z"
+  "updated_at": "2026-09-14T05:24:00Z"
 }

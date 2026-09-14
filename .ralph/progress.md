@@ -121,3 +121,11 @@
 - Files changed: `.ralph/artifacts/t018-campaign-identity-inventory.md` and Ralph state only.
 - Remaining risk: the factory and canonical admission regressions are not yet implemented.
 - Next task: T019 add the deterministic factory, named child derivations, and offline unit/integration proof.
+
+## 2026-09-14T05:24:00Z — T019 campaign-scoped identity implementation
+
+- Changed: added `pi5b3g-campaign-identity-v1`, full campaign UUID parent namespaces, derived dispatch/run/cancel identities, named production child task/submit/dispatch derivations, and permanent unit plus canonical UDS admission tests.
+- Verification: PASS — 57 focused tests, 74 remaining relevant campaign/lifecycle/store/scope tests, focused Ruff, and diff check. Canonical submit and dispatch replay exactly; changed payloads still conflict; two fresh campaigns do not collide with each other or the seeded historical static row.
+- Files changed: identity module, narrow broker/child/dispatch helper wiring, identity tests, canonical control-plane integration test, and Ralph evidence/state.
+- Remaining risk: full Python, repository-wide Ruff, secret/diff review, separate commit, normal push, and exact-head CI remain before live use.
+- Next task: T020 complete the full checkpoint and CI gate without model or live campaign execution.

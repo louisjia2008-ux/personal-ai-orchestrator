@@ -21,6 +21,9 @@ from personal_ai_orchestrator.control_client import (
     ControlPlaneUnavailable,
     UnixSocketHTTPConnection,
 )
+from personal_ai_orchestrator.delegation_campaign import (
+    DelegationCalibrationCampaignStore,
+)
 from personal_ai_orchestrator.execution_controller import (
     apply_verification_result,
     begin_verification,
@@ -44,6 +47,7 @@ from personal_ai_orchestrator.model_registry import (
     QuotaWindowSnapshot,
 )
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
+from personal_ai_orchestrator.pi5_identity import CampaignExecutionIdentityFactory
 from personal_ai_orchestrator.quota_availability import (
     QuotaAvailabilityJournal,
     unknown_availability,
@@ -330,6 +334,82 @@ def test_submit_conflicting_request_id_rejected(harness):
         _submit(harness, request_id="req-1", intent="different intent")
     assert error.value.status == 400
     assert error.value.code == "conflicting_request_id"
+
+
+def test_campaign_scoped_submission_uses_canonical_idempotency_without_history_collision(
+    harness,
+):
+    historical = _submit(
+        harness,
+        task_id="pi5b3g-obs1-parent",
+        request_id="pi5b3g-obs1-submit",
+        intent="historical campaign request",
+    )
+    campaign = DelegationCalibrationCampaignStore(harness.tmp_path / "campaign.json")
+
+    started_a = campaign.start(max_observations=3)
+    identity_a = CampaignExecutionIdentityFactory(started_a.campaign_id).observation(1)
+    first = _submit(
+        harness,
+        task_id=identity_a.parent_task_id,
+        request_id=identity_a.parent_submit_request_id,
+        intent="bounded observation",
+    )
+    replay = _submit(
+        harness,
+        task_id=identity_a.parent_task_id,
+        request_id=identity_a.parent_submit_request_id,
+        intent="bounded observation",
+    )
+    assert replay.model_dump() == first.model_dump()
+    first_dispatch = harness.client.dispatch(
+        first.task_id,
+        request_id=identity_a.parent_dispatch_request_id,
+        task_state_version=first.state_version,
+        execution_target_id="m3-sub",
+    )
+    dispatch_replay = harness.client.dispatch(
+        first.task_id,
+        request_id=identity_a.parent_dispatch_request_id,
+        task_state_version=first.state_version,
+        execution_target_id="m3-sub",
+    )
+    assert dispatch_replay.model_dump() == first_dispatch.model_dump()
+    assert first_dispatch.dispatch_id == identity_a.parent_dispatch_id
+
+    with pytest.raises(ControlPlaneError) as dispatch_conflict:
+        harness.client.dispatch(
+            first.task_id,
+            request_id=identity_a.parent_dispatch_request_id,
+            task_state_version=first.state_version + 1,
+            execution_target_id="m3-sub",
+        )
+    assert dispatch_conflict.value.code == "conflicting_dispatch_request_id"
+
+    with pytest.raises(ControlPlaneError) as conflict:
+        _submit(
+            harness,
+            task_id=identity_a.parent_task_id,
+            request_id=identity_a.parent_submit_request_id,
+            intent="different payload",
+        )
+    assert conflict.value.code == "conflicting_request_id"
+
+    campaign.stop()
+    started_b = campaign.start(max_observations=3)
+    identity_b = CampaignExecutionIdentityFactory(started_b.campaign_id).observation(1)
+    second_campaign = _submit(
+        harness,
+        task_id=identity_b.parent_task_id,
+        request_id=identity_b.parent_submit_request_id,
+        intent="bounded observation",
+    )
+
+    assert started_a.campaign_id != started_b.campaign_id
+    assert first.task_id != second_campaign.task_id
+    assert first.request_id != second_campaign.request_id
+    assert historical.request_id == "pi5b3g-obs1-submit"
+    assert harness.store.connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 3
 
 
 def test_owner_dispatch_accepts_verified_target_and_is_idempotent(harness):

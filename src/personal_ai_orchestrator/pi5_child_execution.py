@@ -32,6 +32,10 @@ from personal_ai_orchestrator.pi5_broker import (
     DelegationChildPlan,
     DelegationChildResult,
 )
+from personal_ai_orchestrator.pi5_identity import (
+    delegation_child_dispatch_request_id,
+    delegation_child_submit_request_id,
+)
 from personal_ai_orchestrator.safety_kernel import (
     OwnerDispatchStatus,
     SafetyKernelStore,
@@ -409,7 +413,7 @@ class PAODelegationChildPort:
     async def execute_child(self, plan: DelegationChildPlan) -> DelegationChildResult:
         store = SafetyKernelStore(self.state_db)
         target = None
-        request_id = f"pi5-child-dispatch-{plan.child_task_id}"
+        request_id = delegation_child_dispatch_request_id(plan.child_task_id)
         try:
             try:
                 parent = store.get_task(plan.parent_task_id)
@@ -445,7 +449,7 @@ class PAODelegationChildPort:
                     )
                 child = store.submit_task(
                     task_id=plan.child_task_id,
-                    request_id=f"pi5-child-submit-{plan.child_task_id}",
+                    request_id=delegation_child_submit_request_id(plan.child_task_id),
                     intent=plan.intent,
                     project_id=plan.project_id,
                     base_sha=plan.base_sha,
