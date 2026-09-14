@@ -9,3 +9,4 @@
 - 2026-09-14T01:32:00Z | RALPH_CONTINUE | T007 | PASS: five real-helper parent/child SIGTERM and restart cycles | continue automatically to T008
 - 2026-09-14T02:23:20Z | RALPH_CONTINUE | T008 | PASS: old stuck daemon retired once; repaired canonical SIGTERM/restart passed | continue automatically to T009
 - 2026-09-14T02:55:40Z | RALPH_BLOCKED | T009 | dynamic child intent rejected before forwarding; 1 parent, 0 child, no retry; cleanup and product restore pass | stop
+- 2026-09-14T03:05:00Z | RALPH_CONTINUE | T011 | new owner authorization resolves blocker; mission re-locked to offline validator hardening and a separate new campaign | continue automatically with read-only inventory
