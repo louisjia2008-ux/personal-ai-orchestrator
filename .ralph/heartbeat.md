@@ -26,3 +26,5 @@
 - 2026-09-14T06:10:00Z | RALPH_CONTINUE | T023 | new owner authorization re-locks offline spawn recovery and gated Campaign D; no source/model action yet | validate mission lock, then continue automatically to T024
 - 2026-09-14T06:11:00Z | RALPH_CONTINUE | T023 | PASS: mission JSON/diff and offline-first boundaries validated; Campaigns A-C immutable | continue automatically to T024 read-only spawn trace
 - 2026-09-14T06:18:54Z | RALPH_CONTINUE | T024 | PASS: process create precedes durable run; Campaign C delta isolated to stale post-create role accounting | continue automatically to T025 offline reproduction and diagnostics
+- 2026-09-14T06:30:00Z | RALPH_CONTINUE | T025 | PASS: exact post-create role misclassification reproduced; v1 diagnostics and exact reap pass; no model egress | continue automatically to T026 fault matrix
+- 2026-09-14T06:40:25Z | RALPH_CONTINUE | T026 | PASS: minimal repair plus full relevant fault matrix; accepted identity/scope hashes unchanged | continue automatically to T027 full verification and remote checkpoint
