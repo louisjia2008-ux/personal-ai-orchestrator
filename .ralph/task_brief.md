@@ -1,12 +1,12 @@
-# PAO PI-5B3G parent worker spawn diagnosis, repair, and fourth campaign mission lock
+# PAO PI-5B3G delegated-child lineage repair and fifth campaign mission lock
 
 ## User Goal
 
-Preserve the completed daemon, scope-validator, and campaign-identity repairs plus all three historical terminal campaigns; deterministically diagnose the Campaign C parent worker spawn failure offline; add sanitized stage-aware observability and the smallest proven repair; pass local and exact-head CI gates; then, and only then, run one newly authorized fourth three-observation PI-5B3G SHADOW campaign without weakening verifier, routing, quota, delegation, or identity safety.
+Preserve the accepted daemon, scope-validator, campaign-identity, and spawn repairs plus all four historical terminal campaigns; replace the Campaign D harness's unsupported child `TaskRecord` attribute access with a small canonical metadata lineage accessor; prove the old failure and repaired child pipeline offline; pass local and exact-head CI gates; then, and only then, run one newly authorized fifth three-observation PI-5B3G SHADOW campaign without weakening verifier, routing, quota, delegation, identity, or spawn safety.
 
 ## Final Deliverable
 
-A precise spawn-path trace and evidence-backed root-cause classification; repository-owned sanitized spawn-stage diagnostics; a minimal repair if a defect is proven; disposable no-egress reproductions and fault-injection cleanup tests; a separately committed, normally pushed, exact-head-CI-green spawn checkpoint; and either three successful sequential observations in fresh Campaign D or the exact authorized blocker report, followed by canonical product restoration and final exact-head CI.
+A documented canonical delegated-lineage source of truth; a repository-owned fail-closed accessor and sanitized validation result; an external harness observer repaired to consume that supported interface; deterministic Campaign D reproduction, ambiguity/cross-campaign/observation failure tests, and a fake no-egress child pipeline; a separately committed, normally pushed, exact-head-CI-green lineage checkpoint; and either three successful sequential observations in fresh Campaign E or the exact authorized first-blocker report, followed by canonical product restoration and final exact-head CI.
 
 ## Success Criteria
 
@@ -25,12 +25,19 @@ A precise spawn-path trace and evidence-backed root-cause classification; reposi
 - An offline reproduction through the same PAO supervisor/executor infrastructure proves one precise root cause, or records `ROOT_CAUSE_NOT_PROVEN` and stops before live work.
 - Required spawn failure, happy-path, idempotency, cleanup, no-retry/fallback, and no-child tests pass before any live model use.
 - Spawn diagnostics and any minimal repair pass focused/relevant/full Python and Ruff, are separately committed and normally pushed, and exact-head CI is green before Campaign D.
+- Canonical child lineage is resolved only from persisted relationship metadata, never ID/filename conventions, and validates one child, one existing parent, expected campaign, and expected observation.
+- The old Campaign D observer `AttributeError` is reproduced offline and the repaired observer plus fake child process reaches ownership registration and protocol bootstrap with no provider call.
+- Missing, ambiguous, missing-parent, parent-as-child, wrong-campaign, and wrong-observation lineage fail closed with stable sanitized rule/category/stage evidence and exact cleanup.
+- The lineage repair passes focused/relevant/full Python and Ruff, is separately committed and normally pushed, and exact-head CI is green before Campaign E.
+- Campaign E is fresh, uses at most 3 parent/3 child/6 total workers sequentially with zero retry/fallback/grandchild, and stops at the first failure.
 
 ## Non-Goals
 
 - No daemon lifecycle redesign or repeated packaged acceptance unless directly related production lifecycle code changes.
 - No UI redesign, LLM safety classifier, validator deletion/always-allow path, previous-hash whitelist, provider-dependent validation, frozen verifier change, provider fallback, production enforcement, merge, force push, unrelated refactor, or unrelated project access.
 - No redesign of the accepted `pi5b3g-child-scope-v2` validator and no deletion, mutation, reopening, or reuse of either historical campaign or canonical task/request/dispatch row.
+- No addition of delegated lineage to `TaskRecord` merely for harness convenience; no heuristic parsing of task IDs, observation numbers, filenames, or campaign strings.
+- No reopening, retrying, deleting, mutating, resetting, or reinterpreting Campaigns A-D.
 - No immediate Campaign D, no paid/model prompt for spawn diagnosis, no daemon/identity/scope/verifier/quota redesign, and no inference that a transient PID proves final exec or provider egress.
 
 ## Constraints
@@ -46,6 +53,8 @@ A precise spawn-path trace and evidence-backed root-cause classification; reposi
 - Generated identity components are host-owned, validated, deterministic, campaign-scoped, and may not be timestamp/PID/model controlled.
 - Offline diagnostics may retain temporary sanitized tracebacks/stderr only outside Git and must delete them before cleanup; environment values, auth files, provider transcripts, and credentials are never retained.
 - Campaigns A, B, and C remain terminal and immutable. Campaign D may start only after known root cause, passing offline acceptance, committed/pushed repair, and exact-head green CI.
+- Campaigns A-D remain terminal and immutable. Campaign E may start only after the lineage accessor/harness repair passes the entire offline gate, is committed/pushed, and exact-head CI is green.
+- Campaign E may consume at most three fixed MiniMax-M3 parent prompts and one `pao_delegate`/child per observation; the first live parent, lineage, ownership, protocol, scope, identity, or verifier failure consumes that observation and stops the campaign without retry.
 
 ## Assumptions
 
@@ -61,6 +70,7 @@ A precise spawn-path trace and evidence-backed root-cause classification; reposi
 - Mixing previous failed campaign accounting with the new budget, quota drift, frozen verifier drift, or concurrent canonical owners.
 - Accidentally repairing only the parent request ID while leaving a later child/task/dispatch collision, breaking same-campaign idempotency with random IDs, or weakening canonical request conflict behavior.
 - Collapsing post-fork, immediate-exit, event-loop ownership, durable registration, protocol bootstrap, or cleanup failures into generic `WORKER_SPAWN_FAILED`; recording secrets through argv/env diagnostics; or creating an orphan after a post-spawn failure.
+- Treating append-only audit metadata as a mutable task field, accepting multiple lineage events, failing to prove the referenced parent exists, or allowing cross-campaign/observation linkage in the harness observer.
 
 ## Execution Plan
 
@@ -81,6 +91,11 @@ A precise spawn-path trace and evidence-backed root-cause classification; reposi
 15. Minimal spawn repair and tests: repair only the proven defect, add the complete fault-injection/cleanup/idempotency/no-retry/no-fallback/no-child matrix, and optionally smoke-test a guaranteed no-egress Pi metadata mode.
 16. Spawn checkpoint: run focused/relevant/full Python and Ruff, inspect/sanitize, commit separately, push normally, and require exact-head CI green before model use.
 17. Fourth campaign and delivery: refresh all gates, create Campaign D, assert its spawn contract and identities, transition canonical ownership, execute three sequential observations without retry, clean up, restore the product, commit only sanitized evidence, and pass final exact-head CI.
+18. Lineage inventory: trace child creation through persisted `TASK_SUBMITTED` audit metadata, existing store APIs, observation/campaign journals, and the Campaign D observer; document the supported source of truth without source changes.
+19. Lineage accessor and harness repair: add the smallest fail-closed repository API, deterministic sanitized result, old-observer reproduction, repaired observer validation, and fake child-pipeline tests without model egress.
+20. Lineage checkpoint: run focused/relevant/full Python and Ruff, inspect/sanitize, commit separately, push normally, and require exact-head CI green before model use.
+21. Fifth campaign: refresh every gate, create fresh Campaign E, precompute identities, transition canonical ownership, run three sequential observations without retry, and stop on the first invariant failure.
+22. Cleanup and delivery: close admission, prove terminal accounting, restore the repaired product, commit only sanitized Campaign E evidence, push normally, wait for final exact-head CI, and do not merge.
 
 ## Drift Guard
 

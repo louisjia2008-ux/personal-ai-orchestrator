@@ -18,3 +18,10 @@
 - A no-egress disposable reproduction through the same PAO spawn infrastructure yields one evidence-backed root-cause classification; unknown root cause blocks live execution.
 - The required spawn fault-injection/happy-path/cleanup/idempotency/no-retry/no-fallback/no-child matrix passes, followed by full Python, Ruff, a focused spawn commit, normal push, and exact-head CI.
 - A fresh Campaign D starts only after the offline gate and completes three sequential observations at 3/3/6 with zero retry/fallback/grandchild, or stops on the first structured post-repair blocker.
+- Campaigns A-D remain immutable and separately evidenced.
+- Canonical lineage source, persistence location, event/key, and supported API are documented before implementation.
+- A deterministic fail-closed lineage accessor rejects missing, ambiguous, missing-parent, parent-as-child, wrong-campaign, and wrong-observation relationships without ID parsing.
+- The historical Campaign D observer failure and the repaired observer are both proven offline, including child durable-run, ownership, protocol-bootstrap, terminal cleanup, and zero provider calls.
+- Full Python and Ruff pass; the focused lineage repair is committed, normally pushed, and exact-head CI passes before Campaign E.
+- Fresh Campaign E completes three sequential observations at 3 parent/3 child/6 total with zero retry/fallback/grandchild, or stops at the first precise live blocker.
+- Campaign E terminal cleanup, normal product restore, sanitized evidence, final normal push, and final exact-head CI pass without merge.

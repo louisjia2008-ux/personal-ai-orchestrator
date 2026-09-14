@@ -29,3 +29,9 @@
 27. T027: run focused/relevant/full verification, commit/push the spawn repair, and require exact-head CI green.
 28. T028: refresh live preflight, create Campaign D, assert identities/spawn contract, execute three sequential observations, clean up, and restore the product.
 29. T029: preserve sanitized Campaign D evidence, final commit/push, exact-head CI, and acceptance report.
+30. T030: trace and document canonical delegated-child lineage source and APIs read-only.
+31. T031: implement the canonical lineage accessor, repairable harness observer, sanitized diagnostics, and permanent offline regressions.
+32. T032: run focused/relevant/full Python and Ruff; commit the lineage repair separately.
+33. T033: normally push the lineage checkpoint and require exact-head Python/macOS Swift/OpenCode CI green.
+34. T034: refresh preflight, create Campaign E, run at most three sequential observations, clean up, and restore the product.
+35. T035: preserve sanitized Campaign E evidence, final commit/push, exact-head CI, and acceptance report.

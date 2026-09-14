@@ -219,3 +219,10 @@
 - Verification: PASS — JSON parsing, PAO `assert_sanitized`, diff check, and secret/transcript-marker scan passed; PR exact head matched; Python passed in 1m55s, macOS Swift in 1m04s, and OpenCode in 19s.
 - Delivery: PASS — Campaigns A-D remain separate; no raw transcript, raw dynamic intent, environment value, or credential value was committed; PR remains OPEN/DRAFT/unmerged.
 - Final state: `RALPH_BLOCKED` on `CAMPAIGN_HARNESS_CHILD_LINEAGE_ATTRIBUTE_ACCESS_FAILED`; Campaign D is terminal and no retry is authorized.
+
+## 2026-09-14T07:20:00Z — T030 delegated child lineage recovery mission lock
+
+- Changed: re-locked Ralph to the newly authorized offline canonical lineage inventory, small fail-closed repository accessor, exhaustive no-egress child-pipeline proof, exact-head CI, and only then a fresh Campaign E.
+- Boundaries: Campaigns A-D remain terminal and immutable; accepted daemon, validator, identity, spawn, verifier, quota, retry, and fallback systems remain frozen absent direct regression evidence.
+- Verification pending: validate Ralph JSON/diff and commit this mission checkpoint before read-only T030 source tracing.
+- Next task: T030 inventory canonical TASK_SUBMITTED lineage semantics and reproduce the external observer defect offline.
