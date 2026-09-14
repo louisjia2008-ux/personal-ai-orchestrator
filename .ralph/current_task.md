@@ -1,18 +1,20 @@
 # Current task
 
-T013 — Implement deterministic diagnosable scope validator
+T014 — Verify and remotely checkpoint validator
 
 Acceptance:
 
-- Add a repository-owned local validator with positive observation/filename/JSON proof, category-specific unsafe requests, narrowly supported safe negation, and fail-closed ambiguity.
-- Return a stable sanitized result containing version, decision, ordered RULE_ID/category/stage, expected filename, lengths/hashes, and no raw text.
-- Integrate validation before broker child execution so rejection cannot reach the child port; retain a sanitized trace hook for campaign evidence.
-- Add permanent corpus and broker tests proving deterministic IDs, no raw transcript, and zero child calls/workers after rejection.
+- Repeat the full Python suite after the final fail-closed micro-change.
+- Ruff, diff checks, JSON checks, and secret scan pass.
+- Commit the validator refinement separately with meaningful lineage.
+- Normal-push only and wait for exact-head CI before any MiniMax call.
 
 Verification:
 
-- All 44 corpus cases match the frozen expected decision/rule/category.
-- Required direct tests cover boundary lengths, deterministic rejection, sanitized evidence, and no child execution after rejection.
-- Existing PI-5 broker/child/campaign/security tests remain green.
+- Full Python and Ruff pass.
+- Local/remote/PR exact HEAD match.
+- Required GitHub checks pass on that exact SHA.
 
-Intended file scope: one new validator module, narrow broker integration, focused tests, and `.ralph/` state. Frozen semantic verifier/profile remain byte-identical; no model/provider calls.
+Intended file scope: validator implementation/tests and Ralph evidence only.
+Frozen semantic verifier/profile remain byte-identical. No MiniMax egress before
+this task is complete.
