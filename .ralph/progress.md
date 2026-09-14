@@ -155,3 +155,10 @@
 - Product restore: PASS — exact repaired GUI/parent/child and sole canonical socket owner restored; expected helper hash/signature/build; health ok and heartbeat advanced.
 - Files changed: new sanitized third-campaign evidence and Ralph state only. Historical campaign evidence remains unchanged.
 - Next task: T022 commit/push sanitized blocker evidence and wait for exact-head CI; no campaign retry.
+
+## 2026-09-14T05:54:00Z — T022 sanitized evidence and exact-head CI
+
+- Changed: committed sanitized third-campaign evidence as `984c801` and pushed normally to the existing branch.
+- Verification: PASS — Draft PR #54 exact head matched; Python passed in 1m49s, macOS Swift passed in 32s, and OpenCode passed in 13s.
+- Delivery: PASS — historical campaign evidence remains separate; no raw provider transcript/dynamic intent/credential value is committed; PR remains OPEN/DRAFT and unmerged.
+- Final state: `RALPH_BLOCKED` because the one authorized parent launch attempt was consumed at `WORKER_SPAWN_FAILED`; no live retry is authorized.
