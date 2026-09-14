@@ -31,3 +31,4 @@
 - 2026-09-14T06:48:00Z | RALPH_CONTINUE | T027 | PASS: repair 57deff6, local 1284/1 and Ruff, exact pushed 8fe8394 CI all green | checkpoint transition evidence, then continue automatically to T028 live preflight
 - 2026-09-14T07:20:00Z | RALPH_CONTINUE | T030 | new owner authorization re-locks offline child-lineage recovery and gated Campaign E; no source/model action yet | validate mission lock, then inventory canonical lineage
 - 2026-09-14T07:28:00Z | RALPH_CONTINUE | T030 | PASS: TASK_SUBMITTED metadata is canonical; host identity map can validate campaign/observation without ID parsing | continue automatically to T031 implementation
+- 2026-09-14T07:52:00Z | RALPH_CONTINUE | T031 | PASS: f62d515; 36 focused, 180 relevant, 1301 full/1 skip, Ruff; fake child pipeline and failure cleanup pass | continue automatically to T032 remote checkpoint

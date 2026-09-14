@@ -2,16 +2,16 @@
   "version": "0.1",
   "status": "running",
   "completion": "IN_PROGRESS",
-  "current_iteration": 24,
-  "current_task_id": "T031",
-  "last_task_id": "T030",
+  "current_iteration": 25,
+  "current_task_id": "T032",
+  "last_task_id": "T031",
   "last_verification": {
     "status": "PASS",
-    "command": "read-only source/schema/harness trace; git diff --check",
-    "summary": "PASS: canonical lineage is the child TASK_SUBMITTED audit payload; no typed resolver exists; campaign/observation validation can use the host-owned current-campaign identity map without parsing identifiers."
+    "command": "pytest focused/relevant/full; ruff check .; git diff/secret scan",
+    "summary": "PASS: canonical resolver and PI-5B3G ownership validator; 36 focused, 180 relevant, 1301 full passed with 1 skip; Ruff and sanitization passed; repair commit f62d515."
   },
   "blockers": [],
   "no_diff_iterations": 0,
   "started_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T07:28:00Z"
+  "updated_at": "2026-09-14T07:52:00Z"
 }

@@ -234,3 +234,11 @@
 - Campaign validation: the external harness already owns the authoritative fresh-campaign observation identity objects; exact parent membership and observation checks require no identifier parsing.
 - Defect boundary: both child activation and later task reporting access absent TaskRecord fields; the activation access exactly explains the preserved post-durable/pre-protocol Campaign D failure.
 - Next task: T031 add the small canonical resolver, ownership validator, and deterministic regressions.
+
+## 2026-09-14T07:52:00Z — T031 canonical lineage repair and offline proof
+
+- Changed: added a typed canonical `TASK_SUBMITTED` lineage resolver and `pi5b3g-child-lineage-v1` campaign ownership validator; TaskRecord/schema, accepted identity, scope validator, and spawn semantics remain unchanged.
+- Repair: committed separately as `f62d515`.
+- Verification: PASS — 36 focused; 180 relevant; full Python 1301 passed/1 skipped; Ruff, diff, sanitization, and secret scan passed.
+- Pipeline: local fake child reached process creation, durable run, canonical ownership PASS, protocol bootstrap/completion, verifier, and clean exit; injected post-durable lineage loss reaped the exact process and released run/writer state without retry.
+- Next task: T032 commit sanitized verification evidence, push normally, and require exact-head CI before any live preflight.
