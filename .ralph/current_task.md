@@ -1,17 +1,15 @@
 # Current task
 
-None — terminal blocked state
+T018 — inventory canonical parent and child identities
 
 Acceptance:
 
-- T015 stopped at the first campaign safety invariant failure.
-- T016 sanitized evidence push and exact-head CI passed.
-- No campaign retry is authorized in this run.
+- Trace campaign, observation, task, request, dispatch, run, broker-call, delegation, and child identities from construction through persistence.
+- Classify uniqueness namespace, idempotency purpose, validation/length constraints, and model versus host ownership.
+- Identify every static cross-campaign PI-5B3G identity without changing production source.
 
 Verification:
 
-- Final Ralph closure commit must be normally pushed and pass exact-head CI.
+- An inventory artifact cites exact source/schema/test evidence and records the minimal repair boundary.
 
-Blocker: `NEW_CAMPAIGN_REQUEST_ID_CONFLICT`. A future separately authorized run
-must mint fresh canonical task/request/dispatch identities offline before any
-model dispatch.
+No model calls or live daemon/campaign state changes are permitted in this task.

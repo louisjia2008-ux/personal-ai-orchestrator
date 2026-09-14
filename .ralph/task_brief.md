@@ -1,12 +1,12 @@
-# PAO PI-5B3G scope-validator hardening and new campaign mission lock
+# PAO PI-5B3G campaign identity repair and third campaign mission lock
 
 ## User Goal
 
-Preserve the completed daemon lifecycle repair and previous failed PI-5B3G campaign, make the dynamic child semantic-scope validator strict, deterministic, and diagnosable using offline evidence, then run one newly authorized three-observation PI-5B3G SHADOW campaign without weakening verifier, routing, quota, or delegation safety.
+Preserve the completed daemon lifecycle repair, accepted scope validator, and both historical terminal PI-5B3G campaigns; repair static cross-campaign execution identities with deterministic campaign-scoped host identities; prove canonical idempotency and conflict safety offline; then run one newly authorized third three-observation PI-5B3G SHADOW campaign without weakening verifier, routing, quota, or delegation safety.
 
 ## Final Deliverable
 
-A permanent repository-owned scope validator with an adversarial offline corpus, stable sanitized rule traces, tests proving child execution is unreachable after rejection, a separately committed/pushed exact-head-CI-green validator checkpoint, and either three successful new real observations or an honest new-campaign blocker report followed by canonical product restoration and final exact-head CI.
+A small repository-owned deterministic campaign identity scheme covering parent and child execution paths; offline unit and canonical-admission integration evidence; a separately committed, normally pushed, exact-head-CI-green identity checkpoint; and either three successful sequential observations in a fresh third campaign or the exact authorized blocker report, followed by canonical product restoration and final exact-head CI.
 
 ## Success Criteria
 
@@ -18,11 +18,15 @@ A permanent repository-owned scope validator with an adversarial offline corpus,
 - Validator changes pass targeted/relevant tests, full Python and Ruff when production Python changes, then are committed, normally pushed, and exact-head CI passes before any MiniMax call.
 - A new campaign ID runs exactly three sequential SHADOW observations with at most three new parents, three new children, six new workers, no retries/fallback/grandchildren, unchanged frozen verifier hashes, and clean terminal accounting; otherwise it stops at the first new live invariant failure.
 - Final evidence separates historical failure, offline hardening, and the new campaign without credentials or raw provider transcripts; the normal repaired product is restored healthy and final exact-head CI passes.
+- Same logical operation in one campaign reconstructs the same identity, while different campaigns, observations, roles, and shared-namespace operations cannot collide.
+- Historical static request rows remain immutable and canonical conflicting-request semantics remain fail-closed.
+- Parent and child identity paths are audited and every static cross-campaign PI-5B3G execution identity in scope is repaired before live model use.
 
 ## Non-Goals
 
 - No daemon lifecycle redesign or repeated packaged acceptance unless directly related production lifecycle code changes.
 - No UI redesign, LLM safety classifier, validator deletion/always-allow path, previous-hash whitelist, provider-dependent validation, frozen verifier change, provider fallback, production enforcement, merge, force push, unrelated refactor, or unrelated project access.
+- No redesign of the accepted `pi5b3g-child-scope-v2` validator and no deletion, mutation, reopening, or reuse of either historical campaign or canonical task/request/dispatch row.
 
 ## Constraints
 
@@ -33,6 +37,8 @@ A permanent repository-owned scope validator with an adversarial offline corpus,
 - The previous failed parent remains consumed and historical. The new authorization permits at most three new parents and three new children; any rejected live parent stops the new campaign without retry or later observation.
 - Offline work must finish, be committed, normally pushed, and pass exact-head CI before any new model call.
 - New campaign egress, normal repaired-daemon SIGTERM transition, product restore, normal pushes, and CI observation are authorized only within this prompt's exact gates.
+- No MiniMax call may occur until the identity repair is tested, committed separately, normally pushed, and green in exact-head CI.
+- Generated identity components are host-owned, validated, deterministic, campaign-scoped, and may not be timestamp/PID/model controlled.
 
 ## Assumptions
 
@@ -46,6 +52,7 @@ A permanent repository-owned scope validator with an adversarial offline corpus,
 - Leaking raw dynamic prompts through audit/evidence while improving rejection diagnosis.
 - Reaching child execution before ALLOW or losing campaign budget/isolation/accounting truth.
 - Mixing previous failed campaign accounting with the new budget, quota drift, frozen verifier drift, or concurrent canonical owners.
+- Accidentally repairing only the parent request ID while leaving a later child/task/dispatch collision, breaking same-campaign idempotency with random IDs, or weakening canonical request conflict behavior.
 
 ## Execution Plan
 
@@ -58,6 +65,9 @@ A permanent repository-owned scope validator with an adversarial offline corpus,
 7. Pre-live checkpoint: inspect diff/secrets, commit validator hardening separately, normally push, and require exact-head CI green before any MiniMax worker.
 8. New PI-5B3G campaign: refresh all live gates, gracefully stop the normal daemon, create a new campaign ID, run exactly three sequential authorized observations, and stop without retry on the first invariant failure.
 9. Cleanup and delivery: close admission, prove terminal accounting, restore the repaired product, commit only sanitized evidence, push normally, wait for final exact-head CI, and do not merge.
+10. Campaign identity recovery: trace campaign/task/request/dispatch/run/broker/child identifiers and canonical uniqueness constraints; implement the smallest deterministic campaign identity factory and dependent plumbing; prove unit, historical-conflict, reconstruction, canonical resubmission, and parent/child integration behavior offline.
+11. Identity checkpoint: run relevant and full Python/Ruff verification, inspect and secret-scan the diff, commit the identity repair separately, push normally, and require exact-head CI green before any model call.
+12. Third campaign: refresh all live gates, create a fresh campaign, precompute and prove all parent identities absent from canonical state, gracefully transition ownership, execute exactly three sequential authorized observations, stop on the first scope/identity/safety failure, restore the product, and preserve sanitized evidence with final exact-head CI.
 
 ## Drift Guard
 

@@ -16,3 +16,9 @@
 14. T014: run targeted/relevant/full verification, commit/push the validator checkpoint, and require exact-head CI green.
 15. T015: refresh live preflight and execute the newly authorized three-observation campaign with a new ID, then restore the product.
 16. T016: preserve sanitized campaign evidence, final commit/push, exact-head CI, and final report.
+17. T017: lock the newly authorized campaign-identity recovery mission without altering historical evidence.
+18. T018: trace canonical parent/child identity generation, namespaces, constraints, and idempotency behavior read-only.
+19. T019: implement deterministic campaign-scoped identities and permanent unit/integration regressions.
+20. T020: run focused/relevant/full verification, commit and push the identity checkpoint, and require exact-head CI green.
+21. T021: refresh preflight, create a third fresh campaign, assert identities absent, execute three sequential observations, clean up, and restore the product.
+22. T022: preserve sanitized identity/campaign evidence, final commit/push, exact-head CI, and acceptance report.

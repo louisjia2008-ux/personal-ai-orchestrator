@@ -16,3 +16,4 @@
 - 2026-09-14T04:01:30Z | RALPH_CONTINUE | T014 | PASS: validator commit 64ce05c pushed and exact-head CI green | continue to live preflight
 - 2026-09-14T04:10:00Z | RALPH_BLOCKED | T015 | new campaign request ID conflicted before dispatch; 0 workers/egress; stopped and product restored | finalize evidence and CI only
 - 2026-09-14T04:15:00Z | RALPH_BLOCKED | T016 | sanitized evidence 110edd6 pushed and exact-head CI green; final blocked report sealed | no retry
+- 2026-09-14T04:59:52Z | RALPH_CONTINUE | T017 | PASS: identity-only mission and third-campaign gates locked; historical campaigns immutable | continue automatically to T018 read-only identity inventory
