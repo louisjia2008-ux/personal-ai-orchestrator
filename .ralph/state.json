@@ -2,16 +2,16 @@
   "version": "0.1",
   "status": "running",
   "completion": "RALPH_CONTINUE",
-  "current_iteration": 13,
-  "current_task_id": "T014",
-  "last_task_id": "T013",
+  "current_iteration": 15,
+  "current_task_id": "T016",
+  "last_task_id": "T015",
   "last_verification": {
     "status": "PASS",
-    "command": "TMPDIR=/tmp PYTHONPATH=. /tmp/pao-venv/bin/python -m pytest -q && .venv/bin/ruff check .",
-    "summary": "PASS: corpus 44/44; focused 66/66; delegation/campaign 202 passed, 1 skipped; final full Python 1243 passed, 1 skipped; Ruff and sanitization checks passed."
+    "command": "live preflight, graceful daemon transition, new campaign start and canonical task submit",
+    "summary": "BLOCKED SAFELY: new campaign fb69fd... created, but historical request ID conflicted before dispatch. 0 parent/0 child/0 model egress; campaign STOPPED; product restored healthy."
   },
   "blockers": [],
   "no_diff_iterations": 0,
   "started_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T03:55:00Z"
+  "updated_at": "2026-09-14T04:10:00Z"
 }
