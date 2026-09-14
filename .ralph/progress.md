@@ -178,3 +178,19 @@
 - Files changed: `.ralph/artifacts/t024-spawn-path-inventory.md` and Ralph state only; no production source, historical state, or model call.
 - Root-cause lead: the external budget wrapper's old task-prefix role classifier treats the new campaign-scoped parent task as a child and enters child-only accounting after `ProcessSupervisor.start` returns.
 - Next task: T025 reproduce that exact ordering with a local worker and add sanitized stage observability.
+
+## 2026-09-14T06:30:00Z — T025 structured spawn diagnosis
+
+- Changed: added `pao-spawn-diagnostics-v1`, task-local post-create process observation, exact unowned-child abort/reap, staged audit evidence, and a fail-closed campaign worker-role parser outside the frozen identity implementation.
+- Root cause: PROVEN `WORKER_POST_CREATE_ACCOUNTING_ROLE_MISCLASSIFIED` — the campaign-scoped parent missed the legacy prefix, entered child-only accounting after process creation, and empty `next(...)` became `RuntimeError`.
+- Verification: PASS — local `/bin/sleep` reproduction; pre-create and post-create diagnostics; exact cleanup; real `pi --version` through the same supervisor with no prompt/provider egress; focused matrices 80 passed plus Pi matrix 154 passed/1 skipped; Ruff pass.
+- Hash preservation: accepted `pi5_identity.py` SHA-256 remains `79ebc21d33d4a39d05bb0a6049b43c1963cfa8ace8c26a4268a6844b9382c03a`; scope validator untouched.
+- Next task: T026 finish the full fault matrix and repair verification before the commit/push/CI gate.
+
+## 2026-09-14T06:40:25Z — T026 minimal repair and fault matrix
+
+- Changed: added strict campaign-scoped parent/delegated-child role parsing, transcript-free argv shaping, exact post-create abort/reap, durable-run and ownership-registration cleanup, and the complete staged audit sequence.
+- Verification: PASS — 297 relevant process/dispatch/control/Pi/broker/delegation/campaign/identity/scope/state tests passed with 1 skip; additional focused checks passed; repository-wide Ruff passed.
+- Faults covered: missing/non-executable/cwd/stdio/env construction, immediate exit, post-create adapter, durable run registration, ownership registration, protocol bootstrap, and happy path; writer/run/process cleanup remains exact and no child path occurs after parent pre-run failures.
+- Accepted anchors: identity and scope-validator implementation hashes remain exactly `79ebc21...` and `a5d255...`; production daemon/verifier/quota semantics are untouched.
+- Next task: T027 run full Python/Ruff, inspect and commit, normal push, then exact-head CI.

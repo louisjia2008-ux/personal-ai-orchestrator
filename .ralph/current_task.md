@@ -1,16 +1,16 @@
 # Current task
 
-T025 — add spawn observability and prove root cause offline
+T027 — verify and checkpoint spawn repair
 
 Acceptance:
 
-- Add sanitized, deterministic spawn-stage diagnostics without environment values, raw prompts, credentials, or provider transcripts.
-- Reproduce the Campaign C failure through the same `ProcessSupervisor.start` and post-create campaign wrapper ordering using only a local fake worker.
-- Prove one precise root-cause classification and the child-created/ownership/cleanup facts.
+- Run the full Python suite and repository-wide Ruff.
+- Inspect diff/sanitization/secrets and commit the spawn repair separately.
+- Push normally and wait for every required exact-head PR #54 CI job before any model use.
 
 Verification:
 
-- Focused tests prove diagnostic stage/class/errno and post-create process observation without model egress.
-- Root-cause artifact records the deterministic reproduction and why the transient PID does not prove provider egress.
+- Local verification artifact records exact results and frozen hash preservation.
+- Local HEAD, remote branch, and Draft PR head match; exact-head Python, macOS Swift, and OpenCode CI pass.
 
-No model call. Production changes are limited to spawn observability and exact post-create cleanup plumbing required by the proven defect.
+No model call. Campaign D remains forbidden until this exact pushed-head gate is green.
