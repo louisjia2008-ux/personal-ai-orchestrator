@@ -2,16 +2,16 @@
   "version": "0.1",
   "status": "running",
   "completion": "RALPH_CONTINUE",
-  "current_iteration": 7,
-  "current_task_id": "T007",
-  "last_task_id": "T006",
+  "current_iteration": 8,
+  "current_task_id": "T008",
+  "last_task_id": "T007",
   "last_verification": {
     "status": "PASS",
-    "command": "build_app_bundle.sh plus embedded identity, SHA-256, file, and codesign checks recorded in t006-packaged-build.md",
-    "summary": "PASS: Release app embeds b1d6a66; arm64 helper and deep app signatures validate."
+    "command": "pao_packaged_shutdown_acceptance.py --cycles 5 plus residual process and log checks",
+    "summary": "PASS: 3 parent-route and 2 child-route real-helper SIGTERM cycles; complete cleanup and restart; no SIGKILL."
   },
   "blockers": [],
   "no_diff_iterations": 0,
   "started_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T01:31:00Z"
+  "updated_at": "2026-09-14T01:32:00Z"
 }

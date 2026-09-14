@@ -6,3 +6,4 @@
 - 2026-09-14T01:29:00Z | RALPH_CONTINUE | T004 | PASS: scalar handler and ordinary-flow cleanup, 5 focused tests | continue automatically to T005
 - 2026-09-14T01:30:00Z | RALPH_CONTINUE | T005 | PASS: full Python, Ruff, OpenCode, Swift build/test | continue automatically to T006
 - 2026-09-14T01:31:00Z | RALPH_CONTINUE | T006 | PASS: real Release bundle identity and strict signatures verified | continue automatically to T007
+- 2026-09-14T01:32:00Z | RALPH_CONTINUE | T007 | PASS: five real-helper parent/child SIGTERM and restart cycles | continue automatically to T008
