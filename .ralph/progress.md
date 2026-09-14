@@ -79,3 +79,11 @@
 - Files changed: `.ralph/artifacts/t011-scope-validator-inventory.md` and Ralph state only.
 - Remaining risk: current gate has no permanent corpus and cannot emit a deterministic RULE_ID/category/stage.
 - Next task: T012 encode and run the complete offline adversarial corpus against the faithful baseline.
+
+## 2026-09-14T03:20:00Z — T012 offline adversarial corpus
+
+- Changed: added a 44-case synthetic corpus and faithful historical-regex baseline runner/report.
+- Verification: PASS — 10 safe, 30 unsafe, and 4 ambiguous cases; current regex matches 26/44, falsely rejects 6 safe negations, and falsely accepts 12 unsafe/ambiguous cases.
+- Files changed: corpus fixture, offline baseline runner/report, and Ralph state only; no production source or frozen verifier change.
+- Remaining risk: expected rule/category semantics are not yet implemented in a repository-owned gate.
+- Next task: T013 implement positive proof, polarity-aware category rules, sanitized trace, and pre-child broker integration with permanent tests.

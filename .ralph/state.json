@@ -2,16 +2,16 @@
   "version": "0.1",
   "status": "running",
   "completion": "RALPH_CONTINUE",
-  "current_iteration": 11,
-  "current_task_id": "T012",
-  "last_task_id": "T011",
+  "current_iteration": 12,
+  "current_task_id": "T013",
+  "last_task_id": "T012",
   "last_verification": {
     "status": "PASS",
-    "command": "read-only exact implementation and test inventory",
-    "summary": "PASS: external broad-regex semantic gate, structured broker/authority boundaries, forwarding order, campaign accounting, coverage gaps, and safe-negation risks documented without source changes."
+    "command": "python3 scripts/pi5b3g_scope_validator_baseline.py",
+    "summary": "PASS: 44-case corpus frozen; historical regex matched 26/44, with 6 safe-negation false rejections and 12 unsafe/ambiguous false acceptances; no model calls."
   },
   "blockers": [],
   "no_diff_iterations": 0,
   "started_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T03:12:00Z"
+  "updated_at": "2026-09-14T03:20:00Z"
 }

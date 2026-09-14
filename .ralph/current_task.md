@@ -1,16 +1,18 @@
 # Current task
 
-T012 — Build offline adversarial scope corpus
+T013 — Implement deterministic diagnosable scope validator
 
 Acceptance:
 
-- Add a deterministic local corpus covering safe exact/wording/negation, unsafe authority/file/tool/delegation/retry/fallback/injection, and ambiguous fail-closed inputs.
-- Encode expected ALLOW or exact rejection category without calling any external model.
-- Run the corpus against a faithful baseline of the current external validator and record its false-positive/false-negative gaps before implementation changes.
+- Add a repository-owned local validator with positive observation/filename/JSON proof, category-specific unsafe requests, narrowly supported safe negation, and fail-closed ambiguity.
+- Return a stable sanitized result containing version, decision, ordered RULE_ID/category/stage, expected filename, lengths/hashes, and no raw text.
+- Integrate validation before broker child execution so rejection cannot reach the child port; retain a sanitized trace hook for campaign evidence.
+- Add permanent corpus and broker tests proving deterministic IDs, no raw transcript, and zero child calls/workers after rejection.
 
 Verification:
 
-- Corpus includes every owner-required category and deterministic case identifiers.
-- Offline baseline report demonstrates current behavior and is sanitized.
+- All 44 corpus cases match the frozen expected decision/rule/category.
+- Required direct tests cover boundary lengths, deterministic rejection, sanitized evidence, and no child execution after rejection.
+- Existing PI-5 broker/child/campaign/security tests remain green.
 
-Intended file scope: new test/corpus fixtures plus `.ralph/` evidence only. Production source and frozen verifier artifacts remain unchanged; no model/provider calls.
+Intended file scope: one new validator module, narrow broker integration, focused tests, and `.ralph/` state. Frozen semantic verifier/profile remain byte-identical; no model/provider calls.
