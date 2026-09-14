@@ -12,7 +12,7 @@
   ],
   "max_iterations": 20,
   "current_iteration": 9,
-  "status": "running",
+  "status": "blocked",
   "tasks": [
     {"id":"T001","title":"Phase 0 mission lock","type":"planning","status":"done","priority":"high","dependencies":[],"acceptance":["Required Ralph state exists and locks the full user goal"],"verification":["test -s .ralph/task_brief.md && python3 -m json.tool .ralph/tasks.json"],"files_expected":[".ralph/*"],"attempts":0,"last_error":"","notes":"Dedicated worktree created from exact PR #53 head."},
     {"id":"T002","title":"Inventory source lifecycle and live topology","type":"analysis","status":"done","priority":"high","dependencies":["T001"],"acceptance":["Repo map records exact implementations, tests, build paths, branch lineage, and read-only live state"],"verification":["test -s .ralph/artifacts/repo_map.md"],"files_expected":[".ralph/artifacts/repo_map.md"],"attempts":0,"last_error":"","notes":"Defective source pattern unchanged from deployed 64a45a3; exact live old process and zero DB accounting revalidated."},
@@ -22,13 +22,13 @@
     {"id":"T006","title":"Build and identify packaged macOS product","type":"build","status":"done","priority":"high","dependencies":["T005"],"acceptance":["Fresh app/helper build identity, SHA-256, architecture, and codesign status recorded"],"verification":["Real bundled Contents/Helpers/pao-daemon exists and is newly built"],"files_expected":[".ralph/artifacts/t006-packaged-build.md"],"attempts":0,"last_error":"","notes":"Release app embeds b1d6a66; helper SHA-256 ad00de62...f887; arm64; strict signatures pass."},
     {"id":"T007","title":"Prove isolated packaged signal matrix and restart cycles","type":"acceptance","status":"done","priority":"high","dependencies":["T006"],"acceptance":["Outer-parent and serving-child SIGTERM routes pass with socket/DB cleanup and at least three cycles"],"verification":["Packaged acceptance evidence has zero failed required checks"],"files_expected":["docs/acceptance/daemon-lifecycle-2026-09-14/",".ralph/artifacts/t007-packaged-acceptance.md"],"attempts":0,"last_error":"","notes":"Five cycles pass: parent route 3, child route 2, zero failures, zero SIGKILL, complete process/socket/DB cleanup and restart."},
     {"id":"T008","title":"Promote and prove canonical live lifecycle","type":"acceptance","status":"done","priority":"high","dependencies":["T007"],"acceptance":["Exact old daemon recovery, fixed build start, canonical SIGTERM, restart, and zero accounting gates pass"],"verification":["Exactly one healthy fixed daemon owns canonical socket after restart"],"files_expected":["docs/acceptance/*",".ralph/artifacts/*"],"attempts":0,"last_error":"","notes":"One exact old-child SIGKILL succeeded; stale socket was proven unowned and unlinked; rebuilt 3b9aaab canonical SIGTERM/restart passed with DB 0/0/0."},
-    {"id":"T009","title":"Execute bounded PI-5B3G SHADOW campaign","type":"acceptance","status":"pending","priority":"high","dependencies":["T008"],"acceptance":["Exactly three sequential observations complete with 3 parent, 3 child, 0 retry/fallback/grandchild and zero terminal resources, or a new unrelated blocker is captured"],"verification":["Frozen verifier and authoritative campaign evidence pass"],"files_expected":["docs/acceptance/*"],"attempts":0,"last_error":"","notes":""},
+    {"id":"T009","title":"Execute bounded PI-5B3G SHADOW campaign","type":"acceptance","status":"blocked","priority":"high","dependencies":["T008"],"acceptance":["Exactly three sequential observations complete with 3 parent, 3 child, 0 retry/fallback/grandchild and zero terminal resources, or a new unrelated blocker is captured"],"verification":["Frozen verifier and authoritative campaign evidence pass"],"files_expected":["docs/acceptance/*"],"attempts":1,"last_error":"PI5B3G_GENERATED_SCOPE_REJECTED","notes":"Observation 1 parent invoked pao_delegate once; generated intent failed the owner-required forbidden-scope gate before child forwarding. Campaign stopped; 1 parent/0 child; no retry/fallback/grandchild; cleanup and product restore passed."},
     {"id":"T010","title":"Finalize delivery and exact-head CI","type":"delivery","status":"pending","priority":"high","dependencies":["T009"],"acceptance":["Focused commits, normal push, Draft PR, exact-head CI, and final report are complete"],"verification":["Remote PR head equals local HEAD and required checks are terminal"],"files_expected":[".ralph/final_report.md","docs/acceptance/*"],"attempts":0,"last_error":"","notes":""}
   ],
-  "blockers": [],
+  "blockers": ["PI5B3G_GENERATED_SCOPE_REJECTED"],
   "last_successful_task": "T008",
-  "last_failed_task": null,
+  "last_failed_task": "T009",
   "no_diff_iterations": 0,
   "created_at": "2026-09-14T00:41:16Z",
-  "updated_at": "2026-09-14T02:23:20Z"
+  "updated_at": "2026-09-14T02:55:40Z"
 }
