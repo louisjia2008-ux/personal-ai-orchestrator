@@ -194,3 +194,11 @@
 - Faults covered: missing/non-executable/cwd/stdio/env construction, immediate exit, post-create adapter, durable run registration, ownership registration, protocol bootstrap, and happy path; writer/run/process cleanup remains exact and no child path occurs after parent pre-run failures.
 - Accepted anchors: identity and scope-validator implementation hashes remain exactly `79ebc21...` and `a5d255...`; production daemon/verifier/quota semantics are untouched.
 - Next task: T027 run full Python/Ruff, inspect and commit, normal push, then exact-head CI.
+
+## 2026-09-14T06:48:00Z — T027 repair checkpoint and exact-head CI
+
+- Changed: committed spawn repair as `57deff6`, committed sanitized offline evidence, and normally pushed through exact head `8fe8394` to the existing branch/PR.
+- Local verification: PASS — full Python 1284 passed/1 skipped; Ruff, diff/JSON/sanitization and secret-pattern scan passed; worktree clean before this transition record.
+- Remote verification: PASS — exact Draft PR #54 head matched; Python 1m57s, macOS Swift 57s, and OpenCode 17s all passed; PR remains open/draft/unmerged.
+- Model accounting: zero provider prompts or Campaign D workers during diagnosis/repair/checkpoint.
+- Next task: push and green this evidence-only transition, then T028 refresh every live preflight and execute only the fresh authorized Campaign D.
