@@ -43,6 +43,9 @@ struct PAOMenuBarApp: App {
         WindowGroup(L10n.dashboardTitle, id: "dashboard") {
             DashboardView()
                 .environmentObject(store)
+                .task {
+                    await primeQuotaWhenDaemonConnects()
+                }
         }
         .defaultSize(width: 1180, height: 740)
 
@@ -60,6 +63,30 @@ struct PAOMenuBarApp: App {
         Settings {
             DailyDriverSettingsRoot()
                 .environmentObject(store)
+        }
+    }
+
+    /// The store's long-running quota refresher intentionally uses a ten-minute
+    /// cadence to avoid hammering provider APIs. Waiting ten minutes for its
+    /// first collection, however, leaves a newly launched Daily Driver with an
+    /// UNKNOWN quota surface and can make quota-aware recommendation / supervised
+    /// planning unusable until the owner manually presses Refresh.
+    ///
+    /// Wait for the daemon's existing background connection loop, then perform
+    /// exactly one bounded read-only quota collection. No model generation is
+    /// issued. If the daemon never connects within the startup window, the normal
+    /// ten-minute refresher and the owner's manual Refresh remain the fallback.
+    @MainActor
+    private func primeQuotaWhenDaemonConnects() async {
+        let attempts = 30
+        for attempt in 0..<attempts {
+            guard !Task.isCancelled else { return }
+            if store.connection.isConnected {
+                await store.refreshQuota()
+                return
+            }
+            guard attempt < attempts - 1 else { return }
+            try? await Task.sleep(for: .seconds(1))
         }
     }
 }
