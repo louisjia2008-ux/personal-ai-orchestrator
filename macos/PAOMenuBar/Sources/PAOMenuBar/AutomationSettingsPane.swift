@@ -141,8 +141,7 @@ struct AutomationSettingsPane: View {
                 .disabled(isChangingMode)
 
                 if isChangingMode {
-                    ProgressView()
-                        .controlSize(.small)
+                    ProgressView().controlSize(.small)
                 }
             }
         } else {
@@ -186,12 +185,10 @@ struct AutomationSettingsPane: View {
         let socketPath = store.socketPath
 
         Task {
-            let client = PAOControlClient(socketPath: socketPath)
             do {
-                let current = try await client.schedulingSettings()
-                let updated = try await client.setSchedulingMode(
-                    mode,
-                    defaultSchedulingPolicy: current.defaultSchedulingPolicy
+                let updated = try await AutomationModeMutationCoordinator.shared.setMode(
+                    socketPath: socketPath,
+                    mode: mode
                 )
                 await store.loadSchedulingSettings()
                 await store.refreshNow()
