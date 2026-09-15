@@ -15,6 +15,11 @@ struct DailyDriverSettingsRoot: View {
                     Label(L10n.settingsTabGeneral, systemImage: "gearshape")
                 }
 
+            AutomationSettingsPane()
+                .tabItem {
+                    Label(DailyDriverL10n.scheduling, systemImage: "sparkles")
+                }
+
             ProjectAutomationSettingsView(showsDoneButton: false)
                 .tabItem {
                     Label(DailyDriverL10n.projectAutomationTitle, systemImage: "folder.badge.gearshape")
