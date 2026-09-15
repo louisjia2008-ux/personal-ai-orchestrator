@@ -19,9 +19,11 @@ public enum ActivityCategory: String, CaseIterable, Identifiable, Sendable {
 public enum ActivityPresentation {
     /// Best-effort product grouping from the daemon's raw event type.
     ///
-    /// Order is intentional. Safety and quota terms outrank task identity, and
-    /// routing terms outrank the generic task bucket, because a dispatch event
-    /// may also carry a task id but is more useful under Routing.
+    /// Order is intentional. Attention/safety terms outrank task identity, quota
+    /// terms outrank routing, and routing terms outrank the generic task bucket.
+    /// Matching stays conservative: a generic substring such as `lock` would also
+    /// match harmless words such as `clock`, so lock-related grouping uses stable
+    /// compound tokens instead.
     public static func category(eventType: String, taskId: String?) -> ActivityCategory? {
         let value = eventType.lowercased()
 
@@ -29,7 +31,8 @@ public enum ActivityPresentation {
             value,
             [
                 "safety", "permission", "approval", "veto", "cancel", "guard",
-                "gate", "blocked", "violation", "denied", "emergency", "lock",
+                "gate", "blocked", "violation", "denied", "emergency",
+                "writer_lock", "owner_lock", "kill_switch",
             ]
         ) {
             return .safety
