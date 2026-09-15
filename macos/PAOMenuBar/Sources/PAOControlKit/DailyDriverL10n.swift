@@ -3,18 +3,102 @@ import Foundation
 /// Localized vocabulary introduced by the Daily Driver redesign.
 ///
 /// Kept in its own table while the redesign is in Draft so the existing mature
-/// `L10n` surface does not churn with every visual iteration. Before merge this
-/// remains a normal Bundle.module-backed localization path, with English and
-/// zh-Hans at parity.
+/// `L10n` surface does not churn with every visual iteration. It deliberately
+/// reuses L10n's resolved language instead of trusting SwiftPM's automatic bundle
+/// selection, which is unreliable for copied `.lproj` directories.
 public enum DailyDriverL10n {
+    public static let requiredKeys: [String] = [
+        "home.ready", "home.needsAttention", "home.now", "home.attention",
+        "home.capacity", "home.recent", "home.daemonUnavailable",
+        "home.fullAutomationLocked", "home.configureProjectAutomation", "home.modeHelp",
+        "home.supervisedNeedsProject", "home.supervisedProjectCount.one",
+        "home.supervisedProjectCount.other", "home.moreActive.one", "home.moreActive.other",
+        "home.nothingRunning", "home.startTaskHint", "home.noBlockers",
+        "home.noEligibleProject", "home.noEligibleProjectDetail", "home.reviewAttention",
+        "home.noCapacity", "home.openResources", "home.viewAllResources", "home.noRecent",
+        "home.openActivity", "home.modeChanged", "home.modeChangeFailed", "home.modeChangeMalformed",
+        "quota.unmetered", "quota.unmeteredRpm", "quota.unknown", "quota.loading",
+        "quota.unavailable", "quota.exhausted", "quota.warnings", "quota.unknownCount",
+        "quota.observed", "quota.state.available", "quota.state.limited", "quota.state.exhausted",
+        "quota.window.week", "quota.window.month", "quota.resetDue", "quota.resetMinutes",
+        "quota.resetHours", "quota.resetDays",
+        "mode.manual", "mode.supervisedAuto", "mode.fullAutomation", "mode.balanced",
+        "mode.qualityFirst", "mode.saveQuota", "mode.lowLatency", "mode.unavailable",
+        "confidence.exact", "confidence.estimated", "confidence.unknown",
+        "menu.scheduling", "menu.stoppingSupervisedAuto", "menu.stopSupervisedAuto",
+        "menu.stopSupervisedAutoHelp", "menu.currentWork", "menu.aiCapacity",
+        "menu.stoppedSupervisedAuto", "menu.daemonReturnedMode", "menu.emergencyStopFailed",
+        "menu.emergencyStopMalformed", "menu.quotaExhausted", "menu.quotaWarnings",
+        "menu.quotaUnknown", "menu.quotaObserved",
+        "project.title", "project.subtitle", "action.done", "project.noneTitle",
+        "project.noneMessage", "project.gone", "project.saved", "project.updateFailed",
+        "project.malformed", "project.enabled", "project.allowSupervisedAuto",
+        "project.allowUnattended", "project.graceWindow", "project.seconds", "action.apply",
+        "project.graceRange", "project.graceHelp", "project.disableTitle", "action.disable",
+        "action.cancel", "project.disableMessage",
+        "auto.sectionTitle", "auto.footnote", "auto.planFrozen", "auto.approvalRequired",
+        "auto.countingDown", "auto.expiredRefreshing", "auto.plannedTarget", "auto.noTarget",
+        "auto.whyPlan", "auto.acknowledged", "auto.untilDispatch", "auto.countdownAccessibility",
+        "auto.ack", "auto.dispatchNow", "auto.veto", "auto.ackHelp", "auto.dispatchHelp",
+        "auto.vetoHelp", "auto.dismissResult", "auto.noticeAcknowledged", "auto.noticeVetoed",
+        "auto.noticeDispatch", "auto.noticeStale", "auto.noticeBlocked", "auto.noticeFailed",
+        "auto.noticeMalformed",
+        "task.awaitingApproval", "task.graceWindow", "task.readyToRoute", "task.ready",
+        "task.running", "task.verifying", "task.verified", "task.completed", "task.blocked",
+        "task.failed", "task.cancelled",
+        "resources.availableTargets", "resources.noRunnableTarget", "resources.unavailableTargets",
+        "relative.now", "relative.minutes", "relative.hours", "relative.days"
+    ]
+
+    private static let activeBundle: Bundle = {
+        bundle(for: L10n.resolvedLanguageCode)
+            ?? bundle(for: "en")
+            ?? Bundle.module
+    }()
+
     private static func tr(_ key: String, _ arguments: CVarArg...) -> String {
-        let format = Bundle.module.localizedString(
+        let format = activeBundle.localizedString(
             forKey: key,
             value: key,
             table: "DailyDriver"
         )
         guard !arguments.isEmpty else { return format }
         return String(format: format, locale: Locale.current, arguments: arguments)
+    }
+
+    public static func catalogString(key: String, language: String) -> String? {
+        guard let bundle = bundle(for: language) else { return nil }
+        let value = bundle.localizedString(forKey: key, value: nil, table: "DailyDriver")
+        return value == key ? nil : value
+    }
+
+    public static func catalogKeys(language: String) -> Set<String> {
+        guard let bundle = bundle(for: language),
+              let url = bundle.url(forResource: "DailyDriver", withExtension: "strings"),
+              let contents = try? String(contentsOf: url, encoding: .utf8)
+        else { return [] }
+        var keys: Set<String> = []
+        for line in contents.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("\"") else { continue }
+            let afterOpening = trimmed.dropFirst()
+            guard let closing = afterOpening.firstIndex(of: "\"") else { continue }
+            keys.insert(String(afterOpening[..<closing]))
+        }
+        return keys
+    }
+
+    private static func bundle(for language: String) -> Bundle? {
+        guard let resourceURL = Bundle.module.resourceURL else { return nil }
+        let entries = (try? FileManager.default.contentsOfDirectory(
+            at: resourceURL,
+            includingPropertiesForKeys: nil
+        )) ?? []
+        guard let entry = entries.first(where: {
+            $0.pathExtension.lowercased() == "lproj"
+                && $0.deletingPathExtension().lastPathComponent.lowercased() == language.lowercased()
+        }) else { return nil }
+        return Bundle(path: entry.path)
     }
 
     public static var readyToWork: String { tr("home.ready") }
