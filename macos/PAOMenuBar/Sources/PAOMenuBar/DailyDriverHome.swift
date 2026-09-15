@@ -16,6 +16,8 @@ struct DailyDriverHome: View {
     let onOpenActivity: () -> Void
 
     private var tasks: [TaskView] { store.tasks?.tasks ?? [] }
+    private var quotaProviders: [QuotaProviderCardView] { store.quota?.providers ?? [] }
+    private var risks: [RiskItemView] { store.dashboard?.risks ?? [] }
 
     private var liveTasks: [TaskView] {
         tasks
@@ -37,12 +39,18 @@ struct DailyDriverHome: View {
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
+    /// Orchestrator operating mode, not the routing policy. BALANCED / QUALITY_FIRST
+    /// etc. are task-routing policy choices and must never be presented as MANUAL /
+    /// SUPERVISED_AUTO / ACTIVE state.
     private var schedulingMode: String {
-        store.schedulingSettings?.defaultSchedulingPolicy ?? "UNKNOWN"
+        store.schedulingSettings?.mode ?? "UNKNOWN"
     }
 
     private var isReady: Bool {
-        store.connection.isConnected && attentionTasks.isEmpty
+        guard store.connection.isConnected else { return false }
+        guard attentionTasks.isEmpty && risks.isEmpty else { return false }
+        guard let quotaSummary = store.quota?.summary else { return true }
+        return quotaSummary.quotaWarningCount == 0 && quotaSummary.quotaExhaustedCount == 0
     }
 
     var body: some View {
@@ -159,7 +167,6 @@ struct DailyDriverHome: View {
 
     @ViewBuilder
     private var attentionContent: some View {
-        let risks = store.dashboard?.risks ?? []
         if attentionTasks.isEmpty && risks.isEmpty {
             Label("No blockers or failed tasks", systemImage: "checkmark.circle")
                 .font(.callout)
@@ -190,10 +197,9 @@ struct DailyDriverHome: View {
 
     @ViewBuilder
     private var capacityContent: some View {
-        let providers = store.providers?.providers ?? []
-        if providers.isEmpty {
+        if quotaProviders.isEmpty {
             HStack {
-                Label("No provider capacity available", systemImage: "externaldrive.badge.questionmark")
+                Label("No connected provider capacity available", systemImage: "externaldrive.badge.questionmark")
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Open Resources") { onOpenResources() }
@@ -201,17 +207,17 @@ struct DailyDriverHome: View {
             }
         } else {
             VStack(spacing: 0) {
-                ForEach(providers.prefix(4)) { provider in
+                ForEach(Array(quotaProviders.prefix(4))) { provider in
                     Button {
                         onOpenResources()
                     } label: {
                         providerCapacityRow(provider)
                     }
                     .buttonStyle(.plain)
-                    if provider.id != providers.prefix(4).last?.id { Divider() }
+                    if provider.id != quotaProviders.prefix(4).last?.id { Divider() }
                 }
             }
-            if providers.count > 4 {
+            if quotaProviders.count > 4 {
                 Button("View all resources") { onOpenResources() }
                     .buttonStyle(.link)
             }
@@ -292,32 +298,26 @@ struct DailyDriverHome: View {
         .contentShape(Rectangle())
     }
 
-    private func providerCapacityRow(_ provider: ProviderHealthView) -> some View {
-        let pool = provider.quotaPools.first
-        let windows = pool?.windows ?? []
-        let readableWindows = windows.prefix(2).map { window -> String in
-            if let remaining = window.remainingFraction {
-                return "\(windowLabel(window.windowKind)) \(Int((remaining * 100).rounded()))%"
-            }
-            return "\(windowLabel(window.windowKind)) unknown"
-        }
-        let quotaText = readableWindows.isEmpty ? (pool?.state ?? "No quota evidence") : readableWindows.joined(separator: " · ")
-        let confidence = pool?.confidence ?? "UNKNOWN"
+    private func providerCapacityRow(_ provider: QuotaProviderCardView) -> some View {
+        let title = provider.plan?.displayName ?? provider.planSurface ?? provider.displayName
+        let quotaText = quotaText(provider)
+        let confidence = provider.plan?.confidence ?? provider.confidence
 
         return HStack(spacing: 12) {
-            Image(systemName: "server.rack")
+            Image(systemName: provider.poolKind == "unmetered" ? "infinity" : "server.rack")
                 .foregroundStyle(.secondary)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 3) {
-                Text(provider.displayName)
+                Text(title)
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.primary)
-                Text(quotaText)
+                Text(capacityDetail(providerName: provider.displayName, title: title, quotaText: quotaText))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             Spacer(minLength: 12)
-            Text(confidence.capitalized)
+            Text(confidenceLabel(confidence))
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
             Image(systemName: "chevron.right")
@@ -326,6 +326,61 @@ struct DailyDriverHome: View {
         }
         .padding(.vertical, 10)
         .contentShape(Rectangle())
+    }
+
+    private func quotaText(_ provider: QuotaProviderCardView) -> String {
+        if provider.poolKind == "unmetered" {
+            if let observed = provider.unmetered {
+                return "Unmetered · \(observed.rpmObserved) RPM observed"
+            }
+            return "Unmetered"
+        }
+
+        if let plan = provider.plan {
+            let readable = plan.windows.prefix(2).map(windowText)
+            if !readable.isEmpty { return readable.joined(separator: " · ") }
+            if let reason = plan.unknownReason, !reason.isEmpty { return "Quota unknown" }
+            return stateLabelForQuota(plan.state)
+        }
+
+        if let pool = provider.quotaPools.first {
+            let readable = pool.windows.prefix(2).map { window -> String in
+                var value: String
+                if let remaining = window.remainingFraction {
+                    value = "\(windowLabel(window.windowKind)) \(Int((remaining * 100).rounded()))%"
+                } else {
+                    value = "\(windowLabel(window.windowKind)) unknown"
+                }
+                if let reset = resetText(window.resetAt) {
+                    value += " · \(reset)"
+                }
+                return value
+            }
+            if !readable.isEmpty { return readable.joined(separator: " · ") }
+            return stateLabelForQuota(pool.state)
+        }
+
+        return provider.quotaState == "UNKNOWN" ? "Quota unknown" : provider.quotaState.capitalized
+    }
+
+    private func windowText(_ window: QuotaPlanWindowView) -> String {
+        var value: String
+        if let remaining = window.remainingFraction {
+            value = "\(windowLabel(window.windowKind)) \(Int((remaining * 100).rounded()))%"
+        } else {
+            value = "\(windowLabel(window.windowKind)) unknown"
+        }
+        if let reset = resetText(window.resetAt) {
+            value += " · \(reset)"
+        }
+        return value
+    }
+
+    private func capacityDetail(providerName: String, title: String, quotaText: String) -> String {
+        if title.caseInsensitiveCompare(providerName) == .orderedSame {
+            return quotaText
+        }
+        return "\(providerName) · \(quotaText)"
     }
 
     @ViewBuilder
@@ -349,18 +404,26 @@ struct DailyDriverHome: View {
     }
 
     private var capacitySummary: String {
-        let providers = store.providers?.providers ?? []
-        guard !providers.isEmpty else { return "capacity unavailable" }
-        let healthy = providers.filter { provider in
-            provider.quotaPools.contains { ["AVAILABLE", "LIMITED"].contains($0.state) }
-        }.count
-        return "\(healthy)/\(providers.count) provider\(providers.count == 1 ? "" : "s") available"
+        guard let summary = store.quota?.summary else {
+            return quotaProviders.isEmpty ? "capacity unavailable" : "quota loading"
+        }
+        if summary.quotaExhaustedCount > 0 {
+            return "\(summary.quotaExhaustedCount) quota exhausted"
+        }
+        if summary.quotaWarningCount > 0 {
+            return "\(summary.quotaWarningCount) quota warning\(summary.quotaWarningCount == 1 ? "" : "s")"
+        }
+        if summary.quotaUnknownProviderCount > 0 {
+            return "\(summary.quotaUnknownProviderCount) quota unknown"
+        }
+        return "\(summary.quotaObservableProviderCount)/\(summary.connectedProviderCount) quota observed"
     }
 
     private func modeLabel(_ value: String) -> String {
         switch value {
         case "MANUAL": return "Manual"
         case "SUPERVISED_AUTO": return "Supervised Auto"
+        case "ACTIVE": return "Full Automation"
         case "BALANCED": return "Balanced"
         case "QUALITY_FIRST": return "Quality First"
         case "QUOTA_SAVER": return "Save Quota"
@@ -384,12 +447,39 @@ struct DailyDriverHome: View {
         }
     }
 
+    private func stateLabelForQuota(_ value: String) -> String {
+        switch value {
+        case "AVAILABLE", "OBSERVED": return "Available"
+        case "LIMITED", "WARNING": return "Limited"
+        case "EXHAUSTED": return "Exhausted"
+        case "UNKNOWN": return "Quota unknown"
+        default: return value.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+
+    private func confidenceLabel(_ value: String) -> String {
+        switch value.uppercased() {
+        case "EXACT": return "Exact"
+        case "ESTIMATED": return "Estimated"
+        default: return "Unknown"
+        }
+    }
+
     private func windowLabel(_ value: String) -> String {
         let lowered = value.lowercased()
-        if lowered.contains("5") && lowered.contains("hour") { return "5h" }
+        if (lowered.contains("5") || lowered.contains("five")) && lowered.contains("hour") { return "5h" }
         if lowered.contains("week") { return "Week" }
         if lowered.contains("month") { return "Month" }
         return value.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    private func resetText(_ raw: String?) -> String? {
+        guard let raw, let date = ISO8601DateFormatter().date(from: raw) else { return nil }
+        let seconds = Int(date.timeIntervalSinceNow)
+        if seconds <= 0 { return "reset due" }
+        if seconds < 3600 { return "reset \(max(1, seconds / 60))m" }
+        if seconds < 86_400 { return "reset \(seconds / 3600)h" }
+        return "reset \(seconds / 86_400)d"
     }
 
     private func relative(_ raw: String) -> String {
