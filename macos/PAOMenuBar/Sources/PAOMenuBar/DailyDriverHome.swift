@@ -78,19 +78,19 @@ struct DailyDriverHome: View {
                     .foregroundStyle(.secondary)
             }
 
-            homeSection("Now", symbol: "bolt.fill") {
+            homeSection(DailyDriverL10n.now, symbol: "bolt.fill") {
                 nowContent
             }
 
-            homeSection("Needs Attention", symbol: "exclamationmark.triangle") {
+            homeSection(DailyDriverL10n.attention, symbol: "exclamationmark.triangle") {
                 attentionContent
             }
 
-            homeSection("Capacity", symbol: "gauge.with.dots.needle.67percent") {
+            homeSection(DailyDriverL10n.capacity, symbol: "gauge.with.dots.needle.67percent") {
                 capacityContent
             }
 
-            homeSection("Recent", symbol: "clock") {
+            homeSection(DailyDriverL10n.recent, symbol: "clock") {
                 recentContent
             }
         }
@@ -109,7 +109,7 @@ struct DailyDriverHome: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(isReady ? "Ready to work" : "Needs attention")
+                Text(isReady ? DailyDriverL10n.readyToWork : DailyDriverL10n.needsAttention)
                     .font(.title3.weight(.semibold))
                 Text(readinessDetail)
                     .font(.callout)
@@ -119,7 +119,7 @@ struct DailyDriverHome: View {
             Spacer(minLength: 16)
 
             if !store.connection.isConnected {
-                Label("Daemon unavailable", systemImage: "bolt.slash")
+                Label(DailyDriverL10n.daemonUnavailable, systemImage: "bolt.slash")
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.secondary)
             } else {
@@ -131,10 +131,10 @@ struct DailyDriverHome: View {
 
     private var readinessDetail: String {
         if projectAutomationNeedsSetup {
-            return "Supervised Auto needs a project opt-in"
+            return DailyDriverL10n.supervisedNeedsProject
         }
         if schedulingMode == "SUPERVISED_AUTO" {
-            return "\(supervisedProjectCount) supervised project\(supervisedProjectCount == 1 ? "" : "s") · \(capacitySummary)"
+            return "\(DailyDriverL10n.supervisedProjectCount(supervisedProjectCount)) · \(capacitySummary)"
         }
         return capacitySummary
     }
@@ -159,13 +159,13 @@ struct DailyDriverHome: View {
                 Button {
                     showsProjectAutomation = true
                 } label: {
-                    Label("Configure Project Automation…", systemImage: "folder.badge.gearshape")
+                    Label(DailyDriverL10n.configureProjectAutomation, systemImage: "folder.badge.gearshape")
                 }
             }
 
             if schedulingMode == "ACTIVE" {
                 Divider()
-                Label("Full Automation is controlled by production gates", systemImage: "lock")
+                Label(DailyDriverL10n.fullAutomationLocked, systemImage: "lock")
             }
         } label: {
             if isChangingMode {
@@ -183,7 +183,7 @@ struct DailyDriverHome: View {
                     currentMode: store.schedulingSettings?.mode
                 )
         )
-        .help("Change between Manual and Supervised Auto without changing the routing policy.")
+        .help(DailyDriverL10n.modeHelp)
     }
 
     @ViewBuilder
@@ -227,7 +227,7 @@ struct DailyDriverHome: View {
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
 
             if liveTasks.count > 1 {
-                Button("View \(liveTasks.count - 1) more active task\(liveTasks.count == 2 ? "" : "s")") {
+                Button(DailyDriverL10n.viewMoreActiveTasks(liveTasks.count - 1)) {
                     onOpenTasks()
                 }
                 .buttonStyle(.link)
@@ -238,9 +238,9 @@ struct DailyDriverHome: View {
                     .font(.title3)
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Nothing is running")
+                    Text(DailyDriverL10n.nothingRunning)
                         .font(.headline)
-                    Text("Start a task from the toolbar when you are ready.")
+                    Text(DailyDriverL10n.startTaskHint)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -256,8 +256,8 @@ struct DailyDriverHome: View {
                 showsProjectAutomation = true
             } label: {
                 attentionRow(
-                    title: "Supervised Auto has no eligible project",
-                    detail: "Enable Supervised Auto for at least one online project before expecting automatic work.",
+                    title: DailyDriverL10n.noEligibleProject,
+                    detail: DailyDriverL10n.noEligibleProjectDetail,
                     symbol: "folder.badge.questionmark"
                 )
             }
@@ -265,7 +265,7 @@ struct DailyDriverHome: View {
         }
 
         if attentionTasks.isEmpty && risks.isEmpty && !projectAutomationNeedsSetup {
-            Label("No blockers or failed tasks", systemImage: "checkmark.circle")
+            Label(DailyDriverL10n.noBlockers, systemImage: "checkmark.circle")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         } else {
@@ -286,7 +286,7 @@ struct DailyDriverHome: View {
             }
 
             if attentionTasks.count > 3 || !risks.isEmpty {
-                Button("Review all attention items") { onOpenTasks() }
+                Button(DailyDriverL10n.reviewAttention) { onOpenTasks() }
                     .buttonStyle(.link)
             }
         }
@@ -296,10 +296,10 @@ struct DailyDriverHome: View {
     private var capacityContent: some View {
         if quotaProviders.isEmpty {
             HStack {
-                Label("No connected provider capacity available", systemImage: "externaldrive.badge.questionmark")
+                Label(DailyDriverL10n.noCapacity, systemImage: "externaldrive.badge.questionmark")
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Open Resources") { onOpenResources() }
+                Button(DailyDriverL10n.openResources) { onOpenResources() }
                     .buttonStyle(.link)
             }
         } else {
@@ -315,7 +315,7 @@ struct DailyDriverHome: View {
                 }
             }
             if quotaProviders.count > 4 {
-                Button("View all resources") { onOpenResources() }
+                Button(DailyDriverL10n.viewAllResources) { onOpenResources() }
                     .buttonStyle(.link)
             }
         }
@@ -324,7 +324,7 @@ struct DailyDriverHome: View {
     @ViewBuilder
     private var recentContent: some View {
         if recentTerminalTasks.isEmpty {
-            Text("No recent completed or blocked work")
+            Text(DailyDriverL10n.noRecent)
                 .font(.callout)
                 .foregroundStyle(.secondary)
         } else {
@@ -355,7 +355,7 @@ struct DailyDriverHome: View {
                 }
             }
 
-            Button("Open Activity") { onOpenActivity() }
+            Button(DailyDriverL10n.openActivity) { onOpenActivity() }
                 .buttonStyle(.link)
         }
     }
@@ -428,15 +428,15 @@ struct DailyDriverHome: View {
     private func quotaText(_ provider: QuotaProviderCardView) -> String {
         if provider.poolKind == "unmetered" {
             if let observed = provider.unmetered {
-                return "Unmetered · \(observed.rpmObserved) RPM observed"
+                return DailyDriverL10n.unmeteredRPM(observed.rpmObserved)
             }
-            return "Unmetered"
+            return DailyDriverL10n.unmetered
         }
 
         if let plan = provider.plan {
             let readable = plan.windows.prefix(2).map(windowText)
             if !readable.isEmpty { return readable.joined(separator: " · ") }
-            if let reason = plan.unknownReason, !reason.isEmpty { return "Quota unknown" }
+            if let reason = plan.unknownReason, !reason.isEmpty { return DailyDriverL10n.quotaUnknown }
             return stateLabelForQuota(plan.state)
         }
 
@@ -446,7 +446,7 @@ struct DailyDriverHome: View {
                 if let remaining = window.remainingFraction {
                     value = "\(windowLabel(window.windowKind)) \(Int((remaining * 100).rounded()))%"
                 } else {
-                    value = "\(windowLabel(window.windowKind)) unknown"
+                    value = "\(windowLabel(window.windowKind)) \(DailyDriverL10n.quotaUnknown)"
                 }
                 if let reset = resetText(window.resetAt) {
                     value += " · \(reset)"
@@ -457,7 +457,9 @@ struct DailyDriverHome: View {
             return stateLabelForQuota(pool.state)
         }
 
-        return provider.quotaState == "UNKNOWN" ? "Quota unknown" : provider.quotaState.capitalized
+        return provider.quotaState == "UNKNOWN"
+            ? DailyDriverL10n.quotaUnknown
+            : stateLabelForQuota(provider.quotaState)
     }
 
     private func windowText(_ window: QuotaPlanWindowView) -> String {
@@ -465,7 +467,7 @@ struct DailyDriverHome: View {
         if let remaining = window.remainingFraction {
             value = "\(windowLabel(window.windowKind)) \(Int((remaining * 100).rounded()))%"
         } else {
-            value = "\(windowLabel(window.windowKind)) unknown"
+            value = "\(windowLabel(window.windowKind)) \(DailyDriverL10n.quotaUnknown)"
         }
         if let reset = resetText(window.resetAt) {
             value += " · \(reset)"
@@ -500,12 +502,12 @@ struct DailyDriverHome: View {
                 await store.loadSchedulingSettings()
                 await store.refreshNow()
                 modeNotice = updated.mode == mode
-                    ? "Scheduling mode changed to \(modeLabel(updated.mode))."
-                    : "Daemon returned \(modeLabel(updated.mode)); no local mode was assumed."
+                    ? DailyDriverL10n.modeChanged(modeLabel(updated.mode))
+                    : DailyDriverL10n.daemonReturnedMode(modeLabel(updated.mode))
             } catch let error as PAOClientError {
-                modeNotice = "Scheduling mode change failed · \(error.displayDetail)"
+                modeNotice = DailyDriverL10n.modeChangeFailed(error.displayDetail)
             } catch {
-                modeNotice = "Scheduling mode response could not be decoded."
+                modeNotice = DailyDriverL10n.modeChangeMalformed
             }
             isChangingMode = false
         }
@@ -533,30 +535,35 @@ struct DailyDriverHome: View {
 
     private var capacitySummary: String {
         guard let summary = store.quota?.summary else {
-            return quotaProviders.isEmpty ? "capacity unavailable" : "quota loading"
+            return quotaProviders.isEmpty
+                ? DailyDriverL10n.capacityUnavailable
+                : DailyDriverL10n.quotaLoading
         }
         if summary.quotaExhaustedCount > 0 {
-            return "\(summary.quotaExhaustedCount) quota exhausted"
+            return DailyDriverL10n.quotaExhausted(summary.quotaExhaustedCount)
         }
         if summary.quotaWarningCount > 0 {
-            return "\(summary.quotaWarningCount) quota warning\(summary.quotaWarningCount == 1 ? "" : "s")"
+            return DailyDriverL10n.quotaWarnings(summary.quotaWarningCount)
         }
         if summary.quotaUnknownProviderCount > 0 {
-            return "\(summary.quotaUnknownProviderCount) quota unknown"
+            return DailyDriverL10n.quotaUnknownCount(summary.quotaUnknownProviderCount)
         }
-        return "\(summary.quotaObservableProviderCount)/\(summary.connectedProviderCount) quota observed"
+        return DailyDriverL10n.quotaObserved(
+            summary.quotaObservableProviderCount,
+            summary.connectedProviderCount
+        )
     }
 
     private func modeLabel(_ value: String) -> String {
         switch value {
-        case "MANUAL": return "Manual"
-        case "SUPERVISED_AUTO": return "Supervised Auto"
-        case "ACTIVE": return "Full Automation"
-        case "BALANCED": return "Balanced"
-        case "QUALITY_FIRST": return "Quality First"
-        case "QUOTA_SAVER": return "Save Quota"
-        case "SPEED_FIRST": return "Low Latency"
-        case "UNKNOWN": return "Mode unavailable"
+        case "MANUAL": return DailyDriverL10n.manual
+        case "SUPERVISED_AUTO": return DailyDriverL10n.supervisedAuto
+        case "ACTIVE": return DailyDriverL10n.fullAutomation
+        case "BALANCED": return DailyDriverL10n.balanced
+        case "QUALITY_FIRST": return DailyDriverL10n.qualityFirst
+        case "QUOTA_SAVER": return DailyDriverL10n.saveQuota
+        case "SPEED_FIRST": return DailyDriverL10n.lowLatency
+        case "UNKNOWN": return DailyDriverL10n.modeUnavailable
         default: return value.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
@@ -572,59 +579,62 @@ struct DailyDriverHome: View {
 
     private func stateLabel(_ value: String) -> String {
         switch value {
-        case "AUTO_PLANNED": return "Waiting for approval"
-        case "AUTO_GRACE": return "Dispatch countdown"
-        case "RUNNING": return "Running"
-        case "VERIFYING": return "Verifying"
-        case "VERIFIED": return "Verified"
-        case "COMPLETED": return "Completed"
-        case "BLOCKED": return "Blocked"
-        case "FAILED": return "Failed"
+        case "AUTO_PLANNED": return DailyDriverL10n.taskAwaitingApproval
+        case "AUTO_GRACE": return DailyDriverL10n.taskGraceWindow
+        case "SUBMITTED": return DailyDriverL10n.taskReadyToRoute
+        case "READY": return DailyDriverL10n.taskReady
+        case "RUNNING": return DailyDriverL10n.taskRunning
+        case "VERIFYING": return DailyDriverL10n.taskVerifying
+        case "VERIFIED": return DailyDriverL10n.taskVerified
+        case "COMPLETED": return DailyDriverL10n.taskCompleted
+        case "BLOCKED": return DailyDriverL10n.taskBlocked
+        case "FAILED": return DailyDriverL10n.taskFailed
+        case "CANCELLED": return DailyDriverL10n.taskCancelled
         default: return value.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
 
     private func stateLabelForQuota(_ value: String) -> String {
         switch value {
-        case "AVAILABLE", "OBSERVED": return "Available"
-        case "LIMITED", "WARNING": return "Limited"
-        case "EXHAUSTED": return "Exhausted"
-        case "UNKNOWN": return "Quota unknown"
+        case "AVAILABLE", "OBSERVED": return DailyDriverL10n.quotaAvailable
+        case "LIMITED", "WARNING": return DailyDriverL10n.quotaLimited
+        case "EXHAUSTED": return DailyDriverL10n.quotaExhaustedState
+        case "UNKNOWN": return DailyDriverL10n.quotaUnknown
         default: return value.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
 
     private func confidenceLabel(_ value: String) -> String {
         switch value.uppercased() {
-        case "EXACT": return "Exact"
-        case "ESTIMATED": return "Estimated"
-        default: return "Unknown"
+        case "EXACT": return DailyDriverL10n.exact
+        case "ESTIMATED": return DailyDriverL10n.estimated
+        default: return DailyDriverL10n.unknown
         }
     }
 
     private func windowLabel(_ value: String) -> String {
         let lowered = value.lowercased()
         if (lowered.contains("5") || lowered.contains("five")) && lowered.contains("hour") { return "5h" }
-        if lowered.contains("week") { return "Week" }
-        if lowered.contains("month") { return "Month" }
+        if lowered.contains("week") { return DailyDriverL10n.weekWindow }
+        if lowered.contains("month") { return DailyDriverL10n.monthWindow }
         return value.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
     private func resetText(_ raw: String?) -> String? {
         guard let raw, let date = ISO8601DateFormatter().date(from: raw) else { return nil }
         let seconds = Int(date.timeIntervalSinceNow)
-        if seconds <= 0 { return "reset due" }
-        if seconds < 3600 { return "reset \(max(1, seconds / 60))m" }
-        if seconds < 86_400 { return "reset \(seconds / 3600)h" }
-        return "reset \(seconds / 86_400)d"
+        if seconds <= 0 { return DailyDriverL10n.resetDue }
+        if seconds < 3600 { return DailyDriverL10n.resetMinutes(max(1, seconds / 60)) }
+        if seconds < 86_400 { return DailyDriverL10n.resetHours(seconds / 3600) }
+        return DailyDriverL10n.resetDays(seconds / 86_400)
     }
 
     private func relative(_ raw: String) -> String {
         guard let date = ISO8601DateFormatter().date(from: raw) else { return raw }
         let seconds = max(0, Int(Date().timeIntervalSince(date)))
-        if seconds < 60 { return "now" }
-        if seconds < 3600 { return "\(seconds / 60)m ago" }
-        if seconds < 86_400 { return "\(seconds / 3600)h ago" }
-        return "\(seconds / 86_400)d ago"
+        if seconds < 60 { return DailyDriverL10n.relativeNow }
+        if seconds < 3600 { return DailyDriverL10n.minutesAgo(seconds / 60) }
+        if seconds < 86_400 { return DailyDriverL10n.hoursAgo(seconds / 3600) }
+        return DailyDriverL10n.daysAgo(seconds / 86_400)
     }
 }
