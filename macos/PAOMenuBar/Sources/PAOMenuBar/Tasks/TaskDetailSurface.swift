@@ -46,7 +46,7 @@ struct TaskDetailSurface: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
-            .accessibilityIdentifier("workspace.detail")
+        .accessibilityIdentifier("workspace.detail")
     }
 
     private var document: some View {
@@ -61,6 +61,9 @@ struct TaskDetailSurface: View {
                     )
                     cancellationNotice(detail)
                     TaskAttentionBanner(reasons: TaskAttention.reasons(for: detail))
+                    // AUTO_PLANNED / AUTO_GRACE are their own supervision mode.
+                    // They must never look like ordinary manual dispatch states.
+                    TaskAutoSupervisionSection(detail: detail)
                     TaskExecutionSection(detail: detail)
                     TaskLifecycleSection(detail: detail)
                     TaskRoutingSection(summary: detail.routingSummary)
