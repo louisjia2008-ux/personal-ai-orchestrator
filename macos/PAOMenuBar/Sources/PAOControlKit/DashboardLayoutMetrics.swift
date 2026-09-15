@@ -1,76 +1,59 @@
 import CoreGraphics
 import SwiftUI
 
-// The dashboard's shared layout contract.
+// Shared geometry for the five product destinations.
 //
-// One source of truth for the geometry five destinations must agree on:
-// sidebar width, page insets, section/card rhythm and the collection→detail
-// split. Before this these were literals repeated per page (210/230, 260/320/460,
-// 420, 24 vs 20), which is why the pages disagreed about where a title, a
-// divider and the first line of content sit.
-//
-// Values that coincide with the `Spacing` scale reference it rather than
-// restating a number, so the 4pt grid stays the only place spacing is defined.
+// The Daily Driver redesign deliberately uses the whole content pane for
+// operational surfaces. Only Settings should impose a reading measure. The
+// previous dashboard solved density by shrinking type and packing bordered
+// cards; this contract instead gives the hierarchy room to breathe while
+// preserving the stable sidebar and collection/detail workspaces.
 
 public enum DashboardLayoutMetrics {
     // MARK: Navigation
 
-    /// The app sidebar, pinned rather than flexible. Five short rows do not need
-    /// a resizable column, and a column the split view was free to re-solve is
-    /// exactly why the sidebar changed width between destinations.
-    public static let sidebarWidth: CGFloat = 180
+    public static let sidebarWidth: CGFloat = 184
 
     // MARK: Page chrome
 
-    /// Outer horizontal inset between the content pane and page content.
-    public static let pageHorizontalPadding: CGFloat = Spacing.page
-    /// Outer vertical inset between the content pane and page content.
-    public static let pageVerticalPadding: CGFloat = Spacing.page
-    /// Vertical gap between a page's top-level sections.
-    public static let sectionSpacing: CGFloat = Spacing.section
+    /// 24pt keeps content visually attached to the native toolbar while still
+    /// separating it from the split-view edge.
+    public static let pageHorizontalPadding: CGFloat = 24
+    public static let pageVerticalPadding: CGFloat = 24
+    /// Major product sections (Now, Needs Attention, Capacity, Recent) need a
+    /// stronger break than rows inside a surface.
+    public static let sectionSpacing: CGFloat = 32
 
-    // MARK: Cards
+    // MARK: Surfaces
 
-    /// Gap between sibling cards (KPI row, chart row, quota binding cards).
-    public static let cardSpacing: CGFloat = Spacing.element
-    public static let cardCornerRadius: CGFloat = Radius.panel
-    public static let cardPadding: CGFloat = 14
-    /// Reserved height of one KPI tile, so every tile in the row is identical.
-    public static let kpiTileHeight: CGFloat = 104
-    /// Reserved plot height of a chart inside a card, so cards sharing a row
-    /// end the same height.
-    public static let chartHeight: CGFloat = 160
-    /// Narrowest a card may become before a row of them wraps.
-    public static let cardMinimumWidth: CGFloat = 260
+    public static let cardSpacing: CGFloat = 16
+    public static let cardCornerRadius: CGFloat = 12
+    public static let cardPadding: CGFloat = 16
+    /// Retained for legacy Overview until its KPI wall is removed in this round.
+    public static let kpiTileHeight: CGFloat = 108
+    /// Charts are secondary in the Daily Driver UI but must remain readable
+    /// wherever a historical/analytics surface still uses them.
+    public static let chartHeight: CGFloat = 208
+    public static let cardMinimumWidth: CGFloat = 280
 
-    // MARK: Collection → detail workspaces
+    // MARK: Collection -> detail workspaces
 
-    /// Width of the collection column in Tasks and Resources. Both workspaces
-    /// name this token, never their own number, so their split dividers start at
-    /// the same position.
-    ///
-    /// `HSplitView` resolves a child to its *maximum* width, not its ideal, so
-    /// this is applied as both the ideal and the maximum; `collectionMinimumWidth`
-    /// is how far the owner may drag it in.
-    public static let collectionPreferredWidth: CGFloat = 312
-    public static let collectionMinimumWidth: CGFloat = 260
-    /// The detail pane never collapses below a readable width; the collection
-    /// gives way first.
-    public static let detailMinimumWidth: CGFloat = 480
+    public static let collectionPreferredWidth: CGFloat = 320
+    public static let collectionMinimumWidth: CGFloat = 272
+    public static let detailMinimumWidth: CGFloat = 520
 
     // MARK: Window
 
-    /// The smallest window the layout is designed to hold: the sidebar, the
-    /// collection and a detail pane still wide enough to read.
     public static var minimumWindowWidth: CGFloat {
         sidebarWidth + collectionPreferredWidth + detailMinimumWidth
     }
-    public static let minimumWindowHeight: CGFloat = 600
+    public static let minimumWindowHeight: CGFloat = 640
 
     // MARK: Reading measure
 
-    /// Widest a chronological table is allowed to grow. Wide enough to use the
-    /// main pane, bounded so a maximised window does not stretch a three-column
-    /// row across the whole display.
-    public static let tableMaximumWidth: CGFloat = 980
+    /// Activity may use a readable measure. Home and Resources must not use
+    /// this as a global content cap.
+    public static let tableMaximumWidth: CGFloat = 1040
+    /// Settings is intentionally narrower, matching a native preferences form.
+    public static let formMaximumWidth: CGFloat = 760
 }
