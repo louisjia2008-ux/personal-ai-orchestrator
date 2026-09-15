@@ -41,7 +41,7 @@ struct ActivityDashboard: View {
                 EmptyStateView(
                     title: L10n.noEvents,
                     symbol: "clock.badge.questionmark",
-                    message: emptyMessage
+                    message: L10n.noEvents
                 )
                 .frame(maxWidth: .infinity)
             } else {
@@ -76,15 +76,7 @@ struct ActivityDashboard: View {
             Text("\(filteredEvents.count) / \(allEvents.count)")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.tertiary)
-                .accessibilityLabel("\(filteredEvents.count) of \(allEvents.count) events")
         }
-    }
-
-    private var emptyMessage: String {
-        if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return L10n.tasksNoMatch
-        }
-        return L10n.noEvents
     }
 
     private func categoryTitle(_ category: ActivityCategory) -> String {
