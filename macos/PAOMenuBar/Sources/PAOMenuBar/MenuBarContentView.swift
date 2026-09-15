@@ -6,41 +6,63 @@ import PAOControlKit
 struct MenuBarContentView: View {
     @EnvironmentObject private var store: OrchestratorStore
     @Environment(\.openWindow) private var openWindow
+    @State private var isStoppingSupervisedAuto = false
+    @State private var stopNotice: String?
+
+    private var liveTasks: [TaskView] {
+        (store.tasks?.tasks ?? [])
+            .filter { ["AUTO_PLANNED", "AUTO_GRACE", "RUNNING", "VERIFYING"].contains($0.state) }
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private var schedulingMode: String? {
+        store.schedulingSettings?.mode
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
             Divider()
-            taskCountsSection
-            recentTasksSection
+            schedulingSection
+            currentWorkSection
+            quotaSection
             Divider()
             QuickSubmitView()
             Divider()
-            providerSection
-            Divider()
-            activeStatusSection
             footer
         }
         .padding(12)
-        .onAppear { store.menuVisible = true }
+        .frame(width: 380)
+        .onAppear {
+            store.menuVisible = true
+            Task { await store.loadSchedulingSettings() }
+        }
         .onDisappear { store.menuVisible = false }
     }
 
     private var header: some View {
-        HStack {
+        HStack(spacing: 8) {
             Image(systemName: store.statusSummary.systemImage)
-            Text(L10n.statusTitle(store.statusSummary))
-                .font(.headline)
-            Spacer()
-            if store.connection.isConnected {
-                Text(L10n.connectedLabel)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(L10n.statusTitle(store.statusSummary))
+                    .font(.headline)
+                Text(store.connection.isConnected ? L10n.connectedLabel : disconnectionText)
                     .font(.caption)
-            } else {
-                Text(disconnectionText)
-                    .foregroundStyle(.red)
-                    .font(.caption)
+                    .foregroundStyle(store.connection.isConnected ? .secondary : StatusTone.critical.color)
             }
+            Spacer()
+            Button {
+                Task { await store.refreshNow() }
+            } label: {
+                if store.isRefreshing {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                }
+            }
+            .buttonStyle(.borderless)
+            .disabled(store.isRefreshing)
+            .help(L10n.refresh)
         }
     }
 
@@ -51,131 +73,200 @@ struct MenuBarContentView: View {
         return ""
     }
 
-    private var taskCountsSection: some View {
-        let counts = store.taskCounts()
-        return HStack(spacing: 16) {
-            Label("\(counts.running)", systemImage: "gearshape.2")
-            Label("\(counts.ready)", systemImage: "tray")
-            Label("\(counts.blocked)", systemImage: "exclamationmark.octagon")
-            Label("\(counts.verified)", systemImage: "checkmark.seal")
+    private var schedulingSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("Scheduling", systemImage: modeSymbol(schedulingMode))
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(modeLabel(schedulingMode))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            if MenuBarAutoStop.shouldOffer(currentMode: schedulingMode) {
+                Button(role: .destructive) {
+                    stopSupervisedAuto()
+                } label: {
+                    if isStoppingSupervisedAuto {
+                        HStack {
+                            ProgressView().controlSize(.small)
+                            Text("Stopping Supervised Auto…")
+                        }
+                        .frame(maxWidth: .infinity)
+                    } else {
+                        Label("Stop Supervised Auto", systemImage: "stop.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(isStoppingSupervisedAuto)
+                .help("Switch the daemon back to Manual while preserving the current routing policy.")
+            }
+
+            if let stopNotice {
+                Text(stopNotice)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .font(.callout)
-        .help(L10n.taskCountsHelp)
     }
 
-    private var recentTasksSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(L10n.recentTasks).font(.subheadline).foregroundStyle(.secondary)
-            if let tasks = store.tasks?.tasks, !tasks.isEmpty {
-                ForEach(tasks.prefix(10)) { task in
-                    HStack {
-                        Text(task.taskId)
-                            .font(.system(.caption, design: .monospaced))
-                            .lineLimit(1)
-                        Spacer()
-                        Text(task.state)
+    @ViewBuilder
+    private var currentWorkSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Current Work")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                if liveTasks.count > 1 {
+                    Text("+\(liveTasks.count - 1)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            if let task = liveTasks.first {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: stateSymbol(task.state))
+                        .foregroundStyle(StatusStyle.task(state: task.state).color)
+                        .frame(width: 18)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(task.intent)
+                            .font(.callout.weight(.medium))
+                            .lineLimit(2)
+                        Text(stateLabel(task.state))
                             .font(.caption)
-                            .foregroundStyle(StatusStyle.task(state: task.state).color)
-                        Button(L10n.cancel) {
-                            Task { await store.cancel(taskId: task.taskId) }
-                        }
-                        .controlSize(.mini)
-                        .disabled(task.state == "CANCELLED" || task.state == "COMPLETED"
-                                  || task.state == "FAILED")
-                        .help(L10n.cancelHelp)
+                            .foregroundStyle(.secondary)
                     }
+                    Spacer(minLength: 0)
                 }
             } else {
-                Text(L10n.noTasks).font(.caption).foregroundStyle(.secondary)
-            }
-            if let notice = store.cancellationNotice {
-                Text(L10n.cancelNotice(notice)).font(.caption2).foregroundStyle(.orange)
+                Label("Nothing is running", systemImage: "checkmark.circle")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
         }
     }
 
-    private var providerSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(L10n.providersQuota).font(.subheadline).foregroundStyle(.secondary)
-            if let providers = store.providers?.providers, !providers.isEmpty {
-                ForEach(providers) { provider in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(provider.displayName) (\(L10n.accountsCount(provider.accountCount)))")
-                            .font(.callout)
-                        ForEach(provider.quotaPools) { pool in
-                            Text(
-                                "  \(pool.name): \(pool.state.lowercased())"
-                                    + " · \(L10n.quotaConfidenceLabel) \(QuotaRendering.confidenceBadge(pool.confidence))"
-                                    + " · \(L10n.quotaSourceLabel) \(pool.measurementSourceType)"
-                            )
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            ForEach(pool.windows, id: \.windowId) { window in
-                                let remaining = L10n.quotaRemaining(
-                                    fraction: window.remainingFraction,
-                                    confidence: window.confidence
-                                )
-                                Text("    \(window.windowId): \(remaining)")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        ForEach(provider.executionTargets) { target in
-                            let observed = target.observedAvailability.map { "\($0.state)" } ?? "NONE"
-                            Text("  \(L10n.providerTargetLabel) \(target.executionTargetId): \(observed)")
-                                .font(.caption2)
-                                .foregroundStyle(
-                                    (target.observedAvailability?.state == "EXHAUSTED_OBSERVED"
-                                      || target.observedAvailability?.state == "COOLDOWN")
-                                        ? StatusTone.caution.color : StatusTone.neutral.color
-                                )
-                        }
-                    }
+    @ViewBuilder
+    private var quotaSection: some View {
+        if let summary = store.quota?.summary {
+            let hasWarning = summary.quotaWarningCount > 0 || summary.quotaExhaustedCount > 0
+                || summary.quotaUnknownProviderCount > 0
+            HStack(spacing: 8) {
+                Image(systemName: hasWarning ? "gauge.with.dots.needle.33percent" : "gauge.with.dots.needle.67percent")
+                    .foregroundStyle(hasWarning ? StatusTone.caution.color : StatusTone.neutral.color)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("AI Capacity")
+                        .font(.subheadline.weight(.semibold))
+                    Text(quotaSummary(summary))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-            } else if store.connection.isConnected {
-                Text(L10n.noProviders).font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var activeStatusSection: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack {
-                Text(L10n.productionActive).font(.subheadline).foregroundStyle(.secondary)
                 Spacer()
-                Text(store.activeStatus?.productionActive ?? "UNKNOWN")
-                    .font(.callout.bold())
-                    .foregroundStyle((store.activeStatus?.authorized == true ? StatusTone.positive : StatusTone.neutral).color)
-            }
-            if let blockers = store.activeStatus?.blockingReasons {
-                ForEach(blockers, id: \.self) { reason in
-                    Text("· \(reason)").font(.caption2).foregroundStyle(.secondary)
-                }
             }
         }
     }
 
     private var footer: some View {
-        HStack {
-            Text(store.socketPath)
-                .font(.system(.caption2, design: .monospaced))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .foregroundStyle(.tertiary)
-            Spacer()
+        HStack(spacing: 8) {
             Button(L10n.openDashboard) {
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: "dashboard")
             }
-            .controlSize(.mini)
-            Button(L10n.refresh) {
-                Task { await store.refreshNow() }
-            }
-            .controlSize(.mini)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+
+            Spacer()
+
             Button(L10n.quit) {
                 NSApplication.shared.terminate(nil)
             }
-            .controlSize(.mini)
+            .controlSize(.small)
+        }
+    }
+
+    private func stopSupervisedAuto() {
+        guard schedulingMode == "SUPERVISED_AUTO", !isStoppingSupervisedAuto else { return }
+        isStoppingSupervisedAuto = true
+        stopNotice = nil
+        let socketPath = store.socketPath
+
+        Task {
+            let client = PAOControlClient(socketPath: socketPath)
+            do {
+                // Re-read immediately before the mutation so the emergency stop
+                // cannot overwrite a routing-policy change made elsewhere.
+                let current = try await client.schedulingSettings()
+                let updated = try await client.setSchedulingMode(
+                    "MANUAL",
+                    defaultSchedulingPolicy: current.defaultSchedulingPolicy
+                )
+                await store.loadSchedulingSettings()
+                await store.refreshNow()
+                stopNotice = updated.mode == "MANUAL"
+                    ? "Supervised Auto stopped. Manual mode is now authoritative."
+                    : "Daemon returned \(modeLabel(updated.mode)); no local mode was assumed."
+            } catch let error as PAOClientError {
+                stopNotice = "Emergency stop failed · \(error.displayDetail)"
+            } catch {
+                stopNotice = "Emergency stop response could not be decoded."
+            }
+            isStoppingSupervisedAuto = false
+        }
+    }
+
+    private func quotaSummary(_ summary: QuotaSummaryView) -> String {
+        if summary.quotaExhaustedCount > 0 {
+            return "\(summary.quotaExhaustedCount) exhausted · \(summary.quotaWarningCount) warning"
+        }
+        if summary.quotaWarningCount > 0 {
+            return "\(summary.quotaWarningCount) warning · \(summary.quotaObservableProviderCount)/\(summary.connectedProviderCount) observed"
+        }
+        if summary.quotaUnknownProviderCount > 0 {
+            return "\(summary.quotaUnknownProviderCount) unknown · \(summary.quotaObservableProviderCount)/\(summary.connectedProviderCount) observed"
+        }
+        return "\(summary.quotaObservableProviderCount)/\(summary.connectedProviderCount) connected plans observed"
+    }
+
+    private func modeLabel(_ value: String?) -> String {
+        switch value {
+        case "MANUAL": return "Manual"
+        case "SUPERVISED_AUTO": return "Supervised Auto"
+        case "ACTIVE": return "Full Automation"
+        case .none: return "Unknown"
+        default: return value?.replacingOccurrences(of: "_", with: " ").capitalized ?? "Unknown"
+        }
+    }
+
+    private func modeSymbol(_ value: String?) -> String {
+        switch value {
+        case "MANUAL": return "hand.raised"
+        case "SUPERVISED_AUTO": return "sparkles"
+        case "ACTIVE": return "bolt.shield"
+        default: return "questionmark.circle"
+        }
+    }
+
+    private func stateLabel(_ state: String) -> String {
+        switch state {
+        case "AUTO_PLANNED": return "Awaiting approval"
+        case "AUTO_GRACE": return "Supervised grace"
+        case "RUNNING": return "Running"
+        case "VERIFYING": return "Verifying"
+        default: return state.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+
+    private func stateSymbol(_ state: String) -> String {
+        switch state {
+        case "AUTO_PLANNED", "AUTO_GRACE": return "timer"
+        case "RUNNING": return "bolt.circle.fill"
+        case "VERIFYING": return "checkmark.seal"
+        default: return "circle"
         }
     }
 }
