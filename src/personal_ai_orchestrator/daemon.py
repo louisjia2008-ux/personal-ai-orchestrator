@@ -146,6 +146,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="serve only the typed UDS control plane; skip the loopback routing API",
     )
     parser.add_argument(
+        "--enable-supervised-auto-tick",
+        action="store_true",
+        help=(
+            "explicitly allow the host-owned SUPERVISED_AUTO supervisor step "
+            "even when --control-only is used; scheduling/project/grace gates "
+            "remain authoritative and Production ACTIVE is unchanged"
+        ),
+    )
+    parser.add_argument(
         "--execution-repo",
         type=Path,
         default=None,
@@ -195,6 +204,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     return parser.parse_args(argv)
+
+
+def _should_register_supervised_auto(args: argparse.Namespace) -> bool:
+    """Whether this daemon invocation explicitly permits the host AUTO step.
+
+    ``--control-only`` stays inert by default, preserving the original safety
+    contract. The bundled product daemon opts in explicitly because its Daily
+    Driver UI exposes SUPERVISED_AUTO; the step itself still enforces scheduling
+    mode, project opt-in, grace, quota, evidence, lease and launch gates.
+    """
+
+    return args.control_socket is not None and (
+        not args.control_only or args.enable_supervised_auto_tick
+    )
 
 
 def load_verifier_profile(path: Path | None):
@@ -509,7 +532,7 @@ def main(
             campaign=campaign,
         )
         control_server.start_background()
-        if not args.control_only:
+        if _should_register_supervised_auto(args):
             from personal_ai_orchestrator.supervised_auto_step import (
                 SUPERVISED_AUTO_STEP_NAME,
             )
