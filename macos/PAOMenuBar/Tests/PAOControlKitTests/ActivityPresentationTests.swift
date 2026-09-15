@@ -15,6 +15,19 @@ final class ActivityPresentationTests: XCTestCase {
             ActivityPresentation.category(eventType: "auto_veto_accepted", taskId: "task-2"),
             .safety
         )
+        XCTAssertEqual(
+            ActivityPresentation.category(eventType: "writer_lock_violation", taskId: "task-3"),
+            .safety
+        )
+    }
+
+    func testGenericClockTextIsNotMistakenForALockSafetyEvent() {
+        XCTAssertNil(
+            ActivityPresentation.category(eventType: "daemon_clock_tick", taskId: nil)
+        )
+        XCTAssertNil(
+            ActivityPresentation.category(eventType: "clock_synchronized", taskId: nil)
+        )
     }
 
     func testQuotaAndRoutingHaveDedicatedBuckets() {
