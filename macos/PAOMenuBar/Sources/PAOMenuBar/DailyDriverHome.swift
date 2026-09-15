@@ -11,6 +11,7 @@ struct DailyDriverHome: View {
     @EnvironmentObject private var store: OrchestratorStore
     @State private var isChangingMode = false
     @State private var modeNotice: String?
+    @State private var showsProjectAutomation = false
 
     let onOpenTask: (String) -> Void
     let onOpenTasks: () -> Void
@@ -20,6 +21,7 @@ struct DailyDriverHome: View {
     private var tasks: [TaskView] { store.tasks?.tasks ?? [] }
     private var quotaProviders: [QuotaProviderCardView] { store.quota?.providers ?? [] }
     private var risks: [RiskItemView] { store.dashboard?.risks ?? [] }
+    private var projects: [ProjectView] { store.projects?.projects ?? [] }
 
     private var liveTasks: [TaskView] {
         tasks
@@ -48,9 +50,20 @@ struct DailyDriverHome: View {
         store.schedulingSettings?.mode ?? "UNKNOWN"
     }
 
+    private var supervisedProjectCount: Int {
+        projects.filter { $0.isOnline && $0.supervisedAutoAllowed }.count
+    }
+
+    /// SUPERVISED_AUTO is not actually useful until at least one online project
+    /// opts in. Global mode alone is deliberately insufficient.
+    private var projectAutomationNeedsSetup: Bool {
+        schedulingMode == "SUPERVISED_AUTO" && supervisedProjectCount == 0
+    }
+
     private var isReady: Bool {
         guard store.connection.isConnected else { return false }
         guard attentionTasks.isEmpty && risks.isEmpty else { return false }
+        guard !projectAutomationNeedsSetup else { return false }
         guard let quotaSummary = store.quota?.summary else { return true }
         return quotaSummary.quotaWarningCount == 0 && quotaSummary.quotaExhaustedCount == 0
     }
@@ -82,6 +95,10 @@ struct DailyDriverHome: View {
             }
         }
         .accessibilityIdentifier("home.dailyDriver")
+        .sheet(isPresented: $showsProjectAutomation) {
+            ProjectAutomationSettingsView()
+                .environmentObject(store)
+        }
     }
 
     private var readinessHeader: some View {
@@ -94,7 +111,7 @@ struct DailyDriverHome: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(isReady ? "Ready to work" : "Needs attention")
                     .font(.title3.weight(.semibold))
-                Text(capacitySummary)
+                Text(readinessDetail)
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -112,6 +129,16 @@ struct DailyDriverHome: View {
         .padding(.vertical, 2)
     }
 
+    private var readinessDetail: String {
+        if projectAutomationNeedsSetup {
+            return "Supervised Auto needs a project opt-in"
+        }
+        if schedulingMode == "SUPERVISED_AUTO" {
+            return "\(supervisedProjectCount) supervised project\(supervisedProjectCount == 1 ? "" : "s") · \(capacitySummary)"
+        }
+        return capacitySummary
+    }
+
     private var automationModeMenu: some View {
         Menu {
             ForEach(AutomationModeCatalog.selectable, id: \.self) { mode in
@@ -125,6 +152,15 @@ struct DailyDriverHome: View {
                     }
                 }
                 .disabled(schedulingMode == mode || schedulingMode == "ACTIVE")
+            }
+
+            if !projects.isEmpty {
+                Divider()
+                Button {
+                    showsProjectAutomation = true
+                } label: {
+                    Label("Configure Project Automation…", systemImage: "folder.badge.gearshape")
+                }
             }
 
             if schedulingMode == "ACTIVE" {
@@ -215,7 +251,20 @@ struct DailyDriverHome: View {
 
     @ViewBuilder
     private var attentionContent: some View {
-        if attentionTasks.isEmpty && risks.isEmpty {
+        if projectAutomationNeedsSetup {
+            Button {
+                showsProjectAutomation = true
+            } label: {
+                attentionRow(
+                    title: "Supervised Auto has no eligible project",
+                    detail: "Enable Supervised Auto for at least one online project before expecting automatic work.",
+                    symbol: "folder.badge.questionmark"
+                )
+            }
+            .buttonStyle(.plain)
+        }
+
+        if attentionTasks.isEmpty && risks.isEmpty && !projectAutomationNeedsSetup {
             Label("No blockers or failed tasks", systemImage: "checkmark.circle")
                 .font(.callout)
                 .foregroundStyle(.secondary)
