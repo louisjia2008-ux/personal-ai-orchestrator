@@ -56,9 +56,8 @@ struct PAOMenuBarApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            ClientSettingsDashboard()
+            DailyDriverSettingsRoot()
                 .environmentObject(store)
-                .frame(width: 520)
         }
     }
 }
