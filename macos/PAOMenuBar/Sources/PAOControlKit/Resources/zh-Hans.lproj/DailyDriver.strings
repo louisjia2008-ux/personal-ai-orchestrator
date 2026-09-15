@@ -7,6 +7,8 @@
 "home.capacity" = "AI 额度";
 "home.recent" = "最近任务";
 "home.daemonUnavailable" = "守护进程不可用";
+"home.ownerExecutionDisabled" = "任务执行权限未开启";
+"home.ownerExecutionDisabledDetail" = "请先在设置中启用“用户发起执行”，PAO 才能真正启动任务。";
 "home.fullAutomationLocked" = "全自动模式由生产门控控制";
 "home.configureProjectAutomation" = "配置项目自动化…";
 "home.modeHelp" = "在手动和受监督自动模式之间切换，不会改动路由策略。";
