@@ -45,7 +45,12 @@ public enum DailyDriverL10n {
     public static var viewAllResources: String { tr("home.viewAllResources") }
     public static var noRecent: String { tr("home.noRecent") }
     public static var openActivity: String { tr("home.openActivity") }
+    public static func modeChanged(_ mode: String) -> String { tr("home.modeChanged", mode) }
+    public static func modeChangeFailed(_ detail: String) -> String { tr("home.modeChangeFailed", detail) }
+    public static var modeChangeMalformed: String { tr("home.modeChangeMalformed") }
+
     public static var unmetered: String { tr("quota.unmetered") }
+    public static func unmeteredRPM(_ rpm: Int) -> String { tr("quota.unmeteredRpm", rpm) }
     public static var quotaUnknown: String { tr("quota.unknown") }
     public static var quotaLoading: String { tr("quota.loading") }
     public static var capacityUnavailable: String { tr("quota.unavailable") }
@@ -55,6 +60,11 @@ public enum DailyDriverL10n {
     public static func quotaObserved(_ observed: Int, _ connected: Int) -> String {
         tr("quota.observed", observed, connected)
     }
+    public static var quotaAvailable: String { tr("quota.state.available") }
+    public static var quotaLimited: String { tr("quota.state.limited") }
+    public static var quotaExhaustedState: String { tr("quota.state.exhausted") }
+    public static var weekWindow: String { tr("quota.window.week") }
+    public static var monthWindow: String { tr("quota.window.month") }
     public static var resetDue: String { tr("quota.resetDue") }
     public static func resetMinutes(_ value: Int) -> String { tr("quota.resetMinutes", value) }
     public static func resetHours(_ value: Int) -> String { tr("quota.resetHours", value) }
