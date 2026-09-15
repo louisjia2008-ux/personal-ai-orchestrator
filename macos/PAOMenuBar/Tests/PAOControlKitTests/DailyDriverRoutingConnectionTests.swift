@@ -8,6 +8,7 @@ final class DailyDriverRoutingConnectionTests: XCTestCase {
         let result = DailyDriverReadiness.derive(
             connection: .connected,
             schedulingMode: "MANUAL",
+            ownerExecutionEnabled: true,
             projects: [project()],
             providers: providers(runtimeId: "opencode", providerConnectionState: "DISCONNECTED")
         )
@@ -20,6 +21,7 @@ final class DailyDriverRoutingConnectionTests: XCTestCase {
         let result = DailyDriverReadiness.derive(
             connection: .connected,
             schedulingMode: "MANUAL",
+            ownerExecutionEnabled: true,
             projects: [project()],
             providers: providers(runtimeId: "opencode", providerConnectionState: "CONNECTED")
         )
@@ -32,6 +34,7 @@ final class DailyDriverRoutingConnectionTests: XCTestCase {
         let result = DailyDriverReadiness.derive(
             connection: .connected,
             schedulingMode: "MANUAL",
+            ownerExecutionEnabled: true,
             projects: [project()],
             providers: providers(runtimeId: "pi", providerConnectionState: nil)
         )
