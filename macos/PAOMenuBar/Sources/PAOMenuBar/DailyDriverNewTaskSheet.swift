@@ -260,7 +260,8 @@ struct DailyDriverNewTaskSheet: View {
             // convenience. It therefore cannot prove THIS invocation succeeded:
             // after any earlier success it may still be non-nil when this submit
             // is rejected. Only this invocation's structured notice is evidence.
-            if case .submitted(let taskId, _) = store.submitNotice {
+            if let notice = store.submitNotice,
+               case .submitted(let taskId, _) = notice {
                 onSubmitted(taskId)
             }
         }
