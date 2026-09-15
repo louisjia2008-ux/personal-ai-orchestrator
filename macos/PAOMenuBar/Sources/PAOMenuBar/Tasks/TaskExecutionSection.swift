@@ -4,10 +4,10 @@ import PAOControlKit
 
 /// What is running this task right now, and what the owner may start.
 ///
-/// The owner-dispatch controls moved here unchanged. Every gate they enforce is
-/// the same one: the persisted owner setting must be on, the task must be in a
-/// dispatchable state, and the target must be an execution-verified one. None of
-/// that implies autonomous Production ACTIVE, which stays disabled by design.
+/// Owner dispatch remains daemon-authoritative. The picker narrows itself to the
+/// same routing-connected, enabled, current-verification and runtime-available
+/// targets used by the other Daily Driver owner-selection surfaces; the daemon
+/// still revalidates every prerequisite when Dispatch is pressed.
 struct TaskExecutionSection: View {
     @EnvironmentObject private var store: OrchestratorStore
     let detail: TaskDetailView
@@ -21,10 +21,11 @@ struct TaskExecutionSection: View {
             ?? detail.routingSummary?.primary?.activeDecision?.selectedExecutionTargetId
     }
 
-    private var verifiedTargets: [ExecutionTargetHealthView] {
-        (store.providers?.providers ?? [])
-            .flatMap(\.executionTargets)
-            .filter { $0.enabled && $0.isExecutionVerified }
+    private var launchableTargets: [ExecutionTargetHealthView] {
+        DailyDriverExecutionTargets.launchable(
+            providers: store.providers,
+            connections: store.providerConnections
+        )
     }
 
     private var ownerSettingEnabled: Bool {
@@ -35,9 +36,12 @@ struct TaskExecutionSection: View {
         detail.task.state == "SUBMITTED" || detail.task.state == "READY"
     }
 
+    private var selectedTargetIsLaunchable: Bool {
+        launchableTargets.contains { $0.executionTargetId == selectedTargetId }
+    }
+
     private var canDispatch: Bool {
-        ownerSettingEnabled && taskDispatchable && !verifiedTargets.isEmpty
-            && !selectedTargetId.isEmpty
+        ownerSettingEnabled && taskDispatchable && selectedTargetIsLaunchable
     }
 
     var body: some View {
@@ -55,22 +59,29 @@ struct TaskExecutionSection: View {
             workerLog
         }
         .onAppear {
-            if selectedTargetId.isEmpty {
+            if !selectedTargetIsLaunchable {
+                selectedTargetId = preferredTargetId
+            }
+        }
+        .onChange(of: launchableTargets.map(\.executionTargetId)) { ids in
+            // Runtime/auth/verification truth can change while Task Detail is
+            // open. Never leave a stale picker selection dispatchable merely
+            // because some different target is still available.
+            if !ids.contains(selectedTargetId) {
                 selectedTargetId = preferredTargetId
             }
         }
     }
 
     /// The target the task itself names first: a MANUAL scheduling policy
-    /// recorded its choice at submit time, and honoring it here is the one
-    /// place the policy visibly drives execution today. Everything else
-    /// falls back to the first execution-verified target.
+    /// recorded its choice at submit time. Honor it only while it remains in the
+    /// current launchable set; otherwise fail over to the first truthful option.
     private var preferredTargetId: String {
         if let manual = detail.task.manualExecutionTargetId,
-           verifiedTargets.contains(where: { $0.executionTargetId == manual }) {
+           launchableTargets.contains(where: { $0.executionTargetId == manual }) {
             return manual
         }
-        return verifiedTargets.first?.executionTargetId ?? ""
+        return launchableTargets.first?.executionTargetId ?? ""
     }
 
     /// What the worker actually did, in the worker's own narration.
@@ -124,17 +135,17 @@ struct TaskExecutionSection: View {
                 if !ownerSettingEnabled {
                     TaskSectionNotice(text: L10n.ownerExecutionDisabled, symbol: "lock")
                 }
-                if verifiedTargets.isEmpty {
+                if launchableTargets.isEmpty {
                     TaskSectionNotice(text: L10n.noVerifiedTargets, symbol: "xmark.shield")
                 } else {
                     Picker(L10n.executionTarget, selection: $selectedTargetId) {
-                        ForEach(verifiedTargets) { target in
+                        ForEach(launchableTargets) { target in
                             let runtime = target.runtimeId == "pi" ? "Pi" : "OpenCode"
                             Text("\(runtime) · \(target.modelSkuId)")
                                 .tag(target.executionTargetId)
                         }
                     }
-                    if let target = verifiedTargets.first(where: {
+                    if let target = launchableTargets.first(where: {
                         $0.executionTargetId == selectedTargetId
                     }) {
                         TaskFieldRow(label: L10n.providerModel, value: target.modelSkuId)
@@ -164,7 +175,7 @@ struct TaskExecutionSection: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .disabled(!ownerSettingEnabled || verifiedTargets.isEmpty)
+                    .disabled(!ownerSettingEnabled || launchableTargets.isEmpty)
                     .help(L10n.recommendDispatchHelp)
                 }
                 if let policy = detail.task.schedulingPolicy {
