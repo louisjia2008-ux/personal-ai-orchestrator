@@ -218,7 +218,7 @@ private struct ProjectAutomationRow: View {
                     .multilineTextAlignment(.trailing)
                     .disabled(isSaving || !project.supervisedAutoAllowed)
                     .onSubmit(applyGrace)
-                Text("s")
+                Text(DailyDriverL10n.seconds)
                     .foregroundStyle(.secondary)
                 Button(DailyDriverL10n.apply, action: applyGrace)
                     .controlSize(.small)
