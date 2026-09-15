@@ -4,10 +4,10 @@ import PAOControlKit
 
 /// The execution targets belonging to one resource.
 ///
-/// A target is not a provider and not a model: it is the runnable thing —
-/// a model SKU on a runtime — that work is actually dispatched to. Presenting it
-/// under its provider is what makes the distinction legible: Claude the
-/// subscription, Claude Code the target it runs through.
+/// A target is not a provider and not a model: it is the concrete thing — a
+/// model SKU on a runtime — that work is dispatched to. Presenting it under its
+/// provider is what makes the distinction legible: Claude the subscription,
+/// Claude Code the target it runs through.
 ///
 /// Only discovery reports targets. The connection registry's model SKU list is a
 /// catalog fact and is shown separately, because a listed model is not a
@@ -18,22 +18,22 @@ struct ResourceExecutionTargetsSection: View {
 
     private var targets: [ExecutionTargetHealthView] { resource.executionTargets }
 
+    /// Dispatch admission requires both provider connection and a target whose
+    /// current host launch prerequisites hold. Historical demote-fallback
+    /// verification remains visible below, but it is not promoted into this set.
     private var runnableTargets: [ExecutionTargetHealthView] {
-        targets
-            .filter { $0.enabled && $0.isExecutionVerified }
-            .sorted { lhs, rhs in
-                // Stale verification is still runnable truth, but put clean
-                // evidence first so the normal choice is visually obvious.
-                if lhs.isExecutionVerifiedStale != rhs.isExecutionVerifiedStale {
-                    return !lhs.isExecutionVerifiedStale
-                }
-                return lhs.modelSkuId.localizedCaseInsensitiveCompare(rhs.modelSkuId) == .orderedAscending
+        guard resource.kind == .connected else { return [] }
+        return targets
+            .filter(\.isLaunchableOnHost)
+            .sorted {
+                $0.modelSkuId.localizedCaseInsensitiveCompare($1.modelSkuId) == .orderedAscending
             }
     }
 
     private var unavailableTargets: [ExecutionTargetHealthView] {
-        targets
-            .filter { !($0.enabled && $0.isExecutionVerified) }
+        let runnableIds = Set(runnableTargets.map(\.executionTargetId))
+        return targets
+            .filter { !runnableIds.contains($0.executionTargetId) }
             .sorted { $0.modelSkuId.localizedCaseInsensitiveCompare($1.modelSkuId) == .orderedAscending }
     }
 
@@ -83,15 +83,17 @@ struct ResourceExecutionTargetsSection: View {
     }
 }
 
-/// One execution target: what it is, whether it is runnable, and what the
-/// daemon last observed about it.
+/// One execution target: what it is, whether current execution verification
+/// exists, and what the daemon last observed about runtime/quota availability.
 struct ExecutionTargetRow: View {
     let target: ExecutionTargetHealthView
 
-    /// Enabled *and* execution-verified. Either alone is not a runnable target,
-    /// and reporting one as the other would offer the owner a target the
-    /// scheduler would refuse.
-    private var isRunnable: Bool { target.enabled && target.isExecutionVerified }
+    /// A stale demote-fallback means an older VERIFIED row exists but the newest
+    /// execution observation is non-VERIFIED. Showing that as VERIFIED would turn
+    /// historical evidence into current authority, so the primary chip fails closed.
+    private var hasCurrentVerification: Bool {
+        target.isExecutionVerified && !target.isExecutionVerifiedStale
+    }
 
     /// M1 WP2: SF Symbol for the tier chip. ``bolt`` (T0), ``gear``
     /// (T1), ``hare`` (T2), ``leaf`` (T3). ``questionmark.circle``
@@ -137,11 +139,6 @@ struct ExecutionTargetRow: View {
                         symbol: tierSymbol(tier)
                     )
                 }
-                // WP5b: stale-verification chip. Demote-fallback
-                // semantics — the latest evidence is non-VERIFIED
-                // while an older VERIFIED row exists. Renders a
-                // caution chip so the owner can spot a target whose
-                // history disagrees with its most recent run.
                 if target.isExecutionVerifiedStale {
                     ResourceChip(
                         text: L10n.targetVerifiedStale,
@@ -150,9 +147,9 @@ struct ExecutionTargetRow: View {
                     )
                 }
                 ResourceChip(
-                    text: isRunnable ? "VERIFIED" : "UNVERIFIED",
-                    tone: isRunnable ? .positive : .caution,
-                    symbol: isRunnable ? "checkmark.seal" : "seal"
+                    text: hasCurrentVerification ? "VERIFIED" : "UNVERIFIED",
+                    tone: hasCurrentVerification ? .positive : .caution,
+                    symbol: hasCurrentVerification ? "checkmark.seal" : "seal"
                 )
             }
 
@@ -165,7 +162,7 @@ struct ExecutionTargetRow: View {
                     )
                     ResourceFieldRow(
                         label: L10n.executionVerified,
-                        value: target.isExecutionVerified ? "TRUE" : "FALSE"
+                        value: hasCurrentVerification ? "TRUE" : "FALSE"
                     )
                     if let runtimeAvailable = target.runtimeAvailable {
                         ResourceFieldRow(
