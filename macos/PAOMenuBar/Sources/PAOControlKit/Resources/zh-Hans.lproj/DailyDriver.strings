@@ -26,8 +26,12 @@
 "home.viewAllResources" = "查看全部资源";
 "home.noRecent" = "最近没有已完成或已阻塞任务";
 "home.openActivity" = "打开活动记录";
+"home.modeChanged" = "调度模式已切换为 %@。";
+"home.modeChangeFailed" = "切换调度模式失败 · %@";
+"home.modeChangeMalformed" = "无法解析调度模式响应。";
 
 "quota.unmetered" = "不限额";
+"quota.unmeteredRpm" = "不限额 · 已观测 %d RPM";
 "quota.unknown" = "额度未知";
 "quota.loading" = "正在读取额度";
 "quota.unavailable" = "额度不可用";
@@ -35,6 +39,11 @@
 "quota.warnings" = "%d 个额度预警";
 "quota.unknownCount" = "%d 个额度未知";
 "quota.observed" = "已读取 %d/%d 个额度";
+"quota.state.available" = "可用";
+"quota.state.limited" = "受限";
+"quota.state.exhausted" = "已耗尽";
+"quota.window.week" = "周";
+"quota.window.month" = "月";
 "quota.resetDue" = "应已重置";
 "quota.resetMinutes" = "%d 分钟后重置";
 "quota.resetHours" = "%d 小时后重置";
