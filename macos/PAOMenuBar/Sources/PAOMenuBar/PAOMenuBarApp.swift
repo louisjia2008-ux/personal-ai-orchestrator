@@ -47,9 +47,11 @@ struct PAOMenuBarApp: App {
         .defaultSize(width: 1180, height: 740)
 
         MenuBarExtra {
+            // MenuBarContentView owns the canonical popover width. A second,
+            // smaller frame here previously forced the 380pt daily-driver
+            // content into a 340pt parent and could clip labels/actions.
             MenuBarContentView()
                 .environmentObject(store)
-                .frame(width: 340)
         } label: {
             Image(systemName: store.statusSummary.systemImage)
         }
