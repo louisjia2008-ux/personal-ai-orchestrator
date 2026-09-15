@@ -48,9 +48,9 @@ struct TaskAutoSupervisionSection: View {
         )
 
         TaskDetailSection(
-            "Supervised Auto",
+            DailyDriverL10n.autoSectionTitle,
             symbol: "sparkles",
-            footnote: "PAO revalidates task state, routing, project policy and quota before every action."
+            footnote: DailyDriverL10n.autoSectionFootnote
         ) {
             phaseNotice(presentation)
 
@@ -59,19 +59,19 @@ struct TaskAutoSupervisionSection: View {
             }
 
             TaskFieldRow(
-                label: "Planned target",
+                label: DailyDriverL10n.autoPlannedTarget,
                 value: presentation.frozenTargetId,
                 monospaced: true,
-                absentText: "No frozen target published"
+                absentText: DailyDriverL10n.autoNoTarget
             )
 
             if let reason = presentation.autoReason, !reason.isEmpty {
-                TaskFieldRow(label: "Why this plan", value: reason)
+                TaskFieldRow(label: DailyDriverL10n.autoWhyPlan, value: reason)
             }
 
             if let ackedAt = presentation.ackedAt {
                 TaskFieldRow(
-                    label: "Acknowledged",
+                    label: DailyDriverL10n.autoAcknowledged,
                     value: ackedAt.formatted(date: .abbreviated, time: .standard)
                 )
             }
@@ -94,25 +94,25 @@ struct TaskAutoSupervisionSection: View {
         switch presentation.phase {
         case .planned:
             TaskSectionNotice(
-                text: "Plan frozen. Waiting for the daemon to promote this task into its supervised grace step.",
+                text: DailyDriverL10n.autoPlanFrozen,
                 symbol: "hourglass",
                 tone: .neutral
             )
         case .waitingAck:
             TaskSectionNotice(
-                text: "Approval is required before the grace countdown begins.",
+                text: DailyDriverL10n.autoApprovalRequired,
                 symbol: "hand.tap",
                 tone: .caution
             )
         case .countingDown:
             TaskSectionNotice(
-                text: "Acknowledged. PAO will dispatch after the grace window unless you veto or dispatch now.",
+                text: DailyDriverL10n.autoCountingDown,
                 symbol: "timer",
                 tone: .caution
             )
         case .expiredRefreshing:
             TaskSectionNotice(
-                text: "Grace time elapsed. Refreshing daemon truth; execution is not assumed locally.",
+                text: DailyDriverL10n.autoExpiredRefreshing,
                 symbol: "arrow.triangle.2.circlepath",
                 tone: .neutral
             )
@@ -128,12 +128,12 @@ struct TaskAutoSupervisionSection: View {
         return VStack(alignment: .leading, spacing: 2) {
             Text(clock)
                 .font(.title2.weight(.semibold).monospacedDigit())
-            Text("until automatic dispatch")
+            Text(DailyDriverL10n.autoUntilDispatch)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Automatic dispatch countdown")
+        .accessibilityLabel(DailyDriverL10n.autoCountdownAccessibility)
         .accessibilityValue(clock)
     }
 
@@ -144,36 +144,36 @@ struct TaskAutoSupervisionSection: View {
                 Button {
                     run(.ack)
                 } label: {
-                    Label("Acknowledge", systemImage: "checkmark.circle")
+                    Label(DailyDriverL10n.autoAcknowledge, systemImage: "checkmark.circle")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .disabled(controller.isInFlight(.ack))
-                .help("Approve this frozen plan and start the daemon-owned grace window.")
+                .help(DailyDriverL10n.autoAckHelp)
             }
 
             if presentation.canDispatchNow {
                 Button {
                     run(.dispatchNow)
                 } label: {
-                    Label("Dispatch Now", systemImage: "paperplane.fill")
+                    Label(DailyDriverL10n.autoDispatchNow, systemImage: "paperplane.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .disabled(controller.isInFlight(.dispatchNow))
-                .help("Ask the daemon to dispatch now; all admission gates still apply.")
+                .help(DailyDriverL10n.autoDispatchHelp)
             }
 
             if presentation.canVeto {
                 Button(role: .destructive) {
                     run(.veto)
                 } label: {
-                    Label("Veto", systemImage: "xmark.octagon")
+                    Label(DailyDriverL10n.autoVeto, systemImage: "xmark.octagon")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(controller.isInFlight(.veto))
-                .help("Stop this supervised-auto lifecycle without bypassing daemon state checks.")
+                .help(DailyDriverL10n.autoVetoHelp)
             }
         }
     }
@@ -211,7 +211,7 @@ struct TaskAutoSupervisionSection: View {
                 }
                 .buttonStyle(.borderless)
                 .controlSize(.mini)
-                .accessibilityLabel("Dismiss result")
+                .accessibilityLabel(DailyDriverL10n.dismissResult)
             }
         }
     }
@@ -219,19 +219,19 @@ struct TaskAutoSupervisionSection: View {
     private func noticeText(_ notice: SupervisedAutoTaskController.Notice) -> String {
         switch notice {
         case .acknowledged:
-            return "Acknowledged. Daemon truth has been refreshed."
+            return DailyDriverL10n.autoNoticeAcknowledged
         case .vetoed:
-            return "Veto accepted. Daemon truth has been refreshed."
+            return DailyDriverL10n.autoNoticeVetoed
         case .dispatchRequested(let status):
-            return "Dispatch requested · \(status)"
+            return DailyDriverL10n.autoNoticeDispatch(status)
         case .staleState:
-            return "Task changed before the action completed. The current state was reloaded."
+            return DailyDriverL10n.autoNoticeStale
         case .blocked(let code):
-            return "Daemon blocked the action · \(code)"
+            return DailyDriverL10n.autoNoticeBlocked(code)
         case .failed(let detail):
-            return "Action failed · \(detail)"
+            return DailyDriverL10n.autoNoticeFailed(detail)
         case .malformedResponse:
-            return "Daemon response could not be decoded."
+            return DailyDriverL10n.autoNoticeMalformed
         }
     }
 
