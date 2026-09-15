@@ -7,6 +7,8 @@
 "home.capacity" = "Capacity";
 "home.recent" = "Recent";
 "home.daemonUnavailable" = "Daemon unavailable";
+"home.ownerExecutionDisabled" = "Owner execution is off";
+"home.ownerExecutionDisabledDetail" = "Enable Owner-Initiated Execution in Settings before PAO can launch tasks.";
 "home.fullAutomationLocked" = "Full Automation is controlled by production gates";
 "home.configureProjectAutomation" = "Configure Project Automation…";
 "home.modeHelp" = "Change between Manual and Supervised Auto without changing the routing policy.";
