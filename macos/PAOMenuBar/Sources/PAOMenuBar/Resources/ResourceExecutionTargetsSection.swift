@@ -18,11 +18,20 @@ struct ResourceExecutionTargetsSection: View {
 
     private var targets: [ExecutionTargetHealthView] { resource.executionTargets }
 
-    /// Dispatch admission requires both provider connection and a target whose
+    /// Normal providers require an explicit connection-registry record. Pi is a
+    /// local-runtime-authenticated surface and intentionally has no such record;
+    /// the daemon's Pi runtime-availability projection is true only when its auth
+    /// is READY and the exact model still exists in the Pi catalog.
+    private var hasRoutingConnection: Bool {
+        resource.kind == .connected
+            || targets.contains { $0.runtimeId == "pi" && $0.runtimeAvailable == true }
+    }
+
+    /// Dispatch admission requires both routing connection and a target whose
     /// current host launch prerequisites hold. Historical demote-fallback
     /// verification remains visible below, but it is not promoted into this set.
     private var runnableTargets: [ExecutionTargetHealthView] {
-        guard resource.kind == .connected else { return [] }
+        guard hasRoutingConnection else { return [] }
         return targets
             .filter(\.isLaunchableOnHost)
             .sorted {
