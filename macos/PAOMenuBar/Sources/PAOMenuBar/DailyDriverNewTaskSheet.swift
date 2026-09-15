@@ -31,9 +31,10 @@ struct DailyDriverNewTaskSheet: View {
     }
 
     /// A MANUAL picker must offer only targets the current client can truthfully
-    /// describe as runnable. Provider connectivity/runtime availability gets a
-    /// target into consideration; enabled + execution-verified is still required
-    /// before the owner may pin a task to it.
+    /// describe as launchable. Provider connectivity gets a target into
+    /// consideration; enabled + current execution verification + host runtime
+    /// availability are still required before the owner may pin a task to it.
+    /// A demote-fallback verification is historical evidence, not launch authority.
     private var connectedTargets: [ExecutionTargetHealthView] {
         let connectedIds = Set(
             (store.providerConnections?.connected ?? []).map(\.providerId)
@@ -43,7 +44,7 @@ struct DailyDriverNewTaskSheet: View {
                 provider.executionTargets.filter { target in
                     let connectionEligible = connectedIds.contains(provider.providerId)
                         || (target.runtimeId == "pi" && target.runtimeAvailable == true)
-                    return connectionEligible && target.enabled && target.isExecutionVerified
+                    return connectionEligible && target.isLaunchableOnHost
                 }
             }
             .sorted {
@@ -136,8 +137,8 @@ struct DailyDriverNewTaskSheet: View {
             resetToDaemonDefaults()
         }
         .onChange(of: connectedTargets.map(\.executionTargetId)) { ids in
-            // Execution verification can expire while this sheet is open. Never
-            // keep a MANUAL selection that disappeared from the runnable set.
+            // Runtime/verification truth can change while this sheet is open.
+            // Never keep a MANUAL selection that disappeared from the launchable set.
             if let manualExecutionTargetId, !ids.contains(manualExecutionTargetId) {
                 self.manualExecutionTargetId = nil
             }
