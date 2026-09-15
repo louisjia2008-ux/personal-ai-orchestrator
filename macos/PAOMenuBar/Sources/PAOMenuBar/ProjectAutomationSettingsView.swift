@@ -13,6 +13,12 @@ struct ProjectAutomationSettingsView: View {
     @State private var savingProjectIds: Set<String> = []
     @State private var notice: String?
 
+    let showsDoneButton: Bool
+
+    init(showsDoneButton: Bool = true) {
+        self.showsDoneButton = showsDoneButton
+    }
+
     private var projects: [ProjectView] {
         (store.projects?.projects ?? [])
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
@@ -29,8 +35,10 @@ struct ProjectAutomationSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 20)
-                Button(DailyDriverL10n.done) { dismiss() }
-                    .keyboardShortcut(.defaultAction)
+                if showsDoneButton {
+                    Button(DailyDriverL10n.done) { dismiss() }
+                        .keyboardShortcut(.defaultAction)
+                }
             }
             .padding(20)
 
