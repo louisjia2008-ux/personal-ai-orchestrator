@@ -18,6 +18,25 @@ struct ResourceExecutionTargetsSection: View {
 
     private var targets: [ExecutionTargetHealthView] { resource.executionTargets }
 
+    private var runnableTargets: [ExecutionTargetHealthView] {
+        targets
+            .filter { $0.enabled && $0.isExecutionVerified }
+            .sorted { lhs, rhs in
+                // Stale verification is still runnable truth, but put clean
+                // evidence first so the normal choice is visually obvious.
+                if lhs.isExecutionVerifiedStale != rhs.isExecutionVerifiedStale {
+                    return !lhs.isExecutionVerifiedStale
+                }
+                return lhs.modelSkuId.localizedCaseInsensitiveCompare(rhs.modelSkuId) == .orderedAscending
+            }
+    }
+
+    private var unavailableTargets: [ExecutionTargetHealthView] {
+        targets
+            .filter { !($0.enabled && $0.isExecutionVerified) }
+            .sorted { $0.modelSkuId.localizedCaseInsensitiveCompare($1.modelSkuId) == .orderedAscending }
+    }
+
     var body: some View {
         ResourceSection(
             L10n.resourceSectionExecutionTargets,
@@ -26,9 +45,37 @@ struct ResourceExecutionTargetsSection: View {
             if targets.isEmpty {
                 ResourceNotice(text: L10n.resourceNoExecutionTargets, symbol: "cpu")
             } else {
-                VStack(alignment: .leading, spacing: Spacing.inner) {
-                    ForEach(targets) { target in
-                        ExecutionTargetRow(target: target)
+                VStack(alignment: .leading, spacing: Spacing.element) {
+                    if runnableTargets.isEmpty {
+                        ResourceNotice(
+                            text: "No verified execution target is currently runnable.",
+                            symbol: "bolt.slash",
+                            tone: .caution
+                        )
+                    } else {
+                        VStack(alignment: .leading, spacing: Spacing.inner) {
+                            Text("Available targets")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            ForEach(runnableTargets) { target in
+                                ExecutionTargetRow(target: target)
+                            }
+                        }
+                    }
+
+                    if !unavailableTargets.isEmpty {
+                        DisclosureGroup(
+                            "Unavailable / unverified (\(unavailableTargets.count))"
+                        ) {
+                            VStack(alignment: .leading, spacing: Spacing.inner) {
+                                ForEach(unavailableTargets) { target in
+                                    ExecutionTargetRow(target: target)
+                                }
+                            }
+                            .padding(.top, Spacing.inner)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
                 }
             }
