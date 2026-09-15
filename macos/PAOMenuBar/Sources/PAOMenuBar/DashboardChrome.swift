@@ -2,25 +2,9 @@ import SwiftUI
 
 import PAOControlKit
 
-// Shared chrome for every primary Dashboard section.
-//
-// The page title is the window's toolbar title — the native macOS page chrome —
-// and no destination draws a second one inside its content. Earlier revisions
-// drew a title band under the toolbar, which repeated the same word twice, 52pt
-// apart, on all five destinations, and cost every page a band of vertical space
-// before its first line of content.
-//
-// What remains shared is the geometry below the toolbar:
-// - `DashboardPageScaffold` — the content region itself (background, insets
-//   contract, measurable identity), used directly by the pages that manage
-//   their own layout (Tasks, Resources)
-// - `DashboardPageContainer` — the scaffold plus a scrolling document body with
-//   the standard page insets and section rhythm (Overview, Activity, Settings)
+// Shared chrome for the Daily Driver redesign. Pages keep native toolbar titles;
+// this layer owns only the content geometry and quiet grouped surfaces below it.
 
-/// The content region under the toolbar.
-///
-/// Identified as one accessibility container so the layout contract — every
-/// destination filling the same region — is measurable rather than asserted.
 struct DashboardPageScaffold<Content: View>: View {
     @ViewBuilder var content: Content
 
@@ -37,8 +21,6 @@ struct DashboardPageScaffold<Content: View>: View {
     }
 }
 
-/// The document-style container: a scrolling body with the standard page insets
-/// and section rhythm.
 struct DashboardPageContainer<Content: View>: View {
     @ViewBuilder var content: Content
 
@@ -60,11 +42,9 @@ struct DashboardPageContainer<Content: View>: View {
     }
 }
 
-/// A group heading inside a page.
-///
-/// One weight, one colour, one baseline, on every page that groups content —
-/// so "Basic information" on Overview and "Today" on Activity are visibly the
-/// same rank rather than two designers' idea of a heading.
+/// Product-level section heading. It must be stronger than metadata inside a
+/// surface; the previous secondary/subheadline treatment made every page read
+/// as one undifferentiated block of diagnostics.
 struct DashboardSectionHeader: View {
     let title: String
     var symbol: String?
@@ -80,17 +60,17 @@ struct DashboardSectionHeader: View {
         HStack(alignment: .firstTextBaseline, spacing: Spacing.tight) {
             if let symbol {
                 Image(systemName: symbol)
-                    .imageScale(.small)
+                    .imageScale(.medium)
                     .foregroundStyle(.secondary)
             }
             Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(.headline)
+                .foregroundStyle(.primary)
             if let detail {
                 Spacer(minLength: Spacing.inner)
                 Text(detail)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -98,16 +78,13 @@ struct DashboardSectionHeader: View {
     }
 }
 
-/// A panel: one bordered surface holding one group of related facts.
-///
-/// Quiet on purpose. The previous card drew a `.regularMaterial` slab, and a
-/// page of them read as a board of grey rectangles rather than as a document.
-/// This one is the window's own control surface plus a hairline, which is what
-/// macOS itself uses to separate a panel from the page behind it.
+/// A quiet grouped surface, not a decorative card. Borders are deliberately
+/// subtle so hierarchy comes from content and spacing rather than a wall of
+/// rectangles. Independent action/status modules may still use this component;
+/// ordinary rows should prefer dividers inside one surface.
 struct DashboardCard<Content: View>: View {
     let title: String?
     let symbol: String?
-    /// KPI tiles pin this to 1 so a longer title can never grow one card in a row.
     var titleLineLimit: Int? = nil
     @ViewBuilder var content: Content
 
@@ -124,21 +101,20 @@ struct DashboardCard<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.inner) {
+        VStack(alignment: .leading, spacing: Spacing.element) {
             if let title {
-                Label {
-                    Text(title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                } icon: {
+                HStack(spacing: Spacing.tight) {
                     if let symbol {
                         Image(systemName: symbol)
                             .imageScale(.small)
                             .foregroundStyle(.secondary)
                     }
+                    Text(title)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(titleLineLimit)
+                        .minimumScaleFactor(titleLineLimit == nil ? 1.0 : 0.8)
                 }
-                .lineLimit(titleLineLimit)
-                .minimumScaleFactor(titleLineLimit == nil ? 1.0 : 0.7)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             content
@@ -146,27 +122,16 @@ struct DashboardCard<Content: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(DashboardLayoutMetrics.cardPadding)
         .background(
-            Color(nsColor: .controlBackgroundColor),
-            in: RoundedRectangle(cornerRadius: DashboardLayoutMetrics.cardCornerRadius)
+            Color(nsColor: .controlBackgroundColor).opacity(0.72),
+            in: RoundedRectangle(cornerRadius: DashboardLayoutMetrics.cardCornerRadius, style: .continuous)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: DashboardLayoutMetrics.cardCornerRadius)
-                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
-        )
+        .overlay {
+            RoundedRectangle(cornerRadius: DashboardLayoutMetrics.cardCornerRadius, style: .continuous)
+                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.5)
+        }
     }
 }
 
-/// Placeholder for a surface with nothing to show.
-///
-/// Draws its content only; callers decide whether it fills a pane (the
-/// collection columns and the Resources detail center it in the whole pane) or
-/// sits inside a larger composition (the Tasks no-selection state groups it
-/// with the routing readiness card).
-///
-/// The action is a title plus a closure rather than a bare closure: every empty
-/// state used to render the same "New Task" button regardless of what it was
-/// empty of, so the quota page offered to create a task when what it needed was
-/// a provider. A caller that supplies an action now has to say what it does.
 struct EmptyStateView: View {
     let title: String
     let symbol: String
@@ -194,17 +159,12 @@ struct EmptyStateView: View {
     var body: some View {
         VStack(spacing: Spacing.element) {
             Image(systemName: symbol)
-                .font(.system(size: 44, weight: .light))
+                .font(.system(size: 38, weight: .light))
                 .foregroundStyle(.tertiary)
-            Text(title).font(.title3.weight(.semibold))
-            // No `fixedSize`: it asks the text for its height at whatever width
-            // it is proposed, and a split view probing its detail pane's
-            // minimum width proposes a very narrow one. The tall answer became
-            // the pane's minimum height, so Tasks — the one destination showing
-            // this state in a detail pane — pushed the whole navigation split
-            // taller than the window and slid up under the title bar. A bounded
-            // width is enough; text wraps inside it on its own.
+            Text(title)
+                .font(.title3.weight(.semibold))
             Text(message)
+                .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             if let hint {
@@ -219,30 +179,16 @@ struct EmptyStateView: View {
                     .padding(.top, Spacing.tight)
             }
         }
-        // A cap, not a fixed width: this view also fills the 312pt collection
-        // column, where a definite 340 would overflow it.
-        .frame(maxWidth: 340)
-        .padding(Spacing.element)
+        .frame(maxWidth: 380)
+        .padding(Spacing.section)
     }
 }
 
-/// Chronological daemon events as one aligned table, grouped by day.
-///
-/// Fixed columns — timestamp, event kind, summary — so every row shares a
-/// leading edge and the columns line up however wide the pane is. The timestamp
-/// column is wide enough for an absolute date, because a column sized for
-/// "5 hours ago" wrapped every older row onto two lines and left the table with
-/// no shared row height. Summaries are the daemon's own sentences, verbatim.
+/// Human-readable chronological events. The machine event type remains visible
+/// as secondary audit metadata instead of competing with the event summary.
 struct EventList: View {
     let events: [ActivityEventView]
-    /// Day headings separate the groups on the Activity page. Overview's recent
-    /// slice is short enough to read without them.
     var groupsByDay: Bool = false
-
-    /// Wide enough for the longest form each column renders: a full date and
-    /// time when the list is ungrouped, a clock time when it is not.
-    private var timestampWidth: CGFloat { groupsByDay ? 72 : 132 }
-    private static let kindWidth: CGFloat = 176
 
     var body: some View {
         if events.isEmpty {
@@ -252,61 +198,56 @@ struct EventList: View {
         } else if groupsByDay {
             VStack(alignment: .leading, spacing: DashboardLayoutMetrics.sectionSpacing) {
                 ForEach(Timestamps.groupedByDay(events, id: \.createdAt)) { group in
-                    VStack(alignment: .leading, spacing: 0) {
+                    VStack(alignment: .leading, spacing: Spacing.inner) {
                         DashboardSectionHeader(group.title)
-                            .padding(.bottom, Spacing.inner)
-                        table(group.items)
+                        rows(group.items)
                     }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            table(events)
+            rows(events)
         }
     }
 
-    private func table(_ rows: [ActivityEventView]) -> some View {
+    private func rows(_ rows: [ActivityEventView]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(rows) { event in
-                row(event)
-                if event.id != rows.last?.id {
-                    Divider()
-                }
+                eventRow(event)
+                if event.id != rows.last?.id { Divider() }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func row(_ event: ActivityEventView) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: Spacing.element) {
-            Text(stamp(event))
-                .font(.caption.monospacedDigit())
+    private func eventRow(_ event: ActivityEventView) -> some View {
+        HStack(alignment: .top, spacing: Spacing.element) {
+            Circle()
+                .fill(Color.secondary.opacity(0.45))
+                .frame(width: 6, height: 6)
+                .padding(.top, 7)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(event.summary)
+                    .font(.callout)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: Spacing.inner) {
+                    Text(stamp(event))
+                        .font(.caption.monospacedDigit())
+                    Text(event.eventType)
+                        .font(.system(.caption2, design: .monospaced))
+                }
                 .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(width: timestampWidth, alignment: .leading)
-            Text(event.eventType)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(width: Self.kindWidth, alignment: .leading)
-            Text(event.summary)
-                .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Spacer(minLength: 0)
         }
-        .padding(.vertical, Spacing.inner - 2)
+        .padding(.vertical, 10)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(stamp(event)), \(event.eventType), \(event.summary)")
+        .accessibilityLabel("\(stamp(event)), \(event.summary), \(event.eventType)")
         .accessibilityIdentifier("dashboard.eventRow")
     }
 
-    /// Under a day heading the date is already stated, so the row carries the
-    /// clock time only.
     private func stamp(_ event: ActivityEventView) -> String {
-        groupsByDay
-            ? Timestamps.timeOfDay(event.createdAt)
-            : Timestamps.friendly(event.createdAt)
+        groupsByDay ? Timestamps.timeOfDay(event.createdAt) : Timestamps.friendly(event.createdAt)
     }
 }
