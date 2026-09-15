@@ -1,5 +1,21 @@
 import Foundation
 
+/// Fail-closed launchability projection shared by Daily Driver surfaces.
+///
+/// The daemon's launch boundary requires the target to be enabled, currently
+/// execution-verified, and backed by an available runtime. A demote-fallback
+/// (`executionVerifiedStale == true`) is historical evidence only: the latest
+/// execution observation was non-VERIFIED, so the client must not promote that
+/// target into a runnable picker/section until fresh verification restores it.
+public extension ExecutionTargetHealthView {
+    var isLaunchableOnHost: Bool {
+        enabled
+            && isExecutionVerified
+            && !isExecutionVerifiedStale
+            && runtimeAvailable == true
+    }
+}
+
 /// Whether the Daily Driver can accept and execute new work right now.
 ///
 /// This deliberately does **not** use historical BLOCKED/FAILED tasks or the
@@ -55,19 +71,15 @@ public enum DailyDriverReadiness {
             return blocked(.supervisedAutoNeedsProject)
         }
 
-        let verifiedTargets = (providers?.providers ?? [])
+        let launchableTargets = (providers?.providers ?? [])
             .flatMap(\.executionTargets)
-            .filter { target in
-                target.enabled
-                    && target.isExecutionVerified
-                    && target.runtimeAvailable == true
-            }
+            .filter(\.isLaunchableOnHost)
 
-        guard !verifiedTargets.isEmpty else {
+        guard !launchableTargets.isEmpty else {
             return blocked(.noRunnableTarget)
         }
 
-        let notExplicitlyUnavailable = verifiedTargets.filter { target in
+        let notExplicitlyUnavailable = launchableTargets.filter { target in
             guard let state = target.observedAvailability?.state else {
                 // Missing availability is uncertainty, not evidence of exhaustion.
                 // Capacity surfaces still render that uncertainty explicitly.
