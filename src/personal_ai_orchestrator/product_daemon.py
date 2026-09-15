@@ -12,8 +12,10 @@ typed UDS control plane. P4.2.4-A adds credential-safe provider discovery:
   owned by :class:`ProviderRegistryManager` and projected to the
   Dashboard via the Control API.
 
-Production ACTIVE remains ``DISABLED_BY_DESIGN``: this phase only adds
-provider truth to the Dashboard, not autonomous routing.
+The bundled Daily Driver explicitly opts its control-only daemon into the
+host-owned SUPERVISED_AUTO supervisor step. This does not authorize Production
+ACTIVE: scheduling mode, project opt-in, grace, quota/evidence, lease and launch
+gates remain authoritative and the default scheduling mode remains MANUAL.
 """
 
 from __future__ import annotations
@@ -134,6 +136,9 @@ def build_daemon_argv(
         "--port",
         str(port),
         "--control-only",
+        # Product-level explicit opt-in: generic --control-only remains
+        # heartbeat-only unless its host names this capability too.
+        "--enable-supervised-auto-tick",
     ]
     if execution_repo is not None:
         argv += ["--execution-repo", str(execution_repo)]
