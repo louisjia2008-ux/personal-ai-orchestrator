@@ -22,14 +22,14 @@ struct ProjectAutomationSettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Project Automation")
+                    Text(DailyDriverL10n.projectAutomationTitle)
                         .font(.title2.weight(.semibold))
-                    Text("Choose which projects Supervised Auto may operate on. These settings do not enable Production ACTIVE.")
+                    Text(DailyDriverL10n.projectAutomationSubtitle)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 20)
-                Button("Done") { dismiss() }
+                Button(DailyDriverL10n.done) { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
             .padding(20)
@@ -38,9 +38,9 @@ struct ProjectAutomationSettingsView: View {
 
             if projects.isEmpty {
                 EmptyStateView(
-                    title: "No registered projects",
+                    title: DailyDriverL10n.noRegisteredProjects,
                     symbol: "folder.badge.questionmark",
-                    message: "Register a project before enabling project-level automation."
+                    message: DailyDriverL10n.registerProjectFirst
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -94,7 +94,7 @@ struct ProjectAutomationSettingsView: View {
                 // that happened to be rendered when the owner clicked.
                 let currentList = try await client.projects()
                 guard let current = currentList.projects.first(where: { $0.projectId == projectId }) else {
-                    notice = "Project no longer exists. The list was refreshed."
+                    notice = DailyDriverL10n.projectGone
                     savingProjectIds.remove(projectId)
                     await store.refreshNow()
                     return
@@ -111,12 +111,12 @@ struct ProjectAutomationSettingsView: View {
                     graceSeconds: requestedGrace
                 )
                 await store.refreshNow()
-                notice = "Project automation settings saved from daemon-confirmed state."
+                notice = DailyDriverL10n.projectSaved
             } catch let error as PAOClientError {
-                notice = "Project automation update failed · \(error.displayDetail)"
+                notice = DailyDriverL10n.projectUpdateFailed(error.displayDetail)
                 await store.refreshNow()
             } catch {
-                notice = "Project automation response could not be decoded."
+                notice = DailyDriverL10n.projectMalformed
                 await store.refreshNow()
             }
             savingProjectIds.remove(projectId)
@@ -171,14 +171,14 @@ private struct ProjectAutomationRow: View {
                 if isSaving {
                     ProgressView().controlSize(.small)
                 } else if project.supervisedAutoAllowed {
-                    Label("Enabled", systemImage: "checkmark.circle.fill")
+                    Label(DailyDriverL10n.enabled, systemImage: "checkmark.circle.fill")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(StatusTone.positive.color)
                 }
             }
 
             Toggle(
-                "Allow Supervised Auto",
+                DailyDriverL10n.allowSupervisedAuto,
                 isOn: Binding(
                     get: { project.supervisedAutoAllowed },
                     set: { value in
@@ -193,7 +193,7 @@ private struct ProjectAutomationRow: View {
             .disabled(isSaving || !project.isOnline)
 
             Toggle(
-                "Allow unattended supervised work",
+                DailyDriverL10n.allowUnattended,
                 isOn: Binding(
                     get: { project.unattendedAllowed },
                     set: onUnattendedChanged
@@ -202,9 +202,9 @@ private struct ProjectAutomationRow: View {
             .disabled(isSaving || !project.isOnline || !project.supervisedAutoAllowed)
 
             HStack {
-                Text("Grace window")
+                Text(DailyDriverL10n.graceWindow)
                 Spacer()
-                TextField("seconds", text: $graceDraft)
+                TextField(DailyDriverL10n.seconds, text: $graceDraft)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 92)
                     .multilineTextAlignment(.trailing)
@@ -212,7 +212,7 @@ private struct ProjectAutomationRow: View {
                     .onSubmit(applyGrace)
                 Text("s")
                     .foregroundStyle(.secondary)
-                Button("Apply", action: applyGrace)
+                Button(DailyDriverL10n.apply, action: applyGrace)
                     .controlSize(.small)
                     .disabled(
                         isSaving || !project.supervisedAutoAllowed || !graceIsValid
@@ -221,11 +221,11 @@ private struct ProjectAutomationRow: View {
             }
 
             if !graceIsValid {
-                Text("Grace must be between 1 and 86,400 seconds.")
+                Text(DailyDriverL10n.graceRange)
                     .font(.caption)
                     .foregroundStyle(StatusTone.caution.color)
             } else {
-                Text("After acknowledgement, PAO waits this long before automatic dispatch unless you veto or dispatch now.")
+                Text(DailyDriverL10n.graceHelp)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -234,16 +234,16 @@ private struct ProjectAutomationRow: View {
             if !isSaving { graceDraft = String(newValue) }
         }
         .confirmationDialog(
-            "Disable Supervised Auto for \(project.displayName)?",
+            DailyDriverL10n.disableProjectTitle(project.displayName),
             isPresented: $confirmingDisable,
             titleVisibility: .visible
         ) {
-            Button("Disable", role: .destructive) {
+            Button(DailyDriverL10n.disable, role: .destructive) {
                 onSupervisedChanged(false)
             }
-            Button("Cancel", role: .cancel) {}
+            Button(DailyDriverL10n.cancel, role: .cancel) {}
         } message: {
-            Text("The daemon may abort this project's waiting or planned supervised-auto lifecycles.")
+            Text(DailyDriverL10n.disableProjectMessage)
         }
     }
 
