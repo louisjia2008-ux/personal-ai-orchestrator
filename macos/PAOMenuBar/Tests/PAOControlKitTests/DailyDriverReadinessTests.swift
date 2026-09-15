@@ -123,6 +123,49 @@ final class DailyDriverReadinessTests: XCTestCase {
         XCTAssertTrue(result.isReady)
     }
 
+    func testOwnerSelectableTargetsRequireExplicitConnectionForOpenCode() {
+        let openCode = target(runtimeId: "opencode")
+        let providerList = providers([openCode])
+
+        XCTAssertTrue(
+            DailyDriverExecutionTargets.launchable(
+                providers: providerList,
+                connections: connections(connectedProviderIds: ["provider-1"])
+            ).contains(where: { $0.executionTargetId == openCode.executionTargetId })
+        )
+
+        XCTAssertTrue(
+            DailyDriverExecutionTargets.launchable(
+                providers: providerList,
+                connections: connections(connectedProviderIds: [])
+            ).isEmpty
+        )
+    }
+
+    func testPiRuntimeAvailabilityRepresentsItsRoutingConnection() {
+        let piReady = target(runtimeId: "pi", runtimeAvailable: true)
+        let piUnavailable = target(id: "pi-off", runtimeId: "pi", runtimeAvailable: false)
+
+        let launchable = DailyDriverExecutionTargets.launchable(
+            providers: providers([piReady, piUnavailable]),
+            connections: connections(connectedProviderIds: [])
+        )
+
+        XCTAssertEqual(launchable.map(\.executionTargetId), [piReady.executionTargetId])
+    }
+
+    func testOwnerSelectableTargetsExcludeStaleVerification() {
+        let current = target(id: "current", runtimeId: "opencode")
+        let stale = target(id: "stale", verificationStale: true, runtimeId: "opencode")
+
+        let launchable = DailyDriverExecutionTargets.launchable(
+            providers: providers([stale, current]),
+            connections: connections(connectedProviderIds: ["provider-1"])
+        )
+
+        XCTAssertEqual(launchable.map(\.executionTargetId), [current.executionTargetId])
+    }
+
     func testProductionActiveEvidenceRisksAreNotDailyDriverAttentionRisks() throws {
         let productionOnly = try risk(
             rawCode: "Owner approval required before ACTIVE mode",
@@ -163,6 +206,7 @@ final class DailyDriverReadinessTests: XCTestCase {
         id: String = "target-1",
         verified: Bool = true,
         verificationStale: Bool = false,
+        runtimeId: String = "pi",
         runtimeAvailable: Bool = true,
         observedState: String? = "AVAILABLE"
     ) -> ExecutionTargetHealthView {
@@ -176,7 +220,7 @@ final class DailyDriverReadinessTests: XCTestCase {
         }
         return decode(
             """
-            {"execution_target_id":"\(id)","model_sku_id":"model-\(id)","runtime_id":"pi","enabled":true,"execution_verified":\(verified),"execution_verified_stale":\(verificationStale),"runtime_available":\(runtimeAvailable),"observed_availability":\(observed)}
+            {"execution_target_id":"\(id)","model_sku_id":"model-\(id)","runtime_id":"\(runtimeId)","enabled":true,"execution_verified":\(verified),"execution_verified_stale":\(verificationStale),"runtime_available":\(runtimeAvailable),"observed_availability":\(observed)}
             """
         )
     }
@@ -192,6 +236,19 @@ final class DailyDriverReadinessTests: XCTestCase {
                     executionTargets: targets
                 )
             ]
+        )
+    }
+
+    private func connections(connectedProviderIds: [String]) -> ProviderConnectionListView {
+        let connected = connectedProviderIds.map { providerId in
+            """
+            {"provider_id":"\(providerId)","display_name":"Provider","connection_state":"CONNECTED","auth_state":"AUTHENTICATED","execution_verified":true,"runtime_state":"AVAILABLE","credential_reference_type":"KEYCHAIN","region":null,"plan_surface":null,"model_skus":[],"connected_at":null,"last_validated_at":null,"last_reason_code":null}
+            """
+        }.joined(separator: ",")
+        return decode(
+            """
+            {"connected":[\(connected)],"available_to_add":[],"import_candidates":[]}
+            """
         )
     }
 
