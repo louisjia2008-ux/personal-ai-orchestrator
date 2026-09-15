@@ -76,7 +76,7 @@ struct MenuBarContentView: View {
     private var schedulingSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Label("Scheduling", systemImage: modeSymbol(schedulingMode))
+                Label(DailyDriverL10n.scheduling, systemImage: modeSymbol(schedulingMode))
                     .font(.subheadline.weight(.semibold))
                 Spacer()
                 Text(modeLabel(schedulingMode))
@@ -91,18 +91,18 @@ struct MenuBarContentView: View {
                     if isStoppingSupervisedAuto {
                         HStack {
                             ProgressView().controlSize(.small)
-                            Text("Stopping Supervised Auto…")
+                            Text(DailyDriverL10n.stoppingSupervisedAuto)
                         }
                         .frame(maxWidth: .infinity)
                     } else {
-                        Label("Stop Supervised Auto", systemImage: "stop.fill")
+                        Label(DailyDriverL10n.stopSupervisedAuto, systemImage: "stop.fill")
                             .frame(maxWidth: .infinity)
                     }
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .disabled(isStoppingSupervisedAuto)
-                .help("Switch the daemon back to Manual while preserving the current routing policy.")
+                .help(DailyDriverL10n.stopSupervisedAutoHelp)
             }
 
             if let stopNotice {
@@ -118,7 +118,7 @@ struct MenuBarContentView: View {
     private var currentWorkSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Current Work")
+                Text(DailyDriverL10n.currentWork)
                     .font(.subheadline.weight(.semibold))
                 Spacer()
                 if liveTasks.count > 1 {
@@ -144,7 +144,7 @@ struct MenuBarContentView: View {
                     Spacer(minLength: 0)
                 }
             } else {
-                Label("Nothing is running", systemImage: "checkmark.circle")
+                Label(DailyDriverL10n.nothingRunning, systemImage: "checkmark.circle")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -160,7 +160,7 @@ struct MenuBarContentView: View {
                 Image(systemName: hasWarning ? "gauge.with.dots.needle.33percent" : "gauge.with.dots.needle.67percent")
                     .foregroundStyle(hasWarning ? StatusTone.caution.color : StatusTone.neutral.color)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("AI Capacity")
+                    Text(DailyDriverL10n.aiCapacity)
                         .font(.subheadline.weight(.semibold))
                     Text(quotaSummary(summary))
                         .font(.caption)
@@ -208,12 +208,12 @@ struct MenuBarContentView: View {
                 await store.loadSchedulingSettings()
                 await store.refreshNow()
                 stopNotice = updated.mode == "MANUAL"
-                    ? "Supervised Auto stopped. Manual mode is now authoritative."
-                    : "Daemon returned \(modeLabel(updated.mode)); no local mode was assumed."
+                    ? DailyDriverL10n.stoppedSupervisedAuto
+                    : DailyDriverL10n.daemonReturnedMode(modeLabel(updated.mode))
             } catch let error as PAOClientError {
-                stopNotice = "Emergency stop failed · \(error.displayDetail)"
+                stopNotice = DailyDriverL10n.emergencyStopFailed(error.displayDetail)
             } catch {
-                stopNotice = "Emergency stop response could not be decoded."
+                stopNotice = DailyDriverL10n.emergencyStopMalformed
             }
             isStoppingSupervisedAuto = false
         }
@@ -221,24 +221,38 @@ struct MenuBarContentView: View {
 
     private func quotaSummary(_ summary: QuotaSummaryView) -> String {
         if summary.quotaExhaustedCount > 0 {
-            return "\(summary.quotaExhaustedCount) exhausted · \(summary.quotaWarningCount) warning"
+            return DailyDriverL10n.menuQuotaExhausted(
+                summary.quotaExhaustedCount,
+                summary.quotaWarningCount
+            )
         }
         if summary.quotaWarningCount > 0 {
-            return "\(summary.quotaWarningCount) warning · \(summary.quotaObservableProviderCount)/\(summary.connectedProviderCount) observed"
+            return DailyDriverL10n.menuQuotaWarnings(
+                summary.quotaWarningCount,
+                summary.quotaObservableProviderCount,
+                summary.connectedProviderCount
+            )
         }
         if summary.quotaUnknownProviderCount > 0 {
-            return "\(summary.quotaUnknownProviderCount) unknown · \(summary.quotaObservableProviderCount)/\(summary.connectedProviderCount) observed"
+            return DailyDriverL10n.menuQuotaUnknown(
+                summary.quotaUnknownProviderCount,
+                summary.quotaObservableProviderCount,
+                summary.connectedProviderCount
+            )
         }
-        return "\(summary.quotaObservableProviderCount)/\(summary.connectedProviderCount) connected plans observed"
+        return DailyDriverL10n.menuQuotaObserved(
+            summary.quotaObservableProviderCount,
+            summary.connectedProviderCount
+        )
     }
 
     private func modeLabel(_ value: String?) -> String {
         switch value {
-        case "MANUAL": return "Manual"
-        case "SUPERVISED_AUTO": return "Supervised Auto"
-        case "ACTIVE": return "Full Automation"
-        case .none: return "Unknown"
-        default: return value?.replacingOccurrences(of: "_", with: " ").capitalized ?? "Unknown"
+        case "MANUAL": return DailyDriverL10n.manual
+        case "SUPERVISED_AUTO": return DailyDriverL10n.supervisedAuto
+        case "ACTIVE": return DailyDriverL10n.fullAutomation
+        case .none: return DailyDriverL10n.unknown
+        default: return value?.replacingOccurrences(of: "_", with: " ").capitalized ?? DailyDriverL10n.unknown
         }
     }
 
@@ -253,10 +267,10 @@ struct MenuBarContentView: View {
 
     private func stateLabel(_ state: String) -> String {
         switch state {
-        case "AUTO_PLANNED": return "Awaiting approval"
-        case "AUTO_GRACE": return "Supervised grace"
-        case "RUNNING": return "Running"
-        case "VERIFYING": return "Verifying"
+        case "AUTO_PLANNED": return DailyDriverL10n.taskAwaitingApproval
+        case "AUTO_GRACE": return DailyDriverL10n.taskGraceWindow
+        case "RUNNING": return DailyDriverL10n.taskRunning
+        case "VERIFYING": return DailyDriverL10n.taskVerifying
         default: return state.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
