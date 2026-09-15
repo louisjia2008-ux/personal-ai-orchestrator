@@ -18,6 +18,12 @@ struct DailyDriverHome: View {
     private var risks: [RiskItemView] { store.dashboard?.risks ?? [] }
     private var projects: [ProjectView] { store.projects?.projects ?? [] }
 
+    /// Production ACTIVE evidence reminders stay in Settings rather than making
+    /// a deliberately pre-ACTIVE Daily Driver look broken forever.
+    private var actionableRisks: [RiskItemView] {
+        DailyDriverRiskPresentation.actionable(risks)
+    }
+
     private var liveTasks: [TaskView] {
         tasks
             .filter { ["AUTO_PLANNED", "AUTO_GRACE", "RUNNING", "VERIFYING"].contains($0.state) }
@@ -46,19 +52,23 @@ struct DailyDriverHome: View {
         projects.filter { $0.isOnline && $0.supervisedAutoAllowed }.count
     }
 
-    /// Global SUPERVISED_AUTO without any project opt-in is configuration, not
-    /// readiness. Surface it as a concrete next action instead of green status.
-    private var projectAutomationNeedsSetup: Bool {
-        schedulingMode == "SUPERVISED_AUTO" && supervisedProjectCount == 0
+    /// Readiness answers one narrow product question: can PAO accept and execute
+    /// new work now? Historical task failures remain visible below, but do not
+    /// poison this status indefinitely.
+    private var readiness: DailyDriverReadinessSnapshot {
+        DailyDriverReadiness.derive(
+            connection: store.connection,
+            schedulingMode: store.schedulingSettings?.mode,
+            projects: projects,
+            providers: store.providers
+        )
     }
 
-    private var isReady: Bool {
-        guard store.connection.isConnected else { return false }
-        guard attentionTasks.isEmpty && risks.isEmpty else { return false }
-        guard !projectAutomationNeedsSetup else { return false }
-        guard let quotaSummary = store.quota?.summary else { return true }
-        return quotaSummary.quotaWarningCount == 0 && quotaSummary.quotaExhaustedCount == 0
+    private var projectAutomationNeedsSetup: Bool {
+        readiness.blocker == .supervisedAutoNeedsProject
     }
+
+    private var isReady: Bool { readiness.isReady }
 
     var body: some View {
         DashboardPageContainer {
@@ -124,13 +134,25 @@ struct DailyDriverHome: View {
     }
 
     private var readinessDetail: String {
-        if projectAutomationNeedsSetup {
+        switch readiness.blocker {
+        case .disconnected:
+            return DailyDriverL10n.daemonUnavailable
+        case .schedulingModeUnknown:
+            return DailyDriverL10n.modeUnavailable
+        case .noOnlineProject:
+            return L10n.projectsEmpty
+        case .supervisedAutoNeedsProject:
             return DailyDriverL10n.supervisedNeedsProject
+        case .noRunnableTarget:
+            return L10n.noVerifiedTargets
+        case .noAvailableCapacity:
+            return capacitySummary
+        case .none:
+            if schedulingMode == "SUPERVISED_AUTO" {
+                return "\(DailyDriverL10n.supervisedProjectCount(supervisedProjectCount)) · \(capacitySummary)"
+            }
+            return capacitySummary
         }
-        if schedulingMode == "SUPERVISED_AUTO" {
-            return "\(DailyDriverL10n.supervisedProjectCount(supervisedProjectCount)) · \(capacitySummary)"
-        }
-        return capacitySummary
     }
 
     private var automationModeMenu: some View {
@@ -254,7 +276,7 @@ struct DailyDriverHome: View {
 
     @ViewBuilder
     private var attentionContent: some View {
-        if attentionTasks.isEmpty && risks.isEmpty && !projectAutomationNeedsSetup {
+        if attentionTasks.isEmpty && actionableRisks.isEmpty && !projectAutomationNeedsSetup {
             Label(DailyDriverL10n.noBlockers, systemImage: "checkmark.circle")
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -291,15 +313,21 @@ struct DailyDriverHome: View {
                     Divider()
                 }
 
-                ForEach(Array(risks.prefix(3))) { risk in
+                ForEach(Array(actionableRisks.prefix(3))) { risk in
                     riskRow(risk)
-                    if risk.id != risks.prefix(3).last?.id { Divider() }
+                    if risk.id != actionableRisks.prefix(3).last?.id { Divider() }
                 }
             }
 
             if attentionTasks.count > 2 {
                 Button(DailyDriverL10n.reviewAttention) {
                     onNavigate(NavigationIntent(section: .tasks))
+                }
+                .buttonStyle(.link)
+            }
+            if actionableRisks.count > 3 {
+                Button(DailyDriverL10n.reviewAttention) {
+                    onNavigate(NavigationIntent(section: .activity))
                 }
                 .buttonStyle(.link)
             }
