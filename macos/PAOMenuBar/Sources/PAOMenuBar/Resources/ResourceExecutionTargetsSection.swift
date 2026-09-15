@@ -48,13 +48,13 @@ struct ResourceExecutionTargetsSection: View {
                 VStack(alignment: .leading, spacing: Spacing.element) {
                     if runnableTargets.isEmpty {
                         ResourceNotice(
-                            text: "No verified execution target is currently runnable.",
+                            text: DailyDriverL10n.resourcesNoRunnableTarget,
                             symbol: "bolt.slash",
                             tone: .caution
                         )
                     } else {
                         VStack(alignment: .leading, spacing: Spacing.inner) {
-                            Text("Available targets")
+                            Text(DailyDriverL10n.resourcesAvailableTargets)
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
                             ForEach(runnableTargets) { target in
@@ -65,7 +65,7 @@ struct ResourceExecutionTargetsSection: View {
 
                     if !unavailableTargets.isEmpty {
                         DisclosureGroup(
-                            "Unavailable / unverified (\(unavailableTargets.count))"
+                            DailyDriverL10n.resourcesUnavailableTargets(unavailableTargets.count)
                         ) {
                             VStack(alignment: .leading, spacing: Spacing.inner) {
                                 ForEach(unavailableTargets) { target in
