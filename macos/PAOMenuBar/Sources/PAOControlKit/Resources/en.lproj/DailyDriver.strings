@@ -26,8 +26,12 @@
 "home.viewAllResources" = "View all resources";
 "home.noRecent" = "No recent completed or blocked work";
 "home.openActivity" = "Open Activity";
+"home.modeChanged" = "Scheduling mode changed to %@.";
+"home.modeChangeFailed" = "Scheduling mode change failed · %@";
+"home.modeChangeMalformed" = "Scheduling mode response could not be decoded.";
 
 "quota.unmetered" = "Unmetered";
+"quota.unmeteredRpm" = "Unmetered · %d RPM observed";
 "quota.unknown" = "Quota unknown";
 "quota.loading" = "quota loading";
 "quota.unavailable" = "capacity unavailable";
@@ -35,6 +39,11 @@
 "quota.warnings" = "%d quota warning(s)";
 "quota.unknownCount" = "%d quota unknown";
 "quota.observed" = "%d/%d quota observed";
+"quota.state.available" = "Available";
+"quota.state.limited" = "Limited";
+"quota.state.exhausted" = "Exhausted";
+"quota.window.week" = "Week";
+"quota.window.month" = "Month";
 "quota.resetDue" = "reset due";
 "quota.resetMinutes" = "reset %dm";
 "quota.resetHours" = "reset %dh";
