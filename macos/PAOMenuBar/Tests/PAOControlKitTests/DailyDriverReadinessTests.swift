@@ -11,6 +11,7 @@ final class DailyDriverReadinessTests: XCTestCase {
         let result = DailyDriverReadiness.derive(
             connection: .connected,
             schedulingMode: "MANUAL",
+            ownerExecutionEnabled: true,
             projects: [project(supervised: false)],
             providers: providers([target()])
         )
@@ -22,6 +23,7 @@ final class DailyDriverReadinessTests: XCTestCase {
         let result = DailyDriverReadiness.derive(
             connection: .connected,
             schedulingMode: nil,
+            ownerExecutionEnabled: true,
             projects: [project(supervised: false)],
             providers: providers([target()])
         )
@@ -29,10 +31,33 @@ final class DailyDriverReadinessTests: XCTestCase {
         XCTAssertFalse(result.isReady)
     }
 
+    func testOwnerExecutionMustBeExplicitlyEnabled() {
+        let disabled = DailyDriverReadiness.derive(
+            connection: .connected,
+            schedulingMode: "MANUAL",
+            ownerExecutionEnabled: false,
+            projects: [project(supervised: false)],
+            providers: providers([target()])
+        )
+        XCTAssertEqual(disabled.blocker, .ownerExecutionDisabled)
+        XCTAssertFalse(disabled.isReady)
+
+        let notLoaded = DailyDriverReadiness.derive(
+            connection: .connected,
+            schedulingMode: "MANUAL",
+            ownerExecutionEnabled: nil,
+            projects: [project(supervised: false)],
+            providers: providers([target()])
+        )
+        XCTAssertEqual(notLoaded.blocker, .ownerExecutionDisabled)
+        XCTAssertFalse(notLoaded.isReady)
+    }
+
     func testAnOnlineProjectIsRequiredForAnyNewWork() {
         let result = DailyDriverReadiness.derive(
             connection: .connected,
             schedulingMode: "MANUAL",
+            ownerExecutionEnabled: true,
             projects: [project(supervised: false, storage: "OFFLINE")],
             providers: providers([target()])
         )
@@ -43,6 +68,7 @@ final class DailyDriverReadinessTests: XCTestCase {
         let blocked = DailyDriverReadiness.derive(
             connection: .connected,
             schedulingMode: "SUPERVISED_AUTO",
+            ownerExecutionEnabled: true,
             projects: [project(supervised: false)],
             providers: providers([target()])
         )
@@ -51,6 +77,7 @@ final class DailyDriverReadinessTests: XCTestCase {
         let ready = DailyDriverReadiness.derive(
             connection: .connected,
             schedulingMode: "SUPERVISED_AUTO",
+            ownerExecutionEnabled: true,
             projects: [project(supervised: true)],
             providers: providers([target()])
         )
@@ -61,6 +88,7 @@ final class DailyDriverReadinessTests: XCTestCase {
         let unavailable = DailyDriverReadiness.derive(
             connection: .connected,
             schedulingMode: "MANUAL",
+            ownerExecutionEnabled: true,
             projects: [project(supervised: false)],
             providers: providers([target(runtimeAvailable: false)])
         )
@@ -69,6 +97,7 @@ final class DailyDriverReadinessTests: XCTestCase {
         let unverified = DailyDriverReadiness.derive(
             connection: .connected,
             schedulingMode: "MANUAL",
+            ownerExecutionEnabled: true,
             projects: [project(supervised: false)],
             providers: providers([target(verified: false)])
         )
@@ -82,6 +111,7 @@ final class DailyDriverReadinessTests: XCTestCase {
         let result = DailyDriverReadiness.derive(
             connection: .connected,
             schedulingMode: "MANUAL",
+            ownerExecutionEnabled: true,
             projects: [project(supervised: false)],
             providers: providers([stale])
         )
@@ -93,6 +123,7 @@ final class DailyDriverReadinessTests: XCTestCase {
         let exhaustedOnly = DailyDriverReadiness.derive(
             connection: .connected,
             schedulingMode: "MANUAL",
+            ownerExecutionEnabled: true,
             projects: [project(supervised: false)],
             providers: providers([
                 target(id: "a", observedState: "EXHAUSTED_OBSERVED"),
@@ -104,6 +135,7 @@ final class DailyDriverReadinessTests: XCTestCase {
         let oneAvailable = DailyDriverReadiness.derive(
             connection: .connected,
             schedulingMode: "MANUAL",
+            ownerExecutionEnabled: true,
             projects: [project(supervised: false)],
             providers: providers([
                 target(id: "a", observedState: "EXHAUSTED_OBSERVED"),
@@ -117,6 +149,7 @@ final class DailyDriverReadinessTests: XCTestCase {
         let result = DailyDriverReadiness.derive(
             connection: .connected,
             schedulingMode: "MANUAL",
+            ownerExecutionEnabled: true,
             projects: [project(supervised: false)],
             providers: providers([target(observedState: nil)])
         )
