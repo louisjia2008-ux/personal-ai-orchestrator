@@ -146,3 +146,35 @@ public actor AutomationModeMutationCoordinator {
         )
     }
 }
+
+/// Project automation writes are full-tuple PUTs. Re-reading immediately before
+/// a write prevents stale siblings within one view, but two separate sheets can
+/// still race between their GET and PUT. This actor serializes the complete
+/// read/resolve/write transaction for every project in the app process.
+public actor ProjectAutomationMutationCoordinator {
+    public static let shared = ProjectAutomationMutationCoordinator()
+
+    public init() {}
+
+    /// Returns nil only when the project disappeared between presentation and
+    /// mutation. Optional arguments mean "leave this field authoritative".
+    public func update(
+        socketPath: String,
+        projectId: String,
+        supervisedAutoAllowed: Bool? = nil,
+        unattendedAllowed: Bool? = nil,
+        graceSeconds: Int? = nil
+    ) async throws -> ProjectView? {
+        let client = PAOControlClient(socketPath: socketPath)
+        let projects = try await client.projects()
+        guard let current = projects.projects.first(where: { $0.projectId == projectId }) else {
+            return nil
+        }
+        return try await client.setProjectSupervisedAutoSettings(
+            projectId: projectId,
+            supervisedAutoAllowed: supervisedAutoAllowed ?? current.supervisedAutoAllowed,
+            unattendedAllowed: unattendedAllowed ?? current.unattendedAllowed,
+            graceSeconds: graceSeconds ?? current.graceSeconds
+        )
+    }
+}
