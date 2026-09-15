@@ -75,6 +75,20 @@ final class DailyDriverReadinessTests: XCTestCase {
         XCTAssertEqual(unverified.blocker, .noRunnableTarget)
     }
 
+    func testStaleVerificationFallbackIsNotLaunchAuthority() {
+        let stale = target(verificationStale: true)
+        XCTAssertFalse(stale.isLaunchableOnHost)
+
+        let result = DailyDriverReadiness.derive(
+            connection: .connected,
+            schedulingMode: "MANUAL",
+            projects: [project(supervised: false)],
+            providers: providers([stale])
+        )
+        XCTAssertEqual(result.blocker, .noRunnableTarget)
+        XCTAssertFalse(result.isReady)
+    }
+
     func testExplicitExhaustionBlocksOnlyWhenEveryRunnableTargetIsUnavailable() {
         let exhaustedOnly = DailyDriverReadiness.derive(
             connection: .connected,
@@ -148,6 +162,7 @@ final class DailyDriverReadinessTests: XCTestCase {
     private func target(
         id: String = "target-1",
         verified: Bool = true,
+        verificationStale: Bool = false,
         runtimeAvailable: Bool = true,
         observedState: String? = "AVAILABLE"
     ) -> ExecutionTargetHealthView {
@@ -161,7 +176,7 @@ final class DailyDriverReadinessTests: XCTestCase {
         }
         return decode(
             """
-            {"execution_target_id":"\(id)","model_sku_id":"model-\(id)","runtime_id":"pi","enabled":true,"execution_verified":\(verified),"runtime_available":\(runtimeAvailable),"observed_availability":\(observed)}
+            {"execution_target_id":"\(id)","model_sku_id":"model-\(id)","runtime_id":"pi","enabled":true,"execution_verified":\(verified),"execution_verified_stale":\(verificationStale),"runtime_available":\(runtimeAvailable),"observed_availability":\(observed)}
             """
         )
     }
