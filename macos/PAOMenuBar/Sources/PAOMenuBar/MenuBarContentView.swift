@@ -196,14 +196,13 @@ struct MenuBarContentView: View {
         let socketPath = store.socketPath
 
         Task {
-            let client = PAOControlClient(socketPath: socketPath)
             do {
-                // Re-read immediately before the mutation so the emergency stop
-                // cannot overwrite a routing-policy change made elsewhere.
-                let current = try await client.schedulingSettings()
-                let updated = try await client.setSchedulingMode(
-                    "MANUAL",
-                    defaultSchedulingPolicy: current.defaultSchedulingPolicy
+                // The process-wide coordinator serializes this emergency fallback
+                // with Home/Settings mode writes. It re-reads routing policy at
+                // execution time before setting MANUAL.
+                let updated = try await AutomationModeMutationCoordinator.shared.setMode(
+                    socketPath: socketPath,
+                    mode: "MANUAL"
                 )
                 await store.loadSchedulingSettings()
                 await store.refreshNow()
