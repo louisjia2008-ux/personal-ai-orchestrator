@@ -1,0 +1,254 @@
+import SwiftUI
+
+import PAOControlKit
+
+/// Reusable project-level supervised-auto configuration.
+///
+/// Every edit re-reads `/v1/projects` immediately before the PUT and submits the
+/// complete three-field tuple. This prevents a stale SwiftUI row from resetting
+/// a sibling setting that changed elsewhere.
+struct ProjectAutomationSettingsView: View {
+    @EnvironmentObject private var store: OrchestratorStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var savingProjectIds: Set<String> = []
+    @State private var notice: String?
+
+    private var projects: [ProjectView] {
+        (store.projects?.projects ?? [])
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Project Automation")
+                        .font(.title2.weight(.semibold))
+                    Text("Choose which projects Supervised Auto may operate on. These settings do not enable Production ACTIVE.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 20)
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(20)
+
+            Divider()
+
+            if projects.isEmpty {
+                EmptyStateView(
+                    title: "No registered projects",
+                    symbol: "folder.badge.questionmark",
+                    message: "Register a project before enabling project-level automation."
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(projects) { project in
+                    ProjectAutomationRow(
+                        project: project,
+                        isSaving: savingProjectIds.contains(project.projectId),
+                        onSupervisedChanged: { value in
+                            save(projectId: project.projectId, supervisedAutoAllowed: value)
+                        },
+                        onUnattendedChanged: { value in
+                            save(projectId: project.projectId, unattendedAllowed: value)
+                        },
+                        onGraceChanged: { value in
+                            save(projectId: project.projectId, graceSeconds: value)
+                        }
+                    )
+                    .padding(.vertical, 6)
+                }
+                .listStyle(.inset(alternatesRowBackgrounds: false))
+            }
+
+            if let notice {
+                Divider()
+                Label(notice, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+            }
+        }
+        .frame(minWidth: 620, idealWidth: 680, minHeight: 420, idealHeight: 540)
+        .task { await store.refreshNow() }
+    }
+
+    private func save(
+        projectId: String,
+        supervisedAutoAllowed: Bool? = nil,
+        unattendedAllowed: Bool? = nil,
+        graceSeconds: Int? = nil
+    ) {
+        guard !savingProjectIds.contains(projectId) else { return }
+        savingProjectIds.insert(projectId)
+        notice = nil
+        let socketPath = store.socketPath
+
+        Task {
+            let client = PAOControlClient(socketPath: socketPath)
+            do {
+                // Resolve siblings from fresh daemon truth, never from the row
+                // that happened to be rendered when the owner clicked.
+                let currentList = try await client.projects()
+                guard let current = currentList.projects.first(where: { $0.projectId == projectId }) else {
+                    notice = "Project no longer exists. The list was refreshed."
+                    savingProjectIds.remove(projectId)
+                    await store.refreshNow()
+                    return
+                }
+
+                let requestedSupervised = supervisedAutoAllowed ?? current.supervisedAutoAllowed
+                let requestedUnattended = unattendedAllowed ?? current.unattendedAllowed
+                let requestedGrace = graceSeconds ?? current.graceSeconds
+
+                _ = try await client.setProjectSupervisedAutoSettings(
+                    projectId: projectId,
+                    supervisedAutoAllowed: requestedSupervised,
+                    unattendedAllowed: requestedUnattended,
+                    graceSeconds: requestedGrace
+                )
+                await store.refreshNow()
+                notice = "Project automation settings saved from daemon-confirmed state."
+            } catch let error as PAOClientError {
+                notice = "Project automation update failed · \(error.displayDetail)"
+                await store.refreshNow()
+            } catch {
+                notice = "Project automation response could not be decoded."
+                await store.refreshNow()
+            }
+            savingProjectIds.remove(projectId)
+        }
+    }
+}
+
+private struct ProjectAutomationRow: View {
+    let project: ProjectView
+    let isSaving: Bool
+    let onSupervisedChanged: (Bool) -> Void
+    let onUnattendedChanged: (Bool) -> Void
+    let onGraceChanged: (Int) -> Void
+
+    @State private var confirmingDisable = false
+    @State private var graceDraft: String
+
+    init(
+        project: ProjectView,
+        isSaving: Bool,
+        onSupervisedChanged: @escaping (Bool) -> Void,
+        onUnattendedChanged: @escaping (Bool) -> Void,
+        onGraceChanged: @escaping (Int) -> Void
+    ) {
+        self.project = project
+        self.isSaving = isSaving
+        self.onSupervisedChanged = onSupervisedChanged
+        self.onUnattendedChanged = onUnattendedChanged
+        self.onGraceChanged = onGraceChanged
+        _graceDraft = State(initialValue: String(project.graceSeconds))
+    }
+
+    private var graceValue: Int? { Int(graceDraft) }
+    private var graceIsValid: Bool {
+        guard let graceValue else { return false }
+        return (1...86_400).contains(graceValue)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(project.displayName)
+                        .font(.headline)
+                    Text(project.canonicalRepoRoot)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 12)
+                if isSaving {
+                    ProgressView().controlSize(.small)
+                } else if project.supervisedAutoAllowed {
+                    Label("Enabled", systemImage: "checkmark.circle.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(StatusTone.positive.color)
+                }
+            }
+
+            Toggle(
+                "Allow Supervised Auto",
+                isOn: Binding(
+                    get: { project.supervisedAutoAllowed },
+                    set: { value in
+                        if value {
+                            onSupervisedChanged(true)
+                        } else if project.supervisedAutoAllowed {
+                            confirmingDisable = true
+                        }
+                    }
+                )
+            )
+            .disabled(isSaving || !project.isOnline)
+
+            Toggle(
+                "Allow unattended supervised work",
+                isOn: Binding(
+                    get: { project.unattendedAllowed },
+                    set: onUnattendedChanged
+                )
+            )
+            .disabled(isSaving || !project.isOnline || !project.supervisedAutoAllowed)
+
+            HStack {
+                Text("Grace window")
+                Spacer()
+                TextField("seconds", text: $graceDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 92)
+                    .multilineTextAlignment(.trailing)
+                    .disabled(isSaving || !project.supervisedAutoAllowed)
+                    .onSubmit(applyGrace)
+                Text("s")
+                    .foregroundStyle(.secondary)
+                Button("Apply", action: applyGrace)
+                    .controlSize(.small)
+                    .disabled(
+                        isSaving || !project.supervisedAutoAllowed || !graceIsValid
+                            || graceValue == project.graceSeconds
+                    )
+            }
+
+            if !graceIsValid {
+                Text("Grace must be between 1 and 86,400 seconds.")
+                    .font(.caption)
+                    .foregroundStyle(StatusTone.caution.color)
+            } else {
+                Text("After acknowledgement, PAO waits this long before automatic dispatch unless you veto or dispatch now.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .onChange(of: project.graceSeconds) { newValue in
+            if !isSaving { graceDraft = String(newValue) }
+        }
+        .confirmationDialog(
+            "Disable Supervised Auto for \(project.displayName)?",
+            isPresented: $confirmingDisable,
+            titleVisibility: .visible
+        ) {
+            Button("Disable", role: .destructive) {
+                onSupervisedChanged(false)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The daemon may abort this project's waiting or planned supervised-auto lifecycles.")
+        }
+    }
+
+    private func applyGrace() {
+        guard graceIsValid, let graceValue, graceValue != project.graceSeconds else { return }
+        onGraceChanged(graceValue)
+    }
+}
