@@ -10,9 +10,13 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from personal_ai_orchestrator.activation import ActiveRoutingGate
 from personal_ai_orchestrator.control_api import ControlPlaneService
+from personal_ai_orchestrator.control_provider_registry_view import (
+    ControlPlaneProviderRegistryView,
+)
 from personal_ai_orchestrator.daemon_supervisor import (
     DaemonSupervisor,
     build_default_supervisor,
@@ -413,6 +417,14 @@ def build_control_service(
             quota_calibration_journal=delegation_quota_journal,
         )
 
+    control_provider_registry_manager = (
+        cast(
+            ProviderRegistryManager,
+            ControlPlaneProviderRegistryView(provider_registry_manager),
+        )
+        if provider_registry_manager is not None
+        else None
+    )
     service = ControlPlaneService(
         registry=registry,
         store=store,
@@ -420,7 +432,7 @@ def build_control_service(
         runtime_availability=dict(config.runtime_availability),
         verification_journal=VerificationEvidenceJournal(runtime_state_root),
         quota_availability_journal=QuotaAvailabilityJournal(runtime_state_root),
-        provider_registry_manager=provider_registry_manager,
+        provider_registry_manager=control_provider_registry_manager,
         owner_execution=OwnerExecutionSettings(runtime_state_root / "owner-execution.json"),
         scheduling_settings=scheduling_settings,
         execution_evidence_journal=execution_evidence_journal,
