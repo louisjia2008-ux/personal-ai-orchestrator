@@ -20,7 +20,16 @@ public enum DailyDriverExecutionTargets {
         return (providers?.providers ?? [])
             .flatMap { provider in
                 provider.executionTargets.filter { target in
+                    // `/v1/providers` also carries the persisted connection
+                    // registry state. Treat any non-DISCONNECTED record as
+                    // routing-connected, matching ProviderConnection.schedulerConnected.
+                    // This fallback matters during refresh ordering, when the
+                    // health projection may arrive before `/v1/provider-connections`.
+                    let healthSaysRoutingConnected = provider.connectionState.map {
+                        $0 != "DISCONNECTED"
+                    } ?? false
                     let routingConnected = explicitlyConnected.contains(provider.providerId)
+                        || healthSaysRoutingConnected
                         || (target.runtimeId == "pi" && target.runtimeAvailable == true)
                     return routingConnected && target.isLaunchableOnHost
                 }
