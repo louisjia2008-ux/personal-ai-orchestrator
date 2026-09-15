@@ -42,10 +42,6 @@ struct TaskCollectionView: View {
             projectMenu
             Spacer(minLength: 0)
             if state.isPopulated {
-                // How much of the *loaded* collection the filters are showing.
-                // The store's total belongs to the truncation line below, where
-                // it is paired with the sentence that explains the shortfall;
-                // pairing it here would suggest the filters searched all of it.
                 let counted = L10n.tasksVisibleCount(
                     shown: state.tasks.count, total: allTasks.count
                 )
@@ -60,10 +56,8 @@ struct TaskCollectionView: View {
     }
 
     /// Groups first, then every state actually present in the collection.
-    ///
-    /// The exact-state section is what keeps the filter total: a state this
-    /// build does not classify still appears there under its own machine value,
-    /// so no task can end up unreachable by any filter.
+    /// Exact machine states remain available in the filter even though rows use
+    /// owner-readable labels.
     private var stateMenu: some View {
         Menu {
             Button(L10n.tasksFilterAllTasks) { filter.state = .all }
@@ -96,7 +90,6 @@ struct TaskCollectionView: View {
         switch filter.state {
         case .all: return L10n.tasksFilterAllTasks
         case .group(let group): return group.title
-        // Machine values are shown verbatim, as everywhere else in the client.
         case .state(let state): return state
         }
     }
@@ -134,8 +127,6 @@ struct TaskCollectionView: View {
     private var content: some View {
         switch state {
         case .loading:
-            // Loading is not empty. An empty state here would claim the store
-            // holds nothing before anything has been asked.
             VStack(spacing: Spacing.inner) {
                 ProgressView()
                     .controlSize(.small)
@@ -163,8 +154,6 @@ struct TaskCollectionView: View {
             )
 
         case .noSearchMatch:
-            // No "New task" here: the owner is looking for something that exists
-            // or does not, and creating a task answers neither question.
             EmptyStateView(
                 title: L10n.emptyTasksSearchTitle,
                 symbol: "magnifyingglass",
@@ -185,8 +174,6 @@ struct TaskCollectionView: View {
             )
 
         case .populated(let tasks):
-            // `List(_:selection:)` tags rows by task id, which is the
-            // authoritative identity the rest of the app selects by.
             List(tasks, selection: $selectedTaskId) { task in
                 TaskCollectionRow(
                     task: task,
@@ -197,7 +184,6 @@ struct TaskCollectionView: View {
         }
     }
 
-    /// Low-noise, and honest about both numbers: what arrived and what exists.
     private var truncationNotice: some View {
         Label {
             Text(L10n.tasksTruncated(shown: allTasks.count, total: totalCount))
@@ -213,18 +199,15 @@ struct TaskCollectionView: View {
     }
 }
 
-/// One row: what it is, what state it is in, whose project it belongs to, and
-/// how long it has been at it.
+/// Compact owner-facing row. Raw machine state remains available from Task
+/// Detail/Inspector and the exact-state filter; the collection prioritizes the
+/// question "what needs my attention?" over backend vocabulary.
 struct TaskCollectionRow: View {
     let task: TaskView
     let projectName: String?
-    /// Live rows measure elapsed time to now; the workspace ticks this so a
-    /// running task's reading advances instead of freezing at its last state
-    /// change. See `TaskTiming`.
     var now: Date = Date()
 
     private var status: StatusPresentation { StatusStyle.task(state: task.state) }
-
     private var isLive: Bool { !TaskTiming.isTerminal(state: task.state) }
 
     private var timingText: String {
@@ -234,34 +217,56 @@ struct TaskCollectionRow: View {
         return Timestamps.friendly(task.updatedAt, now: now)
     }
 
+    private var displayState: String {
+        switch task.state {
+        case "AUTO_PLANNED": return "Awaiting approval"
+        case "AUTO_GRACE": return "Grace window"
+        case "SUBMITTED": return "Ready to route"
+        case "READY": return "Ready"
+        case "RUNNING": return "Running"
+        case "VERIFYING": return "Verifying"
+        case "VERIFIED": return "Verified"
+        case "COMPLETED": return "Completed"
+        case "BLOCKED": return "Blocked"
+        case "FAILED": return "Failed"
+        case "CANCELLED": return "Cancelled"
+        default: return task.state.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: Spacing.inner) {
             Image(systemName: status.symbol)
                 .foregroundStyle(status.color)
                 .frame(width: 16)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 2) {
+                .padding(.top, 3)
+
+            VStack(alignment: .leading, spacing: 4) {
                 Text(task.intent)
                     .font(.body)
                     .lineLimit(2)
+
                 HStack(spacing: Spacing.tight) {
-                    Text(projectName ?? task.projectId ?? L10n.tasksNoProject)
-                        .lineLimit(1)
-                    Text("·")
-                    Text(task.state)
-                        .monospaced()
+                    Text(displayState)
+                        .fontWeight(task.state == "BLOCKED" || task.state == "FAILED" ? .semibold : .regular)
                     Text("·")
                     Text(timingText)
                         .monospacedDigit()
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+                Text(projectName ?? task.projectId ?? L10n.tasksNoProject)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 5)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "\(task.intent), \(task.state), \(projectName ?? L10n.tasksNoProject)"
+            "\(task.intent), \(displayState), \(projectName ?? L10n.tasksNoProject)"
         )
+        .help(task.state)
     }
 }
