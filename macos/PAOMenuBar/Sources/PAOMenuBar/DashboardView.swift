@@ -258,10 +258,20 @@ struct DashboardView: View {
         )
         switch section {
         case .overview:
-            OverviewDashboard(
-                section: $section,
-                onOpenTasks: { openTasks(metricsFilter: $0) },
-                onNavigate: { navigate(to: $0) }
+            DailyDriverHome(
+                onOpenTask: { taskId in
+                    navigate(to: NavigationIntent(section: .tasks, taskId: taskId))
+                },
+                onOpenTasks: {
+                    taskFilter = TaskFilter()
+                    section = .tasks
+                },
+                onOpenResources: {
+                    section = .resources
+                },
+                onOpenActivity: {
+                    section = .activity
+                }
             )
         case .tasks:
             TasksWorkspace(
