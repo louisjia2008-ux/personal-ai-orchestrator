@@ -124,13 +124,15 @@ public extension PAOControlClient {
 
 /// One process-wide serialization point for automation-mode writes.
 ///
-/// Home, Settings and the menu-bar emergency stop are separate SwiftUI trees,
-/// so view-local `isChangingMode` flags cannot stop them from issuing concurrent
-/// PUTs. Serializing here prevents a stale read/PUT pair on one surface from
-/// racing another surface's mode change. Each queued mutation still re-reads the
-/// daemon's current routing policy immediately before its own PUT.
+/// Swift actors are re-entrant across `await`, so actor isolation alone is NOT
+/// sufficient for a GET-then-PUT transaction. The explicit task chain below
+/// prevents a second surface from starting its authoritative GET until the prior
+/// mutation has fully completed. This closes the stale read/PUT race between
+/// Home, Settings and the menu-bar emergency stop.
 public actor AutomationModeMutationCoordinator {
     public static let shared = AutomationModeMutationCoordinator()
+
+    private var mutationTail: Task<Void, Never>?
 
     public init() {}
 
@@ -138,21 +140,31 @@ public actor AutomationModeMutationCoordinator {
         socketPath: String,
         mode: String
     ) async throws -> SchedulingSettingsView {
-        let client = PAOControlClient(socketPath: socketPath)
-        let current = try await client.schedulingSettings()
-        return try await client.setSchedulingMode(
-            mode,
-            defaultSchedulingPolicy: current.defaultSchedulingPolicy
-        )
+        let predecessor = mutationTail
+        let operation = Task<SchedulingSettingsView, Error> {
+            await predecessor?.value
+            let client = PAOControlClient(socketPath: socketPath)
+            let current = try await client.schedulingSettings()
+            return try await client.setSchedulingMode(
+                mode,
+                defaultSchedulingPolicy: current.defaultSchedulingPolicy
+            )
+        }
+        mutationTail = Task {
+            _ = try? await operation.value
+        }
+        return try await operation.value
     }
 }
 
-/// Project automation writes are full-tuple PUTs. Re-reading immediately before
-/// a write prevents stale siblings within one view, but two separate sheets can
-/// still race between their GET and PUT. This actor serializes the complete
-/// read/resolve/write transaction for every project in the app process.
+/// Project automation writes are full-tuple PUTs. Actor isolation alone would
+/// still be re-entrant while the network GET/PUT awaits, so these transactions
+/// use the same explicit completion chain: a later edit cannot resolve siblings
+/// until every earlier full-tuple mutation has committed or failed.
 public actor ProjectAutomationMutationCoordinator {
     public static let shared = ProjectAutomationMutationCoordinator()
+
+    private var mutationTail: Task<Void, Never>?
 
     public init() {}
 
@@ -165,16 +177,24 @@ public actor ProjectAutomationMutationCoordinator {
         unattendedAllowed: Bool? = nil,
         graceSeconds: Int? = nil
     ) async throws -> ProjectView? {
-        let client = PAOControlClient(socketPath: socketPath)
-        let projects = try await client.projects()
-        guard let current = projects.projects.first(where: { $0.projectId == projectId }) else {
-            return nil
+        let predecessor = mutationTail
+        let operation = Task<ProjectView?, Error> {
+            await predecessor?.value
+            let client = PAOControlClient(socketPath: socketPath)
+            let projects = try await client.projects()
+            guard let current = projects.projects.first(where: { $0.projectId == projectId }) else {
+                return nil
+            }
+            return try await client.setProjectSupervisedAutoSettings(
+                projectId: projectId,
+                supervisedAutoAllowed: supervisedAutoAllowed ?? current.supervisedAutoAllowed,
+                unattendedAllowed: unattendedAllowed ?? current.unattendedAllowed,
+                graceSeconds: graceSeconds ?? current.graceSeconds
+            )
         }
-        return try await client.setProjectSupervisedAutoSettings(
-            projectId: projectId,
-            supervisedAutoAllowed: supervisedAutoAllowed ?? current.supervisedAutoAllowed,
-            unattendedAllowed: unattendedAllowed ?? current.unattendedAllowed,
-            graceSeconds: graceSeconds ?? current.graceSeconds
-        )
+        mutationTail = Task {
+            _ = try? await operation.value
+        }
+        return try await operation.value
     }
 }
