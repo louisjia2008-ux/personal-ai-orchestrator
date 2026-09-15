@@ -10,6 +10,7 @@ public enum DailyDriverL10n {
     public static let requiredKeys: [String] = [
         "home.ready", "home.needsAttention", "home.now", "home.attention",
         "home.capacity", "home.recent", "home.daemonUnavailable",
+        "home.ownerExecutionDisabled", "home.ownerExecutionDisabledDetail",
         "home.fullAutomationLocked", "home.configureProjectAutomation", "home.modeHelp",
         "home.supervisedNeedsProject", "home.supervisedProjectCount.one",
         "home.supervisedProjectCount.other", "home.moreActive.one", "home.moreActive.other",
@@ -108,6 +109,8 @@ public enum DailyDriverL10n {
     public static var capacity: String { tr("home.capacity") }
     public static var recent: String { tr("home.recent") }
     public static var daemonUnavailable: String { tr("home.daemonUnavailable") }
+    public static var ownerExecutionDisabled: String { tr("home.ownerExecutionDisabled") }
+    public static var ownerExecutionDisabledDetail: String { tr("home.ownerExecutionDisabledDetail") }
     public static var fullAutomationLocked: String { tr("home.fullAutomationLocked") }
     public static var configureProjectAutomation: String { tr("home.configureProjectAutomation") }
     public static var modeHelp: String { tr("home.modeHelp") }
