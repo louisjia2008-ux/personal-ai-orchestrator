@@ -16,6 +16,10 @@ struct QuickSubmitView: View {
     @State private var schedulingPolicy = "BALANCED"
     @State private var minTier = "T1"
     @State private var manualExecutionTargetId: String?
+    /// Store notices outlive a menu presentation. Render them only after this
+    /// presentation has issued its own submit request, otherwise yesterday's
+    /// failure/success looks like feedback for an untouched form.
+    @State private var submissionAttempted = false
 
     private var onlineProjects: [ProjectView] {
         store.projects?.projects.filter(\.isOnline) ?? []
@@ -26,8 +30,10 @@ struct QuickSubmitView: View {
         return onlineProjects.first { $0.projectId == selectedProjectId }
     }
 
-    /// Manual targets are eligible only when the surface has connection/runtime
-    /// evidence and the exact execution target is still enabled + verified.
+    /// Manual targets are eligible only when the provider surface is routing-
+    /// connected (Pi READY auth is represented by its runtime availability) and
+    /// the exact target satisfies the same current host launch prerequisites used
+    /// by the Daily Driver readiness/new-task surfaces.
     private var connectedTargets: [ExecutionTargetHealthView] {
         let connectedIds = Set(
             (store.providerConnections?.connected ?? []).map(\.providerId)
@@ -37,7 +43,7 @@ struct QuickSubmitView: View {
                 provider.executionTargets.filter { target in
                     let connectionEligible = connectedIds.contains(provider.providerId)
                         || (target.runtimeId == "pi" && target.runtimeAvailable == true)
-                    return connectionEligible && target.enabled && target.isExecutionVerified
+                    return connectionEligible && target.isLaunchableOnHost
                 }
             }
             .sorted {
@@ -133,19 +139,22 @@ struct QuickSubmitView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if let notice = store.submitNotice,
+            if submissionAttempted,
+               let notice = store.submitNotice,
                case .submitted(let taskId, _) = notice {
                 Text(L10n.authoritativeTaskId(taskId))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(StatusTone.positive.color)
             }
-            if let notice = store.submitNotice {
+            if submissionAttempted,
+               let notice = store.submitNotice {
                 Text(L10n.submitNotice(notice))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
         }
         .onAppear {
+            submissionAttempted = false
             if store.selectedProjectId == nil {
                 store.selectedProjectId = onlineProjects.first?.projectId
             }
@@ -192,6 +201,7 @@ struct QuickSubmitView: View {
         store.selectedMinTier = minTier
         store.selectedManualExecutionTargetId = manualExecutionTargetId
 
+        submissionAttempted = true
         submitting = true
         Task {
             await store.quickSubmit(projectId: projectId, intent: value)
