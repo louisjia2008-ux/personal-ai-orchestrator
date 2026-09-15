@@ -2,21 +2,16 @@ import SwiftUI
 
 import PAOControlKit
 
-/// Daily-driver Home surface.
-///
-/// This view intentionally consumes only authoritative projections already held
-/// by OrchestratorStore. It never infers dispatch authority, quota certainty or
-/// task completion from presentation state.
+/// Daily operating surface: current work, actionable attention, commercial AI
+/// capacity and recent outcomes. The view consumes daemon projections only; it
+/// never promotes presentation state into execution authority.
 struct DailyDriverHome: View {
     @EnvironmentObject private var store: OrchestratorStore
     @State private var isChangingMode = false
     @State private var modeNotice: String?
     @State private var showsProjectAutomation = false
 
-    let onOpenTask: (String) -> Void
-    let onOpenTasks: () -> Void
-    let onOpenResources: () -> Void
-    let onOpenActivity: () -> Void
+    let onNavigate: (NavigationIntent) -> Void
 
     private var tasks: [TaskView] { store.tasks?.tasks ?? [] }
     private var quotaProviders: [QuotaProviderCardView] { store.quota?.providers ?? [] }
@@ -43,9 +38,6 @@ struct DailyDriverHome: View {
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
-    /// Orchestrator operating mode, not the routing policy. BALANCED / QUALITY_FIRST
-    /// etc. are task-routing policy choices and must never be presented as MANUAL /
-    /// SUPERVISED_AUTO / ACTIVE state.
     private var schedulingMode: String {
         store.schedulingSettings?.mode ?? "UNKNOWN"
     }
@@ -54,8 +46,8 @@ struct DailyDriverHome: View {
         projects.filter { $0.isOnline && $0.supervisedAutoAllowed }.count
     }
 
-    /// SUPERVISED_AUTO is not actually useful until at least one online project
-    /// opts in. Global mode alone is deliberately insufficient.
+    /// Global SUPERVISED_AUTO without any project opt-in is configuration, not
+    /// readiness. Surface it as a concrete next action instead of green status.
     private var projectAutomationNeedsSetup: Bool {
         schedulingMode == "SUPERVISED_AUTO" && supervisedProjectCount == 0
     }
@@ -100,6 +92,8 @@ struct DailyDriverHome: View {
                 .environmentObject(store)
         }
     }
+
+    // MARK: - Readiness
 
     private var readinessHeader: some View {
         HStack(spacing: 12) {
@@ -159,7 +153,10 @@ struct DailyDriverHome: View {
                 Button {
                     showsProjectAutomation = true
                 } label: {
-                    Label(DailyDriverL10n.configureProjectAutomation, systemImage: "folder.badge.gearshape")
+                    Label(
+                        DailyDriverL10n.configureProjectAutomation,
+                        systemImage: "folder.badge.gearshape"
+                    )
                 }
             }
 
@@ -169,8 +166,7 @@ struct DailyDriverHome: View {
             }
         } label: {
             if isChangingMode {
-                ProgressView()
-                    .controlSize(.small)
+                ProgressView().controlSize(.small)
             } else {
                 Label(modeLabel(schedulingMode), systemImage: modeSymbol(schedulingMode))
             }
@@ -186,11 +182,13 @@ struct DailyDriverHome: View {
         .help(DailyDriverL10n.modeHelp)
     }
 
+    // MARK: - Now
+
     @ViewBuilder
     private var nowContent: some View {
         if let task = liveTasks.first {
             Button {
-                onOpenTask(task.taskId)
+                openTask(task.taskId)
             } label: {
                 HStack(spacing: 14) {
                     stateIcon(task.state)
@@ -224,11 +222,14 @@ struct DailyDriverHome: View {
             }
             .buttonStyle(.plain)
             .padding(16)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+            .background(
+                Color(nsColor: .controlBackgroundColor),
+                in: RoundedRectangle(cornerRadius: 12)
+            )
 
             if liveTasks.count > 1 {
                 Button(DailyDriverL10n.viewMoreActiveTasks(liveTasks.count - 1)) {
-                    onOpenTasks()
+                    onNavigate(NavigationIntent(section: .tasks))
                 }
                 .buttonStyle(.link)
             }
@@ -249,64 +250,140 @@ struct DailyDriverHome: View {
         }
     }
 
+    // MARK: - Attention
+
     @ViewBuilder
     private var attentionContent: some View {
-        if projectAutomationNeedsSetup {
-            Button {
-                showsProjectAutomation = true
-            } label: {
-                attentionRow(
-                    title: DailyDriverL10n.noEligibleProject,
-                    detail: DailyDriverL10n.noEligibleProjectDetail,
-                    symbol: "folder.badge.questionmark"
-                )
-            }
-            .buttonStyle(.plain)
-        }
-
         if attentionTasks.isEmpty && risks.isEmpty && !projectAutomationNeedsSetup {
             Label(DailyDriverL10n.noBlockers, systemImage: "checkmark.circle")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         } else {
             VStack(spacing: 0) {
-                ForEach(Array(attentionTasks.prefix(3))) { task in
+                if projectAutomationNeedsSetup {
                     Button {
-                        onOpenTask(task.taskId)
+                        showsProjectAutomation = true
+                    } label: {
+                        attentionRow(
+                            title: DailyDriverL10n.noEligibleProject,
+                            detail: DailyDriverL10n.noEligibleProjectDetail,
+                            symbol: "folder.badge.questionmark",
+                            color: StatusTone.caution.color
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    Divider()
+                }
+
+                ForEach(Array(attentionTasks.prefix(2))) { task in
+                    Button {
+                        openTask(task.taskId)
                     } label: {
                         attentionRow(
                             title: task.intent,
                             detail: "\(stateLabel(task.state)) · \(relative(task.updatedAt))",
-                            symbol: task.state == "FAILED" ? "xmark.circle.fill" : "exclamationmark.circle.fill"
+                            symbol: task.state == "FAILED" ? "xmark.circle.fill" : "exclamationmark.circle.fill",
+                            color: task.state == "FAILED"
+                                ? StatusTone.critical.color : StatusTone.caution.color
                         )
                     }
                     .buttonStyle(.plain)
-                    if task.id != attentionTasks.prefix(3).last?.id { Divider() }
+                    Divider()
+                }
+
+                ForEach(Array(risks.prefix(3))) { risk in
+                    riskRow(risk)
+                    if risk.id != risks.prefix(3).last?.id { Divider() }
                 }
             }
 
-            if attentionTasks.count > 3 || !risks.isEmpty {
-                Button(DailyDriverL10n.reviewAttention) { onOpenTasks() }
-                    .buttonStyle(.link)
+            if attentionTasks.count > 2 {
+                Button(DailyDriverL10n.reviewAttention) {
+                    onNavigate(NavigationIntent(section: .tasks))
+                }
+                .buttonStyle(.link)
             }
         }
     }
+
+    private func riskRow(_ risk: RiskItemView) -> some View {
+        let presentation = StatusStyle.severity(risk.severity)
+        let title = L10n.riskTitle(
+            rawCode: risk.rawCode,
+            count: risk.count,
+            fallback: risk.title
+        )
+        let detail = L10n.riskDetail(rawCode: risk.rawCode, fallback: risk.detail)
+        let intent = risk.destination.flatMap { RiskDestination.intent(for: $0) }
+
+        return Button {
+            if let intent { onNavigate(intent) }
+        } label: {
+            attentionRow(
+                title: title,
+                detail: detail,
+                symbol: presentation.symbol,
+                color: presentation.color,
+                showsChevron: intent != nil
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(intent == nil)
+    }
+
+    private func attentionRow(
+        title: String,
+        detail: String,
+        symbol: String,
+        color: Color,
+        showsChevron: Bool = true
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .foregroundStyle(color)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 12)
+            if showsChevron {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.vertical, 9)
+        .contentShape(Rectangle())
+    }
+
+    // MARK: - Capacity
 
     @ViewBuilder
     private var capacityContent: some View {
         if quotaProviders.isEmpty {
             HStack {
-                Label(DailyDriverL10n.noCapacity, systemImage: "externaldrive.badge.questionmark")
-                    .foregroundStyle(.secondary)
+                Label(
+                    DailyDriverL10n.noCapacity,
+                    systemImage: "externaldrive.badge.questionmark"
+                )
+                .foregroundStyle(.secondary)
                 Spacer()
-                Button(DailyDriverL10n.openResources) { onOpenResources() }
-                    .buttonStyle(.link)
+                Button(DailyDriverL10n.openResources) {
+                    onNavigate(NavigationIntent(section: .resources))
+                }
+                .buttonStyle(.link)
             }
         } else {
             VStack(spacing: 0) {
                 ForEach(Array(quotaProviders.prefix(4))) { provider in
                     Button {
-                        onOpenResources()
+                        onNavigate(NavigationIntent(section: .resources))
                     } label: {
                         providerCapacityRow(provider)
                     }
@@ -315,11 +392,49 @@ struct DailyDriverHome: View {
                 }
             }
             if quotaProviders.count > 4 {
-                Button(DailyDriverL10n.viewAllResources) { onOpenResources() }
-                    .buttonStyle(.link)
+                Button(DailyDriverL10n.viewAllResources) {
+                    onNavigate(NavigationIntent(section: .resources))
+                }
+                .buttonStyle(.link)
             }
         }
     }
+
+    private func providerCapacityRow(_ provider: QuotaProviderCardView) -> some View {
+        let title = provider.plan?.displayName ?? provider.planSurface ?? provider.displayName
+        let quotaText = quotaText(provider)
+        let confidence = provider.plan?.confidence ?? provider.confidence
+
+        return HStack(spacing: 12) {
+            Image(systemName: provider.poolKind == "unmetered" ? "infinity" : "server.rack")
+                .foregroundStyle(.secondary)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text(capacityDetail(
+                    providerName: provider.displayName,
+                    title: title,
+                    quotaText: quotaText
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+            Spacer(minLength: 12)
+            Text(confidenceLabel(confidence))
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+    }
+
+    // MARK: - Recent
 
     @ViewBuilder
     private var recentContent: some View {
@@ -331,11 +446,10 @@ struct DailyDriverHome: View {
             VStack(spacing: 0) {
                 ForEach(recentTerminalTasks) { task in
                     Button {
-                        onOpenTask(task.taskId)
+                        openTask(task.taskId)
                     } label: {
                         HStack(spacing: 10) {
-                            stateIcon(task.state)
-                                .frame(width: 20)
+                            stateIcon(task.state).frame(width: 20)
                             Text(task.intent)
                                 .lineLimit(1)
                                 .foregroundStyle(.primary)
@@ -355,10 +469,14 @@ struct DailyDriverHome: View {
                 }
             }
 
-            Button(DailyDriverL10n.openActivity) { onOpenActivity() }
-                .buttonStyle(.link)
+            Button(DailyDriverL10n.openActivity) {
+                onNavigate(NavigationIntent(section: .activity))
+            }
+            .buttonStyle(.link)
         }
     }
+
+    // MARK: - Actions and formatting
 
     private func homeSection<Content: View>(
         _ title: String,
@@ -373,113 +491,8 @@ struct DailyDriverHome: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func attentionRow(title: String, detail: String, symbol: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: symbol)
-                .foregroundStyle(.orange)
-                .frame(width: 20)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 12)
-            Image(systemName: "chevron.right")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.vertical, 9)
-        .contentShape(Rectangle())
-    }
-
-    private func providerCapacityRow(_ provider: QuotaProviderCardView) -> some View {
-        let title = provider.plan?.displayName ?? provider.planSurface ?? provider.displayName
-        let quotaText = quotaText(provider)
-        let confidence = provider.plan?.confidence ?? provider.confidence
-
-        return HStack(spacing: 12) {
-            Image(systemName: provider.poolKind == "unmetered" ? "infinity" : "server.rack")
-                .foregroundStyle(.secondary)
-                .frame(width: 22)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.primary)
-                Text(capacityDetail(providerName: provider.displayName, title: title, quotaText: quotaText))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 12)
-            Text(confidenceLabel(confidence))
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-            Image(systemName: "chevron.right")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.vertical, 10)
-        .contentShape(Rectangle())
-    }
-
-    private func quotaText(_ provider: QuotaProviderCardView) -> String {
-        if provider.poolKind == "unmetered" {
-            if let observed = provider.unmetered {
-                return DailyDriverL10n.unmeteredRPM(observed.rpmObserved)
-            }
-            return DailyDriverL10n.unmetered
-        }
-
-        if let plan = provider.plan {
-            let readable = plan.windows.prefix(2).map(windowText)
-            if !readable.isEmpty { return readable.joined(separator: " · ") }
-            if let reason = plan.unknownReason, !reason.isEmpty { return DailyDriverL10n.quotaUnknown }
-            return stateLabelForQuota(plan.state)
-        }
-
-        if let pool = provider.quotaPools.first {
-            let readable = pool.windows.prefix(2).map { window -> String in
-                var value: String
-                if let remaining = window.remainingFraction {
-                    value = "\(windowLabel(window.windowKind)) \(Int((remaining * 100).rounded()))%"
-                } else {
-                    value = "\(windowLabel(window.windowKind)) \(DailyDriverL10n.quotaUnknown)"
-                }
-                if let reset = resetText(window.resetAt) {
-                    value += " · \(reset)"
-                }
-                return value
-            }
-            if !readable.isEmpty { return readable.joined(separator: " · ") }
-            return stateLabelForQuota(pool.state)
-        }
-
-        return provider.quotaState == "UNKNOWN"
-            ? DailyDriverL10n.quotaUnknown
-            : stateLabelForQuota(provider.quotaState)
-    }
-
-    private func windowText(_ window: QuotaPlanWindowView) -> String {
-        var value: String
-        if let remaining = window.remainingFraction {
-            value = "\(windowLabel(window.windowKind)) \(Int((remaining * 100).rounded()))%"
-        } else {
-            value = "\(windowLabel(window.windowKind)) \(DailyDriverL10n.quotaUnknown)"
-        }
-        if let reset = resetText(window.resetAt) {
-            value += " · \(reset)"
-        }
-        return value
-    }
-
-    private func capacityDetail(providerName: String, title: String, quotaText: String) -> String {
-        if title.caseInsensitiveCompare(providerName) == .orderedSame {
-            return quotaText
-        }
-        return "\(providerName) · \(quotaText)"
+    private func openTask(_ taskId: String) {
+        onNavigate(NavigationIntent(section: .tasks, taskId: taskId))
     }
 
     private func setAutomationMode(_ mode: String) {
@@ -490,14 +503,10 @@ struct DailyDriverHome: View {
         let socketPath = store.socketPath
 
         Task {
-            let client = PAOControlClient(socketPath: socketPath)
             do {
-                // Re-read immediately before PUT so a mode change never rewrites
-                // the owner's routing policy with stale client state.
-                let current = try await client.schedulingSettings()
-                let updated = try await client.setSchedulingMode(
-                    mode,
-                    defaultSchedulingPolicy: current.defaultSchedulingPolicy
+                let updated = try await AutomationModeMutationCoordinator.shared.setMode(
+                    socketPath: socketPath,
+                    mode: mode
                 )
                 await store.loadSchedulingSettings()
                 await store.refreshNow()
@@ -554,6 +563,50 @@ struct DailyDriverHome: View {
         )
     }
 
+    private func quotaText(_ provider: QuotaProviderCardView) -> String {
+        if provider.poolKind == "unmetered" {
+            if let observed = provider.unmetered {
+                return DailyDriverL10n.unmeteredRPM(observed.rpmObserved)
+            }
+            return DailyDriverL10n.unmetered
+        }
+
+        if let plan = provider.plan {
+            let readable = plan.windows.prefix(2).map(windowText)
+            if !readable.isEmpty { return readable.joined(separator: " · ") }
+            return plan.state == "UNKNOWN"
+                ? DailyDriverL10n.quotaUnknown : quotaStateLabel(plan.state)
+        }
+
+        if let pool = provider.quotaPools.first {
+            let readable = pool.windows.prefix(2).map { window -> String in
+                var value = window.remainingFraction.map {
+                    "\(windowLabel(window.windowKind)) \(Int(($0 * 100).rounded()))%"
+                } ?? "\(windowLabel(window.windowKind)) \(DailyDriverL10n.quotaUnknown)"
+                if let reset = resetText(window.resetAt) { value += " · \(reset)" }
+                return value
+            }
+            if !readable.isEmpty { return readable.joined(separator: " · ") }
+            return quotaStateLabel(pool.state)
+        }
+
+        return provider.quotaState == "UNKNOWN"
+            ? DailyDriverL10n.quotaUnknown : quotaStateLabel(provider.quotaState)
+    }
+
+    private func windowText(_ window: QuotaPlanWindowView) -> String {
+        var value = window.remainingFraction.map {
+            "\(windowLabel(window.windowKind)) \(Int(($0 * 100).rounded()))%"
+        } ?? "\(windowLabel(window.windowKind)) \(DailyDriverL10n.quotaUnknown)"
+        if let reset = resetText(window.resetAt) { value += " · \(reset)" }
+        return value
+    }
+
+    private func capacityDetail(providerName: String, title: String, quotaText: String) -> String {
+        title.caseInsensitiveCompare(providerName) == .orderedSame
+            ? quotaText : "\(providerName) · \(quotaText)"
+    }
+
     private func modeLabel(_ value: String) -> String {
         switch value {
         case "MANUAL": return DailyDriverL10n.manual
@@ -594,7 +647,7 @@ struct DailyDriverHome: View {
         }
     }
 
-    private func stateLabelForQuota(_ value: String) -> String {
+    private func quotaStateLabel(_ value: String) -> String {
         switch value {
         case "AVAILABLE", "OBSERVED": return DailyDriverL10n.quotaAvailable
         case "LIMITED", "WARNING": return DailyDriverL10n.quotaLimited
@@ -614,7 +667,9 @@ struct DailyDriverHome: View {
 
     private func windowLabel(_ value: String) -> String {
         let lowered = value.lowercased()
-        if (lowered.contains("5") || lowered.contains("five")) && lowered.contains("hour") { return "5h" }
+        if (lowered.contains("5") || lowered.contains("five")) && lowered.contains("hour") {
+            return "5h"
+        }
         if lowered.contains("week") { return DailyDriverL10n.weekWindow }
         if lowered.contains("month") { return DailyDriverL10n.monthWindow }
         return value.replacingOccurrences(of: "_", with: " ").capitalized
@@ -624,8 +679,8 @@ struct DailyDriverHome: View {
         guard let raw, let date = ISO8601DateFormatter().date(from: raw) else { return nil }
         let seconds = Int(date.timeIntervalSinceNow)
         if seconds <= 0 { return DailyDriverL10n.resetDue }
-        if seconds < 3600 { return DailyDriverL10n.resetMinutes(max(1, seconds / 60)) }
-        if seconds < 86_400 { return DailyDriverL10n.resetHours(seconds / 3600) }
+        if seconds < 3_600 { return DailyDriverL10n.resetMinutes(max(1, seconds / 60)) }
+        if seconds < 86_400 { return DailyDriverL10n.resetHours(seconds / 3_600) }
         return DailyDriverL10n.resetDays(seconds / 86_400)
     }
 
@@ -633,8 +688,8 @@ struct DailyDriverHome: View {
         guard let date = ISO8601DateFormatter().date(from: raw) else { return raw }
         let seconds = max(0, Int(Date().timeIntervalSince(date)))
         if seconds < 60 { return DailyDriverL10n.relativeNow }
-        if seconds < 3600 { return DailyDriverL10n.minutesAgo(seconds / 60) }
-        if seconds < 86_400 { return DailyDriverL10n.hoursAgo(seconds / 3600) }
+        if seconds < 3_600 { return DailyDriverL10n.minutesAgo(seconds / 60) }
+        if seconds < 86_400 { return DailyDriverL10n.hoursAgo(seconds / 3_600) }
         return DailyDriverL10n.daysAgo(seconds / 86_400)
     }
 }
