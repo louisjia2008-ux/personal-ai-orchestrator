@@ -256,6 +256,15 @@ struct DispatchRecommendationRow: View {
     let isTopPick: Bool
     let onDispatch: () -> Void
 
+    /// The daemon recommender preserves historical VERIFIED evidence as an
+    /// admitted candidate when the latest probe is non-VERIFIED. That is useful
+    /// ranking history, but the final launch gate will fail closed. Keep the row
+    /// visible and marked stale; do not offer an action that is already known to
+    /// disagree with current launch authority.
+    private var canDispatchCandidate: Bool {
+        candidate.admitted && !candidate.isExecutionVerifiedStale
+    }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Spacing.inner) {
             Image(systemName: candidate.admitted
@@ -339,7 +348,7 @@ struct DispatchRecommendationRow: View {
                     symbol: "exclamationmark.triangle"
                 )
             }
-            if candidate.admitted {
+            if canDispatchCandidate {
                 Button(L10n.dispatch, action: onDispatch)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.mini)
