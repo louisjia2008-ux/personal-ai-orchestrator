@@ -2,17 +2,14 @@ import XCTest
 
 @testable import PAOControlKit
 
-/// The shared layout contract behind the five dashboard destinations.
+/// Shared geometry contract for the five Daily Driver destinations.
 ///
-/// Unit tests cannot prove visual alignment; what they can prove is that the
-/// geometry the views consume is defined once and satisfies the contract B5
-/// set out. If a page reintroduces a private magic number, it shows up as one
-/// of these tokens drifting or being bypassed in review — not as five views
-/// quietly disagreeing.
+/// These tests do not pretend to prove visual quality. They prevent the layout
+/// tokens that every destination consumes from drifting back toward per-screen
+/// magic numbers or the retired admin-dashboard density.
 final class DashboardLayoutContractTests: XCTestCase {
     // MARK: Canonical navigation
 
-    /// The frozen five-destination information architecture.
     func testCanonicalNavigationRemainsFiveDestinationsInOrder() {
         XCTAssertEqual(
             DashboardSection.allCases.map(\.rawValue),
@@ -20,7 +17,6 @@ final class DashboardLayoutContractTests: XCTestCase {
         )
     }
 
-    /// The old backend-shaped destinations must never come back as pages.
     func testLegacyDestinationsResolveIntoTheFive() {
         for legacy in DashboardSectionMigration.legacyStoredValues {
             let resolved = DashboardSectionMigration.section(forStoredValue: legacy)
@@ -33,21 +29,20 @@ final class DashboardLayoutContractTests: XCTestCase {
 
     // MARK: Page chrome
 
-    /// Page insets are one value pair, drawn from the shared spacing scale, so
-    /// Tasks (20) and Resources (20) can never drift apart again the way
-    /// 20 vs 24 did in B4.
-    func testPageInsetsAreSharedAndOnTheSpacingScale() {
+    /// Daily Driver pages use a 24pt outer inset and 32pt separation between
+    /// major product sections. Both remain on the app's 4pt rhythm without
+    /// forcing every legacy component to adopt those larger values.
+    func testDailyDriverPageRhythmIsSharedAndOnFourPointGrid() {
         XCTAssertEqual(
             DashboardLayoutMetrics.pageHorizontalPadding,
             DashboardLayoutMetrics.pageVerticalPadding
         )
-        XCTAssertEqual(DashboardLayoutMetrics.pageHorizontalPadding, Spacing.page)
-        XCTAssertEqual(DashboardLayoutMetrics.sectionSpacing, Spacing.section)
+        XCTAssertEqual(DashboardLayoutMetrics.pageHorizontalPadding, 24)
+        XCTAssertEqual(DashboardLayoutMetrics.sectionSpacing, 32)
+        XCTAssertEqual(Int(DashboardLayoutMetrics.pageHorizontalPadding) % 4, 0)
+        XCTAssertEqual(Int(DashboardLayoutMetrics.sectionSpacing) % 4, 0)
     }
 
-    /// The sidebar is one pinned width, not a band. A resizable column let the
-    /// split view re-solve it per destination, which is exactly how the sidebar
-    /// came to change width when the owner switched pages.
     func testSidebarWidthIsPinned() {
         XCTAssertTrue(
             (160...220).contains(DashboardLayoutMetrics.sidebarWidth),
@@ -55,24 +50,25 @@ final class DashboardLayoutContractTests: XCTestCase {
         )
     }
 
-    // MARK: Cards
+    // MARK: Grouped surfaces
 
-    func testCardGeometryIsShared() {
-        XCTAssertEqual(DashboardLayoutMetrics.cardCornerRadius, Radius.panel)
-        XCTAssertEqual(DashboardLayoutMetrics.cardSpacing, Spacing.element)
-        XCTAssertGreaterThan(DashboardLayoutMetrics.cardPadding, 0)
+    /// The redesign deliberately uses a quieter but roomier grouped surface than
+    /// the earlier 8pt-radius / 12pt-gap admin card wall.
+    func testGroupedSurfaceGeometryIsStable() {
+        XCTAssertEqual(DashboardLayoutMetrics.cardCornerRadius, 12)
+        XCTAssertEqual(DashboardLayoutMetrics.cardSpacing, 16)
+        XCTAssertEqual(DashboardLayoutMetrics.cardPadding, 16)
+        XCTAssertEqual(Int(DashboardLayoutMetrics.cardCornerRadius) % 4, 0)
+        XCTAssertEqual(Int(DashboardLayoutMetrics.cardSpacing) % 4, 0)
+        XCTAssertEqual(Int(DashboardLayoutMetrics.cardPadding) % 4, 0)
     }
 
-    /// KPI tiles reserve one height so the Overview row stays a row.
-    func testKPITilesReserveACommonHeight() {
-        XCTAssertGreaterThan(DashboardLayoutMetrics.kpiTileHeight, 0)
-        XCTAssertGreaterThan(DashboardLayoutMetrics.chartHeight, 0)
+    func testHistoricalChartsRetainReadableHeight() {
+        XCTAssertGreaterThanOrEqual(DashboardLayoutMetrics.chartHeight, 180)
     }
 
     // MARK: Collection → detail workspace
 
-    /// Tasks and Resources name the same numbers because they name the same
-    /// tokens; the contract keeps those numbers in the agreed bands.
     func testWorkspaceSplitContract() {
         let preferred = DashboardLayoutMetrics.collectionPreferredWidth
         let minimum = DashboardLayoutMetrics.collectionMinimumWidth
@@ -89,26 +85,24 @@ final class DashboardLayoutContractTests: XCTestCase {
         )
     }
 
-    /// The split must physically fit the practical minimum window: sidebar,
-    /// collection minimum, detail minimum together.
-    /// The split must physically fit the smallest canonical window — 1000pt —
-    /// with the sidebar, the collection minimum and the detail minimum all at
-    /// their floors.
-    func testSplitFitsTheSmallestCanonicalWindow() {
-        let smallestCanonicalWidth: CGFloat = 1000
+    /// The declared minimum window must be large enough to hold the preferred
+    /// collection width and the detail floor, rather than advertising a size the
+    /// split view can only satisfy by immediately crushing one column.
+    func testDeclaredMinimumWindowContainsPreferredWorkspaceGeometry() {
         let required = DashboardLayoutMetrics.sidebarWidth
-            + DashboardLayoutMetrics.collectionMinimumWidth
+            + DashboardLayoutMetrics.collectionPreferredWidth
             + DashboardLayoutMetrics.detailMinimumWidth
-        XCTAssertLessThanOrEqual(required, smallestCanonicalWidth)
+        XCTAssertEqual(DashboardLayoutMetrics.minimumWindowWidth, required)
+        XCTAssertTrue((1000...1100).contains(DashboardLayoutMetrics.minimumWindowWidth))
+        XCTAssertGreaterThanOrEqual(DashboardLayoutMetrics.minimumWindowHeight, 600)
     }
 
-    /// Two cards must fit side by side in the detail pane at the primary window
-    /// size. Below that the grid is meant to reflow to one column; at 1200pt —
-    /// the size the dashboard is accepted at — a pair of quota bindings has to
-    /// read side by side rather than as a stack in a half-empty pane.
-    func testTwoCardsFitTheDetailPaneAtThePrimaryWindowSize() {
-        let primaryWindowWidth: CGFloat = 1200
-        let detail = primaryWindowWidth
+    /// At the default 1180pt window, two ordinary cards still fit in the detail
+    /// pane while a third does not. That keeps quota/resource groupings readable
+    /// instead of becoming a row of tiny admin widgets.
+    func testTwoCardsFitTheDetailPaneAtDefaultWindowSize() {
+        let defaultWindowWidth: CGFloat = 1180
+        let detail = defaultWindowWidth
             - DashboardLayoutMetrics.sidebarWidth
             - DashboardLayoutMetrics.collectionPreferredWidth
         let content = min(
@@ -118,19 +112,22 @@ final class DashboardLayoutContractTests: XCTestCase {
         let twoCards = 2 * DashboardLayoutMetrics.cardMinimumWidth
             + DashboardLayoutMetrics.cardSpacing
         XCTAssertLessThanOrEqual(twoCards, content)
-        // ...and three must not, or two bindings become an unreadable strip.
+
         let threeCards = 3 * DashboardLayoutMetrics.cardMinimumWidth
             + 2 * DashboardLayoutMetrics.cardSpacing
         XCTAssertGreaterThan(threeCards, content)
     }
 
-    /// A chronological table uses the main pane but stops before it stretches
-    /// a three-column row across a maximised window.
-    func testTableWidthUsesThePaneWithoutStretching() {
+    // MARK: Reading measures
+
+    func testActivityAndSettingsMeasuresStayPurposeSpecific() {
         XCTAssertGreaterThan(
-            DashboardLayoutMetrics.tableMaximumWidth, ContentWidth.reading,
-            "a table must be allowed wider than a prose measure"
+            DashboardLayoutMetrics.tableMaximumWidth,
+            ContentWidth.reading,
+            "an activity/audit table may be wider than prose"
         )
-        XCTAssertLessThanOrEqual(DashboardLayoutMetrics.tableMaximumWidth, 1000)
+        XCTAssertTrue((960...1100).contains(DashboardLayoutMetrics.tableMaximumWidth))
+        XCTAssertTrue((680...800).contains(DashboardLayoutMetrics.formMaximumWidth))
+        XCTAssertLessThan(DashboardLayoutMetrics.formMaximumWidth, DashboardLayoutMetrics.tableMaximumWidth)
     }
 }
