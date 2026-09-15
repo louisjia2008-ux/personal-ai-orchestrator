@@ -385,6 +385,20 @@ struct TaskRoutingReadinessNotice: View {
         store.providerConnections?.connected.count ?? 0
     }
 
+    /// Pi providers are deliberately not persisted in the ordinary connection
+    /// registry. The daemon treats a Pi surface as routing-connected when Pi auth
+    /// is READY and a model remains discoverable; that state projects to the
+    /// target as `runtimeAvailable == true`.
+    private var piRoutingConnected: Bool {
+        (store.providers?.providers ?? [])
+            .flatMap(\.executionTargets)
+            .contains { $0.runtimeId == "pi" && $0.runtimeAvailable == true }
+    }
+
+    private var hasRoutingProvider: Bool {
+        connectedCount > 0 || piRoutingConnected
+    }
+
     private var importCandidateCount: Int {
         store.providerConnections?.importCandidates.count ?? 0
     }
@@ -393,10 +407,10 @@ struct TaskRoutingReadinessNotice: View {
 
     /// Whether there is anything here worth a panel.
     ///
-    /// With a provider connected and tasks already in the list, this notice had
-    /// nothing to add to the empty state it sat under — so it renders nothing
-    /// rather than a panel restating "select a task".
-    private var hasSomethingToSay: Bool { connectedCount == 0 || !hasTasks }
+    /// With a routing-connected provider and tasks already in the list, this
+    /// notice has nothing to add to the empty state it sits under — so it renders
+    /// nothing rather than restating "select a task".
+    private var hasSomethingToSay: Bool { !hasRoutingProvider || !hasTasks }
 
     var body: some View {
         if hasSomethingToSay {
@@ -406,7 +420,7 @@ struct TaskRoutingReadinessNotice: View {
 
     private var notice: some View {
         TaskDetailSection(L10n.routingTitle, symbol: "point.topleft.down.curvedto.point.bottomright.up") {
-            if connectedCount == 0 {
+            if !hasRoutingProvider {
                 TaskSectionNotice(
                     text: L10n.routingNoConnectedProviders,
                     symbol: "exclamationmark.triangle",
