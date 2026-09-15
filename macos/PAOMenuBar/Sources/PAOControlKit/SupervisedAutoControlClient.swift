@@ -121,3 +121,28 @@ public extension PAOControlClient {
         )
     }
 }
+
+/// One process-wide serialization point for automation-mode writes.
+///
+/// Home, Settings and the menu-bar emergency stop are separate SwiftUI trees,
+/// so view-local `isChangingMode` flags cannot stop them from issuing concurrent
+/// PUTs. Serializing here prevents a stale read/PUT pair on one surface from
+/// racing another surface's mode change. Each queued mutation still re-reads the
+/// daemon's current routing policy immediately before its own PUT.
+public actor AutomationModeMutationCoordinator {
+    public static let shared = AutomationModeMutationCoordinator()
+
+    public init() {}
+
+    public func setMode(
+        socketPath: String,
+        mode: String
+    ) async throws -> SchedulingSettingsView {
+        let client = PAOControlClient(socketPath: socketPath)
+        let current = try await client.schedulingSettings()
+        return try await client.setSchedulingMode(
+            mode,
+            defaultSchedulingPolicy: current.defaultSchedulingPolicy
+        )
+    }
+}
