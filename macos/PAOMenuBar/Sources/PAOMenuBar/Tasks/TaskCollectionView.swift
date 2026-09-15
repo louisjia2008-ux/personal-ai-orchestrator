@@ -219,17 +219,17 @@ struct TaskCollectionRow: View {
 
     private var displayState: String {
         switch task.state {
-        case "AUTO_PLANNED": return "Awaiting approval"
-        case "AUTO_GRACE": return "Grace window"
-        case "SUBMITTED": return "Ready to route"
-        case "READY": return "Ready"
-        case "RUNNING": return "Running"
-        case "VERIFYING": return "Verifying"
-        case "VERIFIED": return "Verified"
-        case "COMPLETED": return "Completed"
-        case "BLOCKED": return "Blocked"
-        case "FAILED": return "Failed"
-        case "CANCELLED": return "Cancelled"
+        case "AUTO_PLANNED": return DailyDriverL10n.taskAwaitingApproval
+        case "AUTO_GRACE": return DailyDriverL10n.taskGraceWindow
+        case "SUBMITTED": return DailyDriverL10n.taskReadyToRoute
+        case "READY": return DailyDriverL10n.taskReady
+        case "RUNNING": return DailyDriverL10n.taskRunning
+        case "VERIFYING": return DailyDriverL10n.taskVerifying
+        case "VERIFIED": return DailyDriverL10n.taskVerified
+        case "COMPLETED": return DailyDriverL10n.taskCompleted
+        case "BLOCKED": return DailyDriverL10n.taskBlocked
+        case "FAILED": return DailyDriverL10n.taskFailed
+        case "CANCELLED": return DailyDriverL10n.taskCancelled
         default: return task.state.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
