@@ -9,6 +9,8 @@ import PAOControlKit
 /// task completion from presentation state.
 struct DailyDriverHome: View {
     @EnvironmentObject private var store: OrchestratorStore
+    @State private var isChangingMode = false
+    @State private var modeNotice: String?
 
     let onOpenTask: (String) -> Void
     let onOpenTasks: () -> Void
@@ -57,6 +59,12 @@ struct DailyDriverHome: View {
         DashboardPageContainer {
             readinessHeader
 
+            if let modeNotice {
+                Label(modeNotice, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             homeSection("Now", symbol: "bolt.fill") {
                 nowContent
             }
@@ -86,7 +94,7 @@ struct DailyDriverHome: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(isReady ? "Ready to work" : "Needs attention")
                     .font(.title3.weight(.semibold))
-                Text("\(modeLabel(schedulingMode)) · \(capacitySummary)")
+                Text(capacitySummary)
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -97,9 +105,49 @@ struct DailyDriverHome: View {
                 Label("Daemon unavailable", systemImage: "bolt.slash")
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.secondary)
+            } else {
+                automationModeMenu
             }
         }
         .padding(.vertical, 2)
+    }
+
+    private var automationModeMenu: some View {
+        Menu {
+            ForEach(AutomationModeCatalog.selectable, id: \.self) { mode in
+                Button {
+                    setAutomationMode(mode)
+                } label: {
+                    if schedulingMode == mode {
+                        Label(modeLabel(mode), systemImage: "checkmark")
+                    } else {
+                        Text(modeLabel(mode))
+                    }
+                }
+                .disabled(schedulingMode == mode || schedulingMode == "ACTIVE")
+            }
+
+            if schedulingMode == "ACTIVE" {
+                Divider()
+                Label("Full Automation is controlled by production gates", systemImage: "lock")
+            }
+        } label: {
+            if isChangingMode {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Label(modeLabel(schedulingMode), systemImage: modeSymbol(schedulingMode))
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(
+            isChangingMode
+                || !AutomationModePresentation.canSelectModes(
+                    currentMode: store.schedulingSettings?.mode
+                )
+        )
+        .help("Change between Manual and Supervised Auto without changing the routing policy.")
     }
 
     @ViewBuilder
@@ -383,6 +431,37 @@ struct DailyDriverHome: View {
         return "\(providerName) · \(quotaText)"
     }
 
+    private func setAutomationMode(_ mode: String) {
+        guard mode != schedulingMode, schedulingMode != "ACTIVE" else { return }
+        guard store.schedulingSettings != nil else { return }
+        isChangingMode = true
+        modeNotice = nil
+        let socketPath = store.socketPath
+
+        Task {
+            let client = PAOControlClient(socketPath: socketPath)
+            do {
+                // Re-read immediately before PUT so a mode change never rewrites
+                // the owner's routing policy with stale client state.
+                let current = try await client.schedulingSettings()
+                let updated = try await client.setSchedulingMode(
+                    mode,
+                    defaultSchedulingPolicy: current.defaultSchedulingPolicy
+                )
+                await store.loadSchedulingSettings()
+                await store.refreshNow()
+                modeNotice = updated.mode == mode
+                    ? "Scheduling mode changed to \(modeLabel(updated.mode))."
+                    : "Daemon returned \(modeLabel(updated.mode)); no local mode was assumed."
+            } catch let error as PAOClientError {
+                modeNotice = "Scheduling mode change failed · \(error.displayDetail)"
+            } catch {
+                modeNotice = "Scheduling mode response could not be decoded."
+            }
+            isChangingMode = false
+        }
+    }
+
     @ViewBuilder
     private func stateIcon(_ state: String) -> some View {
         switch state {
@@ -430,6 +509,15 @@ struct DailyDriverHome: View {
         case "SPEED_FIRST": return "Low Latency"
         case "UNKNOWN": return "Mode unavailable"
         default: return value.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+
+    private func modeSymbol(_ value: String) -> String {
+        switch value {
+        case "SUPERVISED_AUTO": return "sparkles"
+        case "ACTIVE": return "bolt.shield"
+        case "MANUAL": return "hand.raised"
+        default: return "questionmark.circle"
         }
     }
 
