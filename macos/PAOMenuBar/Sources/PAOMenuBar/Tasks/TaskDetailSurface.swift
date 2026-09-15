@@ -5,9 +5,9 @@ import PAOControlKit
 /// The canonical workspace for one task.
 ///
 /// Ordered by what the owner needs first: what this is and what state it is in,
-/// then anything demanding attention, then how it is executing, then why that
-/// worker, then what changed, then whether it passed. Machine identity is not
-/// in this order at all — it lives in the inspector.
+/// then anything demanding attention, then supervised actions, execution truth,
+/// why this target was selected, and only then the lifecycle/audit sequence.
+/// Machine identity is not in this order at all — it lives in the inspector.
 ///
 /// Nothing here depends on the inspector being open. That is the point of the
 /// split: the inspector holds ids and paths, and Task Detail holds the answers.
@@ -65,8 +65,12 @@ struct TaskDetailSurface: View {
                     // They must never look like ordinary manual dispatch states.
                     TaskAutoSupervisionSection(detail: detail)
                     TaskExecutionSection(detail: detail)
-                    TaskLifecycleSection(detail: detail)
+                    // Target identity and the scheduler's structured rationale are
+                    // a daily-driver decision surface, not audit history. Put them
+                    // before the lifecycle so the owner can immediately answer
+                    // "what is doing this work and why?".
                     TaskRoutingSection(summary: detail.routingSummary)
+                    TaskLifecycleSection(detail: detail)
                     TaskChangesSection(
                         changes: TaskChangeSet.derive(from: detail),
                         workspace: detail.workspace
