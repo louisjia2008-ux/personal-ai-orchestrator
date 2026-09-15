@@ -128,7 +128,10 @@ final class DailyDriverReadinessTests: XCTestCase {
         let actionable = DailyDriverRiskPresentation.actionable(
             [productionOnly, shadowOnly, quota, futureUnknown]
         )
-        XCTAssertEqual(actionable.map(\.rawCode), ["QUOTA_EXHAUSTED", "FUTURE_OPERATIONAL_RISK"])
+        XCTAssertEqual(
+            actionable.compactMap(\.rawCode),
+            ["QUOTA_EXHAUSTED", "FUTURE_OPERATIONAL_RISK"]
+        )
     }
 
     private func project(
