@@ -23,8 +23,8 @@ public extension ExecutionTargetHealthView {
 /// Attention / Settings, but neither makes MANUAL or SUPERVISED_AUTO unusable.
 /// Readiness is derived only from prerequisites for new work: daemon connection,
 /// known scheduling mode, an online project, project opt-in when supervised,
-/// and at least one verified/runtime-available target that is not explicitly
-/// exhausted or cooling down.
+/// and at least one routing-connected, execution-verified/runtime-available
+/// target that is not explicitly exhausted or cooling down.
 public enum DailyDriverReadinessBlocker: Equatable, Sendable {
     case disconnected
     case schedulingModeUnknown
@@ -71,9 +71,14 @@ public enum DailyDriverReadiness {
             return blocked(.supervisedAutoNeedsProject)
         }
 
-        let launchableTargets = (providers?.providers ?? [])
-            .flatMap(\.executionTargets)
-            .filter(\.isLaunchableOnHost)
+        // Use the same owner-selection projection as New Task / Quick Submit /
+        // Task Detail. `/v1/providers` carries connection state too, so passing
+        // no separate connection projection here remains truthful during refresh
+        // ordering while still excluding discovered-but-disconnected OpenCode.
+        let launchableTargets = DailyDriverExecutionTargets.launchable(
+            providers: providers,
+            connections: nil
+        )
 
         guard !launchableTargets.isEmpty else {
             return blocked(.noRunnableTarget)
