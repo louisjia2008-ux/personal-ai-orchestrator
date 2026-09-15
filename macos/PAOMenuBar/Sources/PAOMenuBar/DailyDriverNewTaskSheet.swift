@@ -18,6 +18,10 @@ struct DailyDriverNewTaskSheet: View {
     @State private var manualExecutionTargetId: String?
     @State private var showsAdvancedRouting = false
     @State private var submitting = false
+    /// `OrchestratorStore.submitNotice` is process-level convenience state and
+    /// intentionally survives a sheet dismissal. Do not render an earlier
+    /// interaction's failure before this sheet has made its own submit attempt.
+    @State private var submissionAttempted = false
 
     let onSubmitted: (String) -> Void
 
@@ -112,7 +116,8 @@ struct DailyDriverNewTaskSheet: View {
                     routingSummary
                     advancedRouting
 
-                    if let notice = store.submitNotice,
+                    if submissionAttempted,
+                       let notice = store.submitNotice,
                        !isSuccessfulSubmission(notice) {
                         Label(L10n.submitNotice(notice), systemImage: "exclamationmark.triangle")
                             .font(.caption)
@@ -252,6 +257,7 @@ struct DailyDriverNewTaskSheet: View {
         store.selectedMinTier = minTier
         store.selectedManualExecutionTargetId = manualExecutionTargetId
 
+        submissionAttempted = true
         submitting = true
         Task {
             await store.quickSubmit(projectId: projectId, intent: value)
