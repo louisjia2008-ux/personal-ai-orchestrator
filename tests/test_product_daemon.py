@@ -133,6 +133,7 @@ def test_product_daemon_builds_control_only_daemon_argv() -> None:
         "--port",
         "8765",
         "--control-only",
+        "--enable-supervised-auto-tick",
     ]
 
 
