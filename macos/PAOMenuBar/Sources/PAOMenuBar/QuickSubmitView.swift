@@ -30,28 +30,11 @@ struct QuickSubmitView: View {
         return onlineProjects.first { $0.projectId == selectedProjectId }
     }
 
-    /// Manual targets are eligible only when the provider surface is routing-
-    /// connected (Pi READY auth is represented by its runtime availability) and
-    /// the exact target satisfies the same current host launch prerequisites used
-    /// by the Daily Driver readiness/new-task surfaces.
     private var connectedTargets: [ExecutionTargetHealthView] {
-        let connectedIds = Set(
-            (store.providerConnections?.connected ?? []).map(\.providerId)
+        DailyDriverExecutionTargets.launchable(
+            providers: store.providers,
+            connections: store.providerConnections
         )
-        return (store.providers?.providers ?? [])
-            .flatMap { provider in
-                provider.executionTargets.filter { target in
-                    let connectionEligible = connectedIds.contains(provider.providerId)
-                        || (target.runtimeId == "pi" && target.runtimeAvailable == true)
-                    return connectionEligible && target.isLaunchableOnHost
-                }
-            }
-            .sorted {
-                if $0.runtimeId != $1.runtimeId {
-                    return $0.runtimeId < $1.runtimeId
-                }
-                return $0.modelSkuId.localizedStandardCompare($1.modelSkuId) == .orderedAscending
-            }
     }
 
     private var selectablePolicies: [String] {
