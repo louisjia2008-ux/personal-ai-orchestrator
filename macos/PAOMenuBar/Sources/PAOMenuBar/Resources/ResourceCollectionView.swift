@@ -148,17 +148,23 @@ struct ResourceCollectionView: View {
     }
 }
 
-/// One resource: what it is, whether it is reachable, and the one quota figure
-/// that can honestly stand for it.
-///
-/// Deliberately not every metric. The row carries identity, availability, the
-/// limiting balance where one is authoritative, and the reset horizon; the rest
-/// belongs to the detail, where there is room to say what each figure means.
+/// One resource: commercial plan/pool identity first, provider implementation
+/// second. A Token Plan is the resource the owner budgets; its provider/runtime
+/// is supporting context, not the headline.
 struct ResourceCollectionRow: View {
     let resource: ResourceSnapshot
     var now: Date = Date()
 
     private var status: StatusPresentation { resource.connectionStatus }
+
+    private var primaryName: String {
+        resource.plan?.displayName ?? resource.planSurface ?? resource.displayName
+    }
+
+    private var providerContext: String? {
+        primaryName.caseInsensitiveCompare(resource.displayName) == .orderedSame
+            ? nil : resource.displayName
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: Spacing.inner) {
@@ -166,10 +172,10 @@ struct ResourceCollectionRow: View {
                 .foregroundStyle(status.color)
                 .frame(width: 16)
                 .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: Spacing.inner) {
-                    Text(resource.displayName)
-                        .font(.body)
+                    Text(primaryName)
+                        .font(.body.weight(.medium))
                         .lineLimit(1)
                     Spacer(minLength: 0)
                     quotaSummary
@@ -180,7 +186,7 @@ struct ResourceCollectionRow: View {
                     .lineLimit(1)
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibleSummary)
     }
@@ -216,9 +222,12 @@ struct ResourceCollectionRow: View {
         }
     }
 
-    /// Kind, reset horizon and execution targets, in the space of one line.
+    /// Provider context, kind, reset horizon and execution-target readiness in
+    /// one compact line. The commercial plan is already the headline.
     private var secondaryLine: String {
-        var parts: [String] = [resource.kind.title]
+        var parts: [String] = []
+        if let providerContext { parts.append(providerContext) }
+        parts.append(resource.kind.title)
         if let reset = resetText { parts.append(reset) }
         if let freshness = freshnessText { parts.append(freshness) }
         let targets = resource.executionTargets.count
@@ -255,7 +264,10 @@ struct ResourceCollectionRow: View {
     }
 
     private var accessibleSummary: String {
-        var parts = [resource.displayName, resource.connectionState, resource.kind.title]
+        var parts = [primaryName]
+        if let providerContext { parts.append(providerContext) }
+        parts.append(resource.connectionState)
+        parts.append(resource.kind.title)
         if let binding = resource.summaryBinding, let fraction = binding.remainingFraction {
             parts.append("\(L10n.quotaRemainingLabel) \(QuotaFormat.percent(fraction))")
             parts.append(binding.state)
