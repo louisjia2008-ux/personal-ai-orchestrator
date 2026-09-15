@@ -4,9 +4,9 @@ import PAOControlKit
 
 /// Reusable project-level supervised-auto configuration.
 ///
-/// Every edit re-reads `/v1/projects` immediately before the PUT and submits the
-/// complete three-field tuple. This prevents a stale SwiftUI row from resetting
-/// a sibling setting that changed elsewhere.
+/// Every edit runs through the process-wide project mutation coordinator. The
+/// coordinator serializes the full GET/resolve/PUT tuple so two Settings/Home
+/// sheets cannot overwrite each other's sibling fields with stale values.
 struct ProjectAutomationSettingsView: View {
     @EnvironmentObject private var store: OrchestratorStore
     @Environment(\.dismiss) private var dismiss
@@ -96,28 +96,20 @@ struct ProjectAutomationSettingsView: View {
         let socketPath = store.socketPath
 
         Task {
-            let client = PAOControlClient(socketPath: socketPath)
             do {
-                // Resolve siblings from fresh daemon truth, never from the row
-                // that happened to be rendered when the owner clicked.
-                let currentList = try await client.projects()
-                guard let current = currentList.projects.first(where: { $0.projectId == projectId }) else {
+                let updated = try await ProjectAutomationMutationCoordinator.shared.update(
+                    socketPath: socketPath,
+                    projectId: projectId,
+                    supervisedAutoAllowed: supervisedAutoAllowed,
+                    unattendedAllowed: unattendedAllowed,
+                    graceSeconds: graceSeconds
+                )
+                guard updated != nil else {
                     notice = DailyDriverL10n.projectGone
                     savingProjectIds.remove(projectId)
                     await store.refreshNow()
                     return
                 }
-
-                let requestedSupervised = supervisedAutoAllowed ?? current.supervisedAutoAllowed
-                let requestedUnattended = unattendedAllowed ?? current.unattendedAllowed
-                let requestedGrace = graceSeconds ?? current.graceSeconds
-
-                _ = try await client.setProjectSupervisedAutoSettings(
-                    projectId: projectId,
-                    supervisedAutoAllowed: requestedSupervised,
-                    unattendedAllowed: requestedUnattended,
-                    graceSeconds: requestedGrace
-                )
                 await store.refreshNow()
                 notice = DailyDriverL10n.projectSaved
             } catch let error as PAOClientError {
