@@ -363,7 +363,7 @@ def build_control_service(
     quota_refresh_service = QuotaRefreshService(
         runtime_state_root=runtime_state_root,
         connected_provider_ids=(
-            provider_registry_manager.connected_provider_ids
+            provider_registry_manager.routing_connected_provider_ids
             if provider_registry_manager is not None
             else tuple
         ),
