@@ -2,9 +2,9 @@ import SwiftUI
 
 import PAOControlKit
 
-/// Native settings surface for the two owner-controlled automation concepts:
-/// orchestrator mode and routing policy. They remain separate so changing
-/// MANUAL/SUPERVISED_AUTO can never silently change BALANCED/QUALITY_FIRST/etc.
+/// Native settings surface for owner-controlled automation authority and routing.
+/// MANUAL/SUPERVISED_AUTO, owner-initiated execution, routing policy, and the
+/// read-only Production ACTIVE gate are kept together without conflating them.
 struct AutomationSettingsPane: View {
     @EnvironmentObject private var store: OrchestratorStore
     @State private var isChangingMode = false
@@ -55,6 +55,26 @@ struct AutomationSettingsPane: View {
                 Text(L10n.settingsDefaultSchedulingPolicy)
             } footer: {
                 Text(L10n.settingsDefaultSchedulingPolicyFooter)
+            }
+
+            Section {
+                let enabled = store.ownerExecutionSettings?.ownerInitiatedExecutionEnabled ?? false
+                Toggle(
+                    L10n.ownerExecutionToggle,
+                    isOn: Binding(
+                        get: { enabled },
+                        set: { newValue in
+                            Task { await store.setOwnerExecution(enabled: newValue) }
+                        }
+                    )
+                )
+                .disabled(store.ownerExecutionSettings == nil)
+
+                LabeledContent(L10n.ownerExecutionState, value: enabled ? "ON" : "OFF")
+            } header: {
+                Text(L10n.ownerExecutionSetting)
+            } footer: {
+                Text(L10n.ownerExecutionMeaning)
             }
 
             Section {
