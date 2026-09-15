@@ -217,21 +217,14 @@ struct DashboardView: View {
 
         switch section {
         case .overview:
-            DailyDriverHome(
-                onOpenTask: { taskId in
-                    navigate(to: NavigationIntent(section: .tasks, taskId: taskId))
-                },
-                onOpenTasks: {
+            DailyDriverHome(onNavigate: { intent in
+                // Navigating to the unfiltered task collection should not retain
+                // an unrelated narrowing from an earlier visit.
+                if intent.section == .tasks && intent.taskId == nil {
                     taskFilter = TaskFilter()
-                    self.section = .tasks
-                },
-                onOpenResources: {
-                    self.section = .resources
-                },
-                onOpenActivity: {
-                    self.section = .activity
                 }
-            )
+                navigate(to: intent)
+            })
 
         case .tasks:
             TasksWorkspace(
