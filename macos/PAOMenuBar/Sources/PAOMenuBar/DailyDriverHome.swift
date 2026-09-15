@@ -59,9 +59,14 @@ struct DailyDriverHome: View {
         DailyDriverReadiness.derive(
             connection: store.connection,
             schedulingMode: store.schedulingSettings?.mode,
+            ownerExecutionEnabled: store.ownerExecutionSettings?.ownerInitiatedExecutionEnabled,
             projects: projects,
             providers: store.providers
         )
+    }
+
+    private var ownerExecutionNeedsSetup: Bool {
+        readiness.blocker == .ownerExecutionDisabled
     }
 
     private var projectAutomationNeedsSetup: Bool {
@@ -139,6 +144,8 @@ struct DailyDriverHome: View {
             return DailyDriverL10n.daemonUnavailable
         case .schedulingModeUnknown:
             return DailyDriverL10n.modeUnavailable
+        case .ownerExecutionDisabled:
+            return DailyDriverL10n.ownerExecutionDisabled
         case .noOnlineProject:
             return L10n.projectsEmpty
         case .supervisedAutoNeedsProject:
@@ -276,12 +283,36 @@ struct DailyDriverHome: View {
 
     @ViewBuilder
     private var attentionContent: some View {
-        if attentionTasks.isEmpty && actionableRisks.isEmpty && !projectAutomationNeedsSetup {
+        if attentionTasks.isEmpty
+            && actionableRisks.isEmpty
+            && !ownerExecutionNeedsSetup
+            && !projectAutomationNeedsSetup
+        {
             Label(DailyDriverL10n.noBlockers, systemImage: "checkmark.circle")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         } else {
             VStack(spacing: 0) {
+                if ownerExecutionNeedsSetup {
+                    Button {
+                        onNavigate(NavigationIntent(section: .settings, context: .clientSettings))
+                    } label: {
+                        attentionRow(
+                            title: DailyDriverL10n.ownerExecutionDisabled,
+                            detail: DailyDriverL10n.ownerExecutionDisabledDetail,
+                            symbol: "lock",
+                            color: StatusTone.caution.color
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    if projectAutomationNeedsSetup
+                        || !attentionTasks.isEmpty
+                        || !actionableRisks.isEmpty
+                    {
+                        Divider()
+                    }
+                }
+
                 if projectAutomationNeedsSetup {
                     Button {
                         showsProjectAutomation = true
@@ -294,7 +325,9 @@ struct DailyDriverHome: View {
                         )
                     }
                     .buttonStyle(.plain)
-                    Divider()
+                    if !attentionTasks.isEmpty || !actionableRisks.isEmpty {
+                        Divider()
+                    }
                 }
 
                 ForEach(Array(attentionTasks.prefix(2))) { task in
