@@ -30,6 +30,10 @@ struct DailyDriverNewTaskSheet: View {
         return onlineProjects.first { $0.projectId == projectId }
     }
 
+    /// A MANUAL picker must offer only targets the current client can truthfully
+    /// describe as runnable. Provider connectivity/runtime availability gets a
+    /// target into consideration; enabled + execution-verified is still required
+    /// before the owner may pin a task to it.
     private var connectedTargets: [ExecutionTargetHealthView] {
         let connectedIds = Set(
             (store.providerConnections?.connected ?? []).map(\.providerId)
@@ -37,8 +41,9 @@ struct DailyDriverNewTaskSheet: View {
         return (store.providers?.providers ?? [])
             .flatMap { provider in
                 provider.executionTargets.filter { target in
-                    connectedIds.contains(provider.providerId)
+                    let connectionEligible = connectedIds.contains(provider.providerId)
                         || (target.runtimeId == "pi" && target.runtimeAvailable == true)
+                    return connectionEligible && target.enabled && target.isExecutionVerified
                 }
             }
             .sorted {
@@ -106,7 +111,8 @@ struct DailyDriverNewTaskSheet: View {
                     routingSummary
                     advancedRouting
 
-                    if let notice = store.submitNotice, case .failed = notice {
+                    if let notice = store.submitNotice,
+                       !isSuccessfulSubmission(notice) {
                         Label(L10n.submitNotice(notice), systemImage: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(StatusTone.caution.color)
@@ -128,6 +134,13 @@ struct DailyDriverNewTaskSheet: View {
         .onChange(of: store.schedulingSettings?.defaultSchedulingPolicy) { _ in
             guard !showsAdvancedRouting else { return }
             resetToDaemonDefaults()
+        }
+        .onChange(of: connectedTargets.map(\.executionTargetId)) { ids in
+            // Execution verification can expire while this sheet is open. Never
+            // keep a MANUAL selection that disappeared from the runnable set.
+            if let manualExecutionTargetId, !ids.contains(manualExecutionTargetId) {
+                self.manualExecutionTargetId = nil
+            }
         }
     }
 
@@ -224,6 +237,11 @@ struct DailyDriverNewTaskSheet: View {
         manualExecutionTargetId = nil
     }
 
+    private func isSuccessfulSubmission(_ notice: SubmitNotice) -> Bool {
+        if case .submitted = notice { return true }
+        return false
+    }
+
     private func submit() {
         guard !submitDisabled else { return }
         let projectId = store.selectedProjectId
@@ -237,7 +255,12 @@ struct DailyDriverNewTaskSheet: View {
         Task {
             await store.quickSubmit(projectId: projectId, intent: value)
             submitting = false
-            if let taskId = store.lastSubmittedTaskId {
+
+            // `lastSubmittedTaskId` intentionally persists as an app-level
+            // convenience. It therefore cannot prove THIS invocation succeeded:
+            // after any earlier success it may still be non-nil when this submit
+            // is rejected. Only this invocation's structured notice is evidence.
+            if case .submitted(let taskId, _) = store.submitNotice {
                 onSubmitted(taskId)
             }
         }
