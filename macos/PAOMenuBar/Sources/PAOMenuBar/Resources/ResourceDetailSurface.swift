@@ -4,9 +4,9 @@ import PAOControlKit
 
 /// The selected resource, in full.
 ///
-/// Ordered by the questions the owner actually arrives with: is it reachable,
-/// how much is left, what has it been doing, what happens next, what can run on
-/// it, and — last, behind its own heading — where all of that came from.
+/// Ordered by the questions the owner actually arrives with: what commercial
+/// plan/pool is this, is it reachable, how much is left, which verified targets
+/// can consume it, and only then usage/projection/technical provenance.
 ///
 /// Sections rather than cards. A provider is one thing; eight rounded boxes
 /// would present its parts as eight unrelated widgets.
@@ -47,6 +47,9 @@ struct ResourceDetailSurface: View {
                             ResourcePlanSection(plan: plan)
                         }
                     }
+                    // Runnable targets are operational capacity, not audit data.
+                    // Keep them adjacent to the plan/quota they consume.
+                    ResourceExecutionTargetsSection(resource: resource)
                     ResourceSection(L10n.resourceSectionUsage, symbol: "chart.xyaxis.line") {
                         QuotaHistoryPanel(
                             series: series,
@@ -57,7 +60,6 @@ struct ResourceDetailSurface: View {
                     QuotaProjectionSection(
                         outlooks: outlooks, displayNames: displayNames, now: now
                     )
-                    ResourceExecutionTargetsSection(resource: resource)
                     ResourceModelsSection(resource: resource)
                     ResourceObservabilitySection(resource: resource)
                 }
@@ -93,7 +95,7 @@ struct ResourceDetailSurface: View {
     }
 }
 
-/// Identity, current availability and the actions available on this resource.
+/// Commercial plan identity first, provider/runtime implementation second.
 struct ResourceDetailHeader: View {
     let resource: ResourceSnapshot
     let isRefreshingQuota: Bool
@@ -101,12 +103,27 @@ struct ResourceDetailHeader: View {
     let onConnect: (String) -> Void
     var now: Date = Date()
 
+    private var primaryName: String {
+        resource.plan?.displayName ?? resource.planSurface ?? resource.displayName
+    }
+
+    private var providerIsSecondary: Bool {
+        primaryName.caseInsensitiveCompare(resource.displayName) != .orderedSame
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.inner) {
             HStack(alignment: .firstTextBaseline, spacing: Spacing.element) {
-                Text(resource.displayName)
-                    .font(.title2.weight(.semibold))
-                    .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(primaryName)
+                        .font(.title2.weight(.semibold))
+                        .textSelection(.enabled)
+                    if providerIsSecondary {
+                        Text(resource.displayName)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 Spacer(minLength: 0)
                 actions
             }
@@ -116,7 +133,10 @@ struct ResourceDetailHeader: View {
                     text: L10n.connectionStateLabel(resource.connectionState)
                 )
                 ResourceChip(text: resource.kind.title)
-                if let plan = resource.planSurface { ResourceChip(text: plan) }
+                if let plan = resource.planSurface,
+                   plan.caseInsensitiveCompare(primaryName) != .orderedSame {
+                    ResourceChip(text: plan)
+                }
                 if let region = resource.region { ResourceChip(text: region) }
                 Spacer(minLength: 0)
             }
