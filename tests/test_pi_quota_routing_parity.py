@@ -1,8 +1,8 @@
 """Regression: quota collection must use the same routing-connected provider set as execution.
 
-Pi intentionally has no ordinary persisted ProviderConnection row.  Its provider
+Pi intentionally has no ordinary persisted ProviderConnection row. Its provider
 surface becomes routing-connected when the Pi runtime reports READY auth plus a
-catalogued model.  The quota service therefore cannot key off only the ordinary
+catalogued model. The quota service therefore cannot key off only the ordinary
 connection registry or SUPERVISED_AUTO will see an empty quota observation set
 for an otherwise runnable Pi target.
 """
@@ -45,6 +45,7 @@ def test_control_service_quota_tracks_pi_routing_connections(tmp_path: Path) -> 
         provider_registry_manager=manager,  # type: ignore[arg-type]
     )
     try:
+        assert service.quota_refresh_service is not None
         observations = service.quota_refresh_service.observations()
         assert [item.provider_id for item in observations] == ["zai-coding-plan"]
         assert manager.verified_lookup_was_set is True
