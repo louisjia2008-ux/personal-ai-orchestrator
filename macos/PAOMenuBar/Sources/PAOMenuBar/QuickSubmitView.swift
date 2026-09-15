@@ -26,9 +26,8 @@ struct QuickSubmitView: View {
         return onlineProjects.first { $0.projectId == selectedProjectId }
     }
 
-    /// Manual targets are owner-connected for connection-managed runtimes,
-    /// while Pi is considered connected when its host-authenticated runtime
-    /// reports the target as available.
+    /// Manual targets are eligible only when the surface has connection/runtime
+    /// evidence and the exact execution target is still enabled + verified.
     private var connectedTargets: [ExecutionTargetHealthView] {
         let connectedIds = Set(
             (store.providerConnections?.connected ?? []).map(\.providerId)
@@ -36,8 +35,9 @@ struct QuickSubmitView: View {
         return (store.providers?.providers ?? [])
             .flatMap { provider in
                 provider.executionTargets.filter { target in
-                    connectedIds.contains(provider.providerId)
+                    let connectionEligible = connectedIds.contains(provider.providerId)
                         || (target.runtimeId == "pi" && target.runtimeAvailable == true)
+                    return connectionEligible && target.enabled && target.isExecutionVerified
                 }
             }
             .sorted {
@@ -48,7 +48,12 @@ struct QuickSubmitView: View {
             }
     }
 
-    private static let selectablePolicies = SelectablePolicyFallback.policies + ["MANUAL"]
+    private var selectablePolicies: [String] {
+        let daemonPolicies = store.schedulingSettings?.selectablePolicies
+            ?? SelectablePolicyFallback.policies
+        return daemonPolicies.contains("MANUAL") ? daemonPolicies : daemonPolicies + ["MANUAL"]
+    }
+
     private static let selectableTiers = ["T0", "T1", "T2", "T3"]
 
     private var selectedProjectNeedsSupervisedOptIn: Bool {
@@ -91,7 +96,7 @@ struct QuickSubmitView: View {
             DisclosureGroup(isExpanded: $showsAdvancedRouting) {
                 VStack(alignment: .leading, spacing: 6) {
                     Picker(L10n.newTaskSchedulingPolicy, selection: $schedulingPolicy) {
-                        ForEach(Self.selectablePolicies, id: \.self) { policy in
+                        ForEach(selectablePolicies, id: \.self) { policy in
                             Text(L10n.schedulingPolicyName(policy)).tag(policy)
                         }
                     }
@@ -128,7 +133,8 @@ struct QuickSubmitView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if let taskId = store.lastSubmittedTaskId {
+            if let notice = store.submitNotice,
+               case .submitted(let taskId, _) = notice {
                 Text(L10n.authoritativeTaskId(taskId))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(StatusTone.positive.color)
@@ -152,6 +158,11 @@ struct QuickSubmitView: View {
         .onChange(of: showsAdvancedRouting) { expanded in
             if !expanded {
                 resetRoutingToDaemonDefault()
+            }
+        }
+        .onChange(of: connectedTargets.map(\.executionTargetId)) { ids in
+            if let manualExecutionTargetId, !ids.contains(manualExecutionTargetId) {
+                self.manualExecutionTargetId = nil
             }
         }
     }
@@ -185,7 +196,12 @@ struct QuickSubmitView: View {
         Task {
             await store.quickSubmit(projectId: projectId, intent: value)
             submitting = false
-            if store.lastSubmittedTaskId != nil {
+
+            // `lastSubmittedTaskId` can survive an earlier successful submit, so
+            // it is not evidence this click succeeded. Clear input only when the
+            // structured notice from THIS invocation is a submission success.
+            if let notice = store.submitNotice,
+               case .submitted = notice {
                 intent = ""
                 if !showsAdvancedRouting {
                     resetRoutingToDaemonDefault()
