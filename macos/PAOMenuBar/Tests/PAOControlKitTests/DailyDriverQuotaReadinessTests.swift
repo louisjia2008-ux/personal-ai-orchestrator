@@ -41,7 +41,8 @@ final class DailyDriverQuotaReadinessTests: XCTestCase {
     }
 
     func testManualUnknownQuotaCanStillBeReadyForDispatchTimeRefresh() {
-        for state in [String?.none, String?.some("UNKNOWN"), String?.some("RECOVERY_PROBE_DUE")] {
+        let states: [String?] = [nil, "UNKNOWN", "RECOVERY_PROBE_DUE"]
+        for state in states {
             let result = readiness(mode: "MANUAL", observedState: state)
             XCTAssertTrue(result.isReady, "manual state \(state ?? "nil")")
             XCTAssertNil(result.blocker)
@@ -89,7 +90,7 @@ final class DailyDriverQuotaReadinessTests: XCTestCase {
 
         return decode(
             """
-            {"providers":[{"provider_id":"zai-coding-plan","display_name":"GLM / Z.AI","account_count":0,"quota_pools":[],"execution_targets":[{"execution_target_id":"pi-zai-coding-plan-glm-5.3","model_sku_id":"glm-5.3","runtime_id":"pi","enabled":true,"execution_verified":true,"execution_verified_stale":false,"runtime_available":true,"observed_availability":\(observed)}],"evidence_source":"PI_RUNTIME_AUTH_READY","auth_status":"AUTHENTICATED","execution_status":null,"connection_state":"CONNECTED","auth_state":"AUTHENTICATED","runtime_state":"AVAILABLE","plan_surface":"Coding Plan","region":null,"last_checked":null}]}
+            {"providers":[{"provider_id":"zai-coding-plan","display_name":"GLM / Z.AI","account_count":0,"quota_pools":[],"execution_targets":[{"execution_target_id":"pi-zai-coding-plan-glm-5.3","model_sku_id":"glm-5.3","runtime_id":"pi","enabled":true,"execution_verified":true,"execution_verified_stale":false,"runtime_available":true,"observed_availability":\(observed)}],"evidence_source":null,"auth_status":null,"execution_status":null,"connection_state":null,"auth_state":null,"runtime_state":null,"plan_surface":null,"region":null,"last_checked":null}]}
             """
         )
     }
