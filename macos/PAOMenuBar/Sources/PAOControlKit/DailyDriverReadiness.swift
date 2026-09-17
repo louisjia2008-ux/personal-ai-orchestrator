@@ -24,8 +24,8 @@ public extension ExecutionTargetHealthView {
 /// Readiness is derived only from prerequisites for new work: daemon connection,
 /// known scheduling mode, explicit owner-execution permission, an online project,
 /// project opt-in when supervised, and at least one routing-connected,
-/// execution-verified/runtime-available target that is not explicitly exhausted
-/// or cooling down.
+/// execution-verified/runtime-available target whose quota truth is compatible
+/// with the selected automation mode.
 public enum DailyDriverReadinessBlocker: Equatable, Sendable {
     case disconnected
     case schedulingModeUnknown
@@ -47,6 +47,29 @@ public struct DailyDriverReadinessSnapshot: Equatable, Sendable {
 }
 
 public enum DailyDriverReadiness {
+    /// Keep this set in lock-step with the daemon's current
+    /// `_AUTO_OK_QUOTA_STATES`. SUPERVISED_AUTO planning is intentionally
+    /// fail-closed: missing/UNKNOWN quota truth means the host tick will skip
+    /// the task before any planning side effect.
+    ///
+    /// `RECOVERED_OBSERVED` is deliberately not listed here yet because the
+    /// daemon currently omits it too; the recovery-semantic mismatch is tracked
+    /// as a backend issue rather than papered over in presentation code.
+    private static let supervisedAutoQuotaReadyStates: Set<String> = [
+        "AVAILABLE_OBSERVED",
+        "AVAILABLE_UNMETERED",
+    ]
+
+    /// MANUAL owner dispatch may collect quota at dispatch time, so absence of an
+    /// observation is uncertainty rather than an automatic UI blocker. Explicit
+    /// host evidence that the target is exhausted, cooling down, or uncertainty-
+    /// locked must still prevent Home from claiming useful capacity.
+    private static let manualQuotaBlockedStates: Set<String> = [
+        "EXHAUSTED_OBSERVED",
+        "COOLDOWN",
+        "UNCERTAIN_LOCKED",
+    ]
+
     public static func derive(
         connection: ConnectionState,
         schedulingMode: String?,
@@ -96,17 +119,32 @@ public enum DailyDriverReadiness {
             return blocked(.noRunnableTarget)
         }
 
-        let notExplicitlyUnavailable = launchableTargets.filter { target in
-            guard let state = target.observedAvailability?.state else {
-                // Missing availability is uncertainty, not evidence of exhaustion.
-                // Capacity surfaces still render that uncertainty explicitly.
-                return true
+        if schedulingMode == "SUPERVISED_AUTO" {
+            // Match the daemon's pre-side-effect AUTO quota gate. In particular,
+            // nil/UNKNOWN/RECOVERY_PROBE_DUE/UNCERTAIN_LOCKED/COOLDOWN are not
+            // enough for Home to advertise that unattended planning can proceed.
+            let autoQuotaReady = launchableTargets.contains { target in
+                guard let state = target.observedAvailability?.state else {
+                    return false
+                }
+                return supervisedAutoQuotaReadyStates.contains(state)
             }
-            return state != "EXHAUSTED_OBSERVED" && state != "COOLDOWN"
-        }
-
-        guard !notExplicitlyUnavailable.isEmpty else {
-            return blocked(.noAvailableCapacity)
+            guard autoQuotaReady else {
+                return blocked(.noAvailableCapacity)
+            }
+        } else {
+            // MANUAL remains usable when quota is merely not observed yet because
+            // the dispatch boundary can perform its own read-only refresh. But an
+            // explicit blocked availability state is authoritative immediately.
+            let manuallyUsable = launchableTargets.contains { target in
+                guard let state = target.observedAvailability?.state else {
+                    return true
+                }
+                return !manualQuotaBlockedStates.contains(state)
+            }
+            guard manuallyUsable else {
+                return blocked(.noAvailableCapacity)
+            }
         }
 
         return DailyDriverReadinessSnapshot(isReady: true, blocker: nil)
