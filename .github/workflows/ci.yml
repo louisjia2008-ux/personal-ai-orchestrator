@@ -77,7 +77,7 @@ jobs:
 
   macos-swift:
     runs-on: macos-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -85,3 +85,7 @@ jobs:
       - name: Swift package build
         working-directory: macos/PAOMenuBar
         run: swift build
+
+      - name: Swift package tests
+        working-directory: macos/PAOMenuBar
+        run: swift test
