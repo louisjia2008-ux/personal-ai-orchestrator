@@ -139,7 +139,7 @@ final class DailyDriverReadinessTests: XCTestCase {
             projects: [project(supervised: false)],
             providers: providers([
                 target(id: "a", observedState: "EXHAUSTED_OBSERVED"),
-                target(id: "b", observedState: "AVAILABLE"),
+                target(id: "b", observedState: "AVAILABLE_OBSERVED"),
             ])
         )
         XCTAssertTrue(oneAvailable.isReady)
@@ -241,12 +241,12 @@ final class DailyDriverReadinessTests: XCTestCase {
         verificationStale: Bool = false,
         runtimeId: String = "pi",
         runtimeAvailable: Bool = true,
-        observedState: String? = "AVAILABLE"
+        observedState: String? = "AVAILABLE_OBSERVED"
     ) -> ExecutionTargetHealthView {
         let observed: String
         if let observedState {
             observed = """
-            {"state":"\(observedState)","measurement_source":"PROVIDER_API","confidence":"EXACT","observed_at":"2026-09-15T00:00:00Z","sanitized_reason_code":null}
+            {"state":"\(observedState)","measurement_source":"LOCALLY_MEASURED","confidence":"ESTIMATED","observed_at":"2026-09-15T00:00:00Z","sanitized_reason_code":null}
             """
         } else {
             observed = "null"
