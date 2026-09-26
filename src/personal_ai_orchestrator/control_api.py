@@ -48,6 +48,9 @@ from personal_ai_orchestrator.dispatch_recommender import (
     DispatchCandidateInput,
     source_pressure_for,
 )
+from personal_ai_orchestrator.execution_controller import (
+    project_execution_target_verification,
+)
 from personal_ai_orchestrator.execution_evidence import (
     ExecutionEvidenceJournal,
     ExecutionVerificationEvidence,
@@ -612,6 +615,13 @@ class ExecutionTargetHealthView(_ViewModel):
     #: the UI surface "we have history, but the most recent run did not
     #: actually succeed" without re-running the verification probe.
     execution_verified_stale: bool = False
+    #: Current full launch authority from the same verification rule used by
+    #: owner dispatch, plus enabled/runtime availability. Historical VERIFIED
+    #: evidence may stay visible while this is false.
+    launch_authorized: bool = False
+    #: Timestamp of the historical VERIFIED evidence when evidence-backed.
+    #: Static registry verification has no observation timestamp.
+    execution_verification_observed_at: str | None = None
     runtime_available: bool | None = None
     observed_availability: ObservedAvailabilityView | None = None
 # M1 WP2: capability tier for this target. ``None`` means the
@@ -2901,22 +2911,28 @@ class ControlPlaneService:
                     sanitized_reason_code=evidence.sanitized_reason_code,
                     consecutive_failures=evidence.consecutive_failures,
                 )
-        # Demote-fallback: journal wins over the static registry flag so a
-        # transient UNKNOWN does not destroy a real verified history. The
-        # stale flag tells the caller when the fallback fired (latest is
-        # non-VERIFIED while an older VERIFIED row exists).
-        execution_verified = False
-        execution_verified_stale = False
-        if self.execution_evidence_journal is not None:
-            try:
-                verified_evidence, stale_since = (
-                    self.execution_evidence_journal.latest_verified_for_target(target.id)
-                )
-            except Exception:
-                verified_evidence, stale_since = None, None
-            if verified_evidence is not None:
-                execution_verified = True
-                execution_verified_stale = stale_since is not None
+        # Historical verification remains a diagnostic surface, while the
+        # launch bit below is derived from the same latest-row + age rule as
+        # owner dispatch. This prevents age-expired or demoted history from
+        # being presented as currently actionable.
+        verification = project_execution_target_verification(
+            self._effective_registry(),
+            execution_target_id=target.id,
+            execution_evidence_journal=self.execution_evidence_journal,
+            now=datetime.now(UTC),
+        )
+        execution_verified = verification.historical_verified
+        execution_verified_stale = verification.verified_stale
+        runtime_available = (
+            self.runtime_availability.get(target.id)
+            if target.id in self.runtime_availability
+            else self._runtime_available(target.id)
+        )
+        launch_authorized = bool(
+            target.enabled
+            and verification.launch_verified
+            and runtime_available
+        )
         # M1 WP2: classify the target against the host-owned tier
         # table. ``None`` means the table is not wired (ad-hoc CLI) or
         # could not classify the target — both surface as ``tier=None``
@@ -2933,11 +2949,13 @@ class ControlPlaneService:
             enabled=target.enabled,
             execution_verified=execution_verified,
             execution_verified_stale=execution_verified_stale,
-            runtime_available=(
-                self.runtime_availability.get(target.id)
-                if target.id in self.runtime_availability
-                else self._runtime_available(target.id)
+            launch_authorized=launch_authorized,
+            execution_verification_observed_at=(
+                verification.verified_observed_at.isoformat()
+                if verification.verified_observed_at is not None
+                else None
             ),
+            runtime_available=runtime_available,
             observed_availability=observed,
             tier=tier_value,
             tier_match_reason=tier_match_reason,
