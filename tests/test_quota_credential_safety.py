@@ -131,17 +131,30 @@ def test_only_reveal_returns_the_value() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _resolver(environ: dict[str, str], auth_paths: tuple[Path, ...] = ()):
+def _resolver(
+    environ: dict[str, str],
+    auth_paths: tuple[Path, ...] = (),
+    *,
+    keychain: dict[str, str] | None = None,
+):
+    keychain_values = keychain or {}
+
+    def owner_keychain_lookup(account: str) -> SecretValue | None:
+        value = keychain_values.get(account)
+        return SecretValue(value) if value else None
+
     return QuotaCredentialResolver(
         specs={
             "zai-coding-plan": QuotaCredentialSpec(
                 provider_id="zai-coding-plan",
                 env_var="ZAI_API_KEY",
+                owner_keychain_accounts=("zai-coding-plan",),
                 opencode_auth_provider_ids=("zai-coding-plan",),
             )
         },
         environ=environ,
         auth_store_paths=auth_paths,
+        owner_keychain_lookup=owner_keychain_lookup,
     )
 
 
@@ -158,6 +171,29 @@ def test_environment_credential_is_resolved_and_labelled() -> None:
     assert resolved.source is CredentialSource.ENVIRONMENT
     assert CANARY not in repr(resolved)
 
+
+def test_owner_keychain_explicitly_authorizes_quota_collection() -> None:
+    resolved = _resolver(
+        {},
+        keychain={"zai-coding-plan": CANARY},
+    ).resolve("zai-coding-plan")
+
+    assert resolved.present is True
+    assert resolved.source is CredentialSource.OWNER_KEYCHAIN
+    assert resolved.secret is not None
+    assert resolved.secret.reveal() == CANARY
+    assert CANARY not in repr(resolved)
+
+
+def test_environment_precedes_owner_keychain() -> None:
+    resolved = _resolver(
+        {"ZAI_API_KEY": "environment"},
+        keychain={"zai-coding-plan": CANARY},
+    ).resolve("zai-coding-plan")
+
+    assert resolved.source is CredentialSource.ENVIRONMENT
+    assert resolved.secret is not None
+    assert resolved.secret.reveal() == "environment"
 
 def test_auth_store_covers_the_gui_launched_daemon(tmp_path: Path) -> None:
     """The regression this fixes.
@@ -176,6 +212,22 @@ def test_auth_store_covers_the_gui_launched_daemon(tmp_path: Path) -> None:
     assert resolved.present is True
     assert resolved.source is CredentialSource.OPENCODE_AUTH_STORE
 
+
+def test_owner_keychain_precedes_opencode_store(tmp_path: Path) -> None:
+    paths = _auth_store(
+        tmp_path,
+        {"zai-coding-plan": {"type": "api", "key": "store"}},
+    )
+
+    resolved = _resolver(
+        {},
+        paths,
+        keychain={"zai-coding-plan": CANARY},
+    ).resolve("zai-coding-plan")
+
+    assert resolved.source is CredentialSource.OWNER_KEYCHAIN
+    assert resolved.secret is not None
+    assert resolved.secret.reveal() == CANARY
 
 def test_environment_takes_precedence_over_the_store(tmp_path: Path) -> None:
     paths = _auth_store(tmp_path, {"zai-coding-plan": {"type": "api", "key": "store"}})
