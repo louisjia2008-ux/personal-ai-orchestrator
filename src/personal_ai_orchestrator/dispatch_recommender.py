@@ -82,11 +82,11 @@ class DispatchCandidateInput:
     model_sku_id: str
     runtime_available: bool
     verified: bool
-    # True when ``verified`` is the demote-fallback result (latest evidence
-    # is non-VERIFIED while an older VERIFIED row still exists). Lets the
-    # view model surface the staleness alongside the score; never affects
-    # the ranking itself — the recommender still admits the target, the UI
-    # just gets the warning.
+    # True when historical VERIFIED evidence exists but is not current
+    # launch authority (for example: latest evidence is non-VERIFIED, or the
+    # latest VERIFIED row exceeded the launch-age cap). The host service
+    # separately sets ``verified=False`` in those cases so admission cannot
+    # be broader than the launch boundary.
     verified_stale: bool = False
     # Observed quota windows for this target (e.g. 5h + weekly remaining
     # fractions). Empty list means "no observation was reported".
