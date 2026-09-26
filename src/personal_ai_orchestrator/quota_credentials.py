@@ -17,8 +17,9 @@ Three credential contracts, deliberately kept apart
 
 Fixing quota by handing every provider credential to every child process would
 erase that separation, so resolution here is narrow: one explicitly permitted
-environment variable and one explicitly permitted entry in the OpenCode auth
-store, per provider surface.
+environment variable, explicit owner-managed PAO Keychain account(s), and one
+explicitly permitted entry in the OpenCode auth store, per provider surface.
+The Keychain path is opt-in and never inspects or copies Pi credential storage.
 
 Why the auth store is read at all
 ---------------------------------
@@ -257,10 +258,10 @@ def _read_owner_keychain_secret(account: str) -> SecretValue | None:
 
 class QuotaCredentialResolver:    """Resolves the single credential one quota collector is allowed to use.
 
-    Resolution order is environment first, then the OpenCode auth store. The
-    environment wins because it is the explicit, per-run override an operator
-    or a test sets deliberately; the store is the standing fact about how the
-    owner signed in.
+    Resolution order is environment first, then the owner-managed PAO
+    Keychain, then the OpenCode auth store. The environment remains the
+    explicit per-run override; the Keychain is the owner's explicit quota-only
+    authorization; OpenCode is the existing standing provider credential.
     """
 
     def __init__(
