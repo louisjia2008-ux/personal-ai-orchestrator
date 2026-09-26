@@ -20,6 +20,7 @@ import shutil
 import socket
 import subprocess
 import threading
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -152,6 +153,10 @@ class _ViewModel(BaseModel):
 #: A task may additionally pick MANUAL, which a *global* default cannot: only a
 #: single task knows a concrete execution target that is valid for itself.
 SELECTABLE_TASK_POLICIES = (*SELECTABLE_GLOBAL_POLICIES, "MANUAL")
+
+# Opaque per-process identity for exact macOS lifecycle ownership. This carries
+# no credential or host path and intentionally changes on every daemon start.
+_PROCESS_INSTANCE_ID = uuid.uuid4().hex
 
 
 class TaskSubmitRequest(_ViewModel):
@@ -1131,6 +1136,12 @@ class SupervisorStepView(_ViewModel):
 class HealthView(_ViewModel):
     status: str
     api_version: str
+    #: Exact process identity for lifecycle ownership. ``process_instance_id``
+    #: is regenerated on every daemon process start, so a client can re-read
+    #: health immediately before signaling and refuse a PID-reuse/identity
+    #: mismatch instead of falling back to broad process-name matching.
+    process_id: int = Field(ge=1)
+    process_instance_id: str = Field(min_length=16, max_length=128)
     #: ``/v1/health`` is the single source of truth for whether the
     #: bundled daemon is still ticking. ``None`` until the first tick
     #: has run (typically within one ``tick_interval_seconds`` of boot).
@@ -3855,6 +3866,8 @@ class ControlPlaneService:
             return HealthView(
                 status="ok",
                 api_version=CONTROL_API_VERSION,
+                process_id=os.getpid(),
+                process_instance_id=_PROCESS_INSTANCE_ID,
                 model_tiers_source=self.model_tiers_source,
             )
         snapshot: DaemonSupervisorSnapshot = self.supervisor.snapshot()
@@ -3873,6 +3886,8 @@ class ControlPlaneService:
         return HealthView(
             status="ok",
             api_version=CONTROL_API_VERSION,
+            process_id=os.getpid(),
+            process_instance_id=_PROCESS_INSTANCE_ID,
             last_tick_at=(
                 snapshot.last_tick_at.isoformat()
                 if snapshot.last_tick_at is not None
