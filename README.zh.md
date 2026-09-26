@@ -261,8 +261,6 @@ MVP 刻意避免 PostgreSQL、Redis、Kafka、Kubernetes、公有 SaaS API、向
 
 变更应小、可审计、面向里程碑。每个里程碑让仓库处于确定性可测试状态。见 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)。
 
-## 开源状态
+## 开源协议
 
-dsh 插件 bundle 声明 **MIT**(见其 `package.json`)。其余仓库**尚未选择 license**;根 license 添加之前,未授权部分视为保留所有权利。
-
-为完整编排器的首次公开发布选择显式根 license 是发布前阻断项。
+本项目采用 [MIT License](LICENSE) 发布。

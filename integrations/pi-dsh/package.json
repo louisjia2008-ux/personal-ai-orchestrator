@@ -2,8 +2,13 @@
   "name": "pi-dsh",
   "version": "0.1.0",
   "description": "Jev quota-aware model dispatch for pi: compares ZAI / MiniMax / DeepSeek pools (5h+weekly windows, prepaid balance) before each turn and switches the session model accordingly.",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "pi": {
-    "extensions": ["."]
-  }
+    "extensions": [
+      "."
+    ]
+  },
+  "license": "MIT"
 }
