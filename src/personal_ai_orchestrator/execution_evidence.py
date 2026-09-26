@@ -193,12 +193,24 @@ class ExecutionEvidenceJournal:
         execution_target_id: str,
         *,
         max_age_seconds: float | None = None,
+        now: datetime | None = None,
     ) -> bool:
+        """Return whether the latest exact-target evidence authorizes launch.
+
+        This deliberately does not use the historical demote-fallback helper:
+        launch authority follows the latest target observation and, when a max
+        age is supplied, its freshness. ``now`` is injectable so every caller
+        can project the same rule deterministically in tests and UI views.
+        """
+
         latest = self.latest_for_target(execution_target_id)
         if latest is None or not latest.establishes_verified:
             return False
         if max_age_seconds is not None:
-            age = (datetime.now(UTC) - latest.observed_at).total_seconds()
+            reference = now or datetime.now(UTC)
+            if reference.tzinfo is None or reference.utcoffset() is None:
+                raise ValueError("now must be timezone-aware")
+            age = (reference - latest.observed_at).total_seconds()
             if age < 0 or age > max_age_seconds:
                 return False
         return True
