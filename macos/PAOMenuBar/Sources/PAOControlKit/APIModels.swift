@@ -45,6 +45,11 @@ public struct SupervisorStepView: Decodable, Equatable, Sendable {
 public struct HealthView: Decodable, Equatable, Sendable {
     public let status: String
     public let apiVersion: String
+    /// Exact daemon server pid + opaque per-process token. Optional so a
+    /// pre-identity daemon remains decodable; lifecycle replacement then
+    /// fails closed instead of broad-matching processes.
+    public let processId: Int32?
+    public let processInstanceId: String?
     public let lastTickAt: String?
     public let tickIntervalSeconds: Double?
     public let supervisorSteps: [SupervisorStepView]
@@ -56,6 +61,8 @@ public struct HealthView: Decodable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case status
         case apiVersion = "api_version"
+        case processId = "process_id"
+        case processInstanceId = "process_instance_id"
         case lastTickAt = "last_tick_at"
         case tickIntervalSeconds = "tick_interval_seconds"
         case supervisorSteps = "supervisor_steps"
@@ -66,6 +73,8 @@ public struct HealthView: Decodable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.status = try container.decode(String.self, forKey: .status)
         self.apiVersion = try container.decode(String.self, forKey: .apiVersion)
+        self.processId = try container.decodeIfPresent(Int32.self, forKey: .processId)
+        self.processInstanceId = try container.decodeIfPresent(String.self, forKey: .processInstanceId)
         self.lastTickAt = try container.decodeIfPresent(String.self, forKey: .lastTickAt)
         self.tickIntervalSeconds = try container.decodeIfPresent(Double.self, forKey: .tickIntervalSeconds)
         self.supervisorSteps = try container.decodeIfPresent([SupervisorStepView].self, forKey: .supervisorSteps) ?? []
