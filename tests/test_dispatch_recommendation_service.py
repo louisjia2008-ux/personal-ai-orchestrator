@@ -33,6 +33,11 @@ from typing import Any
 from personal_ai_orchestrator.dispatch_recommendation_service import (
     DispatchRecommendationService,
 )
+from personal_ai_orchestrator.execution_evidence import (
+    ExecutionEvidenceJournal,
+    ExecutionVerificationOutcome,
+    build_execution_evidence,
+)
 from personal_ai_orchestrator.model_registry import (
     Account,
     EvidenceConfidence,
@@ -169,12 +174,13 @@ def _make_service(
     registry: ModelRegistry,
     *,
     runtime_availability: dict[str, bool] | None = None,
+    execution_evidence_journal: ExecutionEvidenceJournal | None = None,
 ) -> DispatchRecommendationService:
     return DispatchRecommendationService(
         store,
         registry_provider=lambda: registry,
         quota_refresh_service=None,
-        execution_evidence_journal=None,
+        execution_evidence_journal=execution_evidence_journal,
         quota_availability_journal=availability,
         tier_table=None,
         runtime_availability=runtime_availability,
@@ -215,15 +221,81 @@ def test_collect_candidates_one_per_execution_target(tmp_path: Path) -> None:
             "m2-sub",
             "m3-sub",
         ]
+        by_id = {c.execution_target_id: c for c in candidates}
         for c in candidates:
             assert c.model_sku_id in {"m2", "m3"}
             assert c.runtime_available is True
-            assert c.verified is False
             assert c.availability_state is QuotaAvailabilityState.UNKNOWN
             assert c.tier is None
+        # Static registry verification is launch authority and must agree
+        # with the owner-dispatch launch gate.
+        assert by_id["m3-sub"].verified is True
+        assert by_id["m2-sub"].verified is False
     finally:
         store.close()
 
+
+def test_expired_execution_history_is_not_actionable_recommendation(
+    tmp_path: Path,
+) -> None:
+    """Historical VERIFIED may remain diagnostic but cannot be admitted."""
+
+    from personal_ai_orchestrator.scheduler import RoutingObjective
+
+    now = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
+    store, availability, registry = _build_service(tmp_path)
+    try:
+        # Remove static authority so m3-sub is evidence-backed.
+        target = registry.execution_targets["m3-sub"].model_copy(
+            update={"execution_verified": False}
+        )
+        registry = registry.model_copy(
+            update={
+                "execution_targets": {
+                    **registry.execution_targets,
+                    "m3-sub": target,
+                }
+            }
+        )
+        journal = ExecutionEvidenceJournal(tmp_path / "execution-runtime")
+        old = now - timedelta(days=31)
+        journal.append(
+            build_execution_evidence(
+                provider_id="minimax",
+                execution_target_id="m3-sub",
+                model_sku_id="m3",
+                observed_at=old,
+                result=ExecutionVerificationOutcome.VERIFIED,
+                reason_code="TEST_OLD_VERIFIED",
+            )
+        )
+        service = _make_service(
+            store,
+            availability,
+            registry,
+            execution_evidence_journal=journal,
+        )
+        candidates = service.collect_candidates(now=now)
+        by_id = {candidate.execution_target_id: candidate for candidate in candidates}
+        assert by_id["m3-sub"].verified is False
+        assert by_id["m3-sub"].verified_stale is True
+        assert by_id["m3-sub"].evidence_observed_at == old
+
+        task = _make_task(store)
+        recommendation, _, _ = service.recommend_for_task(
+            task,
+            policy=RoutingObjective.BALANCED,
+            now=now,
+        )
+        evaluation = next(
+            item
+            for item in recommendation.evaluations
+            if item.execution_target_id == "m3-sub"
+        )
+        assert evaluation.admitted is False
+        assert "runtime-verified" in " ".join(evaluation.reasons)
+    finally:
+        store.close()
 
 def test_collect_candidates_runtime_availability_overrides_fallback(
     tmp_path: Path,
