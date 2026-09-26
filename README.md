@@ -318,8 +318,6 @@ Changes should be small, auditable, and milestone-oriented. Prefer one focused b
 
 See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
-## Open-source status
+## License
 
-The dsh plugin bundle declares **MIT** (see its `package.json`). The rest of the repository has **no license selected yet**; until a root license is added, treat unlicensed parts as all rights reserved.
-
-Selecting an explicit root license is a release blocker before the first public open-source release of the full orchestrator.
+Released under the [MIT License](LICENSE).
