@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -6,10 +6,16 @@ import pytest
 from personal_ai_orchestrator.execution_controller import (
     apply_verification_result,
     begin_verification,
+    project_execution_target_verification,
     record_worker_exit,
     reconcile_workspace_truth,
     start_worker_run,
     validate_execution_target_launch,
+)
+from personal_ai_orchestrator.execution_evidence import (
+    ExecutionEvidenceJournal,
+    ExecutionVerificationOutcome,
+    build_execution_evidence,
 )
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
 from personal_ai_orchestrator.model_registry import (
@@ -154,6 +160,161 @@ def test_invalid_worker_result_blocks_task(tmp_path: Path) -> None:
     )
     assert state is TaskState.BLOCKED
 
+
+def _launch_registry(*, static_verified: bool = False, enabled: bool = True) -> ModelRegistry:
+    return ModelRegistry(
+        providers={"p": Provider(id="p", display_name="Provider")},
+        accounts={"a": Account(id="a", provider_id="p", label="account")},
+        models={"m": ModelSKU(id="m", provider_id="p", display_name="Model")},
+        execution_targets={
+            "target": ExecutionTarget(
+                id="target",
+                model_sku_id="m",
+                account_id="a",
+                runtime_id="opencode",
+                enabled=enabled,
+                execution_verified=static_verified,
+            )
+        },
+    )
+
+
+def _append_execution_evidence(
+    journal: ExecutionEvidenceJournal,
+    *,
+    observed_at: datetime,
+    result: ExecutionVerificationOutcome,
+) -> None:
+    journal.append(
+        build_execution_evidence(
+            provider_id="p",
+            execution_target_id="target",
+            model_sku_id="m",
+            observed_at=observed_at,
+            result=result,
+            reason_code=f"TEST_{result.value}",
+        )
+    )
+
+
+def test_launch_projection_accepts_fresh_latest_verified_evidence(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
+    registry = _launch_registry()
+    journal = ExecutionEvidenceJournal(tmp_path)
+    observed = now - timedelta(days=1)
+    _append_execution_evidence(
+        journal,
+        observed_at=observed,
+        result=ExecutionVerificationOutcome.VERIFIED,
+    )
+
+    projection = project_execution_target_verification(
+        registry,
+        execution_target_id="target",
+        execution_evidence_journal=journal,
+        now=now,
+    )
+
+    assert projection.historical_verified is True
+    assert projection.launch_verified is True
+    assert projection.verified_stale is False
+    assert projection.verified_observed_at == observed
+    validate_execution_target_launch(
+        registry,
+        execution_target_id="target",
+        runtime_available=True,
+        execution_evidence_journal=journal,
+        now=now,
+    )
+
+
+def test_launch_projection_keeps_expired_history_but_denies_launch(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
+    registry = _launch_registry()
+    journal = ExecutionEvidenceJournal(tmp_path)
+    observed = now - timedelta(days=31)
+    _append_execution_evidence(
+        journal,
+        observed_at=observed,
+        result=ExecutionVerificationOutcome.VERIFIED,
+    )
+
+    projection = project_execution_target_verification(
+        registry,
+        execution_target_id="target",
+        execution_evidence_journal=journal,
+        now=now,
+    )
+
+    assert projection.historical_verified is True
+    assert projection.launch_verified is False
+    assert projection.verified_stale is True
+    assert projection.verified_observed_at == observed
+    with pytest.raises(RuntimeError, match="not been runtime-verified"):
+        validate_execution_target_launch(
+            registry,
+            execution_target_id="target",
+            runtime_available=True,
+            execution_evidence_journal=journal,
+            now=now,
+        )
+
+
+def test_launch_projection_denies_demoted_history(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
+    registry = _launch_registry()
+    journal = ExecutionEvidenceJournal(tmp_path)
+    verified_at = now - timedelta(days=1)
+    _append_execution_evidence(
+        journal,
+        observed_at=verified_at,
+        result=ExecutionVerificationOutcome.VERIFIED,
+    )
+    _append_execution_evidence(
+        journal,
+        observed_at=now - timedelta(hours=1),
+        result=ExecutionVerificationOutcome.QUOTA_BLOCKED,
+    )
+
+    projection = project_execution_target_verification(
+        registry,
+        execution_target_id="target",
+        execution_evidence_journal=journal,
+        now=now,
+    )
+
+    assert projection.historical_verified is True
+    assert projection.launch_verified is False
+    assert projection.verified_stale is True
+    assert projection.verified_observed_at == verified_at
+    with pytest.raises(RuntimeError, match="not been runtime-verified"):
+        validate_execution_target_launch(
+            registry,
+            execution_target_id="target",
+            runtime_available=True,
+            execution_evidence_journal=journal,
+            now=now,
+        )
+
+
+def test_static_execution_verification_remains_launch_authority() -> None:
+    registry = _launch_registry(static_verified=True)
+    projection = project_execution_target_verification(
+        registry,
+        execution_target_id="target",
+        execution_evidence_journal=None,
+        now=datetime(2026, 9, 26, 12, 0, tzinfo=UTC),
+    )
+
+    assert projection.historical_verified is True
+    assert projection.launch_verified is True
+    assert projection.verified_stale is False
+    assert projection.verified_observed_at is None
+    validate_execution_target_launch(
+        registry,
+        execution_target_id="target",
+        runtime_available=True,
+    )
 
 def test_launch_gate_denies_catalog_only_target_even_when_enabled() -> None:
     registry = ModelRegistry(
