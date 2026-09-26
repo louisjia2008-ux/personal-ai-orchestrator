@@ -32,6 +32,9 @@ from personal_ai_orchestrator.dispatch_recommender import (
     DispatchRecommendation,
     recommend_owner_dispatch,
 )
+from personal_ai_orchestrator.execution_controller import (
+    project_execution_target_verification,
+)
 from personal_ai_orchestrator.model_tiers import ModelTier
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityState
 from personal_ai_orchestrator.runtime_quota_routing import (
@@ -135,20 +138,18 @@ class DispatchRecommendationService:
             else:
                 runtime_available = self._runtime_availability_fallback(target_id)
 
-            verified = False
-            verified_stale = False
-            evidence_observed_at: datetime | None = None
-            if self._execution_evidence_journal is not None:
-                try:
-                    verified_evidence, stale_since = (
-                        self._execution_evidence_journal.latest_verified_for_target(target_id)
-                    )
-                except Exception:
-                    verified_evidence, stale_since = None, None
-                if verified_evidence is not None:
-                    verified = True
-                    evidence_observed_at = verified_evidence.observed_at
-                    verified_stale = stale_since is not None
+            verification = project_execution_target_verification(
+                registry,
+                execution_target_id=target_id,
+                execution_evidence_journal=self._execution_evidence_journal,
+                now=now,
+            )
+            # Recommendation admission must never be broader than the launch
+            # verification gate. Disabled targets also fail closed here; the
+            # separate runtime gate remains visible to the scoring core.
+            verified = target.enabled and verification.launch_verified
+            verified_stale = verification.verified_stale
+            evidence_observed_at = verification.verified_observed_at
 
             availability_state = QuotaAvailabilityState.UNKNOWN
             if self._quota_availability_journal is not None:
