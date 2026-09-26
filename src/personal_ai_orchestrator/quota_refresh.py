@@ -116,6 +116,10 @@ class QuotaSourceSpec:
     #: signed in. An explicit allowlist keeps that fallback narrow.
     opencode_auth_provider_ids: tuple[str, ...]
     factory: Callable[[SecretValue, str], QuotaCollector]
+    #: Stable account ids in PAO's owner-managed Keychain namespace. These
+    #: authorize read-only quota collection only; they are not Pi execution
+    #: credentials and are never populated by inspecting Pi storage.
+    owner_keychain_accounts: tuple[str, ...] = ()
 
 
 def _zai_collector(token: SecretValue, quota_pool_id: str) -> QuotaCollector:
@@ -148,6 +152,7 @@ QUOTA_SOURCES: tuple[QuotaSourceSpec, ...] = (
         credential_env_var="ZAI_API_KEY",
         opencode_auth_provider_ids=("zai-coding-plan", "zai", "z-ai", "z.ai"),
         factory=_zai_collector,
+        owner_keychain_accounts=("zai-coding-plan",),
     ),
     QuotaSourceSpec(
         provider_id="minimax-cn",
@@ -157,6 +162,7 @@ QUOTA_SOURCES: tuple[QuotaSourceSpec, ...] = (
         credential_env_var="MINIMAX_API_KEY",
         opencode_auth_provider_ids=("minimax-cn", "minimax-cn-coding-plan"),
         factory=_minimax_cn_collector,
+        owner_keychain_accounts=("minimax-cn-coding-plan",),
     ),
     QuotaSourceSpec(
         provider_id="minimax-cn-coding-plan",
@@ -166,6 +172,7 @@ QUOTA_SOURCES: tuple[QuotaSourceSpec, ...] = (
         credential_env_var="MINIMAX_API_KEY",
         opencode_auth_provider_ids=("minimax-cn-coding-plan", "minimax-cn"),
         factory=_minimax_cn_collector,
+        owner_keychain_accounts=("minimax-cn-coding-plan",),
     ),
     QuotaSourceSpec(
         provider_id="minimax",
@@ -175,6 +182,7 @@ QUOTA_SOURCES: tuple[QuotaSourceSpec, ...] = (
         credential_env_var="MINIMAX_API_KEY",
         opencode_auth_provider_ids=("minimax", "minimax-coding-plan"),
         factory=_minimax_global_collector,
+        owner_keychain_accounts=("minimax-coding-plan",),
     ),
     QuotaSourceSpec(
         provider_id="minimax-coding-plan",
@@ -184,6 +192,7 @@ QUOTA_SOURCES: tuple[QuotaSourceSpec, ...] = (
         credential_env_var="MINIMAX_API_KEY",
         opencode_auth_provider_ids=("minimax-coding-plan", "minimax"),
         factory=_minimax_global_collector,
+        owner_keychain_accounts=("minimax-coding-plan",),
     ),
 )
 
@@ -195,6 +204,7 @@ QUOTA_CREDENTIAL_SPECS: Mapping[str, QuotaCredentialSpec] = {
     spec.provider_id: QuotaCredentialSpec(
         provider_id=spec.provider_id,
         env_var=spec.credential_env_var,
+        owner_keychain_accounts=spec.owner_keychain_accounts,
         opencode_auth_provider_ids=spec.opencode_auth_provider_ids,
     )
     for spec in QUOTA_SOURCES
