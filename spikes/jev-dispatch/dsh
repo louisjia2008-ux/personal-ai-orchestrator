@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""dsh: DeepSeek-harness entry to Jev quota-aware dispatch across ALL
+authenticated pi providers.
+
+Usage:
+  dsh "你的任务"            # 决策后以选中模型打开交互式 pi
+  dsh -p "你的任务"         # 单次执行(pi --print)
+  dsh --dry-run "任务"      # 只显示调度决策
+  dsh --json "任务"         # JSON 输出
+
+Candidate pool = every pi provider with a filled API key
+(``~/.pi/agent/auth.json``), compared by Jev under pool economics:
+
+- zai (glm-5.3 / glm-5.3-flash): subscription, live 5h/weekly windows
+- minimax-cn (MiniMax-M3 / M2.7): token plan, gated when inactive
+- deepseek (v4-pro / v4-flash): pay-as-you-go, gated by live CNY balance
+  (GET /user/balance); low-but-positive balance keeps v4-flash only
+
+Credentials stay in pi's auth store; only the Jev call needs
+``TYPESAFE_API_KEY`` in the environment.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import urllib.request
+from datetime import datetime, timezone
+from typing import Any
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from run_e2e import MM_INACTIVE, load_keys, probe_minimax, probe_zai  # noqa: E402
+from run_spike import Candidate, apply_policy, jev_ask  # noqa: E402
+
+PI_AUTH_PATH = os.path.expanduser("~/.pi/agent/auth.json")
+LOG_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "results", "dsh_log.jsonl"
+)
+
+# Cost gates for the paygo pool (CNY).
+POOL_MIN_BALANCE = 1.0    # below → whole deepseek pool gated
+PRO_MIN_BALANCE = 10.0    # below → only v4-flash allowed
+
+# execution_target_id, pi provider, pi model, tier, pool, metering
+TARGETS = [
+    ("pi@zai-glm-5.3", "zai", "glm-5.3", 3, "zai_glm_coding_plan", "subscription"),
+    ("pi@zai-glm-5.3-flash", "zai", "glm-5.3-flash", 1, "zai_glm_coding_plan", "subscription"),
+    ("pi@minimax-m3", "minimax-cn", "MiniMax-M3", 3, "minimax_token_plan", "subscription"),
+    ("pi@minimax-m2.7", "minimax-cn", "MiniMax-M2.7", 2, "minimax_token_plan", "subscription"),
+    ("pi@deepseek-v4-pro", "deepseek", "deepseek-v4-pro", 3, "deepseek_paygo", "api_paygo"),
+    ("pi@deepseek-v4-flash", "deepseek", "deepseek-v4-flash", 1, "deepseek_paygo", "api_paygo"),
+]
+
+TIER_LEVELS = [
+    "T0: single-file trivial edit, rename, doc tweak, or simple lookup; "
+    "any capable coding model handles it",
+    "T1: standard bugfix or small feature; needs solid general coding ability",
+    "T2: complex multi-file change, subtle concurrency bug, or meaningful "
+    "design tradeoffs",
+    "T3: deep architectural reasoning, cross-system refactor, or "
+    "verification-critical high-risk work",
+]
+
+OBJECTIVE = (
+    "Pick the execution target that completes the task at required quality "
+    "with the best economics. Rules: (1) meet the task's capability tier; "
+    "when a flagship pool is pressed, another plan's flagship is the "
+    "zero-downgrade failover. (2) Subscription pools are shared across "
+    "their models: HIGH/CRITICAL windows press every model on that pool — "
+    "downshifting within a pressed pool saves nothing. (3) Subscriptions "
+    "are already paid: prefer them while pressure is LOW/MODERATE, with "
+    "light tiers (glm-5.3-flash, minimax-m2.7, deepseek-v4-flash) for "
+    "routine work and flagships for demanding work. (4) The paygo pool "
+    "(deepseek) spends real money per token: use it when subscription "
+    "pools are pressed or unavailable, or when its flagship is the only "
+    "healthy T3; avoid it for trivial work a healthy subscription covers."
+)
+
+
+def deepseek_key() -> str | None:
+    if os.path.exists(PI_AUTH_PATH):
+        auth = json.load(open(PI_AUTH_PATH))
+        if auth.get("deepseek", {}).get("key"):
+            return auth["deepseek"]["key"]
+    return os.environ.get("DEEPSEEK_API_KEY")
+
+
+def probe_deepseek(key: str) -> tuple[bool, float] | None:
+    """Return (is_available, total_balance_cny), or None when unreadable."""
+
+    req = urllib.request.Request(
+        "https://api.deepseek.com/user/balance",
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            body = json.load(r)
+    except Exception:
+        return None
+    infos = body.get("balance_infos") or []
+    cny = next((i for i in infos if i.get("currency") == "CNY"), None)
+    if cny is None:
+        return None
+    return bool(body.get("is_available")), float(cny.get("total_balance", 0))
+
+
+def build_questions(admitted: list[Candidate], ds_balance: float | None) -> dict[str, Any]:
+    criteria: dict[str, str] = {}
+    for c in admitted:
+        parts = [
+            f"{c.model_sku_id}, capability tier T{c.tier}, "
+            f"{'pay-as-you-go' if not c.windows else 'subscription'}, "
+            f"pool {c.metering}"
+        ]
+        for w in c.windows:
+            v = w.view()
+            parts.append(
+                f"{w.kind}: {v['pressure']} ({int(v['used_fraction'] * 100)}% used, "
+                f"resets in {v['resets_in_hours']}h)"
+            )
+        if c.metering == "deepseek_paygo" and ds_balance is not None:
+            parts.append(f"prepaid balance: {ds_balance:.2f} CNY (billed per token)")
+        criteria[c.execution_target_id] = "; ".join(parts)
+
+    return {
+        "task_tier": {
+            "type": "score",
+            "instructions": (
+                "Rate the capability tier `task.prompt` requires. Judge the "
+                "work itself, not the wording. Prefer the lower tier when "
+                "the task is routine."
+            ),
+            "criteria": TIER_LEVELS,
+        },
+        "route": {
+            "type": "choice",
+            "instructions": {
+                "objective": OBJECTIVE,
+                "question": (
+                    "Which `candidates[].execution_target_id` should execute "
+                    "`task.prompt` right now? Weigh task tier, pool pressure, "
+                    "and real-money cost."
+                ),
+            },
+            "criteria": criteria,
+        },
+        "defer_acceptable": {
+            "type": "noul",
+            "instructions": (
+                "Speculative, used only under pressure: if every suitable "
+                "target reports HIGH or CRITICAL quota windows, is deferring "
+                "`task.prompt` until the nearest window resets acceptable for "
+                "the user's workflow?"
+            ),
+        },
+    }
+
+
+def dispatch(task: str) -> dict[str, Any]:
+    pi_auth = json.load(open(PI_AUTH_PATH)) if os.path.exists(PI_AUTH_PATH) else {}
+    keys = load_keys()
+
+    zai_windows = probe_zai(keys["zai"])
+    if zai_windows is None:
+        raise SystemExit("ZAI quota probe failed — aborting dispatch")
+    probe_minimax(keys["minimax"])
+
+    ds: tuple[bool, float] | None = None
+    if "deepseek" in pi_auth:
+        ds = probe_deepseek(deepseek_key() or "")
+
+    cands: list[Candidate] = []
+    gates: dict[str, str] = {}
+
+    for tid, prov, model, tier, pool, metering in TARGETS:
+        if prov not in pi_auth:
+            gates[tid] = "no api key configured in pi"
+            continue
+        if pool == "zai_glm_coding_plan":
+            cands.append(Candidate(tid, model, tier, pool, zai_windows))
+        elif pool == "minimax_token_plan":
+            if MM_INACTIVE:
+                gates[tid] = MM_INACTIVE["reason"]
+            else:
+                cands.append(Candidate(tid, model, tier, pool, ()))
+        else:  # deepseek paygo
+            if ds is None:
+                gates[tid] = "balance unreadable"
+            elif not ds[0] or ds[1] < POOL_MIN_BALANCE:
+                gates[tid] = (
+                    f"insufficient prepaid balance ({ds[1]:.2f} CNY)"
+                )
+            elif model == "deepseek-v4-pro" and ds[1] < PRO_MIN_BALANCE:
+                gates[tid] = (
+                    f"balance {ds[1]:.2f} CNY below flagship floor "
+                    f"{PRO_MIN_BALANCE} CNY — flash only"
+                )
+            else:
+                cands.append(Candidate(tid, model, tier, pool, ()))
+
+    admitted = [c for c in cands if c.hard_gate() is None]
+    for c in cands:
+        g = c.hard_gate()
+        if g:
+            gates[c.execution_target_id] = g
+
+    if not admitted:
+        return {"decision": None, "reason": "no executable target", "excluded": gates}
+
+    state = {
+        "task": {"source": "dsh", "prompt": task},
+        "now": datetime.now(timezone.utc).isoformat(),
+        "candidates": [c.view() for c in admitted],
+        "excluded_by_hard_gates": gates,
+    }
+    body, meta = jev_ask(state, build_questions(admitted, ds[1] if ds else None))
+    policy = apply_policy(admitted, body["answers"])
+    return {
+        **policy,
+        "excluded": gates,
+        "quota_zai": [w.view() for w in zai_windows],
+        "deepseek_balance_cny": ds[1] if ds else None,
+        "confidence": round(body["answers"]["route"]["confidence"], 2),
+        **meta,
+    }
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="dsh")
+    ap.add_argument("task", help="task text to dispatch")
+    ap.add_argument("-p", "--print", action="store_true", help="one-shot pi")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+
+    if not os.environ.get("TYPESAFE_API_KEY"):
+        print("TYPESAFE_API_KEY not set — Jev dispatch unavailable", file=sys.stderr)
+        return 2
+
+    result = dispatch(args.task)
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif result["decision"] is None:
+        print(f"无可执行目标:{result['reason']}")
+        for k, v in result["excluded"].items():
+            print(f"  - {k}: {v}")
+        return 3
+    else:
+        quota = ", ".join(
+            f"{int(w['used_fraction'] * 100)}% ({w['pressure']})" for w in result["quota_zai"]
+        )
+        bal = result.get("deepseek_balance_cny")
+        print(f"▸ 调度决策:{result['decision']}({result['mode']}, "
+              f"conf={result['confidence']}, task_tier={result['task_tier']['score']:.1f})")
+        print(f"▸ ZAI 实时配额:{quota} | DeepSeek 余额:{bal if bal is not None else 'N/A'} CNY")
+        for k, v in result["excluded"].items():
+            print(f"▸ 排除 {k}:{v}")
+        if result.get("defer_advice"):
+            print(f"▸ ⚠ {result['defer_advice']}")
+
+    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(
+            json.dumps(
+                {"ts": datetime.now(timezone.utc).isoformat(), "task": args.task,
+                 **{k: v for k, v in result.items() if k != "task_tier"}},
+                ensure_ascii=False,
+            ) + "\n"
+        )
+
+    if args.dry_run:
+        return 0
+
+    prov, model = next(
+        (p, m) for tid, p, m, *_ in TARGETS if tid == result["decision"]
+    )
+    cmd = ["pi", "--provider", prov, "--model", model]
+    if args.print:
+        cmd += ["-p"]
+    cmd += [args.task]
+    print(f"▸ 启动:{' '.join(cmd[:6])} …\n")
+    return subprocess.run(cmd).returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())
