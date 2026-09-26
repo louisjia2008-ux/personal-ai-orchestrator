@@ -150,6 +150,12 @@ _EVIDENCE_FRESH_SECONDS = 7 * 86_400
 _AUTO_OK_QUOTA_STATES = {
     QuotaAvailabilityState.AVAILABLE_OBSERVED,
     QuotaAvailabilityState.AVAILABLE_UNMETERED,
+    # P3.9.2 recovery semantics: a strong positive observation after a
+    # proven exhaustion is authoritative availability evidence again.
+    # Keep the RECOVERED_OBSERVED label for auditability, but admit it
+    # through the same autonomous-planning gate as ordinary observed
+    # availability.
+    QuotaAvailabilityState.RECOVERED_OBSERVED,
 }
 
 #: Post-RUNNING terminal states whose auto metadata is inert (§32): the
