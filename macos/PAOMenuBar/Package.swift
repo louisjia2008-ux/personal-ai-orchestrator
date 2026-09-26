@@ -18,6 +18,9 @@ let package = Package(
                 // lowercases it, which CFBundle then fails to match case-sensitively.
                 .copy("Resources/en.lproj"),
                 .copy("Resources/zh-Hans.lproj"),
+            ],
+            linkerSettings: [
+                .linkedFramework("Security"),
             ]
         ),
         .executableTarget(
