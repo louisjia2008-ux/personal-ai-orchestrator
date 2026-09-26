@@ -240,6 +240,12 @@ def test_health_roundtrip(harness):
     health = harness.client.health()
     assert health.status == "ok"
     assert health.api_version == "v1"
+    assert health.process_id == os.getpid()
+    assert len(health.process_instance_id) >= 16
+    # One daemon process keeps one opaque identity across reads.
+    again = harness.client.health()
+    assert again.process_id == health.process_id
+    assert again.process_instance_id == health.process_instance_id
 
 
 def test_socket_is_permission_restricted(harness):
