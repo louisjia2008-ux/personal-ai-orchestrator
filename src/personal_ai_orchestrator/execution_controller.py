@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,82 @@ _TERMINAL_STATES = {TaskState.FAILED, TaskState.CANCELLED, TaskState.COMPLETED}
 # launch; the runtime surface must be re-proven by a fresh real worker
 # invocation.
 EXECUTION_EVIDENCE_MAX_AGE_SECONDS = 30 * 24 * 3600.0
+
+
+@dataclass(frozen=True)
+class ExecutionVerificationProjection:
+    """Separate diagnostic verification history from current launch authority."""
+
+    historical_verified: bool
+    launch_verified: bool
+    verified_stale: bool
+    verified_observed_at: datetime | None
+
+
+def project_execution_target_verification(
+    registry: ModelRegistry,
+    *,
+    execution_target_id: str,
+    execution_evidence_journal: Any = None,
+    now: datetime | None = None,
+) -> ExecutionVerificationProjection:
+    """Project one canonical verification view for clients and recommenders.
+
+    Static ``ExecutionTarget.execution_verified`` remains authoritative. For
+    dynamic evidence, diagnostic history keeps the existing demote-fallback,
+    while ``launch_verified`` uses the exact same latest-row + 30-day rule as
+    the launch boundary. Age expiry therefore never leaves an actionable UI
+    target merely because an older VERIFIED row is still useful history.
+    """
+
+    try:
+        target = registry.execution_targets[execution_target_id]
+    except KeyError:
+        raise RuntimeError("execution target is not in the registry") from None
+
+    if target.execution_verified:
+        return ExecutionVerificationProjection(
+            historical_verified=True,
+            launch_verified=True,
+            verified_stale=False,
+            verified_observed_at=None,
+        )
+
+    journal = execution_evidence_journal
+    if journal is None:
+        return ExecutionVerificationProjection(
+            historical_verified=False,
+            launch_verified=False,
+            verified_stale=False,
+            verified_observed_at=None,
+        )
+
+    historical = None
+    stale_since = None
+    launch_verified = False
+    try:
+        historical, stale_since = journal.latest_verified_for_target(
+            execution_target_id
+        )
+        launch_verified = journal.target_has_verified_evidence(
+            execution_target_id,
+            max_age_seconds=EXECUTION_EVIDENCE_MAX_AGE_SECONDS,
+            now=now,
+        )
+    except Exception:
+        historical, stale_since, launch_verified = None, None, False
+
+    return ExecutionVerificationProjection(
+        historical_verified=historical is not None,
+        launch_verified=bool(launch_verified),
+        verified_stale=(
+            historical is not None
+            and (stale_since is not None or not launch_verified)
+        ),
+        verified_observed_at=(
+            historical.observed_at if historical is not None else None
+        ),
+    )
 
 
 def _render_result(payload: Any) -> str:
@@ -90,6 +167,7 @@ def validate_execution_target_launch(
     execution_target_id: str,
     runtime_available: bool,
     execution_evidence_journal: Any = None,
+    now: datetime | None = None,
 ) -> None:
     """Fail closed unless the selected target is actually launchable.
 
@@ -104,19 +182,14 @@ def validate_execution_target_launch(
         raise RuntimeError("execution target is not in the registry") from None
     if not target.enabled:
         raise RuntimeError("execution target is disabled")
-    if not target.execution_verified:
-        journal = execution_evidence_journal
-        evidence_ok = False
-        if journal is not None:
-            try:
-                evidence_ok = journal.target_has_verified_evidence(
-                    execution_target_id,
-                    max_age_seconds=EXECUTION_EVIDENCE_MAX_AGE_SECONDS,
-                )
-            except Exception:
-                evidence_ok = False
-        if not evidence_ok:
-            raise RuntimeError("execution target has not been runtime-verified")
+    projection = project_execution_target_verification(
+        registry,
+        execution_target_id=execution_target_id,
+        execution_evidence_journal=execution_evidence_journal,
+        now=now,
+    )
+    if not projection.launch_verified:
+        raise RuntimeError("execution target has not been runtime-verified")
     if not runtime_available:
         raise RuntimeError("execution runtime is unavailable")
 
