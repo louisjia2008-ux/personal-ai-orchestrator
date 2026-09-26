@@ -221,7 +221,9 @@ public final class DaemonLifecycleController: ObservableObject {
             daemonCommit = try await client.build().commitSHA
         } catch {
             // A daemon that cannot answer /v1/build predates the endpoint;
-            // that is indeterminate, not a mismatch.
+            // that is indeterminate, not a mismatch. Do not retain an identity
+            // from an earlier failed comparison.
+            refusedDaemonIdentity = nil
             return true
         }
         let compatibility = BuildCompatibility.compare(
