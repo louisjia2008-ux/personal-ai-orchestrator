@@ -1,0 +1,317 @@
+{
+  "generated_at": "2026-09-23T14:00:00+08:00",
+  "model": "jev-latest",
+  "scenarios": [
+    {
+      "scenario": "S1_trivial_healthy",
+      "note": "低强度任务,配额健康 → 轻快档(flash / m2.7)即可;旗舰档留给高强度工作",
+      "excluded_by_hard_gates": {},
+      "model": "jev-1.13.0",
+      "expected": "pi@zai-glm-5.3-flash|pi@minimax-m2.7",
+      "decision": "pi@zai-glm-5.3-flash",
+      "mode": "jev",
+      "reason": "jev choice (confidence 0.89)",
+      "task_tier": {
+        "score": 0.01,
+        "legend": {
+          "0": "T0: single-file trivial edit, rename, doc tweak, or simple lookup; any capable coding model handles it",
+          "1": "T1: standard bugfix or small feature; needs solid general coding ability",
+          "2": "T2: complex multi-file change, subtle concurrency bug, or meaningful design tradeoffs",
+          "3": "T3: deep architectural reasoning, cross-system refactor, or verification-critical high-risk work"
+        }
+      },
+      "route_probabilities": {
+        "pi@zai-glm-5.3-flash": 0.91,
+        "pi@minimax-m2.7": 0.07,
+        "pi@opencode-zen": 0.0,
+        "pi@minimax-m3": 0.0,
+        "pi@zai-glm-5.3": 0.02
+      },
+      "defer_noul": 0.32,
+      "defer_advice": null,
+      "latency_ms": 616,
+      "usage": {
+        "input_tokens": 1890,
+        "output_tokens": 137
+      },
+      "pass": true
+    },
+    {
+      "scenario": "S2_complex_healthy",
+      "note": "高强度任务,配额健康 → 两个 T3 旗舰池任一皆可",
+      "excluded_by_hard_gates": {},
+      "model": "jev-1.13.0",
+      "expected": "pi@zai-glm-5.3|pi@minimax-m3",
+      "decision": "pi@zai-glm-5.3",
+      "mode": "jev",
+      "reason": "jev choice (confidence 0.82)",
+      "task_tier": {
+        "score": 2.08,
+        "legend": {
+          "0": "T0: single-file trivial edit, rename, doc tweak, or simple lookup; any capable coding model handles it",
+          "1": "T1: standard bugfix or small feature; needs solid general coding ability",
+          "2": "T2: complex multi-file change, subtle concurrency bug, or meaningful design tradeoffs",
+          "3": "T3: deep architectural reasoning, cross-system refactor, or verification-critical high-risk work"
+        }
+      },
+      "route_probabilities": {
+        "pi@opencode-zen": 0.0,
+        "pi@zai-glm-5.3": 0.86,
+        "pi@minimax-m3": 0.12,
+        "pi@zai-glm-5.3-flash": 0.01,
+        "pi@minimax-m2.7": 0.01
+      },
+      "defer_noul": 0.26,
+      "defer_advice": null,
+      "latency_ms": 531,
+      "usage": {
+        "input_tokens": 1918,
+        "output_tokens": 135
+      },
+      "pass": true
+    },
+    {
+      "scenario": "S3_complex_zai_weekly_critical",
+      "note": "高强度任务,ZAI 周限额 CRITICAL(93%)→ 池内降档无意义(flash 共享同池)→ 跨池切到同级 M3,零质量损失",
+      "excluded_by_hard_gates": {},
+      "model": "jev-1.13.0",
+      "expected": "pi@minimax-m3",
+      "decision": "pi@minimax-m3",
+      "mode": "jev",
+      "reason": "jev choice (confidence 1.00)",
+      "task_tier": {
+        "score": 2.1,
+        "legend": {
+          "0": "T0: single-file trivial edit, rename, doc tweak, or simple lookup; any capable coding model handles it",
+          "1": "T1: standard bugfix or small feature; needs solid general coding ability",
+          "2": "T2: complex multi-file change, subtle concurrency bug, or meaningful design tradeoffs",
+          "3": "T3: deep architectural reasoning, cross-system refactor, or verification-critical high-risk work"
+        }
+      },
+      "route_probabilities": {
+        "pi@zai-glm-5.3-flash": 0.0,
+        "pi@zai-glm-5.3": 0.0,
+        "pi@minimax-m2.7": 0.0,
+        "pi@opencode-zen": 0.0,
+        "pi@minimax-m3": 1.0
+      },
+      "defer_noul": 0.23,
+      "defer_advice": null,
+      "latency_ms": 604,
+      "usage": {
+        "input_tokens": 1920,
+        "output_tokens": 131
+      },
+      "pass": true
+    },
+    {
+      "scenario": "S4_complex_zai_5h_high",
+      "note": "高强度任务,ZAI 5 小时窗 HIGH(88%)→ 5h 压力跨池切同级 M3",
+      "excluded_by_hard_gates": {},
+      "model": "jev-1.13.0",
+      "expected": "pi@minimax-m3",
+      "decision": "pi@minimax-m3",
+      "mode": "jev",
+      "reason": "jev choice (confidence 1.00)",
+      "task_tier": {
+        "score": 2.07,
+        "legend": {
+          "0": "T0: single-file trivial edit, rename, doc tweak, or simple lookup; any capable coding model handles it",
+          "1": "T1: standard bugfix or small feature; needs solid general coding ability",
+          "2": "T2: complex multi-file change, subtle concurrency bug, or meaningful design tradeoffs",
+          "3": "T3: deep architectural reasoning, cross-system refactor, or verification-critical high-risk work"
+        }
+      },
+      "route_probabilities": {
+        "pi@minimax-m2.7": 0.0,
+        "pi@opencode-zen": 0.0,
+        "pi@zai-glm-5.3": 0.0,
+        "pi@minimax-m3": 1.0,
+        "pi@zai-glm-5.3-flash": 0.0
+      },
+      "defer_noul": 0.28,
+      "defer_advice": null,
+      "latency_ms": 678,
+      "usage": {
+        "input_tokens": 1920,
+        "output_tokens": 131
+      },
+      "pass": true
+    },
+    {
+      "scenario": "S5_trivial_all_plans_pressed",
+      "note": "两个付费池都 CRITICAL → 琐碎任务让给免费 Zen 中继",
+      "excluded_by_hard_gates": {},
+      "model": "jev-1.13.0",
+      "expected": "pi@opencode-zen",
+      "decision": "pi@opencode-zen",
+      "mode": "jev",
+      "reason": "jev choice (confidence 0.95)",
+      "task_tier": {
+        "score": 0.0,
+        "legend": {
+          "0": "T0: single-file trivial edit, rename, doc tweak, or simple lookup; any capable coding model handles it",
+          "1": "T1: standard bugfix or small feature; needs solid general coding ability",
+          "2": "T2: complex multi-file change, subtle concurrency bug, or meaningful design tradeoffs",
+          "3": "T3: deep architectural reasoning, cross-system refactor, or verification-critical high-risk work"
+        }
+      },
+      "route_probabilities": {
+        "pi@zai-glm-5.3": 0.0,
+        "pi@zai-glm-5.3-flash": 0.0,
+        "pi@opencode-zen": 0.97,
+        "pi@minimax-m3": 0.02,
+        "pi@minimax-m2.7": 0.01
+      },
+      "defer_noul": 0.38,
+      "defer_advice": null,
+      "latency_ms": 545,
+      "usage": {
+        "input_tokens": 1900,
+        "output_tokens": 132
+      },
+      "pass": true
+    },
+    {
+      "scenario": "S6_ambiguous_low_stakes",
+      "note": "模糊任务 → 观察 task_tier 与置信度,验证兜底策略可用",
+      "excluded_by_hard_gates": {},
+      "model": "jev-1.13.0",
+      "expected": "ANY",
+      "decision": "pi@zai-glm-5.3-flash",
+      "mode": "jev",
+      "reason": "jev choice (confidence 0.75)",
+      "task_tier": {
+        "score": 0.89,
+        "legend": {
+          "0": "T0: single-file trivial edit, rename, doc tweak, or simple lookup; any capable coding model handles it",
+          "1": "T1: standard bugfix or small feature; needs solid general coding ability",
+          "2": "T2: complex multi-file change, subtle concurrency bug, or meaningful design tradeoffs",
+          "3": "T3: deep architectural reasoning, cross-system refactor, or verification-critical high-risk work"
+        }
+      },
+      "route_probabilities": {
+        "pi@minimax-m2.7": 0.14,
+        "pi@zai-glm-5.3": 0.06,
+        "pi@zai-glm-5.3-flash": 0.79,
+        "pi@opencode-zen": 0.0,
+        "pi@minimax-m3": 0.01
+      },
+      "defer_noul": 0.28,
+      "defer_advice": null,
+      "latency_ms": 585,
+      "usage": {
+        "input_tokens": 1871,
+        "output_tokens": 137
+      },
+      "pass": true
+    },
+    {
+      "scenario": "S7_zai_5h_exhausted",
+      "note": "ZAI 5h 窗耗尽 → 硬门同时拦截 glm-5.3 和 flash(共享池),MM 池承接;同池两档烧量相同,T2 任务 m2.7/m3 均可",
+      "excluded_by_hard_gates": {
+        "pi@zai-glm-5.3": "FIVE_HOUR window exhausted",
+        "pi@zai-glm-5.3-flash": "FIVE_HOUR window exhausted"
+      },
+      "model": "jev-1.13.0",
+      "expected": "pi@minimax-m2.7|pi@minimax-m3",
+      "decision": "pi@minimax-m3",
+      "mode": "jev",
+      "reason": "jev choice (confidence 0.49)",
+      "task_tier": {
+        "score": 2.35,
+        "legend": {
+          "0": "T0: single-file trivial edit, rename, doc tweak, or simple lookup; any capable coding model handles it",
+          "1": "T1: standard bugfix or small feature; needs solid general coding ability",
+          "2": "T2: complex multi-file change, subtle concurrency bug, or meaningful design tradeoffs",
+          "3": "T3: deep architectural reasoning, cross-system refactor, or verification-critical high-risk work"
+        }
+      },
+      "route_probabilities": {
+        "pi@minimax-m2.7": 0.34,
+        "pi@opencode-zen": 0.0,
+        "pi@minimax-m3": 0.66
+      },
+      "defer_noul": 0.29,
+      "defer_advice": null,
+      "latency_ms": 596,
+      "usage": {
+        "input_tokens": 1456,
+        "output_tokens": 97
+      },
+      "pass": true
+    },
+    {
+      "scenario": "S8_t3_pinned_zai_weekly_critical",
+      "note": "T3 刚性 + ZAI 周限额 CRITICAL(96%)→ 存在健康同级 M3,验证 Jev 自身能否守住刚性约束(跨池同级接管,无需降档)",
+      "excluded_by_hard_gates": {},
+      "model": "jev-1.13.0",
+      "expected": "pi@minimax-m3",
+      "decision": "pi@minimax-m3",
+      "mode": "jev",
+      "reason": "jev choice (confidence 1.00)",
+      "task_tier": {
+        "score": 3.0,
+        "legend": {
+          "0": "T0: single-file trivial edit, rename, doc tweak, or simple lookup; any capable coding model handles it",
+          "1": "T1: standard bugfix or small feature; needs solid general coding ability",
+          "2": "T2: complex multi-file change, subtle concurrency bug, or meaningful design tradeoffs",
+          "3": "T3: deep architectural reasoning, cross-system refactor, or verification-critical high-risk work"
+        }
+      },
+      "route_probabilities": {
+        "pi@zai-glm-5.3-flash": 0.0,
+        "pi@minimax-m2.7": 0.0,
+        "pi@opencode-zen": 0.0,
+        "pi@minimax-m3": 1.0,
+        "pi@zai-glm-5.3": 0.0
+      },
+      "defer_noul": 0.19,
+      "defer_advice": null,
+      "latency_ms": 631,
+      "usage": {
+        "input_tokens": 1931,
+        "output_tokens": 131
+      },
+      "pass": true
+    },
+    {
+      "scenario": "S9_chore_no_healthy_alternative",
+      "note": "低价值杂务 + 两个付费池全部 CRITICAL、无免费中继 → defer_acceptable 应升高,验证 defer 建议消费路径",
+      "excluded_by_hard_gates": {},
+      "model": "jev-1.13.0",
+      "expected": "ANY",
+      "decision": "pi@minimax-m3",
+      "mode": "jev",
+      "reason": "jev choice (confidence 0.46)",
+      "task_tier": {
+        "score": 0.02,
+        "legend": {
+          "0": "T0: single-file trivial edit, rename, doc tweak, or simple lookup; any capable coding model handles it",
+          "1": "T1: standard bugfix or small feature; needs solid general coding ability",
+          "2": "T2: complex multi-file change, subtle concurrency bug, or meaningful design tradeoffs",
+          "3": "T3: deep architectural reasoning, cross-system refactor, or verification-critical high-risk work"
+        }
+      },
+      "route_probabilities": {
+        "pi@zai-glm-5.3": 0.27,
+        "pi@minimax-m3": 0.73
+      },
+      "defer_noul": 0.37,
+      "defer_advice": null,
+      "latency_ms": 648,
+      "usage": {
+        "input_tokens": 1309,
+        "output_tokens": 86
+      },
+      "pass": true
+    }
+  ],
+  "totals": {
+    "requests": 9,
+    "passed": 9,
+    "failed": 0,
+    "input_tokens": 16115,
+    "output_tokens": 1117
+  }
+}

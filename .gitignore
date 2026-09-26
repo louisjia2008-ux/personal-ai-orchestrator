@@ -21,3 +21,4 @@ macos/PAOMenuBar/.build/
 
 # XcodeGen output: project.yml is the deterministic source of truth
 macos/PAOMenuBar/PAOMenuBar.xcodeproj/
+macos/PAOMenuBar/.build/

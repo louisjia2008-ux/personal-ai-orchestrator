@@ -2,7 +2,44 @@
 
 An open-source, safety-first **resource scheduler for coding agents and multi-model AI workflows**.
 
-> Status: **Pre-alpha / architecture & feasibility stage**
+English | [中文](README.zh.md)
+
+> Status: **dispatch kernel verified & usable today** (Jev routing via pi / DeepSeek Harness / CLI) · orchestrator daemon **pre-alpha**
+
+## What works today: Jev quota-aware model dispatch
+
+The scheduling decision layer is implemented, verified end-to-end against live APIs, and installable on three hosts:
+
+| Host | Form | Location | Install |
+|---|---|---|---|
+| [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) | bundle plugin | [`integrations/dsh-plugin/`](integrations/dsh-plugin/) | `dsh plugin --profile <name> add github:louisjia2008-ux/personal-ai-orchestrator` |
+| [pi](https://github.com/earendil-works/pi-coding-agent) | extension package | [`integrations/pi-dsh/`](integrations/pi-dsh/) | `pi install git:github.com:louisjia2008-ux/personal-ai-orchestrator` |
+| any CLI | launcher scripts | [`spikes/jev-dispatch/`](spikes/jev-dispatch/) | `pi-jev "task"` / `dsh "task"` |
+
+### How it routes
+
+```
+task ──> live probes: ZAI 5h/weekly windows · MiniMax token plan · DeepSeek prepaid balance
+     ──> hard gates (code): exhausted / inactive plan / no key / insufficient paygo balance
+     ──> Jev (TypeSafe System One), one request, three parallel questions:
+           task_tier (Score 0–3) · route (Choice) · defer_acceptable (Noul)
+     ──> policy gates (code): confidence-floor fallback · tier-floor override · defer advice
+     ──> execute on the chosen provider/model
+```
+
+**Code owns the rules, Jev owns the semantics.** Deterministic arithmetic (quota fractions, pressure labels, pool sharing, tier floors) never goes through the model; Jev supplies the judgments ordinary code can't make (how demanding is this task, which healthy pool to burn, is deferral acceptable).
+
+### Burn-first economics
+
+Paid token-plan quota is use-it-or-lose-it, so the objective maximizes utilization of paid pools — each pool carries a computed `burn_value` (remaining weekly fraction weighted by reset imminence) — while the pay-as-you-go pool is a last resort, gated by live prepaid balance (flagship floor / pool floor).
+
+### Verified
+
+- Decision layer: 9/9 scenarios (pool-level pressure routing, cross-pool failover, tier pins, confidence fallback) — raw data in [`spikes/jev-dispatch/results/`](spikes/jev-dispatch/results/)
+- End-to-end on live credentials: probes → Jev → real model execution with returned output
+- Headless dsh integration: seed `minimax-cn/MiniMax-M3` rerouted per turn to `zai/glm-5.3` (complex task) and the zai light tier (trivial task), via the `agent/request` waterfall
+
+Requires `TYPESAFE_API_KEY` in the environment ([get one](https://console.typesafe.ai/keys)). Model credentials stay in each host's native store.
 
 ## What problem this project solves
 
@@ -283,6 +320,6 @@ See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## Open-source status
 
-The project is intended to be open source, but **no license has been selected yet**. Until a license is added, the repository should be treated as all rights reserved even if the source becomes publicly visible.
+The dsh plugin bundle declares **MIT** (see its `package.json`). The rest of the repository has **no license selected yet**; until a root license is added, treat unlicensed parts as all rights reserved.
 
-Selecting an explicit license is a release blocker before the first public open-source release.
+Selecting an explicit root license is a release blocker before the first public open-source release of the full orchestrator.

@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+"""pi-jev: issue a task in pi with Jev quota-aware model dispatch.
+
+Usage:
+  pi-jev "你的任务"            # 决策后以选中模型打开交互式 pi
+  pi-jev -p "你的任务"         # 决策后单次执行(pi --print),输出后退出
+  pi-jev --dry-run "任务"      # 只显示调度决策,不启动 pi
+  pi-jev --json "任务"         # 以 JSON 输出决策(供脚本组合)
+
+Pipeline (all live):
+  task -> ZAI/MiniMax quota probe -> hard gates -> Jev decision
+       -> launch ``pi --provider <p> --model <m>`` with the chosen target.
+
+Credentials: pi's own auth store (``pi auth check`` must be ready);
+quota probes read the OpenCode auth store at runtime; the Jev call needs
+``TYPESAFE_API_KEY`` in the environment. Nothing is persisted except an
+append-only dispatch log (``results/pi_jev_log.jsonl``).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+from typing import Any
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from run_e2e import MM_INACTIVE, load_keys, probe_minimax, probe_zai  # noqa: E402
+from run_spike import (  # noqa: E402
+    Candidate,
+    apply_policy,
+    build_questions,
+    jev_ask,
+)
+
+# execution_target_id, pi provider, pi model, tier, quota pool
+TARGETS = [
+    ("pi@zai-glm-5.3", "zai", "glm-5.3", 3, "zai_glm_coding_plan"),
+    ("pi@zai-glm-5.3-flash", "zai", "glm-5.3-flash", 1, "zai_glm_coding_plan"),
+    ("pi@minimax-m3", "minimax-cn", "MiniMax-M3", 3, "minimax_token_plan"),
+    (
+        "pi@minimax-m2.7",
+        "minimax-cn",
+        "MiniMax-M2.7",
+        2,
+        "minimax_token_plan",
+    ),
+]
+
+LOG_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "results", "pi_jev_log.jsonl"
+)
+
+
+def build_candidates(zai_windows: tuple[Any, ...]) -> list[Candidate]:
+    cands = []
+    for tid, _prov, model, tier, pool in TARGETS:
+        if pool == "zai_glm_coding_plan":
+            cands.append(
+                Candidate(
+                    execution_target_id=tid,
+                    model_sku_id=model,
+                    tier=tier,
+                    metering=pool,
+                    windows=zai_windows,
+                )
+            )
+    # MiniMax pool: only includable when the plan is active AND the quota
+    # shape was readable; otherwise it is gated with the real reason.
+    if not MM_INACTIVE:
+        cands += [
+            Candidate(
+                execution_target_id=tid,
+                model_sku_id=model,
+                tier=tier,
+                metering=pool,
+                windows=(),
+            )
+            for tid, _prov, model, tier, pool in TARGETS
+            if pool == "minimax_token_plan"
+        ]
+    return cands
+
+
+def dispatch(task: str) -> dict[str, Any]:
+    keys = load_keys()
+    zai_windows = probe_zai(keys["zai"])
+    if zai_windows is None:
+        raise SystemExit("ZAI quota probe failed — aborting dispatch")
+    mm_windows = probe_minimax(keys["minimax"])
+
+    cands = build_candidates(zai_windows)
+    gates = {c.execution_target_id: c.hard_gate() for c in cands}
+    if MM_INACTIVE:
+        gates["(minimax pool)"] = MM_INACTIVE["reason"]
+    if mm_windows == () and not MM_INACTIVE:
+        gates["(minimax pool)"] = "active but quota shape unreadable"
+    admitted = [c for c in cands if not gates[c.execution_target_id]]
+
+    if not admitted:
+        return {
+            "decision": None,
+            "reason": "no executable target",
+            "excluded": gates,
+        }
+
+    state = {
+        "task": {"source": "pi-jev", "prompt": task},
+        "now": datetime.now(timezone.utc).isoformat(),
+        "candidates": [c.view() for c in admitted],
+        "excluded_by_hard_gates": {k: v for k, v in gates.items() if v},
+    }
+    body, meta = jev_ask(state, build_questions(admitted))
+    policy = apply_policy(admitted, body["answers"])
+    return {
+        **policy,
+        "excluded": state["excluded_by_hard_gates"],
+        "quota_zai": [w.view() for w in zai_windows],
+        "confidence": round(body["answers"]["route"]["confidence"], 2),
+        **meta,
+    }
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="pi-jev")
+    ap.add_argument("task", help="task text to dispatch")
+    ap.add_argument("-p", "--print", action="store_true", help="one-shot pi")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+
+    if not os.environ.get("TYPESAFE_API_KEY"):
+        print("TYPESAFE_API_KEY not set — Jev dispatch unavailable", file=sys.stderr)
+        return 2
+
+    result = dispatch(args.task)
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif result["decision"] is None:
+        print(f"无可执行目标:{result['reason']}")
+        for k, v in result["excluded"].items():
+            print(f"  - {k}: {v}")
+        advice = result.get("defer_advice")
+        if advice:
+            print(f"建议:{advice}")
+        return 3
+    else:
+        quota = ", ".join(
+            f"{int(w['used_fraction'] * 100)}% used ({w['pressure']}, "
+            f"reset {w['resets_in_hours']}h)"
+            for w in result["quota_zai"]
+        )
+        print(f"▸ 调度决策:{result['decision']}({result['mode']}, "
+              f"conf={result['confidence']}, task_tier={result['task_tier']['score']:.1f})")
+        print(f"▸ ZAI 实时配额:{quota}")
+        if result["excluded"]:
+            for k, v in result["excluded"].items():
+                print(f"▸ 排除 {k}:{v}")
+        if result.get("defer_advice"):
+            print(f"▸ ⚠ {result['defer_advice']}")
+
+    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(
+            json.dumps(
+                {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "task": args.task,
+                    **{k: v for k, v in result.items() if k != "task_tier"},
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+
+    if args.dry_run:
+        return 0
+
+    prov, model = next(
+        (p, m)
+        for tid, p, m, *_ in TARGETS
+        if tid == result["decision"]
+    )
+    cmd = ["pi", "--provider", prov, "--model", model]
+    if args.print:
+        cmd += ["-p"]
+    cmd += [args.task]
+    print(f"▸ 启动:{' '.join(cmd[:6])} …\n")
+    return subprocess.run(cmd).returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())
