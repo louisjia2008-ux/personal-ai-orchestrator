@@ -1,0 +1,67 @@
+{
+  "zai_windows": [
+    {
+      "used_fraction": 0.31,
+      "pressure": "LOW",
+      "resets_in_hours": 23.0
+    },
+    {
+      "used_fraction": 0.6,
+      "pressure": "MODERATE",
+      "resets_in_hours": 29.9
+    }
+  ],
+  "minimax": {
+    "reason": "no active token plan subscription"
+  },
+  "runs": [
+    {
+      "scenario": "A_complex_live_quota",
+      "note": "真实配额状态下的中高强度任务;限流器属标准组件,Jev 分级若为 T1–T2 选 flash 也属正确判断",
+      "decision": "pi@zai-glm-5.3-flash",
+      "mode": "jev",
+      "confidence": 0.94,
+      "task_tier": 1.2,
+      "defer_noul": 0.3,
+      "defer_advice": null,
+      "excluded": {
+        "pi@minimax-m3 (pool)": "no active token plan subscription"
+      },
+      "execution": "executed on glm-5.3-flash in 16808ms",
+      "output_excerpt": "```python\nimport threading\nimport time\nfrom collections import deque\n\n\nclass SlidingWindowLimiter:\n    \"\"\"线程安全的滑动窗口限流器:period 秒内最多放行 rate 次请求。\"\"\"\n\n    def __init__(self, rate: int, period: float = 1.0",
+      "latency_ms": 548
+    },
+    {
+      "scenario": "B_trivial_live_quota",
+      "note": "真实配额状态下的低强度任务 → 应选 glm-5.3-flash 执行",
+      "decision": "pi@zai-glm-5.3-flash",
+      "mode": "jev",
+      "confidence": 1.0,
+      "task_tier": 0.0,
+      "defer_noul": 0.43,
+      "defer_advice": null,
+      "excluded": {
+        "pi@minimax-m3 (pool)": "no active token plan subscription"
+      },
+      "execution": "executed on glm-5.3-flash in 3627ms",
+      "output_excerpt": "# 递归删除当前目录下所有 .pyc 编译缓存文件",
+      "latency_ms": 534
+    },
+    {
+      "scenario": "C_t3_synthetic_zai_critical",
+      "note": "注入 ZAI 周 CRITICAL + MM 无订阅(真实)→ 无可执行目标,应触发 defer/兜底路径",
+      "decision": "pi@zai-glm-5.3",
+      "mode": "jev",
+      "confidence": 0.67,
+      "task_tier": 2.84,
+      "defer_noul": 0.27,
+      "defer_advice": null,
+      "excluded": {
+        "pi@minimax-m3 (pool)": "no active token plan subscription"
+      },
+      "execution": "executed on glm-5.3 in 25146ms",
+      "output_excerpt": "# 跨服务幂等支付入账方案\n\n## 一、核心不变量\n1. **唯一入账**：同一支付单号(幂等键)至多成功入账一次；账户流水表对幂等键建唯一索引兜底\n2. **金额守恒**：复式记账，有借必有贷，账户余额=初始值+Σ流水\n3. **状态单调**：支付单状态机只前进(INIT→处理中→成功/失败/冲正)，禁止回退\n4. **消息必达**：扣款成功⇒入账请求最终可达；业务单与本地消息表同库同事务落库\n",
+      "latency_ms": 527
+    }
+  ]
+}
