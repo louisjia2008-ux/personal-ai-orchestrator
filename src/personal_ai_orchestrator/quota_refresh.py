@@ -197,9 +197,11 @@ QUOTA_SOURCES: tuple[QuotaSourceSpec, ...] = (
 )
 
 #: The credential references each surface is permitted to read. This *is* the
-#: quota credential contract (§26): it names one environment variable and one
-#: set of auth-store entries per surface, and nothing else. Discovery still runs
-#: with credential values stripped, and execution auth is unaffected.
+#: quota credential contract (§26): it names one environment variable, explicit
+#: owner-managed PAO Keychain account(s), and one set of OpenCode auth-store
+#: entries per surface, and nothing else. Discovery still runs with credential
+#: values stripped, Pi storage is never inspected, and execution auth is
+#: unaffected.
 QUOTA_CREDENTIAL_SPECS: Mapping[str, QuotaCredentialSpec] = {
     spec.provider_id: QuotaCredentialSpec(
         provider_id=spec.provider_id,
