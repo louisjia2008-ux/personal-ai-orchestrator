@@ -299,9 +299,8 @@ class DispatchRecommendationCandidate(_ViewModel):
     evidence_fresh: bool = False
     runtime_available: bool = False
     verified: bool = False
-    #: True when ``verified`` is the demote-fallback result (latest evidence
-    #: is non-VERIFIED while an older VERIFIED row exists). Lets the
-    #: recommendation panel surface the staleness alongside the score.
+    #: Historical verification exists but no longer carries current launch
+    #: authority (demoted by newer evidence or expired by launch-age policy).
     execution_verified_stale: bool = False
     # M1 WP3: binding-window headroom. Drives ``headroom_term`` on the
     # score path; ``None`` when every window has missing data so the
@@ -610,10 +609,9 @@ class ExecutionTargetHealthView(_ViewModel):
     runtime_id: str
     enabled: bool
     execution_verified: bool
-    #: True when the latest evidence for this target is non-VERIFIED while
-    #: an older VERIFIED row still exists (demote-fallback semantics). Lets
-    #: the UI surface "we have history, but the most recent run did not
-    #: actually succeed" without re-running the verification probe.
+    #: True when historical VERIFIED evidence remains useful diagnostically
+    #: but no longer carries current launch authority, either because newer
+    #: evidence demoted it or because it exceeded the launch-age cap.
     execution_verified_stale: bool = False
     #: Current full launch authority from the same verification rule used by
     #: owner dispatch, plus enabled/runtime availability. Historical VERIFIED
