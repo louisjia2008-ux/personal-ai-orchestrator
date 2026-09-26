@@ -42,6 +42,21 @@ public enum DaemonLifecycleStatus: Equatable, Sendable {
     }
 }
 
+public struct DaemonProcessIdentity: Equatable, Sendable {
+    public let processId: Int32
+    public let instanceId: String
+
+    public init?(health: HealthView) {
+        guard let processId = health.processId,
+              processId > 1,
+              let instanceId = health.processInstanceId,
+              !instanceId.isEmpty
+        else { return nil }
+        self.processId = processId
+        self.instanceId = instanceId
+    }
+}
+
 @MainActor
 public final class DaemonLifecycleController: ObservableObject {
     @Published public private(set) var status: DaemonLifecycleStatus = .unknown {
@@ -55,6 +70,9 @@ public final class DaemonLifecycleController: ObservableObject {
     private let client: PAOControlClient
     private var ownedProcess: Process?
     private var startupTask: Task<Void, Never>?
+    /// Exact identity of the reachable daemon whose build was refused.
+    /// Never derived from argv/path/process-name matching.
+    private var refusedDaemonIdentity: DaemonProcessIdentity?
 
     public init(configuration: DaemonLaunchConfiguration, client: PAOControlClient) {
         self.configuration = configuration
@@ -95,7 +113,7 @@ public final class DaemonLifecycleController: ObservableObject {
                     return
                 }
                 if self.preexistingDaemonWasRefusedForBuild() {
-                    await self.terminateStaleHelpers()
+                    try await self.terminateRefusedDaemon()
                 }
                 try await self.launchBundledDaemon()
             }
@@ -113,36 +131,75 @@ public final class DaemonLifecycleController: ObservableObject {
         return false
     }
 
-    /// Terminate daemon helpers left behind by an earlier app generation.
+    /// Terminate exactly the daemon process whose build was refused.
     ///
-    /// Without this, every app rebuild strands the old helper: it keeps
-    /// serving from the unlinked socket inode while the new helper binds
-    /// the path — two processes writing one state database. Only this
-    /// bundle's own absolute helper path is ever signaled, so nothing
-    /// outside this app's product can be matched.
-    private func terminateStaleHelpers() async {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        process.arguments = ["-f", configuration.helperURL.path]
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            // Best effort: a failed cleanup must not block launching ours.
+    /// The old implementation used `pkill -f <helper path>`, which made a
+    /// command-line substring the ownership boundary. This path instead pins
+    /// the pid + opaque per-process identity obtained from the daemon itself,
+    /// re-reads that identity immediately before SIGTERM, and refuses to signal
+    /// if either value changed. A pre-identity daemon therefore fails closed
+    /// rather than falling back to a broad process match.
+    private func terminateRefusedDaemon() async throws {
+        guard let expected = refusedDaemonIdentity else {
+            throw LifecycleError.staleDaemonIdentityUnavailable
         }
-        // Give the exited helpers a moment to release the socket and
-        // sqlite handles before the new daemon binds the same path.
-        try? await Task.sleep(for: .milliseconds(500))
+
+        let current: HealthView
+        do {
+            current = try await client.health()
+        } catch {
+            // The refused daemon exited between the build check and cleanup.
+            // No process remains to signal; allow a fresh launch.
+            refusedDaemonIdentity = nil
+            try? await Task.sleep(for: .milliseconds(250))
+            return
+        }
+
+        guard let actual = DaemonProcessIdentity(health: current),
+              actual == expected
+        else {
+            throw LifecycleError.staleDaemonIdentityChanged
+        }
+
+        errno = 0
+        let signalResult = Darwin.kill(pid_t(expected.processId), SIGTERM)
+        if signalResult != 0 && errno != ESRCH {
+            throw LifecycleError.staleDaemonSignalFailed
+        }
+
+        let deadline = Date().addingTimeInterval(5.0)
+        while Date() < deadline {
+            do {
+                let health = try await client.health()
+                guard let identity = DaemonProcessIdentity(health: health) else {
+                    throw LifecycleError.staleDaemonIdentityChanged
+                }
+                if identity != expected {
+                    // Another daemon appeared before we finished. Do not touch
+                    // it and do not launch a second copy in the same pass.
+                    throw LifecycleError.staleDaemonIdentityChanged
+                }
+            } catch let error as LifecycleError {
+                throw error
+            } catch {
+                refusedDaemonIdentity = nil
+                try? await Task.sleep(for: .milliseconds(250))
+                return
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw LifecycleError.staleDaemonTerminationTimeout
     }
 
     private func healthIsCompatible() async -> Bool {
         do {
             let health = try await client.health()
             guard health.isCompatible else {
+                refusedDaemonIdentity = nil
                 status = .versionMismatch(version: health.apiVersion)
                 return false
             }
-            return await buildIsCompatible()
+            return await buildIsCompatible(health: health)
         } catch {
             return false
         }
@@ -158,7 +215,7 @@ public final class DaemonLifecycleController: ObservableObject {
     /// Only a *known* mismatch is refused. When either side cannot state its
     /// commit, nothing can be concluded, and refusing on that basis would make
     /// an unstamped development build unable to start at all.
-    private func buildIsCompatible() async -> Bool {
+    private func buildIsCompatible(health: HealthView) async -> Bool {
         let daemonCommit: String?
         do {
             daemonCommit = try await client.build().commitSHA
@@ -171,7 +228,11 @@ public final class DaemonLifecycleController: ObservableObject {
             app: BuildIdentity.current,
             daemonCommitSHA: daemonCommit
         )
-        guard case .mismatched(let app, let daemon) = compatibility else { return true }
+        guard case .mismatched(let app, let daemon) = compatibility else {
+            refusedDaemonIdentity = nil
+            return true
+        }
+        refusedDaemonIdentity = DaemonProcessIdentity(health: health)
         status = .buildMismatch(app: app, daemon: daemon)
         return false
     }
@@ -255,6 +316,10 @@ public final class DaemonLifecycleController: ObservableObject {
     private enum LifecycleError: Error {
         case helperMissing
         case lockUnavailable
+        case staleDaemonIdentityUnavailable
+        case staleDaemonIdentityChanged
+        case staleDaemonSignalFailed
+        case staleDaemonTerminationTimeout
         case exitedEarly(Int32)
         case startupTimeout(Data?)
     }
@@ -265,6 +330,14 @@ public final class DaemonLifecycleController: ObservableObject {
             return "helper_missing"
         case LifecycleError.lockUnavailable:
             return "startup_lock_unavailable"
+        case LifecycleError.staleDaemonIdentityUnavailable:
+            return "stale_daemon_identity_unavailable"
+        case LifecycleError.staleDaemonIdentityChanged:
+            return "stale_daemon_identity_changed"
+        case LifecycleError.staleDaemonSignalFailed:
+            return "stale_daemon_signal_failed"
+        case LifecycleError.staleDaemonTerminationTimeout:
+            return "stale_daemon_termination_timeout"
         case LifecycleError.exitedEarly(let status):
             return "helper_exited_\(status)"
         case LifecycleError.startupTimeout(let data):
