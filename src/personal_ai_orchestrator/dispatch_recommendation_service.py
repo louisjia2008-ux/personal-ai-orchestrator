@@ -26,14 +26,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from personal_ai_orchestrator.execution_controller import (
-    execution_target_has_launch_verification,
-)
 from personal_ai_orchestrator.dispatch_recommender import (
     CandidateWindowInput,
     DispatchCandidateInput,
     DispatchRecommendation,
     recommend_owner_dispatch,
+)
+from personal_ai_orchestrator.execution_controller import (
+    execution_target_has_launch_verification,
 )
 from personal_ai_orchestrator.model_tiers import ModelTier
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityState
