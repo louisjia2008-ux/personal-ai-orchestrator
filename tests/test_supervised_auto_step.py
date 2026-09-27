@@ -31,6 +31,8 @@ from personal_ai_orchestrator.model_registry import (
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
 from personal_ai_orchestrator.quota_availability import (
     QuotaAvailabilityJournal,
+    QuotaAvailabilityState,
+    observe_exhaustion,
     observe_success,
 )
 from personal_ai_orchestrator.quota_refresh import (
@@ -327,8 +329,6 @@ def test_hard_gate_quota_unknown_skips(tmp_path) -> None:
 
 
 def test_hard_gate_quota_state_not_auto_ok_skips(tmp_path) -> None:
-    from personal_ai_orchestrator.quota_availability import observe_exhaustion
-
     env = _env(tmp_path)
     # Flip the availability journal to a cooldown-state blocker after env
     # construction (observe_exhaustion → EXHAUSTED_OBSERVED).
@@ -350,6 +350,35 @@ def test_hard_gate_quota_state_not_auto_ok_skips(tmp_path) -> None:
     # quota-state gate is what fails closed here.
     assert task.auto_reason is not None
     assert task.auto_reason.startswith("quota_state_")
+
+
+def test_recovered_observed_quota_allows_supervised_auto_planning(tmp_path) -> None:
+    env = _env(tmp_path)
+    previous = env.quota_journal.load("m3-sub")
+    exhausted = observe_exhaustion(
+        previous,
+        execution_target_id="m3-sub",
+        provider_id="minimax",
+        quota_pool_id="pool",
+        observed_at=NOW - timedelta(minutes=2),
+        sanitized_reason_code="TEST_EXHAUSTED",
+    )
+    env.quota_journal.save(exhausted)
+    recovered = observe_success(
+        exhausted,
+        execution_target_id="m3-sub",
+        provider_id="minimax",
+        quota_pool_id="pool",
+        observed_at=NOW - timedelta(minutes=1),
+    )
+    assert recovered.state is QuotaAvailabilityState.RECOVERED_OBSERVED
+    env.quota_journal.save(recovered)
+
+    env.tick(NOW)
+
+    task = env.store.get_task("task-1")
+    assert task.state is TaskState.AUTO_GRACE
+    assert task.auto_decision_id is not None
 
 
 def test_hard_gate_evidence_stale_skips(tmp_path) -> None:
