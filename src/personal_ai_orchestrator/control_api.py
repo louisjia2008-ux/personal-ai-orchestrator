@@ -48,6 +48,9 @@ from personal_ai_orchestrator.dispatch_recommender import (
     DispatchCandidateInput,
     source_pressure_for,
 )
+from personal_ai_orchestrator.execution_controller import (
+    execution_target_has_launch_verification,
+)
 from personal_ai_orchestrator.execution_evidence import (
     ExecutionEvidenceJournal,
     ExecutionVerificationEvidence,
@@ -607,10 +610,16 @@ class ExecutionTargetHealthView(_ViewModel):
     runtime_id: str
     enabled: bool
     execution_verified: bool
-    #: True when the latest evidence for this target is non-VERIFIED while
-    #: an older VERIFIED row still exists (demote-fallback semantics). Lets
-    #: the UI surface "we have history, but the most recent run did not
-    #: actually succeed" without re-running the verification probe.
+    #: Historical verification is diagnostic. This bit is the current
+    #: execution launch authority: enabled + fresh/latest verification +
+    #: runtime availability. It intentionally excludes quota/task/safety gates.
+    execution_launch_authorized: bool = False
+    #: Timestamp of the historical VERIFIED evidence surfaced above, when it
+    #: came from the append-only execution evidence journal. Static registry
+    #: authority has no observation timestamp and therefore leaves this null.
+    execution_verification_observed_at: str | None = None
+    #: True when historical VERIFIED evidence exists but no longer matches the
+    #: current journal/age authority. This remains diagnostic only.
     execution_verified_stale: bool = False
     runtime_available: bool | None = None
     observed_availability: ObservedAvailabilityView | None = None
@@ -2901,12 +2910,14 @@ class ControlPlaneService:
                     sanitized_reason_code=evidence.sanitized_reason_code,
                     consecutive_failures=evidence.consecutive_failures,
                 )
-        # Demote-fallback: journal wins over the static registry flag so a
-        # transient UNKNOWN does not destroy a real verified history. The
-        # stale flag tells the caller when the fallback fired (latest is
-        # non-VERIFIED while an older VERIFIED row exists).
-        execution_verified = False
+        # Historical verification stays visible for diagnostics, including
+        # demote-fallback. Launch authority is projected separately from the
+        # same canonical freshness rule used at the final execution boundary.
+        execution_verified = bool(target.execution_verified)
         execution_verified_stale = False
+        execution_verification_observed_at: str | None = None
+        verified_evidence = None
+        stale_since = None
         if self.execution_evidence_journal is not None:
             try:
                 verified_evidence, stale_since = (
@@ -2916,7 +2927,26 @@ class ControlPlaneService:
                 verified_evidence, stale_since = None, None
             if verified_evidence is not None:
                 execution_verified = True
-                execution_verified_stale = stale_since is not None
+                execution_verification_observed_at = verified_evidence.observed_at.isoformat()
+
+        runtime_available = (
+            self.runtime_availability.get(target.id)
+            if target.id in self.runtime_availability
+            else self._runtime_available(target.id)
+        )
+        launch_verification = execution_target_has_launch_verification(
+            self._effective_registry(),
+            execution_target_id=target.id,
+            execution_evidence_journal=self.execution_evidence_journal,
+        )
+        execution_launch_authorized = bool(
+            target.enabled and runtime_available and launch_verification
+        )
+        if verified_evidence is not None:
+            execution_verified_stale = (
+                stale_since is not None
+                or (not launch_verification and not target.execution_verified)
+            )
         # M1 WP2: classify the target against the host-owned tier
         # table. ``None`` means the table is not wired (ad-hoc CLI) or
         # could not classify the target — both surface as ``tier=None``
@@ -2932,12 +2962,10 @@ class ControlPlaneService:
             runtime_id=target.runtime_id,
             enabled=target.enabled,
             execution_verified=execution_verified,
+            execution_launch_authorized=execution_launch_authorized,
+            execution_verification_observed_at=execution_verification_observed_at,
             execution_verified_stale=execution_verified_stale,
-            runtime_available=(
-                self.runtime_availability.get(target.id)
-                if target.id in self.runtime_availability
-                else self._runtime_available(target.id)
-            ),
+            runtime_available=runtime_available,
             observed_availability=observed,
             tier=tier_value,
             tier_match_reason=tier_match_reason,

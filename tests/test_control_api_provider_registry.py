@@ -20,14 +20,25 @@ registry carries one synthetic account per provider.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from personal_ai_orchestrator.activation import ActiveRoutingGate
 from personal_ai_orchestrator.control_api import ControlPlaneService
-from personal_ai_orchestrator.model_registry import ModelRegistry
+from personal_ai_orchestrator.execution_evidence import (
+    ExecutionEvidenceJournal,
+    ExecutionVerificationOutcome,
+    build_execution_evidence,
+)
+from personal_ai_orchestrator.model_registry import (
+    Account,
+    ExecutionTarget,
+    ModelRegistry,
+    ModelSKU,
+    Provider,
+)
 from personal_ai_orchestrator.provider_discovery import (
     AuthStatus,
     DiscoveryCycleOutcome,
@@ -148,6 +159,74 @@ def test_providers_uses_effective_registry_accounts_only(
     assert provider_view.evidence_source == "DISCOVERED_FROM_CATALOG"
     assert provider_view.auth_status == "AUTH_FROM_ENV_PRESENCE"
     assert provider_view.connection_state is None
+
+
+def _static_execution_registry(*, static_verified: bool = False) -> ModelRegistry:
+    return ModelRegistry(
+        providers={"p": Provider(id="p", display_name="Provider")},
+        accounts={"a": Account(id="a", provider_id="p", label="account")},
+        models={"m": ModelSKU(id="m", provider_id="p", display_name="Model")},
+        execution_targets={
+            "target": ExecutionTarget(
+                id="target",
+                model_sku_id="m",
+                account_id="a",
+                runtime_id="opencode",
+                enabled=True,
+                execution_verified=static_verified,
+            )
+        },
+    )
+
+
+def test_target_health_separates_history_from_current_launch_authority(
+    tmp_path: Path,
+) -> None:
+    runtime_state_root = tmp_path / "runtime-state"
+    runtime_state_root.mkdir()
+    journal = ExecutionEvidenceJournal(runtime_state_root)
+    old = datetime.now(UTC) - timedelta(days=31)
+    journal.append(
+        build_execution_evidence(
+            provider_id="p",
+            execution_target_id="target",
+            model_sku_id="m",
+            observed_at=old,
+            result=ExecutionVerificationOutcome.VERIFIED,
+            reason_code="TEST_EXPIRED",
+        )
+    )
+    service = ControlPlaneService(
+        registry=_static_execution_registry(),
+        store=SafetyKernelStore(tmp_path / "state.db"),
+        activation_gate=ActiveRoutingGate(),
+        runtime_availability={"target": True},
+        verification_journal=VerificationEvidenceJournal(runtime_state_root),
+        quota_availability_journal=QuotaAvailabilityJournal(runtime_state_root),
+        execution_evidence_journal=journal,
+    )
+    target = service.providers().providers[0].execution_targets[0]
+    assert target.execution_verified is True
+    assert target.execution_verified_stale is True
+    assert target.execution_launch_authorized is False
+    assert target.execution_verification_observed_at == old.isoformat()
+
+
+def test_target_health_static_verification_matches_launch_gate(tmp_path: Path) -> None:
+    runtime_state_root = tmp_path / "runtime-state"
+    runtime_state_root.mkdir()
+    service = ControlPlaneService(
+        registry=_static_execution_registry(static_verified=True),
+        store=SafetyKernelStore(tmp_path / "state.db"),
+        activation_gate=ActiveRoutingGate(),
+        runtime_availability={"target": True},
+        verification_journal=VerificationEvidenceJournal(runtime_state_root),
+        quota_availability_journal=QuotaAvailabilityJournal(runtime_state_root),
+    )
+    target = service.providers().providers[0].execution_targets[0]
+    assert target.execution_verified is True
+    assert target.execution_launch_authorized is True
+    assert target.execution_verification_observed_at is None
 
 
 def test_provider_connections_separate_connected_from_available_to_add(

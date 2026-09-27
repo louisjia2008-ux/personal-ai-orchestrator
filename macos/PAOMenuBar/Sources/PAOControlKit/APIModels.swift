@@ -522,6 +522,8 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
     public let runtimeId: String
     public let enabled: Bool
     public let executionVerified: Bool?
+    public let executionLaunchAuthorized: Bool?
+    public let executionVerificationObservedAt: String?
     public let executionVerifiedStale: Bool?
     public let runtimeAvailable: Bool?
     public let observedAvailability: ObservedAvailabilityView?
@@ -547,6 +549,7 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
 
     public var id: String { executionTargetId }
     public var isExecutionVerified: Bool { executionVerified ?? false }
+    public var isExecutionLaunchAuthorized: Bool { executionLaunchAuthorized ?? false }
     public var isExecutionVerifiedStale: Bool { executionVerifiedStale ?? false }
 
     enum CodingKeys: String, CodingKey {
@@ -555,6 +558,8 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
         case runtimeId = "runtime_id"
         case enabled
         case executionVerified = "execution_verified"
+        case executionLaunchAuthorized = "execution_launch_authorized"
+        case executionVerificationObservedAt = "execution_verification_observed_at"
         case executionVerifiedStale = "execution_verified_stale"
         case runtimeAvailable = "runtime_available"
         case observedAvailability = "observed_availability"
@@ -570,6 +575,8 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
         runtimeId: String,
         enabled: Bool,
         executionVerified: Bool? = nil,
+        executionLaunchAuthorized: Bool? = nil,
+        executionVerificationObservedAt: String? = nil,
         executionVerifiedStale: Bool? = nil,
         runtimeAvailable: Bool? = nil,
         observedAvailability: ObservedAvailabilityView? = nil,
@@ -583,6 +590,8 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
         self.runtimeId = runtimeId
         self.enabled = enabled
         self.executionVerified = executionVerified
+        self.executionLaunchAuthorized = executionLaunchAuthorized
+        self.executionVerificationObservedAt = executionVerificationObservedAt
         self.executionVerifiedStale = executionVerifiedStale
         self.runtimeAvailable = runtimeAvailable
         self.observedAvailability = observedAvailability
@@ -599,6 +608,12 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
         runtimeId = try container.decode(String.self, forKey: .runtimeId)
         enabled = try container.decode(Bool.self, forKey: .enabled)
         executionVerified = try container.decodeIfPresent(Bool.self, forKey: .executionVerified)
+        executionLaunchAuthorized = try container.decodeIfPresent(
+            Bool.self, forKey: .executionLaunchAuthorized
+        )
+        executionVerificationObservedAt = try container.decodeIfPresent(
+            String.self, forKey: .executionVerificationObservedAt
+        )
         executionVerifiedStale = try container.decodeIfPresent(
             Bool.self, forKey: .executionVerifiedStale
         )
