@@ -1,10 +1,11 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from personal_ai_orchestrator.execution_controller import (
     apply_verification_result,
+    execution_target_has_launch_verification,
     begin_verification,
     record_worker_exit,
     reconcile_workspace_truth,
@@ -12,6 +13,11 @@ from personal_ai_orchestrator.execution_controller import (
     validate_execution_target_launch,
 )
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
+from personal_ai_orchestrator.execution_evidence import (
+    ExecutionEvidenceJournal,
+    ExecutionVerificationOutcome,
+    build_execution_evidence,
+)
 from personal_ai_orchestrator.model_registry import (
     Account,
     EvidenceConfidence,
@@ -202,6 +208,83 @@ def test_launch_gate_denies_legacy_target_missing_execution_verified() -> None:
             execution_target_id="target",
             runtime_available=True,
         )
+
+
+def _launch_registry(*, static_verified: bool = False) -> ModelRegistry:
+    return ModelRegistry(
+        providers={"p": Provider(id="p", display_name="Provider")},
+        accounts={"a": Account(id="a", provider_id="p", label="account")},
+        models={"m": ModelSKU(id="m", provider_id="p", display_name="Model")},
+        execution_targets={
+            "target": ExecutionTarget(
+                id="target",
+                model_sku_id="m",
+                account_id="a",
+                runtime_id="opencode",
+                enabled=True,
+                execution_verified=static_verified,
+            )
+        },
+    )
+
+
+def test_launch_verification_accepts_static_authority() -> None:
+    registry = _launch_registry(static_verified=True)
+    assert execution_target_has_launch_verification(
+        registry, execution_target_id="target"
+    )
+    validate_execution_target_launch(
+        registry,
+        execution_target_id="target",
+        runtime_available=True,
+    )
+
+
+def test_launch_verification_requires_latest_fresh_verified_evidence(tmp_path: Path) -> None:
+    registry = _launch_registry()
+    journal = ExecutionEvidenceJournal(tmp_path)
+    now = datetime(2030, 1, 31, tzinfo=UTC)
+    journal.append(
+        build_execution_evidence(
+            provider_id="p",
+            execution_target_id="target",
+            model_sku_id="m",
+            observed_at=now - timedelta(days=29),
+            result=ExecutionVerificationOutcome.VERIFIED,
+            reason_code="TEST_RECENT",
+        )
+    )
+    assert execution_target_has_launch_verification(
+        registry,
+        execution_target_id="target",
+        execution_evidence_journal=journal,
+        now=now,
+    )
+
+    expired_now = now + timedelta(days=2)
+    assert not execution_target_has_launch_verification(
+        registry,
+        execution_target_id="target",
+        execution_evidence_journal=journal,
+        now=expired_now,
+    )
+
+    journal.append(
+        build_execution_evidence(
+            provider_id="p",
+            execution_target_id="target",
+            model_sku_id="m",
+            observed_at=expired_now,
+            result=ExecutionVerificationOutcome.QUOTA_BLOCKED,
+            reason_code="TEST_LATEST_BLOCKED",
+        )
+    )
+    assert not execution_target_has_launch_verification(
+        registry,
+        execution_target_id="target",
+        execution_evidence_journal=journal,
+        now=expired_now,
+    )
 
 
 def test_worker_success_requires_matching_persisted_verifier_evidence(tmp_path: Path) -> None:

@@ -35,6 +35,40 @@ _TERMINAL_STATES = {TaskState.FAILED, TaskState.CANCELLED, TaskState.COMPLETED}
 EXECUTION_EVIDENCE_MAX_AGE_SECONDS = 30 * 24 * 3600.0
 
 
+def execution_target_has_launch_verification(
+    registry: ModelRegistry,
+    *,
+    execution_target_id: str,
+    execution_evidence_journal: Any = None,
+    now: datetime | None = None,
+) -> bool:
+    """Return the exact verification authority used by the launch gate.
+
+    Historical VERIFIED evidence remains useful for diagnostics, but it only
+    authorizes launch when it is the latest target evidence and is within the
+    canonical age cap. A registry target explicitly marked execution_verified
+    remains authoritative by design.
+    """
+
+    target = registry.execution_targets.get(execution_target_id)
+    if target is None:
+        return False
+    if target.execution_verified:
+        return True
+    journal = execution_evidence_journal
+    if journal is None:
+        return False
+    try:
+        latest = journal.latest_for_target(execution_target_id)
+    except Exception:
+        return False
+    if latest is None or not latest.establishes_verified:
+        return False
+    observed_now = now or datetime.now(UTC)
+    age = (observed_now - latest.observed_at).total_seconds()
+    return 0 <= age <= EXECUTION_EVIDENCE_MAX_AGE_SECONDS
+
+
 def _render_result(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
 
@@ -104,19 +138,12 @@ def validate_execution_target_launch(
         raise RuntimeError("execution target is not in the registry") from None
     if not target.enabled:
         raise RuntimeError("execution target is disabled")
-    if not target.execution_verified:
-        journal = execution_evidence_journal
-        evidence_ok = False
-        if journal is not None:
-            try:
-                evidence_ok = journal.target_has_verified_evidence(
-                    execution_target_id,
-                    max_age_seconds=EXECUTION_EVIDENCE_MAX_AGE_SECONDS,
-                )
-            except Exception:
-                evidence_ok = False
-        if not evidence_ok:
-            raise RuntimeError("execution target has not been runtime-verified")
+    if not execution_target_has_launch_verification(
+        registry,
+        execution_target_id=execution_target_id,
+        execution_evidence_journal=execution_evidence_journal,
+    ):
+        raise RuntimeError("execution target has not been runtime-verified")
     if not runtime_available:
         raise RuntimeError("execution runtime is unavailable")
 
