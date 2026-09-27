@@ -149,6 +149,7 @@ _EVIDENCE_FRESH_SECONDS = 7 * 86_400
 #: step 1: UNKNOWN / UNCERTAIN_LOCKED / COOLDOWN never auto-dispatch).
 _AUTO_OK_QUOTA_STATES = {
     QuotaAvailabilityState.AVAILABLE_OBSERVED,
+    QuotaAvailabilityState.RECOVERED_OBSERVED,
     QuotaAvailabilityState.AVAILABLE_UNMETERED,
 }
 
@@ -647,8 +648,7 @@ def real_execution_recovery_proof(
     CONFLICT fails closed (``False``): it is NOT ordinary pre-worker.
 
     Lifecycles WITHOUT a real exact run (genuinely pre-worker:
-    NO_DISPATCH or EXACT_PREWORKER) return ``True``: the ordinary
-    abort/cleanup path owns them, and the two path classes must never be
+    NO_DISPATCH or EXACT_PREWORKER) return ``True``: the ordinary    abort/cleanup path owns them, and the two path classes must never be
     mixed. Real-run lifecycles without proof return ``False`` — callers
     must keep the metadata, refuse any discard and record a sanitized
     recovery failure.
@@ -1297,8 +1297,7 @@ class SupervisedAutoStep:
             if task.state is TaskState.AUTO_GRACE:
                 # The reservation was rejected before the executor ever
                 # moved the task (e.g. initiate_owner_dispatch validation).
-                self._abort_auto_task(task, now, reason=reason)
-                continue
+                self._abort_auto_task(task, now, reason=reason)                continue
             # Pre-worker supervised-auto BLOCKED for the CURRENT cycle:
             # the exact-reservation proof above is the durable evidence
             # this BLOCKED task belongs to this supervised-auto
