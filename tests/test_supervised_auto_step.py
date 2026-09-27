@@ -386,7 +386,9 @@ def test_hard_gate_evidence_stale_skips(tmp_path) -> None:
     env.tick(NOW)
     task = env.store.get_task("task-1")
     assert task.state is TaskState.READY
-    assert task.auto_reason == "no_admitted_target"
+    # The current launch-verification gate now rejects this before recommendation
+    # ranking, so the more specific host-owned reason is preserved.
+    assert task.auto_reason == "evidence_stale"
 
 
 def test_owner_execution_disabled_skips(tmp_path) -> None:

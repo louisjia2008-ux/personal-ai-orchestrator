@@ -58,7 +58,7 @@ def offline(monkeypatch):
 
 
 def _registry():
-    return build_pi_registry(PiDiscoveryResult(
+    registry = build_pi_registry(PiDiscoveryResult(
         discovered_at=NOW, pi_path="fixture-only-never-executed", pi_version="fixture",
         state=PiDiscoveryState.DISCOVERED,
         providers=(PiProviderDiscovery(
@@ -67,6 +67,15 @@ def _registry():
             observed_at=NOW,
         ),),
     ))
+    # This suite isolates quota-pool identity and cold-cache behavior. Give its
+    # synthetic targets static launch verification so #56's stricter
+    # verification gate cannot mask the quota condition under test.
+    return registry.model_copy(update={
+        "execution_targets": {
+            target_id: target.model_copy(update={"execution_verified": True})
+            for target_id, target in registry.execution_targets.items()
+        }
+    })
 
 
 def _refresh(root):
