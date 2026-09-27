@@ -471,6 +471,27 @@ class QuotaRefreshService:
     # Write path
     # ------------------------------------------------------------------
 
+    def authorize_owner_credential(self, provider_id: str, credential: str) -> None:
+        """Install an explicit read-only quota credential in memory only."""
+
+        self._credentials.authorize_owner_session(provider_id, credential)
+        with self._lock:
+            self._credential_source[provider_id] = CredentialSource.OWNER_SESSION.value
+
+    def revoke_owner_credential(self, provider_id: str) -> bool:
+        """Remove only the owner-session quota credential.
+
+        Execution/Pi authentication is a separate authority and is untouched.
+        """
+
+        removed = self._credentials.revoke_owner_session(provider_id)
+        with self._lock:
+            self._credential_source.pop(provider_id, None)
+        return removed
+
+    def owner_credential_present(self, provider_id: str) -> bool:
+        return self._credentials.owner_session_present(provider_id)
+
     def refresh(self, provider_id: str | None = None) -> tuple[QuotaProviderObservation, ...]:
         """Collect quota for one or all connected providers.
 

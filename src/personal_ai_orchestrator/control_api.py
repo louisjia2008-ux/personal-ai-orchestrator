@@ -65,6 +65,7 @@ from personal_ai_orchestrator.quota_availability import (
     QuotaAvailabilityJournal,
     QuotaAvailabilityState,
 )
+from personal_ai_orchestrator.quota_credentials import CredentialSource
 from personal_ai_orchestrator.quota_equivalent_capacity import (
     EquivalentCapacityEstimate,
     estimate_equivalent_capacity,
@@ -952,6 +953,18 @@ class QuotaRefreshResultView(_ViewModel):
 
     refreshed_provider_ids: tuple[str, ...] = ()
     overview: QuotaOverviewView
+
+
+class QuotaCredentialAuthorizationRequest(_ViewModel):
+    """Secret-bearing request; repr is deliberately suppressed."""
+
+    credential: str = Field(min_length=1, max_length=16_384, repr=False)
+
+
+class QuotaCredentialAuthorizationView(_ViewModel):
+    provider_id: str
+    authorized: bool
+    source: str
 
 
 class ProviderConnectionView(_ViewModel):
@@ -3818,6 +3831,48 @@ class ControlPlaneService:
             except Exception:
                 continue
 
+    def authorize_quota_credential(
+        self,
+        provider_id: str,
+        payload: dict[str, Any],
+    ) -> QuotaCredentialAuthorizationView:
+        """Accept explicit owner authority for read-only quota telemetry only."""
+
+        self._validate_identifier("provider_id", provider_id)
+        if self.quota_refresh_service is None:
+            raise ControlPlaneError(503, "quota_service_unavailable")
+        request = QuotaCredentialAuthorizationRequest.model_validate(payload)
+        try:
+            self.quota_refresh_service.authorize_owner_credential(
+                provider_id,
+                request.credential,
+            )
+        except KeyError as exc:
+            raise ControlPlaneError(404, "quota_provider_unsupported") from exc
+        except ValueError as exc:
+            raise ControlPlaneError(400, "invalid_quota_credential") from exc
+        return QuotaCredentialAuthorizationView(
+            provider_id=provider_id,
+            authorized=True,
+            source=CredentialSource.OWNER_SESSION.value,
+        )
+
+    def revoke_quota_credential(
+        self,
+        provider_id: str,
+    ) -> QuotaCredentialAuthorizationView:
+        """Revoke quota telemetry authority without touching execution auth."""
+
+        self._validate_identifier("provider_id", provider_id)
+        if self.quota_refresh_service is None:
+            raise ControlPlaneError(503, "quota_service_unavailable")
+        self.quota_refresh_service.revoke_owner_credential(provider_id)
+        return QuotaCredentialAuthorizationView(
+            provider_id=provider_id,
+            authorized=False,
+            source=CredentialSource.NONE.value,
+        )
+
     def active_status(self) -> ActiveStatusView:
         gate = self.activation_gate
         return ActiveStatusView(
@@ -4330,6 +4385,40 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                         return
                     target = QuotaRefreshRequest.model_validate(payload).provider_id
                 self._view(200, request_service.refresh_quota(target))
+                return
+
+            if count == 3 and rest[0] == "providers" and rest[2] == "quota-credential":
+                if method != "PUT":
+                    self._json(405, {"error": "method_not_allowed"})
+                    return
+                payload = self._read_json()
+                if payload is None:
+                    return
+                self._view(
+                    200,
+                    request_service.authorize_quota_credential(rest[1], payload),
+                )
+                return
+
+            if (
+                count == 4
+                and rest[0] == "providers"
+                and rest[2] == "quota-credential"
+                and rest[3] == "revoke"
+            ):
+                if method != "POST":
+                    self._json(405, {"error": "method_not_allowed"})
+                    return
+                # Parameterless revocation: the credential is never echoed back.
+                length = int(self.headers.get("content-length", "0") or 0)
+                if length > 0:
+                    payload = self._read_json()
+                    if payload is None:
+                        return
+                self._view(
+                    200,
+                    request_service.revoke_quota_credential(rest[1]),
+                )
                 return
 
             if (
