@@ -99,11 +99,7 @@ class Candidate:
             "tier": f"T{self.tier}",
             "quota_pool": self.pool,
             "pool_shared": len(self.windows) > 0
-            and sum(
-                1
-                for other in ALL_TARGETS
-                if other.metering == self.metering and other.windows
-            )
+            and sum(1 for other in ALL_TARGETS if other.metering == self.metering and other.windows)
             > 1,
             "quota": (
                 {w.kind: w.view() for w in self.windows}
@@ -174,9 +170,7 @@ def base_candidates() -> list[Candidate]:
 ALL_TARGETS = base_candidates()
 
 
-def patched(
-    candidates: list[Candidate], pool: str, **kw: Any
-) -> list[Candidate]:
+def patched(candidates: list[Candidate], pool: str, **kw: Any) -> list[Candidate]:
     """Patch every target sharing ``pool`` (pool-level quota is shared)."""
     windows = kw.pop("windows", None)
     out = []
@@ -209,10 +203,7 @@ SCENARIOS: list[Scenario] = [
         ),
         candidates=base_candidates(),
         expect="pi@zai-glm-5.3-flash|pi@minimax-m2.7",
-        note=(
-            "低强度任务,配额健康 → 轻快档(flash / m2.7)即可;"
-            "旗舰档留给高强度工作"
-        ),
+        note=("低强度任务,配额健康 → 轻快档(flash / m2.7)即可;旗舰档留给高强度工作"),
     ),
     Scenario(
         name="S2_complex_healthy",
@@ -266,10 +257,7 @@ SCENARIOS: list[Scenario] = [
     ),
     Scenario(
         name="S5_trivial_all_plans_pressed",
-        task_prompt=(
-            "pi task: 在 README.md 的安装小节追加一行依赖说明:"
-            "需要 python>=3.10。"
-        ),
+        task_prompt=("pi task: 在 README.md 的安装小节追加一行依赖说明:需要 python>=3.10。"),
         candidates=patched(
             patched(
                 base_candidates(),
@@ -377,9 +365,7 @@ SCENARIOS: list[Scenario] = [
 
 
 def jev_ask(state: Any, questions: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    payload = json.dumps(
-        {"state": state, "model": MODEL, "questions": questions}
-    ).encode()
+    payload = json.dumps({"state": state, "model": MODEL, "questions": questions}).encode()
     last_err: Exception | None = None
     for attempt in range(4):
         req = urllib.request.Request(
@@ -433,8 +419,7 @@ TIER_LEVELS = [
     "T0: single-file trivial edit, rename, doc tweak, or simple lookup; "
     "any capable coding model handles it",
     "T1: standard bugfix or small feature; needs solid general coding ability",
-    "T2: complex multi-file change, subtle concurrency bug, or meaningful "
-    "design tradeoffs",
+    "T2: complex multi-file change, subtle concurrency bug, or meaningful design tradeoffs",
     "T3: deep architectural reasoning, cross-system refactor, or "
     "verification-critical high-risk work",
 ]
@@ -446,9 +431,7 @@ def build_questions(admitted: list[Candidate]) -> dict[str, Any]:
         parts = [
             f"{c.model_sku_id}, capability tier T{c.tier}, "
             f"pool {c.pool}"
-            + (" (shared with other models on the same plan)"
-               if c.view()["pool_shared"]
-               else "")
+            + (" (shared with other models on the same plan)" if c.view()["pool_shared"] else "")
         ]
         for w in c.windows:
             v = w.view()
@@ -503,9 +486,7 @@ def tier_floor(tier_score: float) -> int:
     return min(3, max(1, int(tier_score + 0.5)))
 
 
-def deterministic_pick(
-    admitted: list[Candidate], tier_score: float
-) -> str:
+def deterministic_pick(admitted: list[Candidate], tier_score: float) -> str:
     """Tier-aware fallback: honour the task-tier floor, then prefer
     unpressed paid pools; unmetered relay is the last resort."""
 
@@ -513,10 +494,7 @@ def deterministic_pick(
     pool = [c for c in admitted if c.tier >= floor] or admitted
 
     def rank(c: Candidate) -> tuple[Any, ...]:
-        pressed = any(
-            pressure_label(w.used_fraction) in ("HIGH", "CRITICAL")
-            for w in c.windows
-        )
+        pressed = any(pressure_label(w.used_fraction) in ("HIGH", "CRITICAL") for w in c.windows)
         return (pressed, 0 if c.windows else 1, -c.tier)
 
     return sorted(pool, key=rank)[0].execution_target_id
@@ -554,9 +532,10 @@ def apply_policy(admitted: list[Candidate], answers: dict[str, Any]) -> dict[str
 
     chosen = next(c for c in admitted if c.execution_target_id == decision)
     defer_advice = None
-    if any(
-        pressure_label(w.used_fraction) == "CRITICAL" for w in chosen.windows
-    ) and defer["noul"] > DEFER_ADVICE_THRESHOLD:
+    if (
+        any(pressure_label(w.used_fraction) == "CRITICAL" for w in chosen.windows)
+        and defer["noul"] > DEFER_ADVICE_THRESHOLD
+    ):
         defer_advice = (
             f"chosen target's pool is CRITICAL-pressed and deferral looks "
             f"acceptable (noul {defer['noul']:.2f}) → consider queueing "
@@ -603,9 +582,7 @@ def main() -> int:
             },
             "now": NOW.isoformat(),
             "candidates": [c.view() for c in admitted],
-            "excluded_by_hard_gates": {
-                k: v for k, v in gated.items() if v
-            },
+            "excluded_by_hard_gates": {k: v for k, v in gated.items() if v},
         }
 
         body, meta = jev_ask(state, build_questions(admitted))

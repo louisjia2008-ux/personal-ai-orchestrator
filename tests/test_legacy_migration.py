@@ -135,9 +135,7 @@ def test_migration_skips_runtime_surfaces(tmp_path: Path) -> None:
 
 
 def test_migration_without_legacy_source_is_observable_skip(tmp_path: Path) -> None:
-    record = migrate_legacy_state(
-        tmp_path / "missing-legacy", tmp_path / "app-support"
-    )
+    record = migrate_legacy_state(tmp_path / "missing-legacy", tmp_path / "app-support")
     assert record.outcome is MigrationOutcome.SKIPPED
     record_path = (
         tmp_path / "app-support" / "runtime-state" / "migration" / "legacy-migration-v1.json"
@@ -155,9 +153,7 @@ def test_migration_never_overwrites_conflicting_destination(tmp_path: Path) -> N
 
     record = migrate_legacy_state(source, destination)
 
-    entry = next(
-        e for e in record.entries if e.relative_path == "runtime-state/snapshot.json"
-    )
+    entry = next(e for e in record.entries if e.relative_path == "runtime-state/snapshot.json")
     assert entry.outcome is EntryOutcome.SKIPPED_DEST_CONFLICT
     assert (destination / "runtime-state" / "snapshot.json").read_text(encoding="utf-8") == (
         '{"v": 2}'
@@ -168,9 +164,7 @@ def test_corrupt_migration_record_fails_closed(tmp_path: Path) -> None:
     source = tmp_path / "legacy"
     _make_legacy(source)
     destination = tmp_path / "app-support"
-    record_path = (
-        destination / "runtime-state" / "migration" / "legacy-migration-v1.json"
-    )
+    record_path = destination / "runtime-state" / "migration" / "legacy-migration-v1.json"
     record_path.parent.mkdir(parents=True, exist_ok=True)
     record_path.write_text("corrupt-not-json", encoding="utf-8")
 

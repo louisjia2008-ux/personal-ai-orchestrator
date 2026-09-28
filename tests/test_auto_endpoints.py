@@ -74,9 +74,7 @@ def test_ack_success_sets_acked_at_and_deadline(planned) -> None:
 def test_ack_stale_version_is_409(planned) -> None:
     task = planned.store.get_task("task-1")
     with pytest.raises(ControlPlaneError) as excinfo:
-        planned.service.auto_ack(
-            "task-1", {"task_state_version": task.state_version + 5}
-        )
+        planned.service.auto_ack("task-1", {"task_state_version": task.state_version + 5})
     assert excinfo.value.status == 409
     assert excinfo.value.code == "stale_task_state_version"
 
@@ -99,29 +97,21 @@ def test_ack_wrong_state_is_409(planned) -> None:
 
 def test_ack_duplicate_is_idempotent(planned) -> None:
     task = planned.store.get_task("task-1")
-    first = planned.service.auto_ack(
-        "task-1", {"task_state_version": task.state_version}
-    )
+    first = planned.service.auto_ack("task-1", {"task_state_version": task.state_version})
     # Retry with the STALE original version: already-acked → idempotent.
-    second = planned.service.auto_ack(
-        "task-1", {"task_state_version": task.state_version}
-    )
+    second = planned.service.auto_ack("task-1", {"task_state_version": task.state_version})
     assert second.auto_acked_at == first.auto_acked_at
     assert second.auto_grace_deadline_at == first.auto_grace_deadline_at
 
 
 def test_ack_retry_does_not_extend_deadline(planned) -> None:
     task = planned.store.get_task("task-1")
-    first = planned.service.auto_ack(
-        "task-1", {"task_state_version": task.state_version}
-    )
+    first = planned.service.auto_ack("task-1", {"task_state_version": task.state_version})
     deadline = first.auto_grace_deadline_at
     assert deadline is not None
     # A retry via the CURRENT version also keeps the original deadline.
     current = planned.store.get_task("task-1")
-    second = planned.service.auto_ack(
-        "task-1", {"task_state_version": current.state_version}
-    )
+    second = planned.service.auto_ack("task-1", {"task_state_version": current.state_version})
     assert second.auto_grace_deadline_at == deadline
     assert planned.store.get_task("task-1").auto_grace_deadline_at == deadline
 
@@ -150,9 +140,7 @@ def test_veto_success_returns_ready_and_clears_everything(planned) -> None:
     planned.tick(NOW + timedelta(seconds=5))
     assert planned.store.get_task("task-1").state is TaskState.READY
     assert planned.shadow.load_pending_all() == ()
-    vetoed = [
-        e for e in planned.store.audit_events("task-1") if e["event_type"] == "AUTO_VETOED"
-    ]
+    vetoed = [e for e in planned.store.audit_events("task-1") if e["event_type"] == "AUTO_VETOED"]
     assert len(vetoed) == 1
     assert vetoed[0]["payload"]["request_id"] == "veto-1"
 
@@ -181,16 +169,12 @@ def test_veto_duplicate_replays_idempotently(planned) -> None:
         "task-1", {"request_id": "veto-1", "task_state_version": first.state_version}
     )
     assert second.state == "READY"
-    vetoed = [
-        e for e in planned.store.audit_events("task-1") if e["event_type"] == "AUTO_VETOED"
-    ]
+    vetoed = [e for e in planned.store.audit_events("task-1") if e["event_type"] == "AUTO_VETOED"]
     assert len(vetoed) == 1
 
 
 def test_cancel_on_auto_task_behaves_as_veto(planned) -> None:
-    view = planned.service.cancel_task(
-        "task-1", {"request_id": "cancel-auto-1"}
-    )
+    view = planned.service.cancel_task("task-1", {"request_id": "cancel-auto-1"})
     assert view.cancelled_now is True
     assert view.task.state == "READY"
     assert view.task.auto_decision_id is None
@@ -198,9 +182,7 @@ def test_cancel_on_auto_task_behaves_as_veto(planned) -> None:
         "SELECT scheduling_policy FROM tasks WHERE task_id='task-1'"
     ).fetchone()
     assert row["scheduling_policy"] == "MANUAL"
-    vetoed = [
-        e for e in planned.store.audit_events("task-1") if e["event_type"] == "AUTO_VETOED"
-    ]
+    vetoed = [e for e in planned.store.audit_events("task-1") if e["event_type"] == "AUTO_VETOED"]
     assert any(e["payload"]["reason"] == "owner_cancel" for e in vetoed)
     assert planned.shadow.load_pending_all() == ()
 
@@ -223,9 +205,7 @@ def test_dispatch_now_success_reserves_and_audits(planned) -> None:
     assert view.execution_target_id == "m3-sub"
     assert view.status == "RESERVED"
     dispatched = [
-        e
-        for e in planned.store.audit_events("task-1")
-        if e["event_type"] == "AUTO_DISPATCHED"
+        e for e in planned.store.audit_events("task-1") if e["event_type"] == "AUTO_DISPATCHED"
     ]
     assert len(dispatched) == 1
     assert dispatched[0]["payload"]["trigger"] == "dispatch_now"
@@ -259,9 +239,7 @@ def test_dispatch_now_wrong_mode_is_409(planned) -> None:
 def test_dispatch_now_missing_frozen_decision_is_409(planned) -> None:
     task = planned.store.get_task("task-1")
     # Blow the frozen decision away while keeping the AUTO_GRACE state.
-    planned.store.connection.execute(
-        "DELETE FROM routing_decisions WHERE task_id='task-1'"
-    )
+    planned.store.connection.execute("DELETE FROM routing_decisions WHERE task_id='task-1'")
     with pytest.raises(ControlPlaneError) as excinfo:
         _dispatch_now(planned, task.state_version)
     assert excinfo.value.status == 409
@@ -304,9 +282,7 @@ def test_dispatch_now_requires_auto_grace_state(tmp_path) -> None:
 
 def test_endpoints_404_unknown_task(planned) -> None:
     with pytest.raises(ControlPlaneError) as excinfo:
-        planned.service.auto_ack(
-            "task-does-not-exist", {"task_state_version": 0}
-        )
+        planned.service.auto_ack("task-does-not-exist", {"task_state_version": 0})
     assert excinfo.value.status == 404
     with pytest.raises(ControlPlaneError) as excinfo:
         planned.service.auto_veto(
@@ -315,9 +291,7 @@ def test_endpoints_404_unknown_task(planned) -> None:
         )
     assert excinfo.value.status == 404
     with pytest.raises(ControlPlaneError) as excinfo:
-        planned.service.auto_dispatch_now(
-            "task-does-not-exist", {"task_state_version": 0}
-        )
+        planned.service.auto_dispatch_now("task-does-not-exist", {"task_state_version": 0})
     assert excinfo.value.status == 404
 
 
@@ -335,9 +309,7 @@ def test_endpoints_http_wire(planned) -> None:
     try:
         task = planned.store.get_task("task-1")
         # 400: malformed body over the wire.
-        body, status = _raw_post(
-            _path, "/v1/tasks/task-1/auto/ack", {"unexpected": True}
-        )
+        body, status = _raw_post(_path, "/v1/tasks/task-1/auto/ack", {"unexpected": True})
         assert status == 400
         assert body["error"] == "invalid_json_schema"
         # 404: unknown task.

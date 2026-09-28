@@ -90,9 +90,7 @@ def test_admission_failure_discards_pending(tmp_path) -> None:
     task = env.store.get_task("task-1")
     # Current-cycle request id: reconciliation only honors the dispatch
     # row that belongs to the task's CURRENT auto decision.
-    request_id = (
-        f"supervised-auto-dispatch-{task.auto_decision_id}"
-    )
+    request_id = f"supervised-auto-dispatch-{task.auto_decision_id}"
     env.store.reserve_owner_dispatch(
         dispatch_id=f"owner-dispatch-{request_id}",
         request_id=request_id,
@@ -238,10 +236,7 @@ def test_verified_dispatch_finalizes_pending_exactly_once(tmp_path) -> None:
         assert observations[0].task_id == "task-1"
         assert observations[0].verified is True
         assert observations[0].execution_success is True
-        assert (
-            observations[0].scheduler_execution_target_id
-            == "zai-coding-plan-glm-5.3"
-        )
+        assert observations[0].scheduler_execution_target_id == "zai-coding-plan-glm-5.3"
         # Metadata cleared off the active row (§32) and the dispatch is
         # FINISHED with the SUPERVISED_AUTO authority.
         assert snap["task"].auto_decision_id is None

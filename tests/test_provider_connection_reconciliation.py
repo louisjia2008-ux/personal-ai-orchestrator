@@ -93,9 +93,7 @@ def test_catalog_only_provider_is_not_connected() -> None:
     projection = project_connections(ProviderConnectionRegistry(), discovery)
 
     assert projection.connected == ()
-    assert [item["provider_id"] for item in projection.available_to_add] == [
-        "zai-coding-plan"
-    ]
+    assert [item["provider_id"] for item in projection.available_to_add] == ["zai-coding-plan"]
 
 
 def test_catalog_only_provider_is_not_an_import_candidate() -> None:
@@ -193,9 +191,7 @@ def test_minimax_region_and_plan_scope_is_preserved() -> None:
 
     candidates = build_import_candidates(ProviderConnectionRegistry(), discovery)
 
-    assert [candidate.provider_id for candidate in candidates] == [
-        "minimax-cn-coding-plan"
-    ]
+    assert [candidate.provider_id for candidate in candidates] == ["minimax-cn-coding-plan"]
     assert candidates[0].region == "CN"
     assert candidates[0].plan_surface == "Coding Plan"
 
@@ -258,9 +254,7 @@ def test_plan_surfaces_are_labelled_distinctly() -> None:
         _provider("minimax-cn-coding-plan", region="CN"),
     )
     projection = project_connections(ProviderConnectionRegistry(), discovery)
-    surfaces = {
-        item["provider_id"]: item["plan_surface"] for item in projection.available_to_add
-    }
+    surfaces = {item["provider_id"]: item["plan_surface"] for item in projection.available_to_add}
 
     assert surfaces == {
         "minimax-cn": "Token Plan",
@@ -290,9 +284,7 @@ def test_import_requires_owner_action_and_does_not_happen_implicitly() -> None:
     assert len(projection.import_candidates) == 1
     assert registry.connected_provider_ids() == frozenset()
 
-    imported = import_connections(
-        registry, discovery, provider_ids=("zai-coding-plan",)
-    )
+    imported = import_connections(registry, discovery, provider_ids=("zai-coding-plan",))
     assert imported.connected_provider_ids() == frozenset({"zai-coding-plan"})
 
 

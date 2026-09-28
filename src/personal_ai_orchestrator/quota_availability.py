@@ -126,8 +126,7 @@ class QuotaAvailabilityEvidence(RegistryModel):
             if now >= self.cooldown_until:
                 if (
                     self.measurement_source is MeasurementSource.LOCALLY_MEASURED
-                    and self.previous_state_baseline
-                    is QuotaAvailabilityState.AVAILABLE_UNMETERED
+                    and self.previous_state_baseline is QuotaAvailabilityState.AVAILABLE_UNMETERED
                 ):
                     return QuotaAvailabilityState.AVAILABLE_UNMETERED
                 return QuotaAvailabilityState.RECOVERY_PROBE_DUE
@@ -251,9 +250,7 @@ def observe_exhaustion(
         # when the cooldown expires (windowed targets return to
         # ``RECOVERY_PROBE_DUE``; the ``baseline`` field makes the
         # asymmetry explicit rather than implicit).
-        previous_state_baseline=(
-            previous.state if previous is not None else None
-        ),
+        previous_state_baseline=(previous.state if previous is not None else None),
     )
 
 

@@ -57,8 +57,7 @@ def _scheduler_explanation(
                 "availability_evidence_state": evaluation.observed_availability_state,
                 "scarcity_class": evaluation.scarcity_class.value,
                 "score_components": [
-                    component.model_dump(mode="json")
-                    for component in evaluation.score_components
+                    component.model_dump(mode="json") for component in evaluation.score_components
                 ],
             }
         )

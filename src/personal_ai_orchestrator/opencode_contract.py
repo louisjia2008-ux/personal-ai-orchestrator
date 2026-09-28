@@ -141,8 +141,7 @@ def resolve_adapter_outcome(
             target_model=decision.selected_model,
             decision_id=decision.decision_id,
             reason=(
-                "supervised-auto decision is host-executed and "
-                "cannot switch the current session"
+                "supervised-auto decision is host-executed and cannot switch the current session"
             ),
         )
     if not decision.switch_requested or decision.selected_model is None:

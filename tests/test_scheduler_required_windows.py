@@ -105,9 +105,7 @@ def test_missing_configured_weekly_window_fails_admission() -> None:
                 source=src,
             ),
         ),
-        pool_memberships=(
-            PoolMembership(pool=PoolKind.WORKER, model_sku_id="m", priority=1),
-        ),
+        pool_memberships=(PoolMembership(pool=PoolKind.WORKER, model_sku_id="m", priority=1),),
     )
 
     decision = route_task(

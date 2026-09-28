@@ -268,12 +268,14 @@ def test_legal_transition_auto_planned_to_auto_grace(tmp_path) -> None:
         )
         ready = store.transition_task("t1", TaskState.READY)
         planned = store.transition_task(
-            "t1", TaskState.AUTO_PLANNED,
+            "t1",
+            TaskState.AUTO_PLANNED,
             expected_version=ready.state_version,
             auto_decision_id="auto-dec-1",
         )
         grace = store.transition_task(
-            "t1", TaskState.AUTO_GRACE,
+            "t1",
+            TaskState.AUTO_GRACE,
             expected_version=planned.state_version,
             reason="entering grace",
             auto_grace_deadline_at="2026-09-07T00:02:00+00:00",
@@ -308,13 +310,15 @@ def test_illegal_transition_auto_planned_to_running_fails(tmp_path) -> None:
         )
         ready = store.transition_task("t1", TaskState.READY)
         planned = store.transition_task(
-            "t1", TaskState.AUTO_PLANNED,
+            "t1",
+            TaskState.AUTO_PLANNED,
             expected_version=ready.state_version,
             auto_decision_id="auto-dec-1",
         )
         with pytest.raises((ValueError, RuntimeError)):
             store.transition_task(
-                "t1", TaskState.RUNNING,
+                "t1",
+                TaskState.RUNNING,
                 expected_version=planned.state_version,
             )
         # State unchanged.
@@ -352,17 +356,20 @@ def test_illegal_transition_auto_grace_to_running_fails(tmp_path) -> None:
         )
         ready = store.transition_task("t1", TaskState.READY)
         planned = store.transition_task(
-            "t1", TaskState.AUTO_PLANNED,
+            "t1",
+            TaskState.AUTO_PLANNED,
             expected_version=ready.state_version,
             auto_decision_id="auto-dec-1",
         )
         grace = store.transition_task(
-            "t1", TaskState.AUTO_GRACE,
+            "t1",
+            TaskState.AUTO_GRACE,
             expected_version=planned.state_version,
         )
         # WP5a-2: the map edge now exists...
         running = store.transition_task(
-            "t1", TaskState.RUNNING,
+            "t1",
+            TaskState.RUNNING,
             expected_version=grace.state_version,
         )
         assert running.state is TaskState.RUNNING
@@ -399,11 +406,13 @@ def test_terminal_states_do_not_enter_auto(tmp_path) -> None:
         # Drive into FAILED.
         ready = store.transition_task("t1", TaskState.READY)
         running = store.transition_task(
-            "t1", TaskState.RUNNING,
+            "t1",
+            TaskState.RUNNING,
             expected_version=ready.state_version,
         )
         store.transition_task(
-            "t1", TaskState.FAILED,
+            "t1",
+            TaskState.FAILED,
             expected_version=running.state_version,
             reason="forced",
         )
@@ -442,7 +451,8 @@ def test_state_version_increments_exactly_once(tmp_path) -> None:
         ready = store.transition_task("t1", TaskState.READY)
         assert ready.state_version == task.state_version + 1
         planned = store.transition_task(
-            "t1", TaskState.AUTO_PLANNED,
+            "t1",
+            TaskState.AUTO_PLANNED,
             expected_version=ready.state_version,
             auto_decision_id="auto-dec-1",
         )
@@ -478,13 +488,16 @@ def test_transaction_rollback_preserves_state_and_version(tmp_path) -> None:
 
         # Inject an audit failure inside the AUTO_PLANNED transition.
         original_audit = store._audit
+
         def fail_audit(*args, **kwargs):
             raise RuntimeError("injected auto_planned audit failure")
+
         store._audit = fail_audit  # type: ignore[assignment]
         try:
             with pytest.raises(RuntimeError, match="auto_planned audit failure"):
                 store.transition_task(
-                    "t1", TaskState.AUTO_PLANNED,
+                    "t1",
+                    TaskState.AUTO_PLANNED,
                     expected_version=ready.state_version,
                     auto_decision_id="auto-dec-1",
                 )
@@ -526,13 +539,15 @@ def test_restart_persistence_of_auto_state(tmp_path) -> None:
         )
         ready = store.transition_task("t1", TaskState.READY)
         planned = store.transition_task(
-            "t1", TaskState.AUTO_PLANNED,
+            "t1",
+            TaskState.AUTO_PLANNED,
             expected_version=ready.state_version,
             auto_decision_id="auto-dec-1",
             auto_reason="AUTO_PLANNED{target=m3-sub}",
         )
         _grace = store.transition_task(
-            "t1", TaskState.AUTO_GRACE,
+            "t1",
+            TaskState.AUTO_GRACE,
             expected_version=planned.state_version,
             auto_grace_deadline_at="2026-09-07T00:02:00+00:00",
         )
@@ -578,12 +593,14 @@ def test_auto_planned_veto_back_to_ready(tmp_path) -> None:
         )
         ready = store.transition_task("t1", TaskState.READY)
         planned = store.transition_task(
-            "t1", TaskState.AUTO_PLANNED,
+            "t1",
+            TaskState.AUTO_PLANNED,
             expected_version=ready.state_version,
             auto_decision_id="auto-dec-1",
         )
         vetoed = store.transition_task(
-            "t1", TaskState.READY,
+            "t1",
+            TaskState.READY,
             expected_version=planned.state_version,
             reason="owner veto",
         )

@@ -312,9 +312,7 @@ def policy_from_name(
         update={
             "objective": objective,
             "manual_execution_target_id": (
-                manual_execution_target_id
-                if objective is RoutingObjective.MANUAL
-                else None
+                manual_execution_target_id if objective is RoutingObjective.MANUAL else None
             ),
         }
     )
@@ -346,9 +344,9 @@ def _capability_fit(registry: ModelRegistry, task: TaskProfile, model_sku_id: st
     model = registry.models[model_sku_id]
     if not task.required_capabilities:
         return 0.5
-    return sum(model.capabilities.scores.get(name, 0.0) for name in task.required_capabilities) / len(
-        task.required_capabilities
-    )
+    return sum(
+        model.capabilities.scores.get(name, 0.0) for name in task.required_capabilities
+    ) / len(task.required_capabilities)
 
 
 def _membership_targets(
@@ -447,9 +445,7 @@ def _score_candidate(
     # and ``score_now``.
     freshness_value = _freshness_value(
         observed_at=freshness_observed_at,
-        now=score_now if score_now is not None else (
-            freshness_observed_at or datetime.now(UTC)
-        ),
+        now=score_now if score_now is not None else (freshness_observed_at or datetime.now(UTC)),
     )
 
     # Six-term score; every weight is consumed even when the
@@ -476,29 +472,48 @@ def _score_candidate(
     # drift.
     auxiliary_terms: list[tuple[str, float, EvidenceConfidence, str]] = []
     auxiliary_terms.append(
-        ("membership_weight_bonus", membership_weight * 2.0,
-         EvidenceConfidence.UNKNOWN, "legacy_nudge")
+        (
+            "membership_weight_bonus",
+            membership_weight * 2.0,
+            EvidenceConfidence.UNKNOWN,
+            "legacy_nudge",
+        )
     )
     auxiliary_terms.append(
-        ("priority_penalty", -max(priority - 1, 0) * 1.5,
-         EvidenceConfidence.UNKNOWN, "legacy_nudge")
+        (
+            "priority_penalty",
+            -max(priority - 1, 0) * 1.5,
+            EvidenceConfidence.UNKNOWN,
+            "legacy_nudge",
+        )
     )
     if telemetry.success_prior is not None:
         auxiliary_terms.append(
-            ("success_prior_bonus",
-             quality_weight * telemetry.success_prior * 20.0,
-             EvidenceConfidence.UNKNOWN, "legacy_nudge")
+            (
+                "success_prior_bonus",
+                quality_weight * telemetry.success_prior * 20.0,
+                EvidenceConfidence.UNKNOWN,
+                "legacy_nudge",
+            )
         )
     if pace is not None:
         if pace > DEFAULT_SCARCITY_THRESHOLDS.surplus_upper:
             auxiliary_terms.append(
-                ("scarcity_surplus", headroom_weight * 5.0,
-                 EvidenceConfidence.UNKNOWN, "legacy_nudge")
+                (
+                    "scarcity_surplus",
+                    headroom_weight * 5.0,
+                    EvidenceConfidence.UNKNOWN,
+                    "legacy_nudge",
+                )
             )
         elif pace < DEFAULT_SCARCITY_THRESHOLDS.conserve_below:
             auxiliary_terms.append(
-                ("scarcity_conserve", -headroom_weight * 5.0,
-                 EvidenceConfidence.UNKNOWN, "legacy_nudge")
+                (
+                    "scarcity_conserve",
+                    -headroom_weight * 5.0,
+                    EvidenceConfidence.UNKNOWN,
+                    "legacy_nudge",
+                )
             )
 
     auxiliary_score = sum(value for _, value, _, _ in auxiliary_terms)
@@ -525,9 +540,7 @@ def _score_candidate(
         )
     )
     headroom_confidence = (
-        EvidenceConfidence.UNKNOWN
-        if headroom_min is None
-        else EvidenceConfidence.EXACT
+        EvidenceConfidence.UNKNOWN if headroom_min is None else EvidenceConfidence.EXACT
     )
     score_components.append(
         ScoreComponent(
@@ -571,7 +584,8 @@ def _score_candidate(
         EvidenceConfidence.EXACT
         if freshness_observed_at is not None
         and score_now is not None
-        and 0 <= (score_now - freshness_observed_at).total_seconds() / 86_400.0
+        and 0
+        <= (score_now - freshness_observed_at).total_seconds() / 86_400.0
         <= _EVIDENCE_FRESH_DAYS
         else EvidenceConfidence.UNKNOWN
     )
@@ -639,11 +653,7 @@ def _hard_requirement_reasons(
     # task's min_tier, hard-eliminate. Missing window_started_at or
     # missing used_fraction short-circuits the smoothing gate (the
     # recommender cannot reach a verdict without data).
-    if (
-        tier is not None
-        and tier != task.min_tier
-        and headroom_min is not None
-    ):
+    if tier is not None and tier != task.min_tier and headroom_min is not None:
         smoothing_tripped = False
         try:
             for binding in registry.quota_bindings:
@@ -672,9 +682,7 @@ def _hard_requirement_reasons(
         except Exception:
             smoothing_tripped = False
         if smoothing_tripped:
-            reasons.append(
-                f"rolling_window_smoothing(tier={tier},min_tier={task.min_tier})"
-            )
+            reasons.append(f"rolling_window_smoothing(tier={tier},min_tier={task.min_tier})")
 
     for capability, floor in sorted(task.required_capabilities.items()):
         observed = model.capabilities.scores.get(capability, 0.0)
@@ -822,9 +830,7 @@ def evaluate_target(
         # confidence as ESTIMATED so the UI can label the row.
         if assessment.pressure is BurnPressure.STALE or window_start_inferred:
             pressure_confidence = EvidenceConfidence.ESTIMATED
-        pressure_source = (
-            "burn_curve.inferred" if window_start_inferred else "burn_curve.weekly"
-        )
+        pressure_source = "burn_curve.inferred" if window_start_inferred else "burn_curve.weekly"
 
     reasons = _hard_requirement_reasons(
         registry,
@@ -898,7 +904,10 @@ def evaluate_target(
             reasons.append("one or more binding quota windows have unknown pace")
         if remaining is None:
             reasons.append("one or more binding quota windows have unknown remaining quota")
-        if policy.require_burn_estimate_for_subscription and task.predicted_quota_fraction_p90 is None:
+        if (
+            policy.require_burn_estimate_for_subscription
+            and task.predicted_quota_fraction_p90 is None
+        ):
             reasons.append("task quota burn estimate unavailable")
 
     rule = None
@@ -923,7 +932,12 @@ def evaluate_target(
         if remaining is None
         else max(0.0, remaining - pool.reserve_fraction - policy.uncertainty_margin_fraction)
     )
-    if is_metered_subscription and predicted is not None and usable is not None and predicted > usable:
+    if (
+        is_metered_subscription
+        and predicted is not None
+        and usable is not None
+        and predicted > usable
+    ):
         reasons.append(f"task burn {predicted:.3f} exceeds usable quota headroom {usable:.3f}")
 
     scarcity = DEFAULT_SCARCITY_THRESHOLDS.classify(pace)
@@ -969,7 +983,9 @@ def evaluate_target(
     reasons.extend(
         [
             "hard eligibility gates passed",
-            "task burn fits usable quota headroom" if is_metered_subscription else "quota admission passed",
+            "task burn fits usable quota headroom"
+            if is_metered_subscription
+            else "quota admission passed",
             f"capability fit {capability_fit:.3f}",
             f"scarcity {scarcity.value}",
         ]

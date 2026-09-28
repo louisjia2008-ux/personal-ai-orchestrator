@@ -127,8 +127,7 @@ class RuntimeDispatchExecutor:
                     request_id,
                     failure_code="SHARED_QUOTA_POOL_BLOCKED",
                     failure_reason=(
-                        "shared quota pool is blocked by observed sibling-runtime "
-                        f"state {state}"
+                        f"shared quota pool is blocked by observed sibling-runtime state {state}"
                     ),
                 )
                 return

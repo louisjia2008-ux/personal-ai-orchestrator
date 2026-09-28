@@ -118,9 +118,7 @@ def test_project_disable_mid_grace_aborts(tmp_path) -> None:
     env.tick(NOW + timedelta(seconds=301))
     assert env.executor is not None and env.executor.unique_calls == []
     assert env.store.get_task("task-1").state is TaskState.READY
-    aborted = [
-        e for e in env.store.audit_events("task-1") if e["event_type"] == "AUTO_ABORTED"
-    ]
+    aborted = [e for e in env.store.audit_events("task-1") if e["event_type"] == "AUTO_ABORTED"]
     assert any(e["payload"]["reason"] == "project_auto_disabled" for e in aborted)
 
 

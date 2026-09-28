@@ -175,9 +175,7 @@ def test_fourth_accepted_request_exceeds_host_budget() -> None:
 
 
 def test_incomplete_request_lifecycle_fails_closed() -> None:
-    outcome = extract_requests(
-        _accepted_start("call-1", "Inspect module A", "Need help")
-    )
+    outcome = extract_requests(_accepted_start("call-1", "Inspect module A", "Need help"))
 
     assert outcome.valid is False
     assert outcome.parse_error == "incomplete_request_lifecycle"

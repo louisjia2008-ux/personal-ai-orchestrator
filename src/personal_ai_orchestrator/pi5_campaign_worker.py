@@ -6,9 +6,7 @@ import re
 
 from personal_ai_orchestrator.pi5_identity import CampaignExecutionRole
 
-_CAMPAIGN_PARENT_TASK_ID = re.compile(
-    r"^pi5b3g-[0-9a-f]{32}-obs[1-3]-parent-task$"
-)
+_CAMPAIGN_PARENT_TASK_ID = re.compile(r"^pi5b3g-[0-9a-f]{32}-obs[1-3]-parent-task$")
 _DELEGATED_CHILD_TASK_ID = re.compile(r"^pi5-child-[0-9a-f]{20}$")
 
 

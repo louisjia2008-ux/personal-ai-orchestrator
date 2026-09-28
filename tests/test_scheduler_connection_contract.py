@@ -98,9 +98,7 @@ def _manager(
     save(result, runtime_state_root=tmp_path)
     monkeypatch.setattr(
         "personal_ai_orchestrator.provider_registry_manager.discover",
-        lambda **_kwargs: DiscoveryCycleOutcome(
-            result=result, error_code=None, error_message=None
-        ),
+        lambda **_kwargs: DiscoveryCycleOutcome(result=result, error_code=None, error_message=None),
     )
     return ProviderRegistryManager(runtime_state_root=tmp_path)
 
@@ -216,12 +214,8 @@ def _registry_with_two_targets() -> ModelRegistry:
             "p-modest": Provider(id="p-modest", display_name="Modest Provider"),
         },
         accounts={
-            "acct-strong": Account(
-                id="acct-strong", provider_id="p-strong", label="subscription"
-            ),
-            "acct-modest": Account(
-                id="acct-modest", provider_id="p-modest", label="subscription"
-            ),
+            "acct-strong": Account(id="acct-strong", provider_id="p-strong", label="subscription"),
+            "acct-modest": Account(id="acct-modest", provider_id="p-modest", label="subscription"),
         },
         plans={
             "plan-strong": Plan(
@@ -246,17 +240,13 @@ def _registry_with_two_targets() -> ModelRegistry:
                 id="sku-strong",
                 provider_id="p-strong",
                 display_name="Strong model",
-                capabilities=CapabilityProfile(
-                    scores={"debugging": 0.99, "reasoning": 0.99}
-                ),
+                capabilities=CapabilityProfile(scores={"debugging": 0.99, "reasoning": 0.99}),
             ),
             "sku-modest": ModelSKU(
                 id="sku-modest",
                 provider_id="p-modest",
                 display_name="Modest model",
-                capabilities=CapabilityProfile(
-                    scores={"debugging": 0.82, "reasoning": 0.8}
-                ),
+                capabilities=CapabilityProfile(scores={"debugging": 0.82, "reasoning": 0.8}),
             ),
         },
         execution_targets={

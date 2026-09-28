@@ -120,9 +120,7 @@ async def test_broker_mints_identity_and_disables_child_delegation() -> None:
 @pytest.mark.asyncio
 async def test_broker_context_budget_rejects_next_schema_valid_request() -> None:
     port = FakeChildPort()
-    session = DelegationBrokerSession(
-        context=_context(max_children=2), child_port=port
-    )
+    session = DelegationBrokerSession(context=_context(max_children=2), child_port=port)
 
     responses = [await session.handle(_request(index)) for index in range(1, 4)]
 
@@ -183,9 +181,7 @@ async def test_child_identity_mismatch_never_surfaces_as_completed() -> None:
                 verified=True,
             )
 
-    session = DelegationBrokerSession(
-        context=_context(), child_port=WrongIdentityPort()
-    )
+    session = DelegationBrokerSession(context=_context(), child_port=WrongIdentityPort())
     response = await session.handle(_request(1))
 
     assert response.status is DelegationBrokerStatus.ERROR

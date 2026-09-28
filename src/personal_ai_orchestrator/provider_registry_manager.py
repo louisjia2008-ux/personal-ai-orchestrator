@@ -389,9 +389,7 @@ class ProviderRegistryManager:
             )
             save_connections(next_registry, runtime_state_root=self._runtime_state_root)
             self._connections = next_registry
-            return tuple(
-                self._connections.connections[provider_id] for provider_id in provider_ids
-            )
+            return tuple(self._connections.connections[provider_id] for provider_id in provider_ids)
 
     def connection_projection(self):
         with self._lock:
@@ -524,6 +522,7 @@ class ProviderRegistryManager:
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
+
 
 def _empty_registry() -> ModelRegistry:
     return ModelRegistry()

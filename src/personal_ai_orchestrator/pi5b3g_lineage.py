@@ -90,9 +90,7 @@ def validate_pi5b3g_child_lineage(
     store: SafetyKernelStore,
     child_task_id: str,
     expected: CampaignObservationExecutionIdentities,
-    current_campaign_parents: Mapping[
-        str, CampaignObservationExecutionIdentities
-    ],
+    current_campaign_parents: Mapping[str, CampaignObservationExecutionIdentities],
 ) -> Pi5b3gLineageValidationResult:
     """Validate one child against host-owned current-campaign identities.
 

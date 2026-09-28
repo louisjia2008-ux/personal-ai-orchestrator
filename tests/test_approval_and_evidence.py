@@ -144,10 +144,13 @@ def test_shadow_review_eligibility_cannot_create_active_owner_approval(tmp_path:
 
     assert summary.review_eligible is True
     assert gate.authorized is False
-    assert authority.is_approved(
-        "missing-owner-approval",
-        kind=ApprovalKind.PRODUCTION_ACTIVE_ROUTING,
-    ) is False
+    assert (
+        authority.is_approved(
+            "missing-owner-approval",
+            kind=ApprovalKind.PRODUCTION_ACTIVE_ROUTING,
+        )
+        is False
+    )
 
 
 def _result(
@@ -192,23 +195,35 @@ def test_retry_policy_never_retries_engineering_failure_by_default() -> None:
     )
     assert classify_failure(result) is VerificationFailureClass.COMMAND_FAILURE
     policy = RetryPolicy(max_known_flaky_infra_retries=1)
-    assert policy.should_retry(
-        failure_class=VerificationFailureClass.COMMAND_FAILURE,
-        previous_retries=0,
-        host_attested_known_flaky_infra=True,
-    ) is False
-    assert policy.should_retry(
-        failure_class=VerificationFailureClass.KNOWN_FLAKY_INFRA,
-        previous_retries=0,
-        host_attested_known_flaky_infra=False,
-    ) is False
-    assert policy.should_retry(
-        failure_class=VerificationFailureClass.KNOWN_FLAKY_INFRA,
-        previous_retries=0,
-        host_attested_known_flaky_infra=True,
-    ) is True
-    assert policy.should_retry(
-        failure_class=VerificationFailureClass.KNOWN_FLAKY_INFRA,
-        previous_retries=1,
-        host_attested_known_flaky_infra=True,
-    ) is False
+    assert (
+        policy.should_retry(
+            failure_class=VerificationFailureClass.COMMAND_FAILURE,
+            previous_retries=0,
+            host_attested_known_flaky_infra=True,
+        )
+        is False
+    )
+    assert (
+        policy.should_retry(
+            failure_class=VerificationFailureClass.KNOWN_FLAKY_INFRA,
+            previous_retries=0,
+            host_attested_known_flaky_infra=False,
+        )
+        is False
+    )
+    assert (
+        policy.should_retry(
+            failure_class=VerificationFailureClass.KNOWN_FLAKY_INFRA,
+            previous_retries=0,
+            host_attested_known_flaky_infra=True,
+        )
+        is True
+    )
+    assert (
+        policy.should_retry(
+            failure_class=VerificationFailureClass.KNOWN_FLAKY_INFRA,
+            previous_retries=1,
+            host_attested_known_flaky_infra=True,
+        )
+        is False
+    )

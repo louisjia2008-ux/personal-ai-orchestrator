@@ -114,9 +114,7 @@ class EquivalentCapacityPolicy(RegistryModel):
     @model_validator(mode="after")
     def validate_policy(self) -> EquivalentCapacityPolicy:
         if self.high_confidence_sample_count < self.minimum_sample_count:
-            raise ValueError(
-                "high_confidence_sample_count must be at least minimum_sample_count"
-            )
+            raise ValueError("high_confidence_sample_count must be at least minimum_sample_count")
         return self
 
 
@@ -155,9 +153,7 @@ class EquivalentCapacityEstimate(RegistryModel):
     @model_validator(mode="after")
     def validate_estimate(self) -> EquivalentCapacityEstimate:
         if self.confidence is not EvidenceConfidence.ESTIMATED:
-            raise ValueError(
-                "equivalent capacity is derived; it can only ever be ESTIMATED"
-            )
+            raise ValueError("equivalent capacity is derived; it can only ever be ESTIMATED")
         if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
             raise ValueError("observed_at must be timezone-aware")
         return self

@@ -66,11 +66,7 @@ def _insert_run(store, task_id: str, run_id: str) -> None:
 
 
 def _abort_events(store) -> list:
-    return [
-        e
-        for e in store.audit_events("task-1")
-        if e["event_type"] == "AUTO_ABORTED"
-    ]
+    return [e for e in store.audit_events("task-1") if e["event_type"] == "AUTO_ABORTED"]
 
 
 def test_old_run_does_not_hide_current_preworker_failure(tmp_path: Path) -> None:
@@ -106,8 +102,7 @@ def test_old_run_does_not_hide_current_preworker_failure(tmp_path: Path) -> None
     assert after.auto_grace_deadline_at is None
     assert after.auto_acked_at is None
     assert any(
-        e["payload"]["reason"].startswith("admission_failed:")
-        for e in _abort_events(env.store)
+        e["payload"]["reason"].startswith("admission_failed:") for e in _abort_events(env.store)
     )
     assert env.shadow.load_pending_all() == ()
     assert env.executor.unique_calls == []
@@ -198,8 +193,7 @@ def test_run_correlation_is_dispatch_scoped(tmp_path: Path) -> None:
     assert after.state is TaskState.READY
     assert after.auto_decision_id is None
     assert any(
-        e["payload"]["reason"].startswith("admission_failed:")
-        for e in _abort_events(env.store)
+        e["payload"]["reason"].startswith("admission_failed:") for e in _abort_events(env.store)
     )
     assert env.shadow.load_pending_all() == ()
     env.store.close()
@@ -220,18 +214,14 @@ def test_no_metadata_historical_dispatch_fails_closed(tmp_path: Path) -> None:
     # historical dispatch row is still present.
     ready = env.store.get_task("task-1")
     assert ready.auto_decision_id is None
-    env.store.transition_task(
-        "task-1", TaskState.BLOCKED, expected_version=ready.state_version
-    )
+    env.store.transition_task("task-1", TaskState.BLOCKED, expected_version=ready.state_version)
 
     step = env.service._supervised_auto_step()  # noqa: SLF001 — test hook
     step._reconcile_supervised_auto_dispatches(_TICK_LATER)  # noqa: SLF001
 
     after = env.store.get_task("task-1")
     assert after.state is TaskState.BLOCKED
-    assert [e["payload"]["reason"] for e in _abort_events(env.store)] == [
-        "cycle_1_closed"
-    ]
+    assert [e["payload"]["reason"] for e in _abort_events(env.store)] == ["cycle_1_closed"]
     env.store.close()
 
 
@@ -322,14 +312,10 @@ def test_reconciliation_wrong_target_conflict_preserves_everything(tmp_path) -> 
         version=task.state_version,
         target="TARGET_B",
     )
-    env.store.transition_task(
-        "task-1", TaskState.BLOCKED, expected_version=task.state_version
-    )
+    env.store.transition_task("task-1", TaskState.BLOCKED, expected_version=task.state_version)
 
     assert (
-        correlate_supervised_auto_execution(
-            env.store, task_id="task-1", auto_decision_id=decision
-        )
+        correlate_supervised_auto_execution(env.store, task_id="task-1", auto_decision_id=decision)
         is AutoExecutionCorrelation.CONFLICT
     )
     env.tick(_TICK_LATER)
@@ -352,14 +338,10 @@ def test_reconciliation_wrong_dispatch_id_conflict_preserves(tmp_path) -> None:
         version=task.state_version,
         target="m3-sub",
     )
-    env.store.transition_task(
-        "task-1", TaskState.BLOCKED, expected_version=task.state_version
-    )
+    env.store.transition_task("task-1", TaskState.BLOCKED, expected_version=task.state_version)
 
     assert (
-        correlate_supervised_auto_execution(
-            env.store, task_id="task-1", auto_decision_id=decision
-        )
+        correlate_supervised_auto_execution(env.store, task_id="task-1", auto_decision_id=decision)
         is AutoExecutionCorrelation.CONFLICT
     )
     env.tick(_TICK_LATER)
@@ -428,9 +410,7 @@ def test_reconciliation_invalid_terminal_version_conflict_preserves(tmp_path) ->
     assert blocked.state_version == task.state_version + 1
 
     assert (
-        correlate_supervised_auto_execution(
-            env.store, task_id="task-1", auto_decision_id=decision
-        )
+        correlate_supervised_auto_execution(env.store, task_id="task-1", auto_decision_id=decision)
         is AutoExecutionCorrelation.CONFLICT
     )
     env.tick(_TICK_LATER)
@@ -477,14 +457,10 @@ def test_reconciliation_exact_preworker_blocked_still_aborts(tmp_path) -> None:
     task = env.store.get_task("task-1")
     decision = task.auto_decision_id
     _blocked_dispatch(env.store, task, decision_id=decision)
-    env.store.transition_task(
-        "task-1", TaskState.BLOCKED, expected_version=task.state_version
-    )
+    env.store.transition_task("task-1", TaskState.BLOCKED, expected_version=task.state_version)
 
     assert (
-        correlate_supervised_auto_execution(
-            env.store, task_id="task-1", auto_decision_id=decision
-        )
+        correlate_supervised_auto_execution(env.store, task_id="task-1", auto_decision_id=decision)
         is AutoExecutionCorrelation.EXACT_PREWORKER
     )
     env.tick(_TICK_LATER)
@@ -508,14 +484,10 @@ def test_reconciliation_exact_real_run_is_never_preworker_aborted(tmp_path) -> N
     decision = task.auto_decision_id
     dispatch_id = _blocked_dispatch(env.store, task, decision_id=decision)
     _insert_run(env.store, "task-1", f"run-{dispatch_id}")
-    env.store.transition_task(
-        "task-1", TaskState.BLOCKED, expected_version=task.state_version
-    )
+    env.store.transition_task("task-1", TaskState.BLOCKED, expected_version=task.state_version)
 
     assert (
-        correlate_supervised_auto_execution(
-            env.store, task_id="task-1", auto_decision_id=decision
-        )
+        correlate_supervised_auto_execution(env.store, task_id="task-1", auto_decision_id=decision)
         is AutoExecutionCorrelation.EXACT_REAL_RUN
     )
     env.tick(_TICK_LATER)

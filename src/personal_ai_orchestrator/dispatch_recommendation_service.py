@@ -85,12 +85,17 @@ class DispatchRecommendationService:
 
         connected = (
             {item.provider_id for item in self._quota_refresh_service.observations()}
-            if self._quota_refresh_service is not None else set()
+            if self._quota_refresh_service is not None
+            else set()
         )
         pool_by_target = {
             target_id: quota_pool_id_for_target(
-                registry, execution_target_id=target_id, now=now,
-            ) if provider_by_target.get(target_id) in connected else None
+                registry,
+                execution_target_id=target_id,
+                now=now,
+            )
+            if provider_by_target.get(target_id) in connected
+            else None
             for target_id in registry.execution_targets
         }
         remaining_by_pool: dict[str, list[float]] = {}
@@ -101,9 +106,12 @@ class DispatchRecommendationService:
                 if snapshot is None or snapshot.quota_pool_id != pool_id:
                     continue
                 # Keep identity resolution separate from observation validity.
-                if snapshot.is_stale(
-                    as_of=now, max_age_seconds=RoutingPolicy().max_quota_age_seconds
-                ) or snapshot.confidence.value == "UNKNOWN":
+                if (
+                    snapshot.is_stale(
+                        as_of=now, max_age_seconds=RoutingPolicy().max_quota_age_seconds
+                    )
+                    or snapshot.confidence.value == "UNKNOWN"
+                ):
                     continue
                 if snapshot.state.value in {"UNKNOWN", "EXHAUSTED"}:
                     continue

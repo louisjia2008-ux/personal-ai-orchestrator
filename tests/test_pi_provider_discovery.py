@@ -40,9 +40,7 @@ def test_verified_pi_provider_mapping_is_explicit_and_unique() -> None:
     runtime_ids = [spec.pi_provider_id for spec in PI_PROVIDER_SPECS]
     assert len(pao_ids) == len(set(pao_ids))
     assert len(runtime_ids) == len(set(runtime_ids))
-    zai = next(
-        spec for spec in PI_PROVIDER_SPECS if spec.pao_provider_id == "zai-coding-plan"
-    )
+    zai = next(spec for spec in PI_PROVIDER_SPECS if spec.pao_provider_id == "zai-coding-plan")
     assert zai.pi_provider_id == "zai"
 
 
@@ -461,6 +459,10 @@ def test_minimax_cn_discovery_keeps_commercial_and_runtime_identity(
     from personal_ai_orchestrator.pi_runtime import pi_model_ref
 
     assert target.id != "minimax-cn-coding-plan-MiniMax-M3"
-    assert pi_model_ref(
-        provider_id=spec.pao_provider_id, model_sku_id=target.model_sku_id,
-    ) == "minimax-cn/MiniMax-M3"
+    assert (
+        pi_model_ref(
+            provider_id=spec.pao_provider_id,
+            model_sku_id=target.model_sku_id,
+        )
+        == "minimax-cn/MiniMax-M3"
+    )

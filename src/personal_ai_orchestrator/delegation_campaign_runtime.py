@@ -54,9 +54,7 @@ class CampaignAwareDelegationChildPort(PAODelegationChildPort):
         if provider_id is None:
             return
         try:
-            snapshot = self.quota_refresh_service.snapshot_for_pool(
-                shadow.child_quota_pool_id
-            )
+            snapshot = self.quota_refresh_service.snapshot_for_pool(shadow.child_quota_pool_id)
             baseline = build_quota_baseline(
                 observation_id=shadow.observation_id,
                 provider_id=provider_id,

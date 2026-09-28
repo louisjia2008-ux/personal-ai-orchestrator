@@ -44,13 +44,7 @@ def test_redact_strips_aws_access_key() -> None:
 
 
 def test_parse_provider_list_does_not_carry_secret_through() -> None:
-    poisoned = (
-        "┌  Credentials\n"
-        "│\n"
-        f"●  {CANARY_SK} provider\n"
-        "│\n"
-        "└  1 credentials\n"
-    )
+    poisoned = f"┌  Credentials\n│\n●  {CANARY_SK} provider\n│\n└  1 credentials\n"
     redacted = _redact(poisoned)
     # The canary must not survive the redaction step.
     assert CANARY_SK not in redacted

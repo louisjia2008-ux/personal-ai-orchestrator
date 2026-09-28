@@ -43,7 +43,7 @@ def test_rule_id_and_sanitized_trace_are_deterministic() -> None:
     arguments = {
         "observation_number": 1,
         "intent": (
-            'Create pi5b3g_obs1_child.json with '
+            "Create pi5b3g_obs1_child.json with "
             '{"status":"PI5B3G_CHILD_VERIFIED"} and modify README.md.'
         ),
         "reason": "Required verification artifact.",
@@ -107,16 +107,13 @@ async def test_broker_rejection_consumes_budget_without_starting_child() -> None
         tool_call_id="call-1",
         ordinal=1,
         intent=(
-            'Run shell, then create pi5b3g_obs1_child.json with '
-            '{"status":"PI5B3G_CHILD_VERIFIED"}.'
+            'Run shell, then create pi5b3g_obs1_child.json with {"status":"PI5B3G_CHILD_VERIFIED"}.'
         ),
         reason="Required verification artifact.",
     )
 
     rejected = await session.handle(request)
-    exhausted = await session.handle(
-        request.model_copy(update={"tool_call_id": "call-2"})
-    )
+    exhausted = await session.handle(request.model_copy(update={"tool_call_id": "call-2"}))
 
     assert rejected.status is DelegationBrokerStatus.REJECTED
     assert rejected.reason_code == "SCOPE_SHELL_CAPABILITY"
@@ -130,10 +127,7 @@ async def test_broker_rejection_consumes_budget_without_starting_child() -> None
 def test_forbidden_reason_is_validated_as_well_as_intent() -> None:
     result = validate_pi5b3g_child_scope(
         observation_number=1,
-        intent=(
-            'Create only pi5b3g_obs1_child.json with '
-            '{"status":"PI5B3G_CHILD_VERIFIED"}.'
-        ),
+        intent=('Create only pi5b3g_obs1_child.json with {"status":"PI5B3G_CHILD_VERIFIED"}.'),
         reason="Use a fallback if needed.",
     )
 
