@@ -43,6 +43,10 @@ markers = [
 target-version = "py312"
 line-length = 100
 
+[tool.ruff.format]
+# Markdown under docs/ holds recorded evidence; keep its code blocks verbatim.
+exclude = ["*.md"]
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
