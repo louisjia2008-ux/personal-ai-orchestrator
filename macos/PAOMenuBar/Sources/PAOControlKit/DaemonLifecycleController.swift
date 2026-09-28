@@ -296,7 +296,6 @@ public final class DaemonLifecycleController: ObservableObject {
         case staleDaemonTerminationTimeout
         case exitedEarly(Int32)
         case startupTimeout(Data?)
-        case staleDaemonTerminationTimeout
     }
 
     private func sanitizedReason(_ error: Error) -> String {
@@ -317,8 +316,6 @@ public final class DaemonLifecycleController: ObservableObject {
             return "helper_exited_\(status)"
         case LifecycleError.startupTimeout(let data):
             return sanitizedStderr(data)
-        case LifecycleError.staleDaemonTerminationTimeout:
-            return "stale_daemon_termination_timeout"
         case DaemonProcessOwnershipError.socketOwnerUnavailable:
             return "stale_daemon_owner_unavailable"
         case DaemonProcessOwnershipError.executableUnavailable:

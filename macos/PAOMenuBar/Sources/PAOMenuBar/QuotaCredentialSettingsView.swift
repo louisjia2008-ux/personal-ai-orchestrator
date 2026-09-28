@@ -15,11 +15,8 @@ struct QuotaCredentialSettingsCard: View {
     @State private var notice: String?
 
     var body: some View {
-        DashboardCard(title: "Quota API credentials", symbol: "key.fill") {
-            Text(
-                "Execution login and quota telemetry are separate. PAO never copies a Pi login. " +
-                "Add a provider API credential here only if quota remains UNKNOWN while Pi can run the model."
-            )
+        DashboardCard(title: L10n.quotaCredentialsTitle, symbol: "key.fill") {
+            Text(L10n.quotaCredentialsExplanation)
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -31,7 +28,11 @@ struct QuotaCredentialSettingsCard: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(slot.displayName)
                                 .font(.callout.weight(.medium))
-                            Text(authorized.contains(slot) ? "Quota credential authorized" : "No PAO quota credential")
+                            Text(
+                                authorized.contains(slot)
+                                    ? L10n.quotaCredentialAuthorized
+                                    : L10n.quotaCredentialNone
+                            )
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -39,24 +40,24 @@ struct QuotaCredentialSettingsCard: View {
                         if authorized.contains(slot) {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundStyle(.green)
-                                .accessibilityLabel("Authorized")
+                                .accessibilityLabel(L10n.quotaCredentialAccessibilityAuthorized)
                         }
                     }
 
                     SecureField(
-                        "Provider API credential",
+                        L10n.quotaCredentialPlaceholder,
                         text: secretBinding(for: slot)
                     )
                     .textFieldStyle(.roundedBorder)
                     .privacySensitive()
 
                     HStack {
-                        Button("Save to Keychain") {
+                        Button(L10n.quotaCredentialSave) {
                             save(slot)
                         }
                         .disabled(secretValue(for: slot).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
-                        Button("Revoke", role: .destructive) {
+                        Button(L10n.quotaCredentialRevoke, role: .destructive) {
                             revoke(slot)
                         }
                         .disabled(!authorized.contains(slot))
@@ -74,10 +75,7 @@ struct QuotaCredentialSettingsCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Text(
-                "The credential is used only for read-only quota collection. " +
-                "Adding or revoking it does not change Pi execution authentication."
-            )
+            Text(L10n.quotaCredentialsFooter)
             .font(.caption)
             .foregroundStyle(.tertiary)
             .fixedSize(horizontal: false, vertical: true)
@@ -109,10 +107,10 @@ struct QuotaCredentialSettingsCard: View {
             try keychain.store(secretValue(for: slot), for: slot)
             secrets[slot] = ""
             refreshPresence()
-            notice = "Quota credential saved to macOS Keychain."
+            notice = L10n.quotaCredentialSaved
             Task { await store.refreshQuota(providerId: slot.providerId) }
         } catch {
-            notice = "Could not save the quota credential to macOS Keychain."
+            notice = L10n.quotaCredentialSaveFailed
         }
     }
 
@@ -121,10 +119,10 @@ struct QuotaCredentialSettingsCard: View {
             try keychain.revoke(slot)
             secrets[slot] = ""
             refreshPresence()
-            notice = "Quota credential revoked. Pi execution authentication was not changed."
+            notice = L10n.quotaCredentialRevoked
             Task { await store.refreshQuota(providerId: slot.providerId) }
         } catch {
-            notice = "Could not revoke the quota credential from macOS Keychain."
+            notice = L10n.quotaCredentialRevokeFailed
         }
     }
 }

@@ -635,9 +635,6 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
             Bool.self, forKey: .executionVerifiedStale
         )
         launchAuthorized = try container.decodeIfPresent(Bool.self, forKey: .launchAuthorized)
-        executionVerificationObservedAt = try container.decodeIfPresent(
-            String.self, forKey: .executionVerificationObservedAt
-        )
         runtimeAvailable = try container.decodeIfPresent(Bool.self, forKey: .runtimeAvailable)
         observedAvailability = try container.decodeIfPresent(
             ObservedAvailabilityView.self, forKey: .observedAvailability

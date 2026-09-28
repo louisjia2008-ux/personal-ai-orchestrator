@@ -516,6 +516,19 @@
 "quota.credential.environment" = "Environment variable";
 "quota.credential.authStore" = "OpenCode sign-in";
 "quota.credential.none" = "Not available";
+"quota.credentials.title" = "Quota API credentials";
+"quota.credentials.explanation" = "Execution login and quota telemetry are separate. PAO never copies a Pi login. Add a provider API credential here only if quota remains UNKNOWN while Pi can run the model.";
+"quota.credentials.authorized" = "Quota credential authorized";
+"quota.credentials.none" = "No PAO quota credential";
+"quota.credentials.accessibilityAuthorized" = "Authorized";
+"quota.credentials.placeholder" = "Provider API credential";
+"quota.credentials.save" = "Save to Keychain";
+"quota.credentials.revoke" = "Revoke";
+"quota.credentials.footer" = "The credential is used only for read-only quota collection. Adding or revoking it does not change Pi execution authentication.";
+"quota.credentials.notice.saved" = "Quota credential saved to macOS Keychain.";
+"quota.credentials.notice.saveFailed" = "Could not save the quota credential to macOS Keychain.";
+"quota.credentials.notice.revoked" = "Quota credential revoked. Pi execution authentication was not changed.";
+"quota.credentials.notice.revokeFailed" = "Could not revoke the quota credential from macOS Keychain.";
 
 /* P4.2.6.5.1 workload-scope projection: which provider scope the coding
    dashboard reads, and why an observed scope is absent from it */

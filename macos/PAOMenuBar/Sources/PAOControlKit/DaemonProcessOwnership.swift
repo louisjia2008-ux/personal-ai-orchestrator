@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-struct DaemonProcessIdentity: Equatable, Sendable {
+struct DaemonSocketOwnerIdentity: Equatable, Sendable {
     let pid: Int32
     let executablePath: String
 }
@@ -80,7 +80,7 @@ enum DaemonProcessOwnership {
         pid: Int32,
         expectedHelperPath: String,
         actualExecutablePath: String?
-    ) throws -> DaemonProcessIdentity {
+    ) throws -> DaemonSocketOwnerIdentity {
         guard let actualExecutablePath else {
             throw DaemonProcessOwnershipError.executableUnavailable(pid: pid)
         }
@@ -89,13 +89,13 @@ enum DaemonProcessOwnership {
         guard expected == actual else {
             throw DaemonProcessOwnershipError.executableMismatch
         }
-        return DaemonProcessIdentity(pid: pid, executablePath: actual)
+        return DaemonSocketOwnerIdentity(pid: pid, executablePath: actual)
     }
 
     static func validatedSocketOwner(
         socketPath: String,
         expectedHelperPath: String
-    ) throws -> DaemonProcessIdentity {
+    ) throws -> DaemonSocketOwnerIdentity {
         guard let pid = socketPeerPID(at: socketPath) else {
             throw DaemonProcessOwnershipError.socketOwnerUnavailable
         }
