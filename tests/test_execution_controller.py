@@ -519,6 +519,7 @@ def test_unexpected_exit_keeps_only_sanitized_transcript_tails(tmp_path: Path) -
     ).fetchone()
     assert row["status"] == "FAILED"
     import json as _json
+
     result = _json.loads(row["result_json"])
     # Fail-closed: host-derived metadata is gone; the worker's narration
     # is the only thing that survives so the owner can see WHY.
@@ -570,6 +571,4 @@ def test_human_reason_for_failure_names_exit_code_and_signal() -> None:
     assert _human_reason_for_failure(exit_code=None, signal=9) == (
         "worker exited unexpectedly (signal 9)"
     )
-    assert _human_reason_for_failure(exit_code=None, signal=None) == (
-        "worker exited unexpectedly"
-    )
+    assert _human_reason_for_failure(exit_code=None, signal=None) == ("worker exited unexpectedly")

@@ -65,9 +65,7 @@ def _fake_pi(
     if error_message is not None:
         assistant["errorMessage"] = error_message
     message_end = json.dumps({"type": "message_end", "message": assistant})
-    session = json.dumps(
-        {"type": "session", "version": 3, "id": "s1", "cwd": "fixture"}
-    )
+    session = json.dumps({"type": "session", "version": 3, "id": "s1", "cwd": "fixture"})
     lines = [
         "#!/bin/sh",
         f"printf '%s\\n' '{HELLO}' > hello.txt",
@@ -76,10 +74,7 @@ def _fake_pi(
         f"printf '%s\\n' '{message_end}'",
     ]
     if complete:
-        lines.append(
-            "printf '%s\\n' "
-            "'{\"type\":\"agent_end\",\"messages\":[]}'"
-        )
+        lines.append('printf \'%s\\n\' \'{"type":"agent_end","messages":[]}\'')
     lines.append("exit 0")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)

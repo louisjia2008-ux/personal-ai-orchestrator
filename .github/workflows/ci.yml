@@ -33,6 +33,9 @@ jobs:
       - name: Lint
         run: python -m ruff check .
 
+      - name: Format
+        run: python -m ruff format --check .
+
       - name: Install pinned Pi SDK for offline activation contract
         run: npm install --prefix "$RUNNER_TEMP/pi0851" --no-save @earendil-works/pi-coding-agent@0.85.1
 

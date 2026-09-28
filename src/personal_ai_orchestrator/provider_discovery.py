@@ -87,6 +87,7 @@ def _emit_free_model_event(
         # suppressing every free target.
         return
 
+
 ## # ---------------------------------------------------------------------
 # Constants
 # -----------------------------------------------------------------------------
@@ -111,66 +112,70 @@ DISCOVERY_SUBPROCESS_MAX_OUTPUT_BYTES = 256 * 1024
 # change cannot accidentally leak a credential.
 #
 # P4.2.4-A.1 §15 — credential isolation contract.
-_DISCOVERY_ENV_BLOCKLIST: frozenset[str] = frozenset({
-    # Known by this module
-    "ZAI_API_KEY",
-    "MINIMAX_API_KEY",
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "DEEPSEEK_API_KEY",
-    # Additional credential variables that may be present in the operator's
-    # environment. The blocklist is additive: when a new provider is added
-    # the corresponding credential variable(s) MUST be added here.
-    "OPENAI_ORGANIZATION",
-    "OPENAI_API_BASE",
-    "OPENAI_BASE_URL",
-    "ANTHROPIC_AUTH_TOKEN",
-    "ANTHROPIC_BASE_URL",
-    "GOOGLE_API_KEY",
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "GEMINI_API_KEY",
-    "GROQ_API_KEY",
-    "MISTRAL_API_KEY",
-    "COHERE_API_KEY",
-    "PERPLEXITY_API_KEY",
-    "XAI_API_KEY",
-    "HUGGINGFACE_TOKEN",
-    "HF_TOKEN",
-    "GITHUB_TOKEN",
-    "GH_TOKEN",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SESSION_TOKEN",
-    "GITLAB_TOKEN",
-    "BITBUCKET_TOKEN",
-    "NETLIFY_AUTH_TOKEN",
-    "VERCEL_TOKEN",
-    "RAILWAY_TOKEN",
-    "RENDER_API_KEY",
-    "SUPABASE_KEY",
-    "SUPABASE_SERVICE_KEY",
-})
+_DISCOVERY_ENV_BLOCKLIST: frozenset[str] = frozenset(
+    {
+        # Known by this module
+        "ZAI_API_KEY",
+        "MINIMAX_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "DEEPSEEK_API_KEY",
+        # Additional credential variables that may be present in the operator's
+        # environment. The blocklist is additive: when a new provider is added
+        # the corresponding credential variable(s) MUST be added here.
+        "OPENAI_ORGANIZATION",
+        "OPENAI_API_BASE",
+        "OPENAI_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GEMINI_API_KEY",
+        "GROQ_API_KEY",
+        "MISTRAL_API_KEY",
+        "COHERE_API_KEY",
+        "PERPLEXITY_API_KEY",
+        "XAI_API_KEY",
+        "HUGGINGFACE_TOKEN",
+        "HF_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SESSION_TOKEN",
+        "GITLAB_TOKEN",
+        "BITBUCKET_TOKEN",
+        "NETLIFY_AUTH_TOKEN",
+        "VERCEL_TOKEN",
+        "RAILWAY_TOKEN",
+        "RENDER_API_KEY",
+        "SUPABASE_KEY",
+        "SUPABASE_SERVICE_KEY",
+    }
+)
 
 # Minimal allowlist of environment variables the OpenCode CLI needs to
 # produce catalog output. The intersection of (allowlist \ blocklist) is
 # what actually reaches the subprocess. Any variable outside this set
 # must not be passed by the harness.
-_DISCOVERY_ENV_ALLOWLIST: frozenset[str] = frozenset({
-    "PATH",
-    "LANG",
-    "LC_ALL",
-    "LC_CTYPE",
-    "LC_MESSAGES",
-    "TZ",
-    "TMPDIR",
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "XDG_RUNTIME_DIR",
-    "XDG_CONFIG_HOME",
-    "XDG_CACHE_HOME",
-    "XDG_DATA_HOME",
-})
+_DISCOVERY_ENV_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_MESSAGES",
+        "TZ",
+        "TMPDIR",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "XDG_RUNTIME_DIR",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+    }
+)
 
 # The provider families we attempt to discover. Each entry pairs:
 #   - the OpenCode provider family identifier as returned by ``opencode models``
@@ -203,13 +208,14 @@ _PROVIDER_LIST_CREDENTIAL_HEADER_RE = re.compile(r"^[│|]\s*(\d+)\s+credentials
 # Public model
 # -----------------------------------------------------------------------------
 
+
 class DiscoveryState(StrEnum):
     """Lifecycle of a single provider-discovery cycle."""
 
-    PENDING = "PENDING"            # cycle has not yet completed
-    DISCOVERED = "DISCOVERED"        # at least one family produced evidence
-    EMPTY = "EMPTY"                  # discovery ran and produced no families
-    FAILED = "FAILED"                # discovery raised; see ``last_error_code``
+    PENDING = "PENDING"  # cycle has not yet completed
+    DISCOVERED = "DISCOVERED"  # at least one family produced evidence
+    EMPTY = "EMPTY"  # discovery ran and produced no families
+    FAILED = "FAILED"  # discovery raised; see ``last_error_code``
 
 
 class AuthStatus(StrEnum):
@@ -428,7 +434,7 @@ class ProviderDiscovery:
     display_name: str
     auth_status: AuthStatus
     execution_status: ExecutionStatus
-    evidence_source: str                       # §33 evidence flag
+    evidence_source: str  # §33 evidence flag
     model_skus: tuple[str, ...]
     env_variables_present: tuple[str, ...]
     observed_at: datetime
@@ -572,19 +578,11 @@ class DiscoveryResult:
                 execution_status=ExecutionStatus(str(item["execution_status"])),
                 evidence_source=str(item["evidence_source"]),
                 model_skus=tuple(str(s) for s in item.get("model_skus", [])),  # type: ignore[arg-type]
-                env_variables_present=tuple(
-                    str(s) for s in item.get("env_variables_present", [])
-                ),  # type: ignore[arg-type]
-                region=(
-                    str(item["region"])
-                    if item.get("region") is not None
-                    else None
-                ),
+                env_variables_present=tuple(str(s) for s in item.get("env_variables_present", [])),  # type: ignore[arg-type]
+                region=(str(item["region"]) if item.get("region") is not None else None),
                 in_credentials_store=bool(item.get("in_credentials_store", False)),
                 catalog_discovered=bool(item.get("catalog_discovered", True)),
-                credential_evidence_present=bool(
-                    item.get("credential_evidence_present", False)
-                ),
+                credential_evidence_present=bool(item.get("credential_evidence_present", False)),
                 credential_region_verified=bool(
                     item.get(
                         "credential_region_verified",
@@ -597,9 +595,7 @@ class DiscoveryResult:
                         item.get("credential_scope_verified", False),
                     )
                 ),
-                credential_scope_verified=bool(
-                    item.get("credential_scope_verified", False)
-                ),
+                credential_scope_verified=bool(item.get("credential_scope_verified", False)),
                 execution_verified=bool(item.get("execution_verified", False)),
                 observed_at=datetime.fromisoformat(str(item["observed_at"])),
             )
@@ -639,6 +635,7 @@ class DiscoveryResult:
 # -----------------------------------------------------------------------------
 # Subprocess contract
 # -----------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class SubprocessResult:
@@ -810,11 +807,13 @@ def _run_opencode(
                 pass
 
     stdout_thread = threading.Thread(
-        target=_drain, args=(proc.stdout, stdout_buf, stdout_done),
+        target=_drain,
+        args=(proc.stdout, stdout_buf, stdout_done),
         name=f"discovery-stdout-{proc.pid}",
     )
     stderr_thread = threading.Thread(
-        target=_drain, args=(proc.stderr, stderr_buf, stderr_done),
+        target=_drain,
+        args=(proc.stderr, stderr_buf, stderr_done),
         name=f"discovery-stderr-{proc.pid}",
     )
     stdout_thread.daemon = True
@@ -918,6 +917,7 @@ def _infer_region(spec: ProviderFamilySpec) -> str | None:
 # -----------------------------------------------------------------------------
 # Provider list parsing
 # -----------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class _AuthPresence:
@@ -1075,6 +1075,7 @@ def _parse_provider_list(stdout: str) -> _AuthPresence:
 # Model catalog parsing
 # -----------------------------------------------------------------------------
 
+
 def _parse_model_catalog(stdout: str) -> dict[str, tuple[str, ...]]:
     """Parse ``opencode models`` output into ``{provider_id: (model_ids,)}``.
 
@@ -1106,6 +1107,7 @@ def _parse_model_catalog(stdout: str) -> dict[str, tuple[str, ...]]:
 # -----------------------------------------------------------------------------
 # Discovery entry point
 # -----------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class DiscoveryCycleOutcome:
@@ -1175,7 +1177,7 @@ def discover(
     product runtime can present the truth to the user.
     """
 
-    observed_at = (clock() if clock is not None else datetime.now(tz=UTC))
+    observed_at = clock() if clock is not None else datetime.now(tz=UTC)
     if clock is not None and observed_at.tzinfo is None:
         observed_at = observed_at.replace(tzinfo=UTC)
 
@@ -1193,9 +1195,8 @@ def discover(
         timeout_seconds=timeout_seconds,
     )
     opencode_version = (
-    version_result.stdout.strip().splitlines()[0]
-    if version_result.stdout else "unknown"
-)
+        version_result.stdout.strip().splitlines()[0] if version_result.stdout else "unknown"
+    )
 
     providers_result = _run_opencode(
         ("providers", "list"),
@@ -1279,16 +1280,15 @@ def discover(
             model_skus = raw_skus
         catalog_discovered = bool(model_skus)
         env_present = tuple(
-            name for name in family.env_variables
+            name
+            for name in family.env_variables
             # We check ``os.environ`` (the harness process environment) for
             # **presence** only. The value is never read.
             if name in os.environ
         )
         credential_region_verified = presence.has_region_verified(family)
         credential_plan_surface_verified = presence.has_plan_surface_verified(family)
-        credential_scope_verified = (
-            credential_region_verified and credential_plan_surface_verified
-        )
+        credential_scope_verified = credential_region_verified and credential_plan_surface_verified
         in_env_section = presence.has_in_environment(family)
         # ``credential_evidence_present`` is the *weak* signal: any of
         # these may be set even when the credential does not apply to
@@ -1316,9 +1316,7 @@ def discover(
         else:
             auth_status = AuthStatus.AUTH_REQUIRED
         execution_status = (
-            ExecutionStatus.AVAILABLE_FOR_CATALOG
-            if model_skus
-            else ExecutionStatus.UNKNOWN
+            ExecutionStatus.AVAILABLE_FOR_CATALOG if model_skus else ExecutionStatus.UNKNOWN
         )
         evidence_source = "DISCOVERED_FROM_CATALOG"
         region = _infer_region(family)
@@ -1388,6 +1386,7 @@ def discover(
 # -----------------------------------------------------------------------------
 # Registry assembly
 # -----------------------------------------------------------------------------
+
 
 def build_registry(result: DiscoveryResult) -> ModelRegistry:
     """Convert a ``DiscoveryResult`` into a typed ``ModelRegistry``.
@@ -1467,12 +1466,8 @@ def build_registry(result: DiscoveryResult) -> ModelRegistry:
             "providers": {p.id: p.model_dump() for p in providers.values()},
             "accounts": {a.id: a.model_dump() for a in accounts.values()},
             "models": {m.id: m.model_dump() for m in models.values()},
-            "execution_targets": {
-                e.id: e.model_dump() for e in execution_targets.values()
-            },
-            "catalog_snapshots": {
-                snapshot_id: catalog_snapshot.model_dump(mode="json")
-            },
+            "execution_targets": {e.id: e.model_dump() for e in execution_targets.values()},
+            "catalog_snapshots": {snapshot_id: catalog_snapshot.model_dump(mode="json")},
         },
     }
     assert_sanitized(snapshot)

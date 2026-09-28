@@ -316,9 +316,7 @@ def test_global_default_applies_when_nothing_overrides(service, project_id, tmp_
     service.scheduling_settings.set_default_policy("QUALITY_FIRST")
     routing = _routing_service(service, tmp_path)
 
-    resolution = routing._resolved_policy(
-        _routing_request()
-    )
+    resolution = routing._resolved_policy(_routing_request())
 
     assert resolution.resolved_level is SchedulingPolicyLevel.GLOBAL_DEFAULT
     assert resolution.policy.objective is RoutingObjective.QUALITY_FIRST
@@ -330,9 +328,7 @@ def test_project_override_beats_global(service, project_id, tmp_path) -> None:
     service.set_project_scheduling_policy(project_id, {"scheduling_policy": "QUOTA_SAVER"})
     routing = _routing_service(service, tmp_path)
 
-    resolution = routing._resolved_policy(
-        _routing_request()
-    )
+    resolution = routing._resolved_policy(_routing_request())
 
     assert resolution.resolved_level is SchedulingPolicyLevel.PROJECT_OVERRIDE
     assert resolution.policy.objective is RoutingObjective.QUOTA_SAVER
@@ -344,9 +340,7 @@ def test_task_override_beats_project_and_global(service, project_id, tmp_path) -
     service.set_project_scheduling_policy(project_id, {"scheduling_policy": "QUOTA_SAVER"})
     routing = _routing_service(service, tmp_path)
 
-    resolution = routing._resolved_policy(
-        _routing_request()
-    )
+    resolution = routing._resolved_policy(_routing_request())
 
     assert resolution.resolved_level is SchedulingPolicyLevel.TASK_OVERRIDE
     assert resolution.policy.objective is RoutingObjective.SPEED_FIRST
@@ -361,9 +355,7 @@ def test_manual_task_override_carries_its_target(service, project_id, tmp_path) 
     )
     routing = _routing_service(service, tmp_path)
 
-    resolution = routing._resolved_policy(
-        _routing_request()
-    )
+    resolution = routing._resolved_policy(_routing_request())
 
     assert resolution.policy.objective is RoutingObjective.MANUAL
     assert resolution.policy.manual_execution_target_id == "zai-glm-53"

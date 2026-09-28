@@ -188,9 +188,7 @@ def _sample(
         reasons.append(DelegationReadinessReason.PARENT_VERIFIER_NOT_PASSED)
 
     quota_comparable = bool(
-        child is not None
-        and child.quota_before_snapshot_id
-        and child.quota_after_snapshot_id
+        child is not None and child.quota_before_snapshot_id and child.quota_after_snapshot_id
     )
     if policy is not None and policy.require_quota_comparability and not quota_comparable:
         reasons.append(DelegationReadinessReason.QUOTA_COMPARABILITY_MISSING)

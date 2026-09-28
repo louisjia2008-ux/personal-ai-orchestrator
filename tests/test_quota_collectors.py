@@ -176,11 +176,7 @@ def test_zai_rounded_percentage_only_is_estimated_not_exact() -> None:
     """Without counts, only the integer percentage is available — that is ESTIMATED."""
 
     payload = {
-        "data": {
-            "limits": [
-                {"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 60}
-            ]
-        }
+        "data": {"limits": [{"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 60}]}
     }
 
     projection = normalize_zai_quota(payload, observed_at=NOW)

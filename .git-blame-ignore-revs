@@ -1,0 +1,5 @@
+# Mechanical reformats; skip in blame with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# style: apply ruff format (0.16.9) to all Python sources
+15640cd8e62077816f21ae1bfd3b28988f738570

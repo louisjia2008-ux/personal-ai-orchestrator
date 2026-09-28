@@ -178,6 +178,7 @@ def test_latest_verified_for_target_uses_mtime_tiebreaker(tmp_path: Path) -> Non
     assert evidence.observed_at == base
     assert stale_since == base + timedelta(seconds=1)
 
+
 # -----------------------------------------------------------------------------
 # M1 WP4 — QUOTA_BLOCKED evidence falls back to the most recent VERIFIED row.
 # -----------------------------------------------------------------------------

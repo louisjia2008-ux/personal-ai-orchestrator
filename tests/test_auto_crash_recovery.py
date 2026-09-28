@@ -125,9 +125,7 @@ def _restart_service(
         runtime_availability={"m3-sub": True},
         verification_journal=VerificationEvidenceJournal(tmp_path),
         quota_availability_journal=quota_journal,
-        owner_execution=OwnerExecutionSettings(
-            tmp_path / "owner-execution.json", initial=True
-        ),
+        owner_execution=OwnerExecutionSettings(tmp_path / "owner-execution.json", initial=True),
         scheduling_settings=SchedulingSettings(tmp_path / "scheduling.json"),
         execution_evidence_journal=evidence_journal,
         quota_refresh_service=_FakeQuotaRefresh(_observation(now=quota_observed_at)),
@@ -218,9 +216,7 @@ def test_mode_change_crash_before_abort_recovers_on_restart(tmp_path) -> None:
     assert task.auto_grace_deadline_at is None
     assert task.auto_acked_at is None
     assert task.auto_reason is None
-    aborted = [
-        e for e in store2.audit_events("task-1") if e["event_type"] == "AUTO_ABORTED"
-    ]
+    aborted = [e for e in store2.audit_events("task-1") if e["event_type"] == "AUTO_ABORTED"]
     assert any(e["payload"]["reason"] == "mode_changed" for e in aborted)
     # No dispatch, no worker — even though the grace deadline had passed.
     assert executor.unique_calls == []
@@ -254,9 +250,7 @@ def test_project_disable_crash_before_abort_recovers_on_restart(tmp_path) -> Non
     assert task.auto_decision_id is None
     assert task.auto_grace_deadline_at is None
     assert task.auto_acked_at is None
-    aborted = [
-        e for e in store2.audit_events("task-1") if e["event_type"] == "AUTO_ABORTED"
-    ]
+    aborted = [e for e in store2.audit_events("task-1") if e["event_type"] == "AUTO_ABORTED"]
     assert any(e["payload"]["reason"] == "project_auto_disabled" for e in aborted)
     # ``auto_reason`` may carry the same tick's legal skip hint (the
     # planning scan runs after the abort and records WHY it will not
@@ -309,7 +303,10 @@ def test_unacked_timeout_crash_recovers_and_new_cycle_is_fresh(tmp_path) -> None
     # This test isolates lifecycle recovery: the new cycle has a fresh quota
     # fixture, rather than bypassing the production observation-age gate.
     store2, service2 = _restart_service(
-        tmp_path, executor=executor, shadow=shadow2, quota_observed_at=restarted_at,
+        tmp_path,
+        executor=executor,
+        shadow=shadow2,
+        quota_observed_at=restarted_at,
     )
     service2.supervised_auto_tick(restarted_at)
 
@@ -358,9 +355,7 @@ def test_pre_worker_blocked_closeout_crash_recovers_atomically(tmp_path) -> None
         failure_code="QUOTA_ADMISSION_FAILED",
         failure_reason="quota admission blocked the billable launch",
     )
-    env.store.transition_task(
-        "task-1", TaskState.BLOCKED, expected_version=task.state_version
-    )
+    env.store.transition_task("task-1", TaskState.BLOCKED, expected_version=task.state_version)
     # Process dies before the reconciliation tick.
     env.store.close()
 
@@ -377,12 +372,8 @@ def test_pre_worker_blocked_closeout_crash_recovers_atomically(tmp_path) -> None
     assert after.auto_grace_deadline_at is None
     assert after.auto_acked_at is None
     assert after.auto_reason is None
-    aborted = [
-        e for e in store2.audit_events("task-1") if e["event_type"] == "AUTO_ABORTED"
-    ]
-    assert any(
-        e["payload"]["reason"].startswith("admission_failed:") for e in aborted
-    )
+    aborted = [e for e in store2.audit_events("task-1") if e["event_type"] == "AUTO_ABORTED"]
+    assert any(e["payload"]["reason"].startswith("admission_failed:") for e in aborted)
     assert shadow2.load_pending_all() == ()
     assert executor.unique_calls == []
     store2.close()
@@ -414,14 +405,10 @@ def test_legacy_ready_stale_metadata_is_recovered(tmp_path) -> None:
     env.tick(NOW + timedelta(seconds=5))
     task = env.store.get_task("task-1")
     recovered = [
-        e
-        for e in env.store.audit_events("task-1")
-        if e["event_type"] == "AUTO_METADATA_RECOVERED"
+        e for e in env.store.audit_events("task-1") if e["event_type"] == "AUTO_METADATA_RECOVERED"
     ]
     assert recovered
-    assert (
-        recovered[0]["payload"]["reason"] == "ready_state_stale_auto_metadata"
-    )
+    assert recovered[0]["payload"]["reason"] == "ready_state_stale_auto_metadata"
     assert recovered[0]["payload"]["cleared_decision_id"] == old_decision_id
     # The old lifecycle is gone: no old pending, outbox drained.
     pending_ids = [p.pending_id for p in env.shadow.load_pending_all()]
@@ -447,9 +434,7 @@ def test_ready_with_only_routing_decision_is_not_mistaken_as_stale(tmp_path) -> 
 
     decision = step._freeze_decision(  # noqa: SLF001 — test hook
         task=task,
-        request_id=supervised_auto_routing_request_id(
-            supervised_auto_decision_id(task)
-        ),
+        request_id=supervised_auto_routing_request_id(supervised_auto_decision_id(task)),
         target_id="m3-sub",
         decision_reason="crash boundary A",
         now=NOW,
@@ -462,9 +447,7 @@ def test_ready_with_only_routing_decision_is_not_mistaken_as_stale(tmp_path) -> 
     assert after.state is TaskState.AUTO_GRACE
     assert after.auto_decision_id == supervised_auto_decision_id(task)
     assert not [
-        e
-        for e in env.store.audit_events("task-1")
-        if e["event_type"] == "AUTO_METADATA_RECOVERED"
+        e for e in env.store.audit_events("task-1") if e["event_type"] == "AUTO_METADATA_RECOVERED"
     ]
 
 
@@ -508,16 +491,12 @@ def test_outbox_crash_after_commit_before_discard(tmp_path) -> None:
     task = store.get_task("task-1")
     assert task.state is TaskState.READY and task.auto_decision_id is None
     assert pending_path.exists()
-    assert [r["pending_id"] for r in store.pending_shadow_cleanups()] == [
-        "auto-task-1-v1"
-    ]
+    assert [r["pending_id"] for r in store.pending_shadow_cleanups()] == ["auto-task-1-v1"]
 
     # Restart: the incomplete row is loaded and the drain completes it.
     store.close()
     store2 = SafetyKernelStore(tmp_path / "outbox.db")
-    assert [r["pending_id"] for r in store2.pending_shadow_cleanups()] == [
-        "auto-task-1-v1"
-    ]
+    assert [r["pending_id"] for r in store2.pending_shadow_cleanups()] == ["auto-task-1-v1"]
     completed = drain_auto_shadow_cleanup_outbox(store2, shadow)
     assert completed == 1
     assert not pending_path.exists()
@@ -569,9 +548,7 @@ def test_outbox_unavailable_journal_never_rolls_back_sqlite(tmp_path) -> None:
     assert task.auto_grace_deadline_at is None
     assert task.auto_acked_at is None
     assert task.auto_reason is None
-    assert [r["pending_id"] for r in store.pending_shadow_cleanups()] == [
-        "auto-task-1-v1"
-    ]
+    assert [r["pending_id"] for r in store.pending_shadow_cleanups()] == ["auto-task-1-v1"]
     # A later healthy drain finishes the job.
     assert drain_auto_shadow_cleanup_outbox(store, shadow) == 1
     assert store.pending_shadow_cleanups() == ()
@@ -593,9 +570,7 @@ def test_abort_is_exactly_one_version_bump_and_one_audit(tmp_path) -> None:
     )
     assert updated.state is TaskState.READY
     assert updated.state_version == before.state_version + 1
-    events = [
-        e["event_type"] for e in store.audit_events("task-1")
-    ]
+    events = [e["event_type"] for e in store.audit_events("task-1")]
     assert events.count("AUTO_ABORTED") == 1
     # No second authoritative mutation followed the close.
     assert store.get_task("task-1").state_version == updated.state_version
@@ -634,9 +609,7 @@ def test_plain_owner_blocked_task_cannot_take_auto_abort_path(tmp_path) -> None:
     store.transition_task("task-2", TaskState.READY)
     store.transition_task("task-2", TaskState.BLOCKED)
     try:
-        store.abort_auto_lifecycle(
-            "task-2", reason="mode_changed", allow_blocked=True
-        )
+        store.abort_auto_lifecycle("task-2", reason="mode_changed", allow_blocked=True)
     except ValueError:
         pass
     else:

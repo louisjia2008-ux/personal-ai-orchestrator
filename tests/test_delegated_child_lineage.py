@@ -63,12 +63,9 @@ def _prepare_campaign_child(store: SafetyKernelStore, campaign: str, number: int
     return identity, child_identity
 
 
-def _replace_submission_payload(
-    store: SafetyKernelStore, task_id: str, payload: object
-) -> None:
+def _replace_submission_payload(store: SafetyKernelStore, task_id: str, payload: object) -> None:
     store.connection.execute(
-        "UPDATE audit_events SET payload_json=? "
-        "WHERE task_id=? AND event_type='TASK_SUBMITTED'",
+        "UPDATE audit_events SET payload_json=? WHERE task_id=? AND event_type='TASK_SUBMITTED'",
         (json.dumps(payload, sort_keys=True), task_id),
     )
 

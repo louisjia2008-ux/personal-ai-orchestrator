@@ -108,8 +108,6 @@ def test_worker_exit_commits_run_and_task_together(tmp_path: Path) -> None:
 
     assert state is TaskState.WORKER_FINISHED
     assert store.get_task("t1").state is TaskState.WORKER_FINISHED
-    run = store.connection.execute(
-        "SELECT status FROM runs WHERE run_id='run-1'"
-    ).fetchone()
+    run = store.connection.execute("SELECT status FROM runs WHERE run_id='run-1'").fetchone()
     assert run is not None
     assert run["status"] == "FINISHED"

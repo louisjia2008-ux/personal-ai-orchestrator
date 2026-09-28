@@ -197,15 +197,20 @@ def test_daemon_injects_same_router_and_host_recommendation(tmp_path, enabled):
     from personal_ai_orchestrator.runtime_config import RuntimeConfig
 
     manager = SimpleNamespace(
-        registry=_registry, pi_runtime_manager=lambda: object(),
+        registry=_registry,
+        pi_runtime_manager=lambda: object(),
         set_verified_execution_lookup=lambda _: None,
-        connected_provider_ids=lambda: (), runtime_available=lambda _: True,
+        connected_provider_ids=lambda: (),
+        runtime_available=lambda _: True,
     )
     kwargs = {"pi_runtime": PiRuntimeConfig(delegation_enabled=True)} if enabled else {}
     service = build_control_service(
         config=RuntimeConfig(catalog_snapshot_id="synthetic", registry=_registry()),
-        state_db=tmp_path / "state.db", runtime_state_root=tmp_path / "runtime",
-        execution_repo=tmp_path / "repo", provider_registry_manager=manager, **kwargs,
+        state_db=tmp_path / "state.db",
+        runtime_state_root=tmp_path / "runtime",
+        execution_repo=tmp_path / "repo",
+        provider_registry_manager=manager,
+        **kwargs,
     )
     try:
         pi_executor = service.dispatch_executor._executors["pi"]

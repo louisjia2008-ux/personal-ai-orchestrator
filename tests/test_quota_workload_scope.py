@@ -101,9 +101,7 @@ def payload(*entries: dict) -> dict:
 
 
 def project(*entries: dict):
-    return normalize_minimax_quota(
-        payload(*entries), observed_at=NOW, known_model_ids=CATALOG
-    )
+    return normalize_minimax_quota(payload(*entries), observed_at=NOW, known_model_ids=CATALOG)
 
 
 def fractions(projection) -> tuple[float | None, float | None]:
@@ -132,9 +130,7 @@ def test_every_minimax_surface_shares_one_scope_vocabulary() -> None:
     """Discovery exposes several MiniMax surfaces; they meter the same scopes."""
 
     for provider_id in ("minimax", "minimax-cn", "minimax-cn-coding-plan"):
-        assert (
-            classify_provider_scope(provider_id, "general") is QuotaWorkloadScope.CODING_TEXT
-        )
+        assert classify_provider_scope(provider_id, "general") is QuotaWorkloadScope.CODING_TEXT
 
 
 def test_this_build_schedules_coding_text_only() -> None:
@@ -232,10 +228,7 @@ def test_a_window_the_general_scope_does_not_identify_is_not_invented() -> None:
     five_hour, weekly = fractions(projection)
     assert five_hour == pytest.approx(0.95)
     assert weekly is None
-    assert (
-        projection.unknown_reason
-        == MiniMaxQuotaReason.GENERAL_WINDOW_SEMANTICS_UNKNOWN.value
-    )
+    assert projection.unknown_reason == MiniMaxQuotaReason.GENERAL_WINDOW_SEMANTICS_UNKNOWN.value
     # ...and certainly not borrowed from video's weekly figure.
     assert weekly != pytest.approx(0.60)
 
@@ -293,9 +286,7 @@ def test_video_alone_leaves_coding_unknown_rather_than_borrowing_its_figure() ->
     assert fractions(projection) == (None, None)
     assert projection.confidence is EvidenceConfidence.UNKNOWN
     assert projection.state is QuotaState.UNKNOWN
-    assert (
-        projection.unknown_reason == MiniMaxQuotaReason.GENERAL_QUOTA_NOT_AVAILABLE.value
-    )
+    assert projection.unknown_reason == MiniMaxQuotaReason.GENERAL_QUOTA_NOT_AVAILABLE.value
     # The video observation itself is still preserved.
     assert [view.scope_id for view in projection.model_equivalents] == ["video", "video"]
 
@@ -310,10 +301,7 @@ def test_malformed_general_values_fail_closed() -> None:
         )
         assert fractions(projection) == (None, None)
         assert projection.confidence is EvidenceConfidence.UNKNOWN
-        assert (
-            projection.unknown_reason
-            == MiniMaxQuotaReason.GENERAL_QUOTA_READ_FAILED.value
-        )
+        assert projection.unknown_reason == MiniMaxQuotaReason.GENERAL_QUOTA_READ_FAILED.value
 
 
 def test_a_general_scope_with_no_figures_does_not_fall_back_to_video() -> None:
@@ -323,9 +311,7 @@ def test_a_general_scope_with_no_figures_does_not_fall_back_to_video() -> None:
     )
 
     assert fractions(projection) == (None, None)
-    assert (
-        projection.unknown_reason == MiniMaxQuotaReason.GENERAL_QUOTA_NOT_AVAILABLE.value
-    )
+    assert projection.unknown_reason == MiniMaxQuotaReason.GENERAL_QUOTA_NOT_AVAILABLE.value
 
 
 def test_several_coding_scopes_that_disagree_still_derive_nothing() -> None:
@@ -343,9 +329,7 @@ def test_several_coding_scopes_that_disagree_still_derive_nothing() -> None:
     five_hour, weekly = fractions(projection)
     assert five_hour is None
     assert weekly == pytest.approx(0.95)
-    assert (
-        projection.unknown_reason == MiniMaxQuotaReason.CODING_SCOPE_VIEWS_DISAGREE.value
-    )
+    assert projection.unknown_reason == MiniMaxQuotaReason.CODING_SCOPE_VIEWS_DISAGREE.value
 
 
 # ---------------------------------------------------------------------------
@@ -361,9 +345,7 @@ def test_video_evidence_is_preserved_and_classified_not_deleted() -> None:
         scope_entry("video", interval=60, weekly=60),
     )
 
-    by_scope = {
-        (view.scope_id, view.window_id): view for view in projection.model_equivalents
-    }
+    by_scope = {(view.scope_id, view.window_id): view for view in projection.model_equivalents}
     assert set(by_scope) == {
         ("general", "5h"),
         ("general", "weekly"),
@@ -449,9 +431,7 @@ def _registry_with(snapshot) -> ModelRegistry:
 
     return ModelRegistry(
         providers={"minimax": Provider(id="minimax", display_name="MiniMax")},
-        accounts={
-            "minimax-a": Account(id="minimax-a", provider_id="minimax", label="MiniMax")
-        },
+        accounts={"minimax-a": Account(id="minimax-a", provider_id="minimax", label="MiniMax")},
         plans={
             "minimax-plan": Plan(
                 id="minimax-plan",

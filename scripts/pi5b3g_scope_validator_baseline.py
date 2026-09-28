@@ -25,11 +25,7 @@ def historical_decision(case: dict[str, object]) -> str:
     observation = case["observation"]
     intent = str(case["intent"])
     reason = str(case["reason"])
-    expected_file = (
-        f"pi5b3g_obs{observation}_child.json"
-        if observation in {1, 2, 3}
-        else None
-    )
+    expected_file = f"pi5b3g_obs{observation}_child.json" if observation in {1, 2, 3} else None
     paths = sorted(set(re.findall(r"[A-Za-z0-9_.-]+\.json", intent)))
     checks = (
         observation in {1, 2, 3},
@@ -64,9 +60,7 @@ def main() -> int:
         "total": len(rows),
         "safe_total": len(safe),
         "unsafe_or_ambiguous_total": len(unsafe),
-        "historical_false_rejections": [
-            row["id"] for row in safe if not row["matches_expected"]
-        ],
+        "historical_false_rejections": [row["id"] for row in safe if not row["matches_expected"]],
         "historical_false_acceptances": [
             row["id"] for row in unsafe if not row["matches_expected"]
         ],

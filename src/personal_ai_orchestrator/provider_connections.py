@@ -250,11 +250,7 @@ def connect_from_discovery(
         if provider_id in current.connections
         else timestamp,
         last_validated_at=record.observed_at,
-        last_reason_code=(
-            "EXECUTION_UNVERIFIED"
-            if not record.execution_verified
-            else None
-        ),
+        last_reason_code=("EXECUTION_UNVERIFIED" if not record.execution_verified else None),
     )
     connections = dict(current.connections)
     connections[provider_id] = connection

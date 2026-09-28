@@ -40,9 +40,9 @@ def test_bare_quota_word_does_not_match() -> None:
         exit_code=1,
         stderr_tail=(
             "Traceback (most recent call last):\n"
-            "  File \"/Users/<user>/personal_ai_orchestrator/src/personal_ai_orchestrator/"
-            "quota_availability.py\", line 42, in <module>\n"
-            "    raise ValueError(\"quota pool id is empty\")\n"
+            '  File "/Users/<user>/personal_ai_orchestrator/src/personal_ai_orchestrator/'
+            'quota_availability.py", line 42, in <module>\n'
+            '    raise ValueError("quota pool id is empty")\n'
         ),
     )
     assert verdict is WorkerFailureClass.UNCLASSIFIED
@@ -62,9 +62,7 @@ def test_classifier_trips_on_canonical_rate_limit_phrases() -> None:
     """Each canonical phrase returns ``QUOTA_OR_RATE_LIMIT``."""
 
     for marker in QUOTA_OR_RATE_LIMIT_MARKERS:
-        verdict = classify_worker_failure(
-            exit_code=1, stderr_tail=f"upstream replied: {marker}\n"
-        )
+        verdict = classify_worker_failure(exit_code=1, stderr_tail=f"upstream replied: {marker}\n")
         assert verdict is WorkerFailureClass.QUOTA_OR_RATE_LIMIT, marker
 
 
@@ -81,9 +79,7 @@ def test_classifier_trips_on_429_alone() -> None:
 def test_classifier_is_case_insensitive() -> None:
     """Uppercase markers still trip (worker stderr may be unbuffered)."""
 
-    verdict = classify_worker_failure(
-        exit_code=1, stderr_tail="RATE LIMIT EXCEEDED"
-    )
+    verdict = classify_worker_failure(exit_code=1, stderr_tail="RATE LIMIT EXCEEDED")
     assert verdict is WorkerFailureClass.QUOTA_OR_RATE_LIMIT
 
 
@@ -91,9 +87,7 @@ def test_classifier_trips_on_auth_markers() -> None:
     """The 401 / 403 / unauthorized phrases return ``AUTH``."""
 
     for marker in AUTH_MARKERS:
-        verdict = classify_worker_failure(
-            exit_code=1, stderr_tail=f"upstream replied: {marker}\n"
-        )
+        verdict = classify_worker_failure(exit_code=1, stderr_tail=f"upstream replied: {marker}\n")
         assert verdict is WorkerFailureClass.AUTH, marker
 
 

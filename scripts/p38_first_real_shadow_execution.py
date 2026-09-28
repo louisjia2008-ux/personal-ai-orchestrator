@@ -77,9 +77,7 @@ def _write_disposable_repo(root: Path) -> tuple[str, str]:
     (root / "src").mkdir(parents=True)
     (root / "tests").mkdir()
     (root / "src" / "tiny_math.py").write_text(
-        "def add_one(value: int) -> int:\n"
-        "    \"\"\"Return value plus one.\"\"\"\n"
-        "    return value\n",
+        'def add_one(value: int) -> int:\n    """Return value plus one."""\n    return value\n',
         encoding="utf-8",
     )
     (root / "tests" / "test_tiny_math.py").write_text(

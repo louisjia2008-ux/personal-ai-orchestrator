@@ -206,9 +206,7 @@ class UnmeteredQuotaCollector(QuotaCollector):
             update={
                 "state": QuotaAvailabilityState.AVAILABLE_UNMETERED,
                 "sanitized_reason_code": "UNMETERED_POOL_AVAILABLE",
-                "previous_state_baseline": (
-                    QuotaAvailabilityState.AVAILABLE_UNMETERED
-                ),
+                "previous_state_baseline": (QuotaAvailabilityState.AVAILABLE_UNMETERED),
             }
         )
 

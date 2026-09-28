@@ -75,18 +75,12 @@ class CampaignQueueSnapshot(RegistryModel):
 
     @property
     def pending_case_ids(self) -> tuple[str, ...]:
-        return tuple(
-            item.case_id
-            for item in self.cases
-            if item.state is CampaignCaseState.PENDING
-        )
+        return tuple(item.case_id for item in self.cases if item.state is CampaignCaseState.PENDING)
 
     @property
     def deferred_case_ids(self) -> tuple[str, ...]:
         return tuple(
-            item.case_id
-            for item in self.cases
-            if item.state is CampaignCaseState.DEFERRED_QUOTA
+            item.case_id for item in self.cases if item.state is CampaignCaseState.DEFERRED_QUOTA
         )
 
 
@@ -134,8 +128,7 @@ class CampaignQueueJournal:
     ) -> CampaignQueueSnapshot:
         existing = self.load()
         case_records = {
-            item.case_id: item
-            for item in (existing.cases if existing is not None else ())
+            item.case_id: item for item in (existing.cases if existing is not None else ())
         }
         records: list[CampaignCaseRecord] = []
         for case in cases:
@@ -151,9 +144,7 @@ class CampaignQueueJournal:
             campaign_id=campaign_id,
             execution_target_id=execution_target_id,
             cases=tuple(records),
-            circuit_breaker_trips=0
-            if existing is None
-            else existing.circuit_breaker_trips,
+            circuit_breaker_trips=0 if existing is None else existing.circuit_breaker_trips,
             quota_deferred_cases=sum(
                 item.state is CampaignCaseState.DEFERRED_QUOTA for item in records
             ),

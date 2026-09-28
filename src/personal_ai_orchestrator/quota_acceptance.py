@@ -80,13 +80,9 @@ def scoped_quota_refresh(
         )
     target = provider_id.strip()
     result = client.refresh_quota(target)
-    unexpected = tuple(
-        item for item in result.refreshed_provider_ids if item != target
-    )
+    unexpected = tuple(item for item in result.refreshed_provider_ids if item != target)
     if unexpected:
-        raise ScopedRefreshWidened(
-            f"scoped refresh of {target!r} also refreshed {unexpected!r}"
-        )
+        raise ScopedRefreshWidened(f"scoped refresh of {target!r} also refreshed {unexpected!r}")
     return result
 
 
@@ -105,9 +101,7 @@ def _sanitized_report(result: QuotaRefreshResultView, *, provider_id: str) -> di
     token, an endpoint with query parameters, or a raw provider body.
     """
 
-    cards = [
-        card for card in result.overview.providers if card.provider_id == provider_id
-    ]
+    cards = [card for card in result.overview.providers if card.provider_id == provider_id]
     return {
         "provider_id": provider_id,
         "refreshed_provider_ids": list(result.refreshed_provider_ids),

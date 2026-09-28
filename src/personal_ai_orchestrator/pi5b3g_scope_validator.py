@@ -151,8 +151,15 @@ def _mask_safe_negations(value: str) -> str:
 
 
 def _result(
-    *, observation_number: int, expected_filename: str, intent: str, reason: str,
-    decision: ScopeDecision, rule_id: str, category: str, input_field: str = "intent",
+    *,
+    observation_number: int,
+    expected_filename: str,
+    intent: str,
+    reason: str,
+    decision: ScopeDecision,
+    rule_id: str,
+    category: str,
+    input_field: str = "intent",
 ) -> PI5B3GScopeValidationResult:
     normalized_intent = _normalize(intent)
     return PI5B3GScopeValidationResult(
@@ -176,9 +183,7 @@ def validate_pi5b3g_child_scope(
 
     expected_filename = f"pi5b3g_obs{observation_number}_child.json"
 
-    def reject(
-        rule: str, category: str, field: str = "intent"
-    ) -> PI5B3GScopeValidationResult:
+    def reject(rule: str, category: str, field: str = "intent") -> PI5B3GScopeValidationResult:
         return _result(
             observation_number=observation_number,
             expected_filename=expected_filename,
@@ -189,13 +194,12 @@ def validate_pi5b3g_child_scope(
             category=category,
             input_field=field,
         )
+
     if observation_number not in (1, 2, 3):
         return reject("SCOPE_OBSERVATION_INVALID", "OBSERVATION_IDENTITY")
 
     for field, raw in (("intent", intent), ("reason", reason)):
-        if re.search(
-            r"\b(?:do not|never|no) .{0,80}\bunless\b", raw, flags=re.IGNORECASE
-        ):
+        if re.search(r"\b(?:do not|never|no) .{0,80}\bunless\b", raw, flags=re.IGNORECASE):
             return reject("SCOPE_AMBIGUOUS_NEGATION", "AMBIGUOUS", field)
         value = _mask_safe_negations(_normalize(raw))
         for rule_id, category, pattern in _RULES:
@@ -208,9 +212,7 @@ def validate_pi5b3g_child_scope(
     if re.search(r"(?:^|\s)(?:/|~\/|\.\.?\/)", intent) or ".." in intent:
         return reject("SCOPE_PATH_ESCAPE", "FILE_SCOPE")
 
-    filename_tokens = re.findall(
-        r"(?<![\w.-])([\w.-]+\.[A-Za-z0-9]{1,12})(?![\w-])", intent
-    )
+    filename_tokens = re.findall(r"(?<![\w.-])([\w.-]+\.[A-Za-z0-9]{1,12})(?![\w-])", intent)
     filenames = [name.rstrip(".") for name in filename_tokens]
     expected_mentions = [name for name in filenames if name == expected_filename]
     other_filenames = [name for name in filenames if name != expected_filename]
@@ -228,7 +230,7 @@ def validate_pi5b3g_child_scope(
     decoder = json.JSONDecoder()
     for match in re.finditer(r"\{", intent):
         try:
-            value, _ = decoder.raw_decode(intent[match.start():])
+            value, _ = decoder.raw_decode(intent[match.start() :])
         except json.JSONDecodeError:
             continue
         decoded.append(value)
@@ -236,14 +238,20 @@ def validate_pi5b3g_child_scope(
         return reject("SCOPE_SEMANTIC_TARGET_INVALID", "SEMANTIC_TARGET")
 
     return _result(
-        observation_number=observation_number, expected_filename=expected_filename,
-        intent=intent, reason=reason, decision=ScopeDecision.ALLOW,
-        rule_id="ALLOW_EXACT_SCOPE", category="ALLOWED",
+        observation_number=observation_number,
+        expected_filename=expected_filename,
+        intent=intent,
+        reason=reason,
+        decision=ScopeDecision.ALLOW,
+        rule_id="ALLOW_EXACT_SCOPE",
+        category="ALLOWED",
     )
 
 
 __all__ = [
-    "PI5B3G_CHILD_STATUS", "PI5B3G_SCOPE_VALIDATOR_VERSION",
-    "PI5B3GScopeValidationResult", "ScopeDecision",
+    "PI5B3G_CHILD_STATUS",
+    "PI5B3G_SCOPE_VALIDATOR_VERSION",
+    "PI5B3GScopeValidationResult",
+    "ScopeDecision",
     "validate_pi5b3g_child_scope",
 ]

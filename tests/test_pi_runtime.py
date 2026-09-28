@@ -151,9 +151,7 @@ def test_pi_json_summary_rejects_provider_error_and_preserves_bounded_reason() -
 
 
 def test_pi_json_summary_rejects_malformed_jsonl_and_extension_error() -> None:
-    malformed = summarize_pi_json_stream(
-        b'{"type":"session"}\nnot-json\n{"type":"agent_end"}'
-    )
+    malformed = summarize_pi_json_stream(b'{"type":"session"}\nnot-json\n{"type":"agent_end"}')
     assert malformed.completed is False
     assert malformed.parse_error == "invalid_jsonl"
 

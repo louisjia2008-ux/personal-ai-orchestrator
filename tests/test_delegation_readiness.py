@@ -41,9 +41,7 @@ def _shadow(
     replay_match: bool = True,
 ) -> DelegationShadowRecord:
     parent_pool = "pool-a"
-    child_pool = (
-        "pool-a" if same_pool is True else "pool-b" if same_pool is False else None
-    )
+    child_pool = "pool-a" if same_pool is True else "pool-b" if same_pool is False else None
     facts = DelegationPolicyInput(
         delegation_feature_enabled=True,
         host_required=True,

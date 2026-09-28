@@ -162,9 +162,7 @@ def migrate_legacy_state(
     record_path = destination_root / "runtime-state" / "migration" / MIGRATION_RECORD_NAME
     if record_path.exists():
         try:
-            existing = MigrationRecord.model_validate_json(
-                record_path.read_text(encoding="utf-8")
-            )
+            existing = MigrationRecord.model_validate_json(record_path.read_text(encoding="utf-8"))
             if existing.migration_schema == MIGRATION_SCHEMA and (
                 existing.outcome
                 in {MigrationOutcome.COMPLETED, MigrationOutcome.COMPLETED_WITH_SKIPS}

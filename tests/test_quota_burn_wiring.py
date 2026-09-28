@@ -47,9 +47,7 @@ from personal_ai_orchestrator.quota_plan import (
 
 
 def _evidence(now: datetime) -> EvidenceSource:
-    return EvidenceSource(
-        source_type=EvidenceSourceType.PROVIDER_API, observed_at=now
-    )
+    return EvidenceSource(source_type=EvidenceSourceType.PROVIDER_API, observed_at=now)
 
 
 def test_snapshot_burn_returns_unmetered_when_no_reset_at() -> None:

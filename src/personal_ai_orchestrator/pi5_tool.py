@@ -91,7 +91,7 @@ __all__ = [
 
 # Loaded only by the host's feature-enabled runtime. Socket authority is a
 # generated literal outside the worktree, never a model parameter or environment.
-PI5_SOCKET_TOOL_SOURCE = r'''import { createConnection } from "node:net";
+PI5_SOCKET_TOOL_SOURCE = r"""import { createConnection } from "node:net";
 const socketPath = __SOCKET_PATH__;
 const ordinals = new Map<string, number>();
 const failure = () => ({ content: [{ type: "text", text: "PAO delegation unavailable." }] });
@@ -157,15 +157,17 @@ export default function (pi: any) {
     },
   });
 }
-'''
+"""
 
 
 def pi5_socket_tool_source(socket_path: Path) -> str:
     import json
 
-    return (PI5_SOCKET_TOOL_SOURCE.replace("__SOCKET_PATH__", json.dumps(str(socket_path)))
-              .replace("__MAX_INTENT__", str(PI5_MAX_INTENT_CHARS))
-              .replace("__MAX_REASON__", str(PI5_MAX_REASON_CHARS)))
+    return (
+        PI5_SOCKET_TOOL_SOURCE.replace("__SOCKET_PATH__", json.dumps(str(socket_path)))
+        .replace("__MAX_INTENT__", str(PI5_MAX_INTENT_CHARS))
+        .replace("__MAX_REASON__", str(PI5_MAX_REASON_CHARS))
+    )
 
 
 def seed_pi5_socket_tool(policy_root: Path, *, socket_path: Path) -> Path:

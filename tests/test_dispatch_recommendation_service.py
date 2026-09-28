@@ -295,7 +295,8 @@ def test_recommend_for_task_runs_deterministic_scoring(tmp_path: Path) -> None:
         task = _make_task(store)
         service = _make_service(store, availability, registry)
         recommendation, candidates, invalid_min_tier = service.recommend_for_task(
-            task, policy=RoutingObjective.BALANCED,
+            task,
+            policy=RoutingObjective.BALANCED,
         )
         assert invalid_min_tier is None
         assert len(candidates) == len(recommendation.evaluations)
@@ -329,7 +330,8 @@ def test_recommend_for_task_records_task_min_tier_invalid(tmp_path: Path) -> Non
 
         service = _make_service(store, availability, registry)
         recommendation, candidates, invalid_min_tier = service.recommend_for_task(
-            task, policy=RoutingObjective.BALANCED,
+            task,
+            policy=RoutingObjective.BALANCED,
         )
         assert invalid_min_tier == "T_CORRUPT"
         # No exception; ranking falls back to T1 and surfaces a
@@ -339,8 +341,7 @@ def test_recommend_for_task_records_task_min_tier_invalid(tmp_path: Path) -> Non
                 reasons_text = " ".join(evaluation.reasons)
                 assert "min_tier_invalid_assumed_T1" in reasons_text
         row = store.connection.execute(
-            "SELECT event_type FROM audit_events "
-            "WHERE event_type='TASK_MIN_TIER_INVALID'"
+            "SELECT event_type FROM audit_events WHERE event_type='TASK_MIN_TIER_INVALID'"
         ).fetchone()
         assert row is not None
     finally:
@@ -362,7 +363,8 @@ def test_recommend_for_task_passes_candidates_to_view_construction(
         service = _make_service(store, availability, registry)
         direct_candidates = service.collect_candidates()
         recommendation, service_candidates, _ = service.recommend_for_task(
-            task, policy=RoutingObjective.BALANCED,
+            task,
+            policy=RoutingObjective.BALANCED,
         )
         assert [c.execution_target_id for c in service_candidates] == [
             c.execution_target_id for c in direct_candidates

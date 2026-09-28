@@ -909,9 +909,7 @@ def _versions() -> dict[str, str]:
     }
     sw_vers = _run(["sw_vers"], check=False)
     values["macos"] = (
-        sw_vers.stdout.strip().replace("\n", "; ")
-        if sw_vers.returncode == 0
-        else "UNKNOWN"
+        sw_vers.stdout.strip().replace("\n", "; ") if sw_vers.returncode == 0 else "UNKNOWN"
     )
     opencode = _run(["opencode", "--version"], check=False)
     if opencode.returncode == 0:

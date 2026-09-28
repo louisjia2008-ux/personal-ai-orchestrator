@@ -114,9 +114,7 @@ class DelegationChildResult(RegistryModel):
 class DelegationBrokerResponse(RegistryModel):
     schema_version: int = PI5_SCHEMA_VERSION
     tool_call_id: str | None = Field(default=None, max_length=256)
-    ordinal: int | None = Field(
-        default=None, ge=1, le=PI5_MAX_REQUESTS_PER_PARENT_RUN
-    )
+    ordinal: int | None = Field(default=None, ge=1, le=PI5_MAX_REQUESTS_PER_PARENT_RUN)
     status: DelegationBrokerStatus
     reason_code: str = Field(min_length=1, max_length=128)
     child_task_id: str | None = Field(default=None, max_length=128)
@@ -148,8 +146,7 @@ class DelegationBrokerSession:
         context: DelegationBrokerContext,
         child_port: DelegationChildExecutionPort,
         active: bool = True,
-        scope_validator: Callable[[DelegationRequest], PI5B3GScopeValidationResult]
-        | None = None,
+        scope_validator: Callable[[DelegationRequest], PI5B3GScopeValidationResult] | None = None,
         scope_trace_sink: Callable[[PI5B3GScopeValidationResult], None] | None = None,
     ) -> None:
         self.active = active
@@ -170,9 +167,7 @@ class DelegationBrokerSession:
         )
         return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
-    def _reject(
-        self, request: DelegationRequest, reason_code: str
-    ) -> DelegationBrokerResponse:
+    def _reject(self, request: DelegationRequest, reason_code: str) -> DelegationBrokerResponse:
         return DelegationBrokerResponse(
             tool_call_id=request.tool_call_id,
             ordinal=request.ordinal,
@@ -249,9 +244,7 @@ class DelegationBrokerSession:
                         status=DelegationBrokerStatus.COMPLETED,
                         reason_code="CHILD_EXECUTION_FINISHED",
                         child_task_id=result.child_task_id,
-                        selected_execution_target_id=(
-                            result.selected_execution_target_id
-                        ),
+                        selected_execution_target_id=(result.selected_execution_target_id),
                         child_state=result.final_state,
                         verified=result.verified,
                         summary=result.summary,
@@ -328,10 +321,7 @@ class UnixDelegationBrokerServer:
     ) -> None:
         payload = response.model_dump(mode="json")
         assert_sanitized(payload)
-        writer.write(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-            + b"\n"
-        )
+        writer.write(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode() + b"\n")
         await writer.drain()
 
     async def _handle_client(

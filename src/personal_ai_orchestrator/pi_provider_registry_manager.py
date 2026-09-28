@@ -170,10 +170,7 @@ class PiProviderRegistryManager:
         for provider in result.providers:
             if provider.provider_id != model_provider:
                 continue
-            return (
-                provider.auth_status.value == "READY"
-                and model_name in provider.model_skus
-            )
+            return provider.auth_status.value == "READY" and model_name in provider.model_skus
         return False
 
     def refresh(self) -> PiRuntimeDiscoveryStatus:
