@@ -122,14 +122,14 @@ this attempt provides no authorization to repair and rerun.
 ## Disposable fixture and frozen verification
 
 Fixture main:
-`/Volumes/Taoruide外接/AI LLM TOOLS/pi5b2-real-acceptance-20260913-activation/fixture`
+`/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-activation/fixture`
 
 Initial and final main HEAD:
 `e5086f9ba857e017346dc1abb71433d129603390`.
 Initial and final main status: empty / clean.
 
 Parent worktree:
-`/Volumes/Taoruide外接/AI LLM TOOLS/pi5b2-real-acceptance-20260913-activation/worktrees/pi5b2-activation-parent`
+`/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-activation/worktrees/pi5b2-activation-parent`
 
 The worktree is separate from fixture main and PAO source. It also remained
 clean. Child worktree was not created. PAO source HEAD/status were identical

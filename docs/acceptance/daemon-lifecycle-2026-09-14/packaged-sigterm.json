@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "helper": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon",
+  "helper": "/tmp/pao-acceptance/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon",
   "home": "/private/tmp/pao-packaged-g_im86ld",
   "cycles_requested": 5,
   "routes": [
@@ -18,13 +18,13 @@
         "pid": 5280,
         "ppid": 5268,
         "pgid": 5268,
-        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+        "command": "/tmp/pao-acceptance/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
       },
       "child": {
         "pid": 5281,
         "ppid": 5280,
         "pgid": 5268,
-        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+        "command": "/tmp/pao-acceptance/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
       },
       "signal_target_pid": 5280,
       "signal_count": 1,
@@ -57,13 +57,13 @@
         "pid": 5399,
         "ppid": 5268,
         "pgid": 5268,
-        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+        "command": "/tmp/pao-acceptance/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
       },
       "child": {
         "pid": 5401,
         "ppid": 5399,
         "pgid": 5268,
-        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+        "command": "/tmp/pao-acceptance/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
       },
       "signal_target_pid": 5401,
       "signal_count": 1,
@@ -96,13 +96,13 @@
         "pid": 5431,
         "ppid": 5268,
         "pgid": 5268,
-        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+        "command": "/tmp/pao-acceptance/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
       },
       "child": {
         "pid": 5432,
         "ppid": 5431,
         "pgid": 5268,
-        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+        "command": "/tmp/pao-acceptance/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
       },
       "signal_target_pid": 5431,
       "signal_count": 1,
@@ -135,13 +135,13 @@
         "pid": 5458,
         "ppid": 5268,
         "pgid": 5268,
-        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+        "command": "/tmp/pao-acceptance/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
       },
       "child": {
         "pid": 5459,
         "ppid": 5458,
         "pgid": 5268,
-        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+        "command": "/tmp/pao-acceptance/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
       },
       "signal_target_pid": 5459,
       "signal_count": 1,
@@ -174,13 +174,13 @@
         "pid": 5498,
         "ppid": 5268,
         "pgid": 5268,
-        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+        "command": "/tmp/pao-acceptance/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
       },
       "child": {
         "pid": 5499,
         "ppid": 5498,
         "pgid": 5268,
-        "command": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
+        "command": "/tmp/pao-acceptance/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon --home /private/tmp/pao-packaged-g_im86ld --port 0"
       },
       "signal_target_pid": 5498,
       "signal_count": 1,

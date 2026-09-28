@@ -1136,6 +1136,18 @@ class ApprovalView(_ViewModel):
     resolved_at: str | None = None
 
 
+class ApprovalResolveRequest(_ViewModel):
+    """Owner resolution of one already-pending approval.
+
+    The control socket is owner-only (0600).  Clients still provide a stable
+    request id so Telegram/DeskPet retries can be audited without inventing a
+    second approval or resolving the same record twice.
+    """
+
+    request_id: str = Field(min_length=1, max_length=128)
+    approved: bool
+
+
 class ApprovalListView(_ViewModel):
     approvals: tuple[ApprovalView, ...]
 
@@ -3863,6 +3875,35 @@ class ControlPlaneService:
         except KeyError:
             raise ControlPlaneError(404, "approval_not_found") from None
 
+    def resolve_approval(
+        self,
+        approval_id: str,
+        payload: dict[str, Any],
+    ) -> ApprovalView:
+        """Resolve one pending approval through the owner-only UDS surface.
+
+        This does not create approvals and cannot grant a different authority
+        than the kind already recorded by the Safety Kernel. Replaying the same
+        resolution is idempotent; trying to reverse a terminal resolution
+        remains fail-closed in :class:`ApprovalAuthority`.
+        """
+
+        self._validate_identifier("approval_id", approval_id)
+        request = ApprovalResolveRequest.model_validate(payload)
+        self._validate_identifier("request_id", request.request_id)
+        authority = ApprovalAuthority(self.store)
+        try:
+            record = authority.resolve(
+                approval_id,
+                approved=request.approved,
+                request_id=request.request_id,
+            )
+        except KeyError:
+            raise ControlPlaneError(404, "approval_not_found") from None
+        except ValueError as error:
+            raise ControlPlaneError(409, "approval_already_resolved") from error
+        return self._approval_view(record)
+
     @staticmethod
     def _approval_view(record) -> ApprovalView:
         return ApprovalView(
@@ -4226,8 +4267,17 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                 self._view(200, request_service.get_run(rest[1]))
                 return
 
-            if count == 2 and rest[0] == "approvals" and method == "GET":
-                self._view(200, request_service.get_approval(rest[1]))
+            if count == 2 and rest[0] == "approvals":
+                if method == "GET":
+                    self._view(200, request_service.get_approval(rest[1]))
+                    return
+                if method == "POST":
+                    payload = self._read_json()
+                    if payload is None:
+                        return
+                    self._view(200, request_service.resolve_approval(rest[1], payload))
+                    return
+                self._json(405, {"error": "method_not_allowed"})
                 return
 
             if count == 2 and rest[0] == "dispatches" and method == "GET":

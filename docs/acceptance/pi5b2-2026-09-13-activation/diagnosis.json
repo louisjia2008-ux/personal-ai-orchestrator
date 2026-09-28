@@ -9,7 +9,7 @@
   "workspaces": [
     {
       "task_id": "pi5b2-activation-parent",
-      "worktree_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-activation/worktrees/pi5b2-activation-parent",
+      "worktree_path": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-activation/worktrees/pi5b2-activation-parent",
       "base_sha": "e5086f9ba857e017346dc1abb71433d129603390",
       "writer_released": true,
       "writer_acquired_at_cleared": true

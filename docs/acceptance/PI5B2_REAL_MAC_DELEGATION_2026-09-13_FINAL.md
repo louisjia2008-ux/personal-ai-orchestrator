@@ -145,17 +145,17 @@ returned the production child result unchanged.
 ## New disposable fixture and frozen verification
 
 Fixture main:
-`/Volumes/Taoruide外接/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/fixture`
+`/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/fixture`
 
 Initial and final fixture HEAD: `0431845631c193ef9c1a63108cc2a954d44ea827`.
 Initial and final fixture status: empty / clean. The initial commit was empty:
 no user project data, dependencies, credentials, or network work were required.
 
 Parent worktree:
-`/Volumes/Taoruide外接/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent`
+`/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent`
 
 Child worktree:
-`/Volumes/Taoruide外接/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5-child-fde92b4ef8466950ec06`
+`/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/pi5-child-fde92b4ef8466950ec06`
 
 Both worktrees derive from the fixture base and are distinct from fixture main
 and the PAO source checkout. Parent changed only `pi5_parent_result.json`;

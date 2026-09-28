@@ -354,6 +354,20 @@ class ControlPlaneClient:
     def get_approval(self, approval_id: str) -> ApprovalView:
         return self._get(f"/v1/approvals/{approval_id}", ApprovalView)  # type: ignore[return-value]
 
+    def resolve_approval(
+        self,
+        approval_id: str,
+        *,
+        request_id: str,
+        approved: bool,
+    ) -> ApprovalView:
+        rendered = self._request(
+            "POST",
+            f"/v1/approvals/{approval_id}",
+            payload={"request_id": request_id, "approved": approved},
+        )
+        return ApprovalView.model_validate(rendered)
+
 
 __all__ = [
     "ControlPlaneClient",

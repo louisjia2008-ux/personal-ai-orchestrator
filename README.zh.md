@@ -4,6 +4,25 @@
 
 > 状态:**调度决策内核已验证、今天就能用**(Jev 路由,支持 pi / DeepSeek Harness / CLI 三种宿主)· 编排 daemon **pre-alpha**
 
+## 安装与支持平台
+
+- Python 核心/CLI：macOS 或 Linux，Python 3.12。
+- JavaScript 适配器：macOS 或 Linux，Node.js 24。
+- 原生仪表盘/菜单栏/Widget：macOS 13+，Swift tools 5.9+。
+- Windows 目前未支持、未观察。
+
+```bash
+git clone https://github.com/louisjia2008-ux/personal-ai-orchestrator.git
+cd personal-ai-orchestrator
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/pao --help
+```
+
+开发与 clean-clone 验证见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。项目采用
+[`MIT License`](LICENSE)，公开发布准备清单见
+[`docs/PUBLIC_RELEASE_CHECKLIST.md`](docs/PUBLIC_RELEASE_CHECKLIST.md)。
+
 English | [中文](README.zh.md)
 
 ## 今天就能用的:Jev 配额感知模型调度
@@ -57,7 +76,7 @@ Personal AI Orchestrator 由两层构成:
 ## 核心架构
 
 ```text
-OpenCode / CLI / macOS / DeskPet / 未来客户端
+OpenCode / CLI / macOS / Telegram / DeskPet
                      |
                      v
          Personal AI Orchestrator Core
@@ -215,6 +234,15 @@ open "dist/Personal AI Orchestrator.app"
 bundle 内含 `Contents/Helpers/pao-daemon`。仪表盘仍是客户端:只读类型化 `/v1` daemon 视图,绝不直接读安全内核 SQLite、凭证或浏览器会话存储。DeskPet 是可选客户端而非依赖。
 
 见 [`docs/MACOS_CONTROL_PLANE.md`](docs/MACOS_CONTROL_PLANE.md)。
+
+## Telegram 与 DeskPet
+
+Telegram 与 DeskPet 复用同一个类型化客户端网关和同一份持久任务状态。网关只提供
+submit/status/cancel/approve/report，不存在任意命令或 shell 字段。Telegram 同时校验
+用户与 chat 白名单，并用消息派生的稳定 request ID 保证重试幂等。Bot 凭证留在
+provider 原生秘密存储中，不进入 PAO 状态或命令参数。
+
+详见 [`docs/TELEGRAM_DESKPET_CLIENTS.md`](docs/TELEGRAM_DESKPET_CLIENTS.md)。
 
 ## 安全原则
 

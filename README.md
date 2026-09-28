@@ -6,6 +6,26 @@ English | [中文](README.zh.md)
 
 > Status: **dispatch kernel verified & usable today** (Jev routing via pi / DeepSeek Harness / CLI) · orchestrator daemon **pre-alpha**
 
+## Install and supported platforms
+
+- Python core/CLI: Python 3.12 on macOS or Linux.
+- JavaScript adapters: Node.js 24 on macOS or Linux.
+- Native dashboard/menu bar/widget: macOS 13+ with Swift tools 5.9+.
+- Windows is not currently supported or observed.
+
+```bash
+git clone https://github.com/louisjia2008-ux/personal-ai-orchestrator.git
+cd personal-ai-orchestrator
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/pao --help
+```
+
+Development and clean-clone verification instructions are in
+[`CONTRIBUTING.md`](CONTRIBUTING.md). The project is licensed under the
+[`MIT License`](LICENSE); release preparation is tracked in
+[`docs/PUBLIC_RELEASE_CHECKLIST.md`](docs/PUBLIC_RELEASE_CHECKLIST.md).
+
 ## What works today: Jev quota-aware model dispatch
 
 The scheduling decision layer is implemented, verified end-to-end against live APIs, and installable on three hosts:
@@ -59,7 +79,7 @@ Personal AI Orchestrator combines two layers:
 ## Core architecture
 
 ```text
-OpenCode / CLI / macOS / DeskPet / future clients
+OpenCode / CLI / macOS / Telegram / DeskPet
                      |
                      v
         Personal AI Orchestrator Core
@@ -234,14 +254,14 @@ Disposable integration spikes may exercise session-scoped ACTIVE switching witho
 
 The orchestrator core remains headless and cross-client.
 
-A first-party macOS client is being built with three complementary surfaces:
+A first-party macOS client is available from source with three complementary surfaces:
 
 - **Menu Bar** — live status, quick safe submission, bounded cancellation, and an
   `Open Dashboard` command;
 - **Full Dashboard** — native `NavigationSplitView` sections for overview, tasks,
   execution targets, providers, quota, routing, verification, history, and settings;
-- **Desktop / Notification Center Widgets** — read-only snapshot source/bridge, pending
-  installable `.appex` packaging.
+- **Desktop / Notification Center Widgets** — read-only snapshot source/bridge embedded as
+  an installable `.appex` in the locally built app bundle.
 
 P4.2 introduces a local app-bundle builder:
 
@@ -260,6 +280,17 @@ Safety Kernel SQLite, credentials, provider auth files, or browser/session store
 DeskPet is an optional client, not a dependency of the project.
 
 See [`docs/MACOS_CONTROL_PLANE.md`](docs/MACOS_CONTROL_PLANE.md).
+
+## Telegram and DeskPet
+
+Telegram and DeskPet use the same typed client gateway and the same durable
+task state. The gateway exposes only submit/status/cancel/approve/report; it
+has no arbitrary command or shell field. Telegram messages require both user
+and chat allowlists, and stable message-derived request IDs make retries
+idempotent. Telegram bot credentials remain in a provider-native secret store,
+outside PAO state and command arguments.
+
+See [`docs/TELEGRAM_DESKPET_CLIENTS.md`](docs/TELEGRAM_DESKPET_CLIENTS.md).
 
 ## Safety principles
 

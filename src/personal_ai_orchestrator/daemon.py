@@ -59,8 +59,12 @@ from personal_ai_orchestrator.policy_snapshot import PolicySnapshotJournal
 from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryManager
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityJournal
 from personal_ai_orchestrator.quota_collectors.unmetered import UnmeteredQuotaCollector
-from personal_ai_orchestrator.quota_credentials import SecretValue
-from personal_ai_orchestrator.quota_refresh import QUOTA_SOURCES, QuotaRefreshService
+from personal_ai_orchestrator.quota_credentials import QuotaCredentialResolver, SecretValue
+from personal_ai_orchestrator.quota_refresh import (
+    QUOTA_CREDENTIAL_SPECS,
+    QUOTA_SOURCES,
+    QuotaRefreshService,
+)
 from personal_ai_orchestrator.routing_service import RoutingService
 from personal_ai_orchestrator.runtime_config import RuntimeConfig
 from personal_ai_orchestrator.runtime_dispatch_executor import RuntimeDispatchExecutor
@@ -118,9 +122,9 @@ def build_service(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Personal AI Orchestrator Shadow routing daemon")
-    parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--state-db", type=Path, required=True)
-    parser.add_argument("--runtime-state-root", type=Path, required=True)
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--state-db", type=Path)
+    parser.add_argument("--runtime-state-root", type=Path)
     parser.add_argument(
         "--host",
         default="127.0.0.1",
@@ -187,7 +191,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "falls back to PAO_TICK_INTERVAL_SECONDS, then 5.0s"
         ),
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--quota-credential-check",
+        choices=tuple(sorted(QUOTA_CREDENTIAL_SPECS)),
+        default=None,
+        help=(
+            "read one allowlisted quota credential source and exit with sanitized "
+            "presence/provenance JSON; never calls a provider endpoint"
+        ),
+    )
+    args = parser.parse_args(argv)
+    if args.quota_credential_check is None:
+        missing = [
+            flag
+            for flag, value in (
+                ("--config", args.config),
+                ("--state-db", args.state_db),
+                ("--runtime-state-root", args.runtime_state_root),
+            )
+            if value is None
+        ]
+        if missing:
+            parser.error(f"the following arguments are required: {', '.join(missing)}")
+    return args
 
 
 def load_verifier_profile(path: Path | None):
@@ -454,6 +480,21 @@ def main(
     provider_registry_manager: ProviderRegistryManager | None = None,
 ) -> int:
     args = parse_args(argv)
+    if args.quota_credential_check is not None:
+        credential = QuotaCredentialResolver(specs=QUOTA_CREDENTIAL_SPECS).resolve(
+            args.quota_credential_check
+        )
+        print(
+            json.dumps(
+                {
+                    "provider_id": args.quota_credential_check,
+                    "present": credential.present,
+                    "source": credential.source.value,
+                },
+                sort_keys=True,
+            )
+        )
+        return 0 if credential.present else 3
     config = load_runtime_config(args.config)
     if provider_registry_manager is None:
         provider_registry_manager = ProviderRegistryManager(

@@ -46,7 +46,7 @@ PI-2 scope).
 The harness:
 
 ```python
-# /Volumes/Taoruide外接/pi2-real-acceptance/pi2_real_discovery.py
+# /tmp/pao-acceptance/pi2-real-acceptance/pi2_real_discovery.py
 from personal_ai_orchestrator.pi_provider_discovery import (
     discover_pi, build_pi_registry,
 )
@@ -186,7 +186,7 @@ binary; the wall-clock cap is 15 s and the stdout cap is 256 KiB.
 ## Credential-safety acceptance
 
 A canary subprocess probe
-(`/Volumes/Taoruide外接/pi2-real-acceptance/credential_isolation_probe.py`)
+(`/tmp/pao-acceptance/pi2-real-acceptance/credential_isolation_probe.py`)
 forged a parent env containing 13 known credential env-var names with
 recognisable `canary_*` values, then ran `_build_subprocess_env` (the
 same helper PI-2 uses) and spawned `/usr/bin/env` with the result.
@@ -252,7 +252,7 @@ remain green on the same HEAD.
 ## Sanitized baseline sanity
 
 Run from the PI-2 acceptance worktree
-(`/Volumes/Taoruide外接/pi2-mac-discovery`,
+(`/tmp/pao-acceptance/pi2-mac-discovery`,
 branch `pi2-mac-discovery`,
 tracking `origin/feat/pi-provider-discovery-02`,
 HEAD `31267c18d35972c4abda33cb820fef82e5a9a342`):
@@ -359,7 +359,7 @@ until the owner decides to merge.
   new PAO/Runtime pair has its own PI-1-style real acceptance. PI-2
   ships with the single entry that PI-1 already proved.
 - The disposable harness scripts
-  (`/Volumes/Taoruide外接/pi2-real-acceptance/pi2_real_discovery.py`,
-  `/Volumes/Taoruide外接/pi2-real-acceptance/credential_isolation_probe.py`)
+  (`/tmp/pao-acceptance/pi2-real-acceptance/pi2_real_discovery.py`,
+  `/tmp/pao-acceptance/pi2-real-acceptance/credential_isolation_probe.py`)
   are out-of-tree artifacts and NOT part of the PR diff. The owner
   may delete them after merge.

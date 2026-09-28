@@ -27,11 +27,11 @@
       "role": "parent",
       "ordinal": 1,
       "pid": 63303,
-      "cwd": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent",
+      "cwd": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent",
       "model": "minimax-cn/MiniMax-M3",
       "no_extensions": true,
       "explicit_extensions": [
-        "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/.pao-runtime/.pao/pi-worktree-guard.ts",
+        "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/.pao-runtime/.pao/pi-worktree-guard.ts",
         "/var/folders/pt/tn46s3216rg366nxx7g7ng940000gn/T/pao-pi5-hihrr2mo/.pao/pi5-request.ts"
       ],
       "tools": "read,edit,write,grep,find,ls,pao_delegate"
@@ -56,7 +56,7 @@
     {
       "event": "PARENT_WRITER_ACQUIRED",
       "observed_at": "2026-09-13T06:01:28.353706+00:00",
-      "worktree": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent",
+      "worktree": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent",
       "writer_fingerprint": "5913d3bb97828663"
     },
     {
@@ -82,7 +82,7 @@
       "observation_found": true,
       "snapshot_id": "quota-a679f5bc-6aea-48fa-8526-c0e78e8bb35f",
       "source": "PERSISTED_POOL_CACHE",
-      "cache_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/runtime/quota/quota-minimax-token-plan-cn.json",
+      "cache_path": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/runtime/quota/quota-minimax-token-plan-cn.json",
       "cache_sha256": "ca50fe7ef7b7c4db76f67dfd09fdd363bd5e1b7adbce4a919e1a629b91b93541",
       "observation_state": "AVAILABLE",
       "observation_confidence": "EXACT",
@@ -107,7 +107,7 @@
       "observation_found": true,
       "snapshot_id": "quota-a679f5bc-6aea-48fa-8526-c0e78e8bb35f",
       "source": "PERSISTED_POOL_CACHE",
-      "cache_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/runtime/quota/quota-minimax-token-plan-cn.json",
+      "cache_path": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/runtime/quota/quota-minimax-token-plan-cn.json",
       "cache_sha256": "ca50fe7ef7b7c4db76f67dfd09fdd363bd5e1b7adbce4a919e1a629b91b93541",
       "observation_state": "AVAILABLE",
       "observation_confidence": "EXACT",
@@ -132,7 +132,7 @@
       "observation_found": true,
       "snapshot_id": "quota-a679f5bc-6aea-48fa-8526-c0e78e8bb35f",
       "source": "PERSISTED_POOL_CACHE",
-      "cache_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/runtime/quota/quota-minimax-token-plan-cn.json",
+      "cache_path": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/runtime/quota/quota-minimax-token-plan-cn.json",
       "cache_sha256": "ca50fe7ef7b7c4db76f67dfd09fdd363bd5e1b7adbce4a919e1a629b91b93541",
       "observation_state": "AVAILABLE",
       "observation_confidence": "EXACT",
@@ -205,11 +205,11 @@
       "role": "child",
       "ordinal": 2,
       "pid": 63332,
-      "cwd": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5-child-fde92b4ef8466950ec06",
+      "cwd": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/pi5-child-fde92b4ef8466950ec06",
       "model": "minimax-cn/MiniMax-M3",
       "no_extensions": true,
       "explicit_extensions": [
-        "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/.pao-runtime/.pao/pi-worktree-guard.ts"
+        "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/.pao-runtime/.pao/pi-worktree-guard.ts"
       ],
       "tools": "read,edit,write,grep,find,ls"
     },
@@ -234,8 +234,8 @@
     {
       "event": "SIMULTANEOUS_ISOLATION",
       "observed_at": "2026-09-13T06:01:33.580915+00:00",
-      "parent_worktree": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent",
-      "child_worktree": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5-child-fde92b4ef8466950ec06",
+      "parent_worktree": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent",
+      "child_worktree": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/pi5-child-fde92b4ef8466950ec06",
       "base_sha": "0431845631c193ef9c1a63108cc2a954d44ea827",
       "parent_writer_present": true,
       "child_writer_present": true,
@@ -333,13 +333,13 @@
       "role": "parent",
       "ordinal": 1,
       "pid": 63303,
-      "cwd": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent"
+      "cwd": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent"
     },
     {
       "role": "child",
       "ordinal": 2,
       "pid": 63332,
-      "cwd": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5-child-fde92b4ef8466950ec06"
+      "cwd": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/pi5-child-fde92b4ef8466950ec06"
     }
   ],
   "source_code_changed": false,
@@ -456,7 +456,7 @@
           "base_sha": "0431845631c193ef9c1a63108cc2a954d44ea827",
           "project_id": "pi5b2-fixture",
           "working_subpath": null,
-          "worktree_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent"
+          "worktree_path": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent"
         }
       },
       {
@@ -534,7 +534,7 @@
           "quota_state": "AVAILABLE_OBSERVED",
           "request_id": "pi5b2-final-parent-dispatch",
           "run_id": "run-owner-dispatch-pi5b2-final-parent-dispatch",
-          "worktree_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent"
+          "worktree_path": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent"
         }
       }
     ],
@@ -577,7 +577,7 @@
           "base_sha": "0431845631c193ef9c1a63108cc2a954d44ea827",
           "project_id": "pi5b2-fixture",
           "working_subpath": null,
-          "worktree_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5-child-fde92b4ef8466950ec06"
+          "worktree_path": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/pi5-child-fde92b4ef8466950ec06"
         }
       },
       {
@@ -655,7 +655,7 @@
           "quota_state": "AVAILABLE_OBSERVED",
           "request_id": "pi5-child-dispatch-pi5-child-fde92b4ef8466950ec06",
           "run_id": "run-owner-dispatch-pi5-child-dispatch-pi5-child-fde92b4ef8466950ec06",
-          "worktree_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5-child-fde92b4ef8466950ec06"
+          "worktree_path": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/pi5-child-fde92b4ef8466950ec06"
         }
       }
     ]

@@ -6,11 +6,11 @@
       "observed_at": "2026-09-13T02:48:08.668217+00:00",
       "ordinal": 1,
       "pid": 13099,
-      "cwd": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913/worktrees/pi5b2-real-parent",
+      "cwd": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913/worktrees/pi5b2-real-parent",
       "model": "minimax-cn/MiniMax-M3",
       "no_extensions": true,
       "explicit_extensions": [
-        "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913/worktrees/.pao-runtime/.pao/pi-worktree-guard.ts",
+        "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913/worktrees/.pao-runtime/.pao/pi-worktree-guard.ts",
         "/var/folders/pt/tn46s3216rg366nxx7g7ng940000gn/T/pao-pi5-0xl1sj6a/.pao/pi5-request.ts"
       ],
       "tools": "read,edit,write,grep,find,ls"
@@ -53,7 +53,7 @@
     {
       "ordinal": 1,
       "pid": 13099,
-      "cwd": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913/worktrees/pi5b2-real-parent"
+      "cwd": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913/worktrees/pi5b2-real-parent"
     }
   ],
   "source_code_changed": false,
@@ -134,7 +134,7 @@
           "base_sha": "7bb8752a7a73207bc7d3863645fec8a2b159e0ba",
           "project_id": "pi5b2-fixture",
           "working_subpath": null,
-          "worktree_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913/worktrees/pi5b2-real-parent"
+          "worktree_path": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913/worktrees/pi5b2-real-parent"
         }
       },
       {
@@ -201,7 +201,7 @@
           "quota_state": "AVAILABLE_OBSERVED",
           "request_id": "pi5b2-real-parent-dispatch",
           "run_id": "run-owner-dispatch-pi5b2-real-parent-dispatch",
-          "worktree_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913/worktrees/pi5b2-real-parent"
+          "worktree_path": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913/worktrees/pi5b2-real-parent"
         }
       }
     ]

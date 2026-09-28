@@ -103,7 +103,7 @@ Reread this brief after every phase. Every action must directly serve the locked
 
 ## Git Safety
 
-Work only in `/Volumes/Taoruide外接/AI LLM TOOLS/pao-daemon-graceful-sigterm` on `fix/pao-daemon-graceful-sigterm`, based on `3f15e6d`. Inspect branch, status, diff, changed-file scope, and secret exposure before each commit. Use focused commits and normal push only. Never reset, clean, rebase, force-push, merge, delete unrelated worktrees, or modify the dirty parent repository. Rollback means reverting only task-owned edits with a new normal commit or stopping for owner direction; no history rewrite.
+Work only in `/tmp/pao-acceptance/pao-daemon-graceful-sigterm` on `fix/pao-daemon-graceful-sigterm`, based on `3f15e6d`. Inspect branch, status, diff, changed-file scope, and secret exposure before each commit. Use focused commits and normal push only. Never reset, clean, rebase, force-push, merge, delete unrelated worktrees, or modify the dirty parent repository. Rollback means reverting only task-owned edits with a new normal commit or stopping for owner direction; no history rewrite.
 # Integration and product-promotion closure continuation
 
 ## User Goal

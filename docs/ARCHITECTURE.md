@@ -25,14 +25,14 @@ Typed Orchestrator API
 | Quota Governor                |
 +-------------------------------+
           |
-          | ACP v1
+          | typed host-owned adapter contract
           v
 +-------------------------------+
 | Worker runtime / adapters     |
 |-------------------------------|
-| Codex                         |
-| Claude Code                   |
-| OpenCode -> MiniMax/...       |
+| Pi runtime / host broker      |
+| OpenCode thin adapter         |
+| future bounded adapters       |
 +-------------------------------+
           |
           v
@@ -44,8 +44,15 @@ Host-owned deterministic verifier
 
 ## What may be reused
 
-### ACP v1
-Used as the worker communication contract where supported. It is transport/interoperability, not the orchestrator's safety model.
+### ACP feasibility decision
+
+The original common-ACP spike did not establish one pinned, equally supported
+Codex + Claude Code + OpenCode lifecycle. PAO therefore made a fail-closed
+**NO-GO** decision for ACP as the mandatory production transport. Current
+production paths use narrow host-owned adapters (Pi/host broker and the
+OpenCode routing adapter); ACP may be added by a future adapter, but is not an
+architectural dependency or evidence shortcut. See
+[`decisions/0001-common-acp-no-go.md`](decisions/0001-common-acp-no-go.md).
 
 ### OpenHands SDK / Agent Server
 May be selectively reused for subprocess lifecycle, event streaming, telemetry, credential plumbing, and workspace/runtime infrastructure after the feasibility spike proves the exact integration path.
@@ -76,8 +83,7 @@ SUBMITTED
   -> WORKER_FINISHED
   -> VERIFYING
   -> VERIFIED
-  -> REVIEWING (optional)
-  -> ACCEPTED
+  -> COMPLETED
   -> INTEGRATED (future / policy controlled)
 
 Any stage may transition to:
@@ -86,7 +92,13 @@ Any stage may transition to:
   -> CANCELLED
 ```
 
-`WORKER_FINISHED` deliberately does not imply `VERIFIED` or `ACCEPTED`.
+`WORKER_FINISHED` deliberately does not imply `VERIFIED` or `COMPLETED`.
+
+The original automatic cross-provider reviewer stage is not a production
+state. It was superseded by host verification plus explicit one-level bounded
+delegation; the UI role contract remains forward-compatible but does not claim
+reviewer execution. See
+[`decisions/0002-review-flow-superseded.md`](decisions/0002-review-flow-superseded.md).
 
 ## Worktree model
 

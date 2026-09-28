@@ -37,7 +37,7 @@ Captured JSON event stream from `pi --mode json --no-session
 --no-approve --no-extensions -e <guard> --no-skills
 --no-prompt-templates --no-context-files --tools
 read,edit,write,grep,find,ls --model zai/glm-5.3 -- "..."` against
-`/Volumes/Taoruide外接/pi1-real-acceptance/fixture-repo`:
+`/tmp/pao-acceptance/pi1-real-acceptance/fixture-repo`:
 
 ```text
 STREAM_BYTES:   17311
@@ -99,10 +99,10 @@ the guard file was modified by the worker.
 ## Real PAO end-to-end via PiOwnerDispatchExecutor (sanitized)
 
 Script:
-`/Volumes/Taoruide外接/pi1-real-acceptance/scripts/pi1_real_e2e.py`
+`/tmp/pao-acceptance/pi1-real-acceptance/scripts/pi1_real_e2e.py`
 (mirrors `tests/test_pi_dispatch_executor.py`'s `test_pi_adapter_reuses_existing_host_authority_to_verified`
 shape, but uses the real Pi binary and the real
-`/Volumes/Taoruide外接/pi1-real-acceptance/fixture-repo`
+`/tmp/pao-acceptance/pi1-real-acceptance/fixture-repo`
 registered project).
 
 Captured run result:
@@ -208,7 +208,7 @@ No PI-1 source patch was required.
   `tests/test_pi_runtime.py`,
   `tests/test_pi_dispatch_executor.py`): UNCHANGED in this attempt.
 - Disposable fixture repo created at
-  `/Volumes/Taoruide外接/pi1-real-acceptance/fixture-repo`
+  `/tmp/pao-acceptance/pi1-real-acceptance/fixture-repo`
   with one initial commit (`12d7d5e init: PI-1 fixture`);
   fixture main branch HEAD remains `12d7d5e`.
 - Disposable task worktrees created under a temporary
@@ -230,7 +230,7 @@ No PI-1 source patch was required.
 ## Sanitized baseline sanity
 
 Run from the acceptance worktree
-(`/Volumes/Taoruide外接/pi1-mac-acceptance`,
+(`/tmp/pao-acceptance/pi1-mac-acceptance`,
 branch `pi1-mac-acceptance`,
 tracking `origin/feat/pi-runtime-spike-01`,
 HEAD `89dbe35c8a4a6968986218fd86bc7a4a9b9e293b` at start of this

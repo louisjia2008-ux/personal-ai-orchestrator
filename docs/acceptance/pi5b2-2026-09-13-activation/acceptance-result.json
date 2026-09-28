@@ -25,11 +25,11 @@
       "role": "parent",
       "ordinal": 1,
       "pid": 39379,
-      "cwd": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-activation/worktrees/pi5b2-activation-parent",
+      "cwd": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-activation/worktrees/pi5b2-activation-parent",
       "model": "minimax-cn/MiniMax-M3",
       "no_extensions": true,
       "explicit_extensions": [
-        "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-activation/worktrees/.pao-runtime/.pao/pi-worktree-guard.ts",
+        "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-activation/worktrees/.pao-runtime/.pao/pi-worktree-guard.ts",
         "/var/folders/pt/tn46s3216rg366nxx7g7ng940000gn/T/pao-pi5-y8d3sc_u/.pao/pi5-request.ts"
       ],
       "tools": "read,edit,write,grep,find,ls,pao_delegate"
@@ -54,7 +54,7 @@
     {
       "event": "PARENT_WRITER_ACQUIRED",
       "observed_at": "2026-09-13T04:46:19.309183+00:00",
-      "worktree": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-activation/worktrees/pi5b2-activation-parent",
+      "worktree": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-activation/worktrees/pi5b2-activation-parent",
       "writer_fingerprint": "f104caa6e42c3ff0"
     },
     {
@@ -148,7 +148,7 @@
       "role": "parent",
       "ordinal": 1,
       "pid": 39379,
-      "cwd": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-activation/worktrees/pi5b2-activation-parent"
+      "cwd": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-activation/worktrees/pi5b2-activation-parent"
     }
   ],
   "source_code_changed": false,
@@ -235,7 +235,7 @@
           "base_sha": "e5086f9ba857e017346dc1abb71433d129603390",
           "project_id": "pi5b2-fixture",
           "working_subpath": null,
-          "worktree_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-activation/worktrees/pi5b2-activation-parent"
+          "worktree_path": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-activation/worktrees/pi5b2-activation-parent"
         }
       },
       {
@@ -313,7 +313,7 @@
           "quota_state": "AVAILABLE_OBSERVED",
           "request_id": "pi5b2-activation-parent-dispatch",
           "run_id": "run-owner-dispatch-pi5b2-activation-parent-dispatch",
-          "worktree_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-activation/worktrees/pi5b2-activation-parent"
+          "worktree_path": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-activation/worktrees/pi5b2-activation-parent"
         }
       }
     ],

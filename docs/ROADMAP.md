@@ -4,6 +4,10 @@ This roadmap is intentionally conservative. The project should earn autonomy by 
 
 ## Spike / PoC — ACP feasibility
 
+**Resolution: NO-GO for a mandatory common ACP transport; superseded by narrow
+host-owned adapters.** The exact evidence gap and replacement decision are
+recorded in [`decisions/0001-common-acp-no-go.md`](decisions/0001-common-acp-no-go.md).
+
 ### Objective
 Prove that Codex, Claude Code, and OpenCode/MiniMax can be driven through a common supervised control path on a disposable repository/worktree.
 
@@ -68,6 +72,12 @@ Injected failures in tests, build, evidence, or file-scope checks must prevent v
 ---
 
 ## P2 — Multi-worker orchestration
+
+**Resolution: original automatic reviewer flow superseded.** PAO uses the
+ExecutionTarget/runtime registry for plurality, the deterministic verifier for
+acceptance, and explicit bounded one-level delegation where a second worker is
+justified. It does not silently run a cross-provider reviewer by default. See
+[`decisions/0002-review-flow-superseded.md`](decisions/0002-review-flow-superseded.md).
 
 ### Objective
 Add provider plurality without turning the core into provider-specific middleware.

@@ -127,7 +127,7 @@ user LaunchAgents inventory.
 | Control socket | `/Users/<user>/Library/Caches/Personal AI Orchestrator/control.sock` |
 
 A clean detached production worktree was created on the external disk at
-`/Volumes/Taoruide外接/AI LLM TOOLS/pao-product-main-64a45a3`, pinned to merged
+`/tmp/pao-acceptance/pao-product-main-64a45a3`, pinned to merged
 main `64a45a3adaafb42cac2c6a55a3ac0db31c06f059`. The existing
 `scripts/build_and_run_macos_dashboard.sh` performed the normal Release
 build/package/sign/launch path using an existing project-local packaging venv,

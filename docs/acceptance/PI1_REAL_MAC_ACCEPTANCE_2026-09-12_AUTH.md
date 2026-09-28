@@ -95,7 +95,7 @@ attempted against `--provider zai --model glm-5.3`. Pi emitted a real
 JSON event line before exiting on auth failure:
 
 ```json
-{"type":"session","version":3,"id":"01a095ab-ddb5-71d4-a389-57a4899da714","timestamp":"2026-09-12T12:51:03.733Z","cwd":"/Volumes/Taoruide外接/pi1-real-acceptance/fixture-repo"}
+{"type":"session","version":3,"id":"01a095ab-ddb5-71d4-a389-57a4899da714","timestamp":"2026-09-12T12:51:03.733Z","cwd":"/tmp/pao-acceptance/pi1-real-acceptance/fixture-repo"}
 ```
 
 stderr (sanitized, no credential values):
@@ -175,13 +175,13 @@ shell **before** any next PI-1 executor resumes:
 After auth is configured, the next executor should resume from
 "Section 5. Direct Real Pi JSON Smoke Test" using the exact fixture
 repo path
-`/Volumes/Taoruide外接/pi1-real-acceptance/fixture-repo`
+`/tmp/pao-acceptance/pi1-real-acceptance/fixture-repo`
 already created in this attempt.
 
 ## Sanitized baseline sanity (no Pi involved)
 
 Run from the acceptance worktree
-(`/Volumes/Taoruide外接/pi1-mac-acceptance`,
+(`/tmp/pao-acceptance/pi1-mac-acceptance`,
 branch `pi1-mac-acceptance`,
 tracking `origin/feat/pi-runtime-spike-01`,
 HEAD `89dbe35c8a4a6968986218fd86bc7a4a9b9e293b`):
@@ -226,7 +226,7 @@ pi:           0.85.1 INSTALLED @ fnm_multishells bin
 - New files added to `origin/feat/pi-runtime-spike-01` in this attempt:
   none (this blocker is recorded by rewriting PR #29 body only)
 - Disposable fixture repo created at
-  `/Volumes/Taoruide外接/pi1-real-acceptance/fixture-repo`
+  `/tmp/pao-acceptance/pi1-real-acceptance/fixture-repo`
   with one empty `README.md` and one initial commit
   (`12d7d5e init: PI-1 fixture`); never used by a real Pi worker run
 - No `hello.txt` was ever created (real worker run never executed)
@@ -248,7 +248,7 @@ Once the owner configures the ZAI auth surface and confirms
    catalog (Pi filters `--list-models` to configured providers; the
    `zai.json` provider file already declares `glm-5.3`).
 2. Re-run the direct Pi JSON smoke test in the existing disposable
-   fixture `/Volumes/Taoruide外接/pi1-real-acceptance/fixture-repo`,
+   fixture `/tmp/pao-acceptance/pi1-real-acceptance/fixture-repo`,
    instructing Pi to create `hello.txt` containing the exact string
    `PI_REAL_RUNTIME_ACCEPTANCE`.
 3. Validate the real JSON event shape:

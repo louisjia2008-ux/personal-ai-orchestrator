@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose a bounded product or developer improvement.
+title: "[Feature] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem should be solved?
+    validations:
+      required: true
+  - type: textarea
+    id: boundary
+    attributes:
+      label: Authority and safety boundary
+      description: Explain effects on verification, credentials, approvals, worktrees, quota, paid usage, or Production ACTIVE.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance evidence
+      description: List deterministic tests and any separate external or target-platform acceptance.
+    validations:
+      required: true

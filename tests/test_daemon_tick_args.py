@@ -81,6 +81,42 @@ def test_parse_args_defaults_tick_interval_to_none() -> None:
     assert args.tick_interval_seconds is None
 
 
+def test_parse_args_exposes_sanitized_quota_credential_check() -> None:
+    args = daemon_module.parse_args(
+        [
+            "--quota-credential-check",
+            "zai-coding-plan",
+        ]
+    )
+
+    assert args.quota_credential_check == "zai-coding-plan"
+    assert args.config is None
+    assert args.state_db is None
+    assert args.runtime_state_root is None
+
+
+def test_parse_args_normal_daemon_still_requires_runtime_paths() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        daemon_module.parse_args([])
+
+    assert exc_info.value.code == 2
+
+
+def test_parse_args_defaults_quota_credential_check_to_none() -> None:
+    args = daemon_module.parse_args(
+        [
+            "--config",
+            "/tmp/r.json",
+            "--state-db",
+            "/tmp/s.db",
+            "--runtime-state-root",
+            "/tmp/rs",
+        ]
+    )
+
+    assert args.quota_credential_check is None
+
+
 # --------------------------------------------------------------------- #
 # M1 WP2: --model-tiers-path / load_model_tiers
 # --------------------------------------------------------------------- #
