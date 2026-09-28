@@ -8,5 +8,6 @@ def test_packaged_helper_resolves_sources_from_the_exact_checkout() -> None:
     script = repository / "macos" / "PAOMenuBar" / "scripts" / "build_app_bundle.sh"
     source = script.read_text(encoding="utf-8")
 
+    assert 'PYTHONPATH="${REPO_DIR}/src" "${PYTHON}" -m PyInstaller' in source
     assert '--paths "${REPO_DIR}/src"' in source
     assert '"${REPO_DIR}/scripts/pao_daemon_entry.py"' in source
