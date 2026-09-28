@@ -32,7 +32,7 @@ import os
 import sys
 import time
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -84,20 +84,20 @@ def probe_zai(key: str) -> tuple[QuotaWindow, ...] | None:
     windows = []
     for lim in body["data"]["limits"]:
         reset_at = datetime.fromtimestamp(
-            lim["nextResetTime"] / 1000, tz=timezone.utc
+            lim["nextResetTime"] / 1000, tz=UTC
         )
         windows.append((reset_at, lim["percentage"] / 100))
     windows.sort()  # sooner reset first
     # Label by plausibility: a 5h rolling window always resets within ~5h;
     # ZAI lite's shorter credit window resets on a multi-hour/day boundary.
     kinds = [
-        "FIVE_HOUR" if (windows[0][0] - datetime.now(timezone.utc)).total_seconds() <= 6 * 3600
+        "FIVE_HOUR" if (windows[0][0] - datetime.now(UTC)).total_seconds() <= 6 * 3600
         else "SHORT_TERM",
         "WEEKLY",
     ]
     return tuple(
         QuotaWindow(kind, used, reset)
-        for kind, (reset, used) in zip(kinds, windows)
+        for kind, (reset, used) in zip(kinds, windows, strict=False)
     )
 
 
@@ -156,7 +156,10 @@ TASKS: list[dict[str, str]] = [
             "SlidingWindowLimiter(构造参数 rate/period),"
             "给出 allow() 方法与一行使用示例。只输出代码。"
         ),
-        "note": "真实配额状态下的中高强度任务;限流器属标准组件,Jev 分级若为 T1–T2 选 flash 也属正确判断",
+        "note": (
+            "真实配额状态下的中高强度任务;限流器属标准组件,"
+            "Jev 分级若为 T1–T2 选 flash 也属正确判断"
+        ),
     },
     {
         "name": "B_trivial_live_quota",
@@ -250,7 +253,7 @@ def main() -> int:
 
         state = {
             "task": {"source": "pi", "prompt": t["task"]},
-            "now": datetime.now(timezone.utc).isoformat(),
+            "now": datetime.now(UTC).isoformat(),
             "candidates": [c.view() for c in admitted],
             "excluded_by_hard_gates": {k: v for k, v in gated.items() if v},
         }
