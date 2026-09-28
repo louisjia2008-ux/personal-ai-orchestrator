@@ -57,3 +57,12 @@ test("jevAsk gives up immediately on 401", async (t) => {
   assert.equal(f.mock.callCount(), 1);
   assert.ok(Date.now() - started < 500, "no backoff sleep on a non-retryable error");
 });
+
+test("fallback with no T3 candidate keeps the current model", () => {
+  const lowTiers = [admitted[1], admitted[2]];
+  for (const r of [fallbackPolicy(lowTiers, "HTTP 503"), applyPolicy(lowTiers, {})]) {
+    assert.equal(r.decision, null);
+    assert.equal(r.target, undefined);
+    assert.match(r.reason!, /no admitted T3 target/);
+  }
+});

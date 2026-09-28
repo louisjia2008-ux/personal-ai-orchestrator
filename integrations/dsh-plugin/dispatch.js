@@ -367,6 +367,14 @@ function readAnswers(body) {
 
 /** Decision without Jev: unknown task tier → assume T3 so quality is never downgraded. */
 export function fallbackPolicy(admitted, cause) {
+  const floor = tierFloor(UNKNOWN_TIER_SCORE);
+  if (!admitted.some((c) => c.target.tier >= floor)) {
+    // deterministicPick would widen to lower tiers; keep the seed model instead.
+    return {
+      decision: null,
+      reason: `jev unavailable (${cause}) and no admitted T${floor} target → keeping seed model`,
+    };
+  }
   const pick = deterministicPick(admitted, UNKNOWN_TIER_SCORE);
   return {
     decision: targetId(pick),
