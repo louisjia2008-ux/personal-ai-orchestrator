@@ -150,9 +150,7 @@ def test_step_exception_writes_failed_audit_event() -> None:
 
     clock = FakeClock()
     audit = FakeAuditStore()
-    supervisor = DaemonSupervisor(
-        interval_seconds=0.01, clock=clock, audit_store=audit
-    )
+    supervisor = DaemonSupervisor(interval_seconds=0.01, clock=clock, audit_store=audit)
 
     def _boom(_now: datetime) -> None:
         raise ValueError("nope")
@@ -184,9 +182,7 @@ def test_consecutive_failures_trigger_backoff_and_recovery_audit() -> None:
 
     clock = FakeClock()
     audit = FakeAuditStore()
-    supervisor = DaemonSupervisor(
-        interval_seconds=0.01, clock=clock, audit_store=audit
-    )
+    supervisor = DaemonSupervisor(interval_seconds=0.01, clock=clock, audit_store=audit)
 
     failures_left = [CONSECUTIVE_FAILURE_THRESHOLD + 2]
 

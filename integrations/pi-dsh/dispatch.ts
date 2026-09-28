@@ -21,6 +21,7 @@ const CONFIDENCE_FLOOR = 0.45;
 const DEFER_THRESHOLD = 0.6;
 const POOL_MIN_BALANCE_CNY = 1.0; // below → whole deepseek pool gated
 const PRO_MIN_BALANCE_CNY = 10.0; // below → v4-pro gated, flash stays
+const UNKNOWN_TIER_SCORE = 3; // no usable Jev tier → never downgrade quality
 
 const ZAI_QUOTA_URL = "https://api.z.ai/api/monitor/usage/quota/limit";
 const MM_QUOTA_URL = "https://api.minimaxi.com/v1/token_plan/remains";
@@ -243,13 +244,22 @@ function buildQuestions(
   };
 }
 
-async function jevAsk(state: any, questions: any): Promise<any> {
+const JEV_ATTEMPTS = 3;
+
+/** Rate limits, overload and server errors are transient; other 4xx (401, 400…) are not. */
+function retryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+export async function jevAsk(state: any, questions: any): Promise<any> {
   const key = process.env.TYPESAFE_API_KEY;
   if (!key) throw new Error("TYPESAFE_API_KEY not set");
-  let lastErr: unknown = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  let lastErr: Error = new Error("jev: no attempt made");
+  for (let attempt = 0; attempt < JEV_ATTEMPTS; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 2 ** (attempt - 1) * 1000));
+    let res: Response;
     try {
-      const res = await fetch(JEV_URL, {
+      res = await fetch(JEV_URL, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${key}`,
@@ -258,18 +268,15 @@ async function jevAsk(state: any, questions: any): Promise<any> {
         body: JSON.stringify({ state, model: JEV_MODEL, questions }),
         signal: AbortSignal.timeout(30_000),
       });
-      if (res.status === 429 || res.status === 529) {
-        await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
-        continue;
-      }
-      if (!res.ok) throw new Error(`jev HTTP ${res.status}: ${await res.text()}`);
-      return await res.json();
     } catch (e) {
-      lastErr = e;
-      await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
+      lastErr = e instanceof Error ? e : new Error(String(e)); // network / timeout
+      continue;
     }
+    if (res.ok) return await res.json();
+    lastErr = new Error(`jev HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    if (!retryableStatus(res.status)) throw lastErr;
   }
-  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  throw lastErr;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,45 +305,106 @@ function deterministicPick(admitted: Admitted[], score: number): Admitted {
   })[0];
 }
 
-function applyPolicy(admitted: Admitted[], answers: any): any {
-  const route = answers.route;
-  const tierScore = answers.task_tier.score;
-  let decision = route.choice;
-  let mode = "jev";
-  let reason = `jev choice (confidence ${route.confidence.toFixed(2)})`;
+const targetId = (c: Admitted): string => `pi@${c.target.tid}`;
 
-  if (route.confidence < CONFIDENCE_FLOOR) {
-    const pick = deterministicPick(admitted, tierScore);
-    decision = `pi@${pick.target.tid}`;
+function finite(x: unknown): number | null {
+  return typeof x === "number" && Number.isFinite(x) ? x : null;
+}
+
+interface Answers {
+  choice: string;
+  confidence: number;
+  tierScore: number;
+  noul: number | null;
+  probabilities: unknown;
+}
+
+/**
+ * Validate Jev's answers. Returns null when the route answer is unusable;
+ * a missing tier score degrades to the conservative T3 floor and a missing
+ * noul disables defer advice.
+ */
+function readAnswers(body: any): Answers | null {
+  const a = body?.answers;
+  const choice = a?.route?.choice;
+  const confidence = finite(a?.route?.confidence);
+  if (typeof choice !== "string" || confidence === null) return null;
+  return {
+    choice,
+    confidence,
+    tierScore: finite(a?.task_tier?.score) ?? UNKNOWN_TIER_SCORE,
+    noul: finite(a?.defer_acceptable?.noul),
+    probabilities: a.route.probabilities,
+  };
+}
+
+/** Decision without Jev: unknown task tier → assume T3 so quality is never downgraded. */
+export function fallbackPolicy(admitted: Admitted[], cause: string): DispatchResult {
+  const floor = tierFloor(UNKNOWN_TIER_SCORE);
+  if (!admitted.some((c) => c.target.tier >= floor)) {
+    // deterministicPick would widen to lower tiers; keep the current model instead.
+    return {
+      decision: null,
+      reason: `jev unavailable (${cause}) and no admitted T${floor} target → keeping current model`,
+    };
+  }
+  const pick = deterministicPick(admitted, UNKNOWN_TIER_SCORE);
+  return {
+    decision: targetId(pick),
+    target: pick.target,
+    mode: "jev_unavailable",
+    reason: `jev unavailable (${cause}) → deterministic fallback at T3 floor`,
+    tierScore: null,
+    confidence: null,
+    deferAdvice: null,
+  };
+}
+
+export function applyPolicy(admitted: Admitted[], body: any): DispatchResult {
+  const answers = readAnswers(body);
+  if (!answers) return fallbackPolicy(admitted, "malformed answers");
+  const { choice, confidence, tierScore, noul } = answers;
+
+  let chosen = admitted.find((c) => targetId(c) === choice);
+  let mode = "jev";
+  let reason = `jev choice (confidence ${confidence.toFixed(2)})`;
+
+  if (!chosen) {
+    chosen = deterministicPick(admitted, tierScore);
+    mode = "invalid_choice";
+    reason = `jev chose ${JSON.stringify(choice)}, not an admitted target → deterministic fallback`;
+  } else if (confidence < CONFIDENCE_FLOOR) {
+    chosen = deterministicPick(admitted, tierScore);
     mode = "fallback_policy";
-    reason = `jev confidence ${route.confidence.toFixed(2)} below floor → deterministic fallback`;
+    reason = `jev confidence ${confidence.toFixed(2)} below floor → deterministic fallback`;
   }
 
   const floor = tierFloor(tierScore);
-  const chosen = admitted.find((c) => `pi@${c.target.tid}` === decision);
-  if (chosen && chosen.target.tier < floor) {
+  if (chosen.target.tier < floor) {
     const pick = deterministicPick(admitted, tierScore);
-    decision = `pi@${pick.target.tid}`;
-    mode = "policy_override";
-    reason = `jev chose T${chosen.target.tier} for a T${floor} task → tier floor enforced in code`;
+    if (pick !== chosen) {
+      reason = `jev chose T${chosen.target.tier} for a T${floor} task → tier floor enforced in code`;
+      mode = "policy_override";
+      chosen = pick;
+    }
   }
 
-  const finalPick = admitted.find((c) => `pi@${c.target.tid}` === decision)!;
   const deferAdvice =
-    finalPick.windows.some((w) => w.pressure === "CRITICAL") &&
-    answers.defer_acceptable.noul > DEFER_THRESHOLD
-      ? `chosen pool is CRITICAL-pressed and deferral looks acceptable (noul ${answers.defer_acceptable.noul.toFixed(2)}) → consider queueing until reset`
+    chosen.windows.some((w) => w.pressure === "CRITICAL") &&
+    noul !== null &&
+    noul > DEFER_THRESHOLD
+      ? `chosen pool is CRITICAL-pressed and deferral looks acceptable (noul ${noul.toFixed(2)}) → consider queueing until reset`
       : null;
 
   return {
-    decision,
-    target: finalPick.target,
+    decision: targetId(chosen),
+    target: chosen.target,
     mode,
     reason,
     tierScore,
-    confidence: route.confidence,
+    confidence,
     deferAdvice,
-    probabilities: route.probabilities,
+    probabilities: answers.probabilities,
   };
 }
 
@@ -348,15 +416,19 @@ export interface DispatchResult {
   target?: Target;
   mode?: string;
   reason?: string;
-  tierScore?: number;
-  confidence?: number;
+  tierScore?: number | null;
+  confidence?: number | null;
   deferAdvice?: string | null;
+  probabilities?: unknown;
   quotaZai?: QuotaWindow[];
   deepseekBalanceCny?: number | null;
   excluded?: Record<string, string>;
 }
 
 export async function dispatchTask(prompt: string): Promise<DispatchResult> {
+  // A missing key is a setup error, not an outage: surface it instead of
+  // silently running every turn on the fallback policy.
+  if (!process.env.TYPESAFE_API_KEY) throw new Error("TYPESAFE_API_KEY not set");
   const auth = loadPiAuth();
   const gates: Record<string, string> = {};
 
@@ -404,8 +476,13 @@ export async function dispatchTask(prompt: string): Promise<DispatchResult> {
     excluded_by_hard_gates: gates,
   };
 
-  const body = await jevAsk(state, buildQuestions(admitted, ds?.balance ?? null));
-  const policy = applyPolicy(admitted, body.answers);
+  let policy: DispatchResult;
+  try {
+    const body = await jevAsk(state, buildQuestions(admitted, ds?.balance ?? null));
+    policy = applyPolicy(admitted, body);
+  } catch (e) {
+    policy = fallbackPolicy(admitted, String((e as any)?.message ?? e).slice(0, 200));
+  }
 
   return {
     ...policy,

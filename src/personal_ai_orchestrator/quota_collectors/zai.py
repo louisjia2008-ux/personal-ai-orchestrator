@@ -222,9 +222,7 @@ def normalize_zai_quota(
         remaining_units = _number(entry.get("remaining"))
         used_units = _number(entry.get("currentValue"))
         reset_at = _millis_datetime(entry.get("nextResetTime"))
-        window_started_at = (
-            reset_at - timedelta(seconds=duration) if reset_at is not None else None
-        )
+        window_started_at = reset_at - timedelta(seconds=duration) if reset_at is not None else None
         known = confidence is not EvidenceConfidence.UNKNOWN
         windows.append(
             QuotaWindowSnapshot(
@@ -379,9 +377,7 @@ def normalize_zai_model_usage(
         series = row.get("tokensUsage")
         if not isinstance(series, list):
             continue
-        consumed = sum(
-            value for value in (_number(item) for item in series) if value is not None
-        )
+        consumed = sum(value for value in (_number(item) for item in series) if value is not None)
         observations.append(
             ModelConsumptionObservation(
                 provider_id=provider_id,
@@ -465,9 +461,7 @@ class ZAIQuotaCollector:
             f"&endTime={end.strftime(pattern).replace(' ', '%20')}"
         )
         try:
-            payload = self._transport.get_json(
-                url, headers=self._headers(), timeout=self._timeout
-            )
+            payload = self._transport.get_json(url, headers=self._headers(), timeout=self._timeout)
         except QuotaTransportError:
             return ()
         if payload.get("success") is False:

@@ -173,35 +173,27 @@ def _validate_entry(key: str, value: object) -> TierEntry:
         )
     if set(value.keys()) - {"tier", "caps"}:
         extra = sorted(set(value.keys()) - {"tier", "caps"})
-        raise ValueError(
-            f"tiers[{key!r}] has unknown field(s) {extra}; allowed: tier, caps"
-        )
+        raise ValueError(f"tiers[{key!r}] has unknown field(s) {extra}; allowed: tier, caps")
 
     raw_tier = value.get("tier")
     if not isinstance(raw_tier, str):
-        raise ValueError(
-            f"tiers[{key!r}].tier must be a string, got {type(raw_tier).__name__}"
-        )
+        raise ValueError(f"tiers[{key!r}].tier must be a string, got {type(raw_tier).__name__}")
     try:
         tier = ModelTier(raw_tier)
     except ValueError:
         allowed = ", ".join(t.value for t in ModelTier)
-        raise ValueError(
-            f"tiers[{key!r}].tier={raw_tier!r} is not one of: {allowed}"
-        ) from None
+        raise ValueError(f"tiers[{key!r}].tier={raw_tier!r} is not one of: {allowed}") from None
 
     raw_caps = value.get("caps", ())
     if not isinstance(raw_caps, list):
         raise ValueError(
-            f"tiers[{key!r}].caps must be a list of strings, got "
-            f"{type(raw_caps).__name__}"
+            f"tiers[{key!r}].caps must be a list of strings, got {type(raw_caps).__name__}"
         )
     caps_list: list[str] = []
     for index, cap in enumerate(raw_caps):
         if not isinstance(cap, str):
             raise ValueError(
-                f"tiers[{key!r}].caps[{index}] must be a string, got "
-                f"{type(cap).__name__}"
+                f"tiers[{key!r}].caps[{index}] must be a string, got {type(cap).__name__}"
             )
         if not cap:
             raise ValueError(f"tiers[{key!r}].caps[{index}] must be non-empty")
@@ -230,30 +222,22 @@ def parse_tier_table(raw: Mapping[str, object]) -> TierTable:
     """
 
     if not isinstance(raw, Mapping):
-        raise ValueError(
-            f"tier table must be a JSON object, got {type(raw).__name__}"
-        )
+        raise ValueError(f"tier table must be a JSON object, got {type(raw).__name__}")
 
     version = raw.get("version")
     if version != 1:
         raise ValueError(
-            f"tier table version must be 1, got {version!r}; this daemon "
-            f"only knows version 1"
+            f"tier table version must be 1, got {version!r}; this daemon only knows version 1"
         )
 
     tiers_raw = raw.get("tiers")
     if not isinstance(tiers_raw, Mapping):
-        raise ValueError(
-            f"tier table 'tiers' must be an object, got {type(tiers_raw).__name__}"
-        )
+        raise ValueError(f"tier table 'tiers' must be an object, got {type(tiers_raw).__name__}")
 
     entries: dict[str, TierEntry] = {}
     for pattern, value in tiers_raw.items():
         if not isinstance(pattern, str) or not pattern:
-            raise ValueError(
-                f"tier table pattern keys must be non-empty strings, got "
-                f"{pattern!r}"
-            )
+            raise ValueError(f"tier table pattern keys must be non-empty strings, got {pattern!r}")
         entries[pattern] = _validate_entry(pattern, value)
 
     return TierTable(entries=entries)

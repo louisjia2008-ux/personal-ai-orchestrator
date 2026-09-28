@@ -337,9 +337,7 @@ def determine_binding_window(
         return BindingWindow(reason=reason)
 
     binding = min(comparable, key=lambda window: window.remaining_fraction or 0.0)
-    seconds = (
-        (binding.reset_at - at).total_seconds() if binding.reset_at is not None else None
-    )
+    seconds = (binding.reset_at - at).total_seconds() if binding.reset_at is not None else None
     reason = (
         BindingWindowReason.ONLY_KNOWN_WINDOW
         if len(comparable) == 1
@@ -348,9 +346,7 @@ def determine_binding_window(
     # The binding answer is only as good as its coverage: if some window could
     # not be read, the scarcest *readable* window may not be the real one.
     confidence = (
-        binding.confidence
-        if len(comparable) == len(windows)
-        else EvidenceConfidence.ESTIMATED
+        binding.confidence if len(comparable) == len(windows) else EvidenceConfidence.ESTIMATED
     )
     return BindingWindow(
         window_id=binding.window_id,
@@ -455,8 +451,7 @@ class PlanQuotaProjection(RegistryModel):
         return tuple(
             view
             for view in self.model_equivalents
-            if view.workload_scope
-            in {self.active_workload_scope, QuotaWorkloadScope.UNKNOWN}
+            if view.workload_scope in {self.active_workload_scope, QuotaWorkloadScope.UNKNOWN}
         )
 
     def equivalents_outside_active_workload(self) -> tuple[ModelEquivalentView, ...]:
@@ -465,8 +460,7 @@ class PlanQuotaProjection(RegistryModel):
         return tuple(
             view
             for view in self.model_equivalents
-            if view.workload_scope
-            not in {self.active_workload_scope, QuotaWorkloadScope.UNKNOWN}
+            if view.workload_scope not in {self.active_workload_scope, QuotaWorkloadScope.UNKNOWN}
         )
 
     def covered_model_ids(self) -> tuple[str, ...]:

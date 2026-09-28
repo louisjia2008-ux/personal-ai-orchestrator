@@ -226,7 +226,9 @@ def test_harvest_signal_does_not_admit_task_larger_than_headroom() -> None:
         runtime_availability={"minimax-sub": True, "glm-sub": False},
     )
 
-    minimax = next(item for item in decision.evaluations if item.execution_target_id == "minimax-sub")
+    minimax = next(
+        item for item in decision.evaluations if item.execution_target_id == "minimax-sub"
+    )
     assert minimax.scarcity_class is ScarcityClass.HARVEST
     assert minimax.admitted is False
     assert any("exceeds usable quota headroom" in reason for reason in minimax.reasons)

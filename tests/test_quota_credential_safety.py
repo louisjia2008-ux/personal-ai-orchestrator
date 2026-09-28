@@ -195,6 +195,7 @@ def test_environment_precedes_owner_keychain() -> None:
     assert resolved.secret is not None
     assert resolved.secret.reveal() == "environment"
 
+
 def test_auth_store_covers_the_gui_launched_daemon(tmp_path: Path) -> None:
     """The regression this fixes.
 
@@ -229,6 +230,7 @@ def test_owner_keychain_precedes_opencode_store(tmp_path: Path) -> None:
     assert resolved.secret is not None
     assert resolved.secret.reveal() == CANARY
 
+
 def test_environment_takes_precedence_over_the_store(tmp_path: Path) -> None:
     paths = _auth_store(tmp_path, {"zai-coding-plan": {"type": "api", "key": "store"}})
 
@@ -245,9 +247,7 @@ def test_only_the_allowlisted_store_entry_is_read(tmp_path: Path) -> None:
     A credential for an unrelated provider must not be picked up by shape.
     """
 
-    paths = _auth_store(
-        tmp_path, {"some-other-provider": {"type": "api", "key": CANARY}}
-    )
+    paths = _auth_store(tmp_path, {"some-other-provider": {"type": "api", "key": CANARY}})
 
     resolved = _resolver({}, paths).resolve("zai-coding-plan")
 
@@ -259,9 +259,7 @@ def test_an_unsupported_auth_type_is_skipped_not_guessed_at(tmp_path: Path) -> N
     """Sending an OAuth refresh token as an API key produces a 401 the owner
     would reasonably read as a broken subscription."""
 
-    paths = _auth_store(
-        tmp_path, {"zai-coding-plan": {"type": "oauth", "refresh": CANARY}}
-    )
+    paths = _auth_store(tmp_path, {"zai-coding-plan": {"type": "oauth", "refresh": CANARY}})
 
     resolved = _resolver({}, paths).resolve("zai-coding-plan")
 
@@ -300,9 +298,7 @@ def test_a_malformed_store_is_survived_without_raising(tmp_path: Path) -> None:
 
 def test_the_credential_reaches_the_request_header_and_nowhere_else() -> None:
     transport = RecordingTransport()
-    collector = ZAIQuotaCollector(
-        authorization_token=SecretValue(CANARY), transport=transport
-    )
+    collector = ZAIQuotaCollector(authorization_token=SecretValue(CANARY), transport=transport)
 
     result = collector.collect()
 
@@ -316,9 +312,7 @@ def test_the_credential_reaches_the_request_header_and_nowhere_else() -> None:
 
 def test_persisted_quota_state_never_contains_the_credential(tmp_path: Path) -> None:
     transport = RecordingTransport()
-    collector = ZAIQuotaCollector(
-        authorization_token=SecretValue(CANARY), transport=transport
-    )
+    collector = ZAIQuotaCollector(authorization_token=SecretValue(CANARY), transport=transport)
     result = collector.collect()
     assert result.snapshot is not None and result.projection is not None
 

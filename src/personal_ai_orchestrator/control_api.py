@@ -627,7 +627,7 @@ class ExecutionTargetHealthView(_ViewModel):
     execution_verification_observed_at: str | None = None
     runtime_available: bool | None = None
     observed_availability: ObservedAvailabilityView | None = None
-# M1 WP2: capability tier for this target. ``None`` means the
+    # M1 WP2: capability tier for this target. ``None`` means the
     # host-owned tier table could not classify the target — the
     # Swift dashboard falls back to its "unknown" label and the recommender
     # assumes T1 in scoring.
@@ -1438,9 +1438,9 @@ class ControlPlaneService:
         if not selected.is_dir():
             raise ControlPlaneError(400, "project_path_not_directory")
         try:
-            git_root = Path(
-                self._git(selected, "rev-parse", "--show-toplevel")
-            ).resolve(strict=True)
+            git_root = Path(self._git(selected, "rev-parse", "--show-toplevel")).resolve(
+                strict=True
+            )
             is_work_tree = self._git(git_root, "rev-parse", "--is-inside-work-tree")
             if is_work_tree != "true":
                 raise ValueError("not a work tree")
@@ -1502,9 +1502,8 @@ class ControlPlaneService:
 
     def _refresh_project_view(self, project: ProjectRecord) -> ProjectView:
         availability, head, default_branch, current_branch = self._availability_for_project(project)
-        if (
-            availability is not project.storage_availability
-            or (head is not None and head != project.last_known_head)
+        if availability is not project.storage_availability or (
+            head is not None and head != project.last_known_head
         ):
             project = self.store.update_project_availability(
                 project.project_id,
@@ -1542,9 +1541,7 @@ class ControlPlaneService:
     def resolve_project(self, payload: dict[str, Any]) -> ProjectView:
         request = ProjectResolveRequest.model_validate(payload)
         probe = self._project_probe(request.path)
-        project_id = self._project_id_for(
-            str(probe["git_root"]), probe["working_subpath"]
-        )
+        project_id = self._project_id_for(str(probe["git_root"]), probe["working_subpath"])
         now = datetime_now_iso()
         return ProjectView(
             project_id=project_id,
@@ -1564,9 +1561,7 @@ class ControlPlaneService:
     def register_project(self, payload: dict[str, Any]) -> ProjectView:
         request = ProjectRegisterRequest.model_validate(payload)
         probe = self._project_probe(request.path)
-        project_id = self._project_id_for(
-            str(probe["git_root"]), probe["working_subpath"]
-        )
+        project_id = self._project_id_for(str(probe["git_root"]), probe["working_subpath"])
         display_name = request.display_name or Path(str(probe["canonical_repo_root"])).name
         try:
             project = self.store.register_project(
@@ -1588,8 +1583,7 @@ class ControlPlaneService:
     def list_projects(self) -> ProjectListView:
         return ProjectListView(
             projects=tuple(
-                self._refresh_project_view(project)
-                for project in self.store.list_projects()
+                self._refresh_project_view(project) for project in self.store.list_projects()
             )
         )
 
@@ -1671,8 +1665,7 @@ class ControlPlaneService:
             # activation authority is authorised. ``SUPERVISED_AUTO``
             # and ``MANUAL`` always succeed.
             if request.mode == SchedulingMode.ACTIVE and (
-                self.activation_gate is None
-                or not self.activation_gate.authorized
+                self.activation_gate is None or not self.activation_gate.authorized
             ):
                 raise ControlPlaneError(
                     409,
@@ -1793,9 +1786,7 @@ class ControlPlaneService:
         if self.provider_registry_manager is None:
             raise ControlPlaneError(503, "provider_registry_manager_not_configured")
         try:
-            connections = self.provider_registry_manager.import_connections(
-                request.provider_ids
-            )
+            connections = self.provider_registry_manager.import_connections(request.provider_ids)
         except LookupError as error:
             code = str(error) or "provider_not_import_candidate"
             raise ControlPlaneError(404, code) from None
@@ -2086,9 +2077,7 @@ class ControlPlaneService:
             updated = self.store.ack_auto_grace(
                 task_id,
                 acked_at=now.isoformat(),
-                grace_deadline=(
-                    now + timedelta(seconds=project.grace_seconds)
-                ).isoformat(),
+                grace_deadline=(now + timedelta(seconds=project.grace_seconds)).isoformat(),
                 expected_version=request.task_state_version,
             )
         except RuntimeError as error:
@@ -2283,9 +2272,7 @@ class ControlPlaneService:
         try:
             policy = RoutingObjective(policy_name)
         except ValueError as error:
-            raise ControlPlaneError(
-                400, f"unknown_scheduling_policy:{policy_name}"
-            ) from error
+            raise ControlPlaneError(400, f"unknown_scheduling_policy:{policy_name}") from error
 
         # One ``now`` shared by the score path and the per-candidate
         # source_pressure projection, so the score and the chip agree on
@@ -2298,7 +2285,9 @@ class ControlPlaneService:
         # focused on view-model construction.
         recommendation, candidates, invalid_min_tier = (
             self._recommendation_service().recommend_for_task(
-                task, policy=policy, now=now,
+                task,
+                policy=policy,
+                now=now,
             )
         )
 
@@ -2347,24 +2336,15 @@ class ControlPlaneService:
             # ``QuotaSnapshot``. ``None`` propagates the "missing
             # data" signal end-to-end.
             headroom_min=(
-                min(inputs.remaining_fractions)
-                if inputs and inputs.remaining_fractions
-                else None
+                min(inputs.remaining_fractions) if inputs and inputs.remaining_fractions else None
             ),
-            evidence_fresh=bool(
-                inputs and inputs.evidence_observed_at is not None
-            ),
+            evidence_fresh=bool(inputs and inputs.evidence_observed_at is not None),
             runtime_available=bool(inputs and inputs.runtime_available),
             verified=bool(inputs and inputs.verified),
             execution_verified_stale=bool(inputs and inputs.verified_stale),
-            quota_state=(
-                inputs.availability_state.value
-                if inputs else None
-            ),
+            quota_state=(inputs.availability_state.value if inputs else None),
             source_pressure=(
-                source_pressure_for(inputs.windows, now=now)
-                if inputs is not None
-                else None
+                source_pressure_for(inputs.windows, now=now) if inputs is not None else None
             ).value,
             score_components=tuple(
                 DispatchRecommendationScoreComponent(
@@ -2376,23 +2356,15 @@ class ControlPlaneService:
                     # visible end-to-end (and a tuning commit does
                     # not have to push a new ``contribution``).
                     value=(
-                        float(component.value)
-                        if isinstance(component.value, (int, float))
-                        else 0.0
+                        float(component.value) if isinstance(component.value, (int, float)) else 0.0
                     ),
                     weight=component.weight,
                 )
                 for component in evaluation.score_components
             ),
             reasons=tuple(evaluation.reasons),
-            tier=(
-                inputs.tier.value
-                if inputs is not None and inputs.tier is not None
-                else None
-            ),
-            tier_match_reason=(
-                inputs.tier_match_reason if inputs is not None else None
-            ),
+            tier=(inputs.tier.value if inputs is not None and inputs.tier is not None else None),
+            tier_match_reason=(inputs.tier_match_reason if inputs is not None else None),
         )
 
     def owner_execution_settings(self) -> OwnerExecutionSettingsView:
@@ -2446,9 +2418,10 @@ class ControlPlaneService:
             if payload.get("to") == TaskState.VERIFIED.value and isinstance(reason, str):
                 if reason.startswith(prefix):
                     evidence_id = reason[len(prefix) :]
-            if payload.get("from") == TaskState.VERIFYING.value and payload.get(
-                "to"
-            ) == TaskState.BLOCKED.value:
+            if (
+                payload.get("from") == TaskState.VERIFYING.value
+                and payload.get("to") == TaskState.BLOCKED.value
+            ):
                 failure_reason = reason if isinstance(reason, str) else None
         result: VerificationResult | None = None
         if evidence_id is not None and self.verification_journal is not None:
@@ -2596,9 +2569,7 @@ class ControlPlaneService:
             for row in reversed(rows)
         )
 
-    def _task_state_distribution(
-        self, by_state: dict[str, int]
-    ) -> tuple[TaskStateSliceView, ...]:
+    def _task_state_distribution(self, by_state: dict[str, int]) -> tuple[TaskStateSliceView, ...]:
         return tuple(
             TaskStateSliceView(state=state, count=int(count))
             for state, count in sorted(by_state.items())
@@ -2938,9 +2909,7 @@ class ControlPlaneService:
             else self._runtime_available(target.id)
         )
         launch_authorized = bool(
-            target.enabled
-            and verification.launch_verified
-            and runtime_available
+            target.enabled and verification.launch_verified and runtime_available
         )
         # M1 WP2: classify the target against the host-owned tier
         # table. ``None`` means the table is not wired (ad-hoc CLI) or
@@ -3082,8 +3051,7 @@ class ControlPlaneService:
         return ProviderConnectionListView(
             connected=tuple(self._connection_view(item) for item in projection.connected),
             available_to_add=tuple(
-                AvailableProviderView.model_validate(item)
-                for item in projection.available_to_add
+                AvailableProviderView.model_validate(item) for item in projection.available_to_add
             ),
             import_candidates=tuple(
                 self._import_candidate_view(item) for item in projection.import_candidates
@@ -3154,10 +3122,7 @@ class ControlPlaneService:
         result = self.provider_registry_manager.last_discovery_result()
         if result is None:
             return {}
-        return {
-            record.provider_id: record
-            for record in result.providers
-        }
+        return {record.provider_id: record for record in result.providers}
 
     def provider_discovery_status(self) -> ProviderDiscoveryStatusView:
         if self.provider_registry_manager is None:
@@ -3255,9 +3220,7 @@ class ControlPlaneService:
                             else None
                         ),
                         reset_at=(
-                            window.reset_at.isoformat()
-                            if window.reset_at is not None
-                            else None
+                            window.reset_at.isoformat() if window.reset_at is not None else None
                         ),
                     )
                     for window in snapshot.windows
@@ -3266,9 +3229,7 @@ class ControlPlaneService:
         )
 
     @staticmethod
-    def _burn_view_for_window(
-        window, *, now: datetime
-    ) -> QuotaBurnView | None:
+    def _burn_view_for_window(window, *, now: datetime) -> QuotaBurnView | None:
         """Render the M1 WP1 burn view-model for one plan window.
 
         Returns ``None`` when the window has no ``reset_at`` (UNMETERED
@@ -3291,9 +3252,7 @@ class ControlPlaneService:
         )
 
     @staticmethod
-    def _plan_view(
-        observation: QuotaProviderObservation, *, now: datetime
-    ) -> QuotaPlanView | None:
+    def _plan_view(observation: QuotaProviderObservation, *, now: datetime) -> QuotaPlanView | None:
         """Render the shared-plan projection the Quota page leads with.
 
         Returns ``None`` only when there is no plan evidence at all. A plan
@@ -3335,9 +3294,7 @@ class ControlPlaneService:
         return QuotaPlanView(
             provider_id=projection.plan.provider_id,
             plan_id=projection.plan.plan_id,
-            display_name=(
-                observation.plan_display_name or projection.plan.display_name
-            ),
+            display_name=(observation.plan_display_name or projection.plan.display_name),
             plan_level=projection.plan.plan_level,
             quota_semantics=projection.plan.quota_semantics.value,
             pool_id=projection.pool.pool_id,
@@ -3391,9 +3348,7 @@ class ControlPlaneService:
                 )
                 for item in projection.model_equivalents
             ),
-            equivalent_capacity=ControlPlaneService._equivalent_capacity_views(
-                projection
-            ),
+            equivalent_capacity=ControlPlaneService._equivalent_capacity_views(projection),
         )
 
     @staticmethod
@@ -3480,6 +3435,7 @@ class ControlPlaneService:
         from personal_ai_orchestrator.provider_discovery import (
             PROVIDER_FAMILIES as _PF,
         )
+
         for spec in _PF:
             if spec.provider_id == model.provider_id:
                 return spec.auth
@@ -3493,6 +3449,7 @@ class ControlPlaneService:
         from personal_ai_orchestrator.provider_discovery import (
             PROVIDER_FAMILIES as _PF,
         )
+
         for spec in _PF:
             if spec.provider_id == model.provider_id:
                 return spec.pool_kind
@@ -3508,6 +3465,7 @@ class ControlPlaneService:
         from personal_ai_orchestrator.provider_discovery import (
             PROVIDER_FAMILIES as _PF,
         )
+
         for spec in _PF:
             if spec.provider_id == provider_id:
                 return spec.pool_kind
@@ -3528,6 +3486,7 @@ class ControlPlaneService:
         from personal_ai_orchestrator.provider_discovery import (
             PROVIDER_FAMILIES as _PF,
         )
+
         family = next(
             (spec for spec in _PF if spec.provider_id == connection.provider_id),
             None,
@@ -3568,15 +3527,11 @@ class ControlPlaneService:
             non_verified = 0
             try:
                 for path in sorted(
-                    self.execution_evidence_journal.directory.glob(
-                        "exec-verify-*.json"
-                    )
+                    self.execution_evidence_journal.directory.glob("exec-verify-*.json")
                 ):
                     try:
-                        evidence = (
-                            ExecutionVerificationEvidence.model_validate_json(
-                                path.read_text(encoding="utf-8")
-                            )
+                        evidence = ExecutionVerificationEvidence.model_validate_json(
+                            path.read_text(encoding="utf-8")
                         )
                     except Exception:
                         continue
@@ -3622,20 +3577,14 @@ class ControlPlaneService:
         connection,
         observation: QuotaProviderObservation | None,
     ) -> QuotaProviderCardView:
-        pools = (
-            self._quota_pool_views_from_snapshot(observation)
-            if observation is not None
-            else ()
-        )
+        pools = self._quota_pool_views_from_snapshot(observation) if observation is not None else ()
         # One ``now`` for the entire card so the per-window ``burn`` figures
         # and the provider-level ``source_pressure`` compare like-for-like
         # — and so two providers rendered in the same response agree on
         # "now" rather than disagreeing across the ~1 ms gap between two
         # ``datetime.now(UTC)`` calls.
         now = datetime.now(UTC)
-        plan_view = (
-            self._plan_view(observation, now=now) if observation is not None else None
-        )
+        plan_view = self._plan_view(observation, now=now) if observation is not None else None
         source_pressure: str | None = None
         if observation is not None and observation.projection is not None:
             source_pressure = observation.projection.source_pressure(now=now).value
@@ -3670,9 +3619,7 @@ class ControlPlaneService:
                 if observation is not None
                 else QuotaObservationState.UNKNOWN.value
             ),
-            confidence=(
-                observation.confidence if observation is not None else "UNKNOWN"
-            ),
+            confidence=(observation.confidence if observation is not None else "UNKNOWN"),
             measurement_source=(
                 observation.measurement_source if observation is not None else None
             ),
@@ -3684,12 +3631,8 @@ class ControlPlaneService:
             last_refresh_status=(
                 observation.last_refresh_status if observation is not None else None
             ),
-            last_refresh_at=(
-                observation.last_refresh_at if observation is not None else None
-            ),
-            failure_reason=(
-                observation.failure_reason if observation is not None else None
-            ),
+            last_refresh_at=(observation.last_refresh_at if observation is not None else None),
+            failure_reason=(observation.failure_reason if observation is not None else None),
             credential_source=(
                 observation.credential_source if observation is not None else "NONE"
             ),
@@ -3809,9 +3752,7 @@ class ControlPlaneService:
                     remaining_fraction=window.remaining_fraction,
                     confidence=window.confidence.value,
                     measurement_source=snapshot.source.source_type.value,
-                    reset_at=(
-                        window.reset_at.isoformat() if window.reset_at is not None else None
-                    ),
+                    reset_at=(window.reset_at.isoformat() if window.reset_at is not None else None),
                     state=window.state.value,
                 )
             except Exception:
@@ -3889,9 +3830,7 @@ class ControlPlaneService:
             process_id=os.getpid(),
             process_instance_id=_PROCESS_INSTANCE_ID,
             last_tick_at=(
-                snapshot.last_tick_at.isoformat()
-                if snapshot.last_tick_at is not None
-                else None
+                snapshot.last_tick_at.isoformat() if snapshot.last_tick_at is not None else None
             ),
             tick_interval_seconds=snapshot.interval_seconds,
             supervisor_steps=steps_view,
@@ -4023,6 +3962,7 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                 # A small file under /tmp is the simplest durable trace.
                 try:
                     import traceback
+
                     with open("/tmp/pao_control_plane_unavailable.log", "a") as fh:
                         fh.write(f"{type(exc).__name__}: {exc}\n")
                         fh.write(traceback.format_exc())
@@ -4134,7 +4074,8 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                     self._view(
                         200,
                         request_service.set_project_supervised_auto_settings(
-                            project_id, payload,
+                            project_id,
+                            payload,
                         ),
                     )
                     return
@@ -4198,9 +4139,7 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                         payload = self._read_json()
                         if payload is None:
                             return
-                        self._view(
-                            200, request_service.auto_dispatch_now(task_id, payload)
-                        )
+                        self._view(200, request_service.auto_dispatch_now(task_id, payload))
                         return
                 if count == 3 and sub == "approvals" and method == "GET":
                     self._view(200, request_service.approvals_for_task(task_id))

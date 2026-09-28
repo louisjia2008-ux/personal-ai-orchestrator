@@ -32,7 +32,7 @@ import os
 import sys
 import time
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -46,9 +46,7 @@ from run_spike import (  # noqa: E402
     patched,
 )
 
-AUTH_PATH = os.path.expanduser(
-    "~/Library/Application Support/opencode/auth.json"
-)
+AUTH_PATH = os.path.expanduser("~/Library/Application Support/opencode/auth.json")
 AUTH_PATH_FALLBACK = os.path.expanduser("~/.local/share/opencode/auth.json")
 ZAI_QUOTA_URL = "https://api.z.ai/api/monitor/usage/quota/limit"
 MM_QUOTA_URL = "https://api.minimaxi.com/v1/token_plan/remains"
@@ -67,9 +65,7 @@ def load_keys() -> dict[str, str]:
 
 
 def http_get(url: str, key: str) -> tuple[int, dict[str, Any]]:
-    req = urllib.request.Request(
-        url, headers={"Authorization": f"Bearer {key}", "x-api-key": key}
-    )
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}", "x-api-key": key})
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
             return r.status, json.load(r)
@@ -83,21 +79,19 @@ def probe_zai(key: str) -> tuple[QuotaWindow, ...] | None:
         return None
     windows = []
     for lim in body["data"]["limits"]:
-        reset_at = datetime.fromtimestamp(
-            lim["nextResetTime"] / 1000, tz=timezone.utc
-        )
+        reset_at = datetime.fromtimestamp(lim["nextResetTime"] / 1000, tz=UTC)
         windows.append((reset_at, lim["percentage"] / 100))
     windows.sort()  # sooner reset first
     # Label by plausibility: a 5h rolling window always resets within ~5h;
     # ZAI lite's shorter credit window resets on a multi-hour/day boundary.
     kinds = [
-        "FIVE_HOUR" if (windows[0][0] - datetime.now(timezone.utc)).total_seconds() <= 6 * 3600
+        "FIVE_HOUR"
+        if (windows[0][0] - datetime.now(UTC)).total_seconds() <= 6 * 3600
         else "SHORT_TERM",
         "WEEKLY",
     ]
     return tuple(
-        QuotaWindow(kind, used, reset)
-        for kind, (reset, used) in zip(kinds, windows)
+        QuotaWindow(kind, used, reset) for kind, (reset, used) in zip(kinds, windows, strict=False)
     )
 
 
@@ -117,9 +111,7 @@ def probe_minimax(key: str) -> tuple[QuotaWindow, ...] | None:
 MM_INACTIVE: dict[str, str] = {}
 
 
-def execute_on_zai(
-    key: str, model: str, task: str
-) -> tuple[str, int]:
+def execute_on_zai(key: str, model: str, task: str) -> tuple[str, int]:
     payload = json.dumps(
         {
             "model": model,
@@ -142,9 +134,7 @@ def execute_on_zai(
     started = time.perf_counter()
     with urllib.request.urlopen(req, timeout=300) as r:
         body = json.load(r)
-    text = "".join(
-        b.get("text", "") for b in body.get("content", [])
-    ).strip()
+    text = "".join(b.get("text", "") for b in body.get("content", [])).strip()
     return text, round((time.perf_counter() - started) * 1000)
 
 
@@ -156,14 +146,13 @@ TASKS: list[dict[str, str]] = [
             "SlidingWindowLimiter(构造参数 rate/period),"
             "给出 allow() 方法与一行使用示例。只输出代码。"
         ),
-        "note": "真实配额状态下的中高强度任务;限流器属标准组件,Jev 分级若为 T1–T2 选 flash 也属正确判断",
+        "note": (
+            "真实配额状态下的中高强度任务;限流器属标准组件,Jev 分级若为 T1–T2 选 flash 也属正确判断"
+        ),
     },
     {
         "name": "B_trivial_live_quota",
-        "task": (
-            "给下面这行 Shell 写一句注释说明作用:"
-            "find . -name '*.pyc' -delete。只输出注释。"
-        ),
+        "task": ("给下面这行 Shell 写一句注释说明作用:find . -name '*.pyc' -delete。只输出注释。"),
         "note": "真实配额状态下的低强度任务 → 应选 glm-5.3-flash 执行",
     },
     {
@@ -173,10 +162,7 @@ TASKS: list[dict[str, str]] = [
             "失败恢复路径。用要点提纲,总共不超过 300 字。"
             "仅 T3 最强模型可执行,禁止降档。"
         ),
-        "note": (
-            "注入 ZAI 周 CRITICAL + MM 无订阅(真实)→ 无可执行目标,"
-            "应触发 defer/兜底路径"
-        ),
+        "note": ("注入 ZAI 周 CRITICAL + MM 无订阅(真实)→ 无可执行目标,应触发 defer/兜底路径"),
     },
 ]
 
@@ -244,13 +230,11 @@ def main() -> int:
         gated = {c.execution_target_id: c.hard_gate() for c in cands}
         if MM_INACTIVE:
             gated["pi@minimax-m3 (pool)"] = MM_INACTIVE["reason"]
-        admitted = [
-            c for c in cands if not gated[c.execution_target_id]
-        ]
+        admitted = [c for c in cands if not gated[c.execution_target_id]]
 
         state = {
             "task": {"source": "pi", "prompt": t["task"]},
-            "now": datetime.now(timezone.utc).isoformat(),
+            "now": datetime.now(UTC).isoformat(),
             "candidates": [c.view() for c in admitted],
             "excluded_by_hard_gates": {k: v for k, v in gated.items() if v},
         }
@@ -261,11 +245,7 @@ def main() -> int:
         output = ""
         chosen = policy["decision"]
         if chosen.startswith("pi@zai-"):
-            model = next(
-                c.model_sku_id
-                for c in admitted
-                if c.execution_target_id == chosen
-            )
+            model = next(c.model_sku_id for c in admitted if c.execution_target_id == chosen)
             output, exec_ms = execute_on_zai(keys["zai"], model, t["task"])
             exec_note = f"executed on {model} in {exec_ms}ms"
         elif chosen == "pi@opencode-zen":
@@ -278,9 +258,7 @@ def main() -> int:
             "note": t["note"],
             "decision": chosen,
             "mode": policy["mode"],
-            "confidence": round(
-                body["answers"]["route"]["confidence"], 2
-            ),
+            "confidence": round(body["answers"]["route"]["confidence"], 2),
             "task_tier": policy["task_tier"]["score"],
             "defer_noul": policy["defer_noul"],
             "defer_advice": policy["defer_advice"],

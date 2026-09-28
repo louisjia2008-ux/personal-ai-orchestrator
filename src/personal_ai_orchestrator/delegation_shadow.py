@@ -73,9 +73,7 @@ class DelegationShadowRecord(RegistryModel):
         return evaluate_delegation(self.facts, mode=DelegationPolicyMode.SHADOW)
 
     def replay_matches(self) -> bool:
-        return self.replay().model_dump(mode="json") == self.decision.model_dump(
-            mode="json"
-        )
+        return self.replay().model_dump(mode="json") == self.decision.model_dump(mode="json")
 
 
 class DelegationShadowJournal:
@@ -98,9 +96,7 @@ class DelegationShadowJournal:
         return f"delegation-shadow-{sha256(payload).hexdigest()[:24]}"
 
     def path_for(self, observation_id: str) -> Path:
-        if not observation_id or any(
-            part in observation_id for part in ("/", "\\", "..")
-        ):
+        if not observation_id or any(part in observation_id for part in ("/", "\\", "..")):
             raise ValueError("unsafe delegation shadow observation id")
         return self.directory / f"{observation_id}.json"
 
@@ -146,9 +142,7 @@ class DelegationShadowJournal:
         target = self.path_for(observation_id)
         if not target.exists():
             return None
-        return DelegationShadowRecord.model_validate_json(
-            target.read_text(encoding="utf-8")
-        )
+        return DelegationShadowRecord.model_validate_json(target.read_text(encoding="utf-8"))
 
     def records_for_parent_run(
         self,
@@ -158,9 +152,7 @@ class DelegationShadowJournal:
             return ()
         records: list[DelegationShadowRecord] = []
         for path in sorted(self.directory.glob("delegation-shadow-*.json")):
-            record = DelegationShadowRecord.model_validate_json(
-                path.read_text(encoding="utf-8")
-            )
+            record = DelegationShadowRecord.model_validate_json(path.read_text(encoding="utf-8"))
             if record.parent_run_id == parent_run_id:
                 records.append(record)
         return tuple(records)
@@ -206,21 +198,13 @@ def build_delegation_shadow_record(
     child_candidate = None if child_target is None else by_target.get(child_target)
     remaining = () if child_candidate is None else child_candidate.remaining_fractions
     availability_state = (
-        None
-        if child_candidate is None
-        else child_candidate.availability_state.value
+        None if child_candidate is None else child_candidate.availability_state.value
     )
 
     parent_profile = (
-        None
-        if task_profile_provider is None
-        else task_profile_provider(parent_task_id)
+        None if task_profile_provider is None else task_profile_provider(parent_task_id)
     )
-    child_profile = (
-        None
-        if task_profile_provider is None
-        else task_profile_provider(child_task_id)
-    )
+    child_profile = None if task_profile_provider is None else task_profile_provider(child_task_id)
     try:
         parent_task = store.get_task(parent_task_id)
     except KeyError:
@@ -267,8 +251,8 @@ def build_delegation_shadow_record(
     # metered and fail-closed on a missing burn estimate. B3C may learn that the
     # registry lacks enough plan lineage to name the commercial mode; that new
     # UNKNOWN limitation must not weaken the older conservative burn gate.
-    observed_metered_unknown = (
-        commercial_mode is DelegationCommercialMode.UNKNOWN and bool(remaining)
+    observed_metered_unknown = commercial_mode is DelegationCommercialMode.UNKNOWN and bool(
+        remaining
     )
     burn_gated_candidate = metered_subscription or observed_metered_unknown
     quota_truth_required = commercial_mode not in {
@@ -281,9 +265,7 @@ def build_delegation_shadow_record(
         or commercial_mode is DelegationCommercialMode.PAY_AS_YOU_GO
     )
     require_burn = burn_gated_candidate and (
-        True
-        if resolved_policy is None
-        else resolved_policy.require_burn_estimate_for_subscription
+        True if resolved_policy is None else resolved_policy.require_burn_estimate_for_subscription
     )
 
     facts = DelegationPolicyInput(
@@ -291,24 +273,16 @@ def build_delegation_shadow_record(
         host_required=host_required_delegation is True,
         failure_count=host_evidence.parent_failure_count or 0,
         failure_escalation_after=(
-            resolved_policy.failure_escalation_after
-            if resolved_policy is not None
-            else 2
+            resolved_policy.failure_escalation_after if resolved_policy is not None else 2
         ),
-        eligible_child_count=sum(
-            1 for item in recommendation.evaluations if item.admitted
-        ),
+        eligible_child_count=sum(1 for item in recommendation.evaluations if item.admitted),
         quota_truth_required=quota_truth_required,
         quota_truth_known=quota_truth_known,
         require_burn_estimate=require_burn,
         predicted_child_burn_fraction=host_evidence.predicted_child_burn_fraction,
-        usable_child_headroom_fraction=(
-            host_evidence.usable_child_headroom_fraction
-        ),
+        usable_child_headroom_fraction=(host_evidence.usable_child_headroom_fraction),
         paid_usage_required=host_evidence.paid_usage_required is True,
-        paid_usage_allowed=(
-            False if resolved_policy is None else resolved_policy.allow_paid_usage
-        ),
+        paid_usage_allowed=(False if resolved_policy is None else resolved_policy.allow_paid_usage),
         independence_required=independence_required is True,
         different_provider_candidate_available=different_provider_available,
         same_quota_pool_as_parent=host_evidence.same_quota_pool_as_parent,

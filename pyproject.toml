@@ -18,7 +18,9 @@ dev = [
   "pytest>=8.3,<9",
   "pytest-asyncio>=0.24,<1",
   "pytest-rerunfailures>=14,<15",
-  "ruff>=0.6,<1",
+  # Pinned: new ruff releases add lint rules and would turn CI red on unrelated
+  # pushes. Bump deliberately and fix any new findings in the same change.
+  "ruff==0.16.9",
 ]
 macos-package = [
   "pyinstaller>=6.11,<7",
@@ -29,6 +31,9 @@ pao = "personal_ai_orchestrator.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Tests import shared fixtures as `tests.<module>`; make bare `pytest` work
+# the same as `python -m pytest` (which adds the cwd to sys.path).
+pythonpath = ["."]
 asyncio_mode = "auto"
 markers = [
   "flaky: opt-in retry decorator provided by pytest-rerunfailures; the daemon SIGINT shutdown race is the only known consumer in this repo.",
@@ -37,6 +42,10 @@ markers = [
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+
+[tool.ruff.format]
+# Markdown under docs/ holds recorded evidence; keep its code blocks verbatim.
+exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

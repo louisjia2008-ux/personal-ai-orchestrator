@@ -189,9 +189,7 @@ def test_glm_model_consumption_does_not_overwrite_plan_remaining() -> None:
             "model_consumption": normalize_zai_model_usage(
                 {
                     "data": {
-                        "modelDataList": [
-                            {"modelName": "GLM-5.3", "tokensUsage": [999_999_999]}
-                        ]
+                        "modelDataList": [{"modelName": "GLM-5.3", "tokensUsage": [999_999_999]}]
                     }
                 },
                 observed_at=NOW,
@@ -311,9 +309,12 @@ def test_minimax_differing_model_views_create_no_second_plan_balance() -> None:
     assert five_hour.remaining_fraction is None
     # Every provider view survives as an equivalent, labelled as such.
     assert len(projection.model_equivalents) == 4
-    assert sorted(
-        round(view.remaining_fraction, 4) for view in projection.model_equivalents
-    ) == [0.63, 0.81, 0.81, 0.95]
+    assert sorted(round(view.remaining_fraction, 4) for view in projection.model_equivalents) == [
+        0.63,
+        0.81,
+        0.81,
+        0.95,
+    ]
 
 
 def test_minimax_five_hour_and_weekly_remain_distinct() -> None:
@@ -339,9 +340,7 @@ def test_minimax_plan_level_counts_outrank_per_model_percentages() -> None:
             "current_weekly_usage_count": 7_000_000,
             "current_weekly_reset_time": "2026-09-06T00:00:00+08:00",
             # A per-model percentage that contradicts the plan-level counts.
-            "model_remains": [
-                {"model": "MiniMax-M3", "current_interval_remaining_percent": 12}
-            ],
+            "model_remains": [{"model": "MiniMax-M3", "current_interval_remaining_percent": 12}],
         }
     }
 
@@ -502,9 +501,7 @@ def _projection(**overrides) -> dict:
             observed_at=NOW,
         ),
         "pool": SharedQuotaPool(pool_id="pool", provider_id="p", plan_id="plan"),
-        "source": EvidenceSource(
-            source_type=EvidenceSourceType.PROVIDER_API, observed_at=NOW
-        ),
+        "source": EvidenceSource(source_type=EvidenceSourceType.PROVIDER_API, observed_at=NOW),
     }
     return {**base, **overrides}
 
@@ -555,9 +552,7 @@ def test_unknown_confidence_cannot_smuggle_a_precise_value() -> None:
             window_kind=QuotaWindowKind.FIVE_HOUR,
             remaining_fraction=0.5,
             confidence=EvidenceConfidence.UNKNOWN,
-            source=EvidenceSource(
-                source_type=EvidenceSourceType.PROVIDER_API, observed_at=NOW
-            ),
+            source=EvidenceSource(source_type=EvidenceSourceType.PROVIDER_API, observed_at=NOW),
         )
 
 
@@ -602,9 +597,7 @@ def test_minimax_resource_categories_are_not_reported_as_models() -> None:
 
 def test_an_entry_matching_the_catalog_is_reported_as_a_model() -> None:
     payload = {
-        "model_remains": [
-            {"model": "MiniMax-M2.7", "current_interval_remaining_percent": 63}
-        ]
+        "model_remains": [{"model": "MiniMax-M2.7", "current_interval_remaining_percent": 63}]
     }
 
     projection = normalize_minimax_quota(

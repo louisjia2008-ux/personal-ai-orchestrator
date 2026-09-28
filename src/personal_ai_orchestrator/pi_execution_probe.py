@@ -83,9 +83,7 @@ async def _probe(
             if total > cap:
                 truncated = True
 
-    stdout_task = asyncio.create_task(
-        _drain(supervised.process.stdout, PI_MAX_STDOUT_BYTES, "out")
-    )
+    stdout_task = asyncio.create_task(_drain(supervised.process.stdout, PI_MAX_STDOUT_BYTES, "out"))
     stderr_task = asyncio.create_task(
         _drain(supervised.process.stderr, MAX_WORKER_STDERR_BYTES, "err")
     )
@@ -127,7 +125,7 @@ def run_pi_execution_probe(
         None,
     )
     expected_target_id = (
-        f"pi-{provider_id}-{model_sku_id.split("/", 1)[-1]}"
+        f"pi-{provider_id}-{model_sku_id.split('/', 1)[-1]}"
         if "/" in model_sku_id
         else f"pi-{provider_id}-{model_sku_id}"
     )

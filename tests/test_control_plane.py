@@ -689,9 +689,7 @@ def test_wrong_content_type_rejected(harness):
 
 
 def test_oversized_body_rejected(harness):
-    payload = json.dumps(
-        {"task_id": "t" * 100, "request_id": "r", "intent": "x" * 70000}
-    ).encode()
+    payload = json.dumps({"task_id": "t" * 100, "request_id": "r", "intent": "x" * 70000}).encode()
     status, body = _raw_request(
         harness.socket_path,
         "POST",
@@ -936,8 +934,7 @@ def test_dashboard_summary_composes_sanitized_authoritative_state(harness):
     assert "explicit owner approval missing" in view.important_blockers
     assert any(risk.title == "Production automation is not authorized" for risk in view.risks)
     assert all(
-        risk.raw_code is None or "credential" not in risk.raw_code.lower()
-        for risk in view.risks
+        risk.raw_code is None or "credential" not in risk.raw_code.lower() for risk in view.risks
     )
     assert view.quota_history.retention_limit == 500
     assert view.quota_history.observations
@@ -1101,9 +1098,7 @@ def test_run_view_pid_alive_false_when_process_is_gone(harness) -> None:
     proc.wait(timeout=10)
     dead_pid = proc.pid
 
-    harness.store.submit_task(
-        task_id="task-pid-dead", request_id="req-pid-dead", intent="dead"
-    )
+    harness.store.submit_task(task_id="task-pid-dead", request_id="req-pid-dead", intent="dead")
     harness.store.start_run(
         run_id="run-dead",
         task_id="task-pid-dead",
@@ -1203,6 +1198,7 @@ def test_provider_health_keeps_expired_verified_history_but_denies_launch(harnes
     assert target_view.execution_verified_stale is True
     assert target_view.launch_authorized is False
     assert target_view.execution_verification_observed_at == observed.isoformat()
+
 
 def test_quota_is_connection_based_not_pool_based(harness):
     """Quota enumerates connected providers, never merely providers with pools.
@@ -1307,9 +1303,24 @@ def test_cli_submit_status_active_status(harness, capsys):
     socket_arg = "--socket"
     socket_value = str(harness.socket_path)
 
-    assert cli_main([socket_arg, socket_value, "submit", "--task-id", "cli-1",
-                     "--request-id", "cli-req-1", "--project-id", harness.project.project_id,
-                     "--intent", "cli driven task"]) == 0
+    assert (
+        cli_main(
+            [
+                socket_arg,
+                socket_value,
+                "submit",
+                "--task-id",
+                "cli-1",
+                "--request-id",
+                "cli-req-1",
+                "--project-id",
+                harness.project.project_id,
+                "--intent",
+                "cli driven task",
+            ]
+        )
+        == 0
+    )
     out = capsys.readouterr().out
     assert "SUBMITTED" in out
 
@@ -1412,9 +1423,7 @@ def test_opencode_runtime_resolves_the_canonical_install_when_path_is_minimal(
 def test_opencode_runtime_prefers_path_resolution(tmp_path, monkeypatch):
     from personal_ai_orchestrator import control_api
 
-    monkeypatch.setattr(
-        control_api.shutil, "which", lambda name: "/usr/local/bin/opencode"
-    )
+    monkeypatch.setattr(control_api.shutil, "which", lambda name: "/usr/local/bin/opencode")
     # Even with no home install, PATH resolution wins.
     empty_home = tmp_path / "empty-home"
     empty_home.mkdir()

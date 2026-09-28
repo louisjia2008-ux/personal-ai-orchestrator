@@ -87,9 +87,7 @@ def _registry() -> ModelRegistry:
     )
     return ModelRegistry(
         providers={"minimax": Provider(id="minimax", display_name="MiniMax")},
-        accounts={
-            "account": Account(id="account", provider_id="minimax", label="subscription")
-        },
+        accounts={"account": Account(id="account", provider_id="minimax", label="subscription")},
         plans={
             "plan": Plan(
                 id="plan",
@@ -307,10 +305,13 @@ def test_policy_precedence_is_task_then_project_then_global() -> None:
     assert resolve_scheduling_policy(global_default=global_default).policy.objective is (
         RoutingObjective.BALANCED
     )
-    assert resolve_scheduling_policy(
-        global_default=global_default,
-        project_override=project_override,
-    ).policy.objective is RoutingObjective.QUOTA_SAVER
+    assert (
+        resolve_scheduling_policy(
+            global_default=global_default,
+            project_override=project_override,
+        ).policy.objective
+        is RoutingObjective.QUOTA_SAVER
+    )
     resolved = resolve_scheduling_policy(
         global_default=global_default,
         project_override=project_override,
@@ -431,8 +432,7 @@ def test_weak_negative_observed_exhaustion_removes_candidate() -> None:
     assert candidate.admitted is False
     assert candidate.observed_availability_state == "COOLDOWN"
     assert any(
-        "observed quota availability blocks target" in reason
-        for reason in candidate.reasons
+        "observed quota availability blocks target" in reason for reason in candidate.reasons
     )
     assert decision.selected_execution_target_id is None
 
@@ -598,28 +598,48 @@ def test_score_candidate_weight_value_equals_core_score_sum() -> None:
     weights = objective_weights(RoutingObjective.BALANCED)
     freshness_weight = 0.2  # M1 WP3 fix (F2) — see scheduler.FRESHNESS_WEIGHT
     core_components = (
-        ScoreComponent(name="quality_capability_fit", value=0.5,
-                       confidence=EvidenceConfidence.EXACT,
-                       source="registry.capabilities", weight=weights.quality),
-        ScoreComponent(name="pressure_term", value=0.2,
-                       confidence=EvidenceConfidence.EXACT,
-                       source="burn_curve.weekly", weight=weights.pressure),
-        ScoreComponent(name="headroom_min", value=0.4,
-                       confidence=EvidenceConfidence.EXACT,
-                       source="quota_window.minimum_remaining_fraction",
-                       weight=weights.headroom),
-        ScoreComponent(name="latency_log", value=0.1,
-                       confidence=EvidenceConfidence.ESTIMATED,
-                       source="target_telemetry.expected_latency_ms",
-                       weight=weights.latency),
-        ScoreComponent(name="cost_log", value=0.05,
-                       confidence=EvidenceConfidence.ESTIMATED,
-                       source="target_telemetry.expected_cost_to_green_usd",
-                       weight=weights.cost),
-        ScoreComponent(name="freshness", value=2.0,
-                       confidence=EvidenceConfidence.ESTIMATED,
-                       source="execution_evidence.age",
-                       weight=freshness_weight),
+        ScoreComponent(
+            name="quality_capability_fit",
+            value=0.5,
+            confidence=EvidenceConfidence.EXACT,
+            source="registry.capabilities",
+            weight=weights.quality,
+        ),
+        ScoreComponent(
+            name="pressure_term",
+            value=0.2,
+            confidence=EvidenceConfidence.EXACT,
+            source="burn_curve.weekly",
+            weight=weights.pressure,
+        ),
+        ScoreComponent(
+            name="headroom_min",
+            value=0.4,
+            confidence=EvidenceConfidence.EXACT,
+            source="quota_window.minimum_remaining_fraction",
+            weight=weights.headroom,
+        ),
+        ScoreComponent(
+            name="latency_log",
+            value=0.1,
+            confidence=EvidenceConfidence.ESTIMATED,
+            source="target_telemetry.expected_latency_ms",
+            weight=weights.latency,
+        ),
+        ScoreComponent(
+            name="cost_log",
+            value=0.05,
+            confidence=EvidenceConfidence.ESTIMATED,
+            source="target_telemetry.expected_cost_to_green_usd",
+            weight=weights.cost,
+        ),
+        ScoreComponent(
+            name="freshness",
+            value=2.0,
+            confidence=EvidenceConfidence.ESTIMATED,
+            source="execution_evidence.age",
+            weight=freshness_weight,
+        ),
     )
     identity = sum(c.value * c.weight for c in core_components)
     expected = (
@@ -660,8 +680,14 @@ def test_score_candidate_emits_six_weight_named_components() -> None:
         freshness_observed_at=NOW - timedelta(days=1),
         score_now=NOW,
     )
-    weight_names = {"quality_capability_fit", "pressure_term", "headroom_min",
-                    "latency_log", "cost_log", "freshness"}
+    weight_names = {
+        "quality_capability_fit",
+        "pressure_term",
+        "headroom_min",
+        "latency_log",
+        "cost_log",
+        "freshness",
+    }
     weight_rows = [c for c in components if c.name in weight_names]
     assert {c.name for c in weight_rows} == weight_names
     # Each weight-named row carries the matching weight from the
@@ -674,9 +700,7 @@ def test_score_candidate_emits_six_weight_named_components() -> None:
     assert by_name["cost_log"].weight == weights.cost
     assert by_name["freshness"].weight == 0.2
     # Σ identity over the six named rows.
-    identity = sum(
-        (c.value or 0.0) * (c.weight or 0.0) for c in weight_rows
-    )
+    identity = sum((c.value or 0.0) * (c.weight or 0.0) for c in weight_rows)
     # The pre-known identity: with no membership/priority/scarcity
     # nudges, the score equals the identity. Tolerance widened to
     # ``1e-7`` because the V2 freshness normalisation
@@ -730,8 +754,10 @@ def test_pressure_term_stale_sets_reason_burn_stale_ignored() -> None:
     from personal_ai_orchestrator.quota_burn import BurnAssessment, BurnPressure
 
     stale = BurnAssessment(
-        expected_used_fraction=0.5, actual_used_fraction=0.4,
-        deviation=-0.1, remaining_fraction=0.6,
+        expected_used_fraction=0.5,
+        actual_used_fraction=0.4,
+        deviation=-0.1,
+        remaining_fraction=0.6,
         seconds_to_reset=0.0,
         pressure=BurnPressure.STALE,
         pressure_score=0.0,
@@ -753,7 +779,6 @@ def test_pressure_term_scheduler_and_recommender_agree_on_same_window() -> None:
     They both bottom out in ``quota_burn.assess`` so ``-pressure_score``
     must match exactly.
     """
-
 
     source = EvidenceSource(
         source_type=EvidenceSourceType.PROVIDER_API,
@@ -865,10 +890,14 @@ def test_evaluate_target_never_scores_manual_policy() -> None:
         task=_task(),
         target=list(_registry().execution_targets.values())[0],
         membership=PoolMembership(
-            pool=PoolKind.WORKER, model_sku_id="m", execution_target_id="m3-sub",
-            priority=1, weight=1.0,
+            pool=PoolKind.WORKER,
+            model_sku_id="m",
+            execution_target_id="m3-sub",
+            priority=1,
+            weight=1.0,
         ),
-        now=NOW, known_at=NOW,
+        now=NOW,
+        known_at=NOW,
         runtime_available=True,
         telemetry=TargetTelemetry(),
         policy=RoutingPolicy(
@@ -900,35 +929,40 @@ def test_freshness_value_is_bounded_zero_to_one() -> None:
     # 0 days ago → ceiling
     assert (
         _freshness_value(
-            observed_at=now, now=now,
+            observed_at=now,
+            now=now,
         )
         == 1.0
     )
     # 3.5 days ago → midpoint
     assert (
         _freshness_value(
-            observed_at=now - timedelta(days=3.5), now=now,
+            observed_at=now - timedelta(days=3.5),
+            now=now,
         )
         == 0.5
     )
     # 7 days ago → boundary
     assert (
         _freshness_value(
-            observed_at=now - timedelta(days=7), now=now,
+            observed_at=now - timedelta(days=7),
+            now=now,
         )
         == 0.0
     )
     # Older than the cap → floor
     assert (
         _freshness_value(
-            observed_at=now - timedelta(days=30), now=now,
+            observed_at=now - timedelta(days=30),
+            now=now,
         )
         == 0.0
     )
     # Future-dated evidence → floor (negative age is not a signal)
     assert (
         _freshness_value(
-            observed_at=now + timedelta(hours=1), now=now,
+            observed_at=now + timedelta(hours=1),
+            now=now,
         )
         == 0.0
     )
@@ -957,9 +991,7 @@ def test_freshness_dominates_only_when_other_terms_identical() -> None:
             pressure_term=0.2,
             headroom_min=0.4,
             freshness_observed_at=(
-                now - timedelta(days=evidence_age_days)
-                if evidence_age_days is not None
-                else None
+                now - timedelta(days=evidence_age_days) if evidence_age_days is not None else None
             ),
             score_now=now,
         )
@@ -970,8 +1002,7 @@ def test_freshness_dominates_only_when_other_terms_identical() -> None:
     stale = score_at(capability_fit=0.8, evidence_age_days=7)
     assert fresh is not None and stale is not None
     assert fresh > stale, (
-        "Same target, same telemetry, fresh evidence must outrank "
-        "7-day-stale evidence."
+        "Same target, same telemetry, fresh evidence must outrank 7-day-stale evidence."
     )
     # Maximum delta is bounded: 0.2 (FRESHNESS_WEIGHT) * 1.0 (ceiling) = 0.2
     assert (fresh - stale) <= 0.2 + 1e-9

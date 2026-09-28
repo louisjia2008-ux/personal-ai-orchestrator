@@ -202,9 +202,7 @@ def _build_service(tmp_path: Path) -> ControlPlaneService:
         runtime_availability={"m3-sub": True},
         verification_journal=VerificationEvidenceJournal(tmp_path),
         quota_availability_journal=availability,
-        owner_execution=OwnerExecutionSettings(
-            tmp_path / "owner-execution.json", initial=True
-        ),
+        owner_execution=OwnerExecutionSettings(tmp_path / "owner-execution.json", initial=True),
     )
 
 
@@ -273,7 +271,8 @@ def test_initiate_owner_dispatch_succeeds_on_fresh_reservation(tmp_path: Path) -
     task = _submit_task(service, project_id)
 
     dispatch, created, transitioned = _call(
-        service, executor,
+        service,
+        executor,
         task=task,
         request_id="dispatch-1",
         task_state_version=task.state_version,
@@ -304,7 +303,8 @@ def test_initiate_owner_dispatch_returns_existing_on_idempotent_retry(tmp_path: 
     task = _submit_task(service, project_id)
 
     first_dispatch, first_created, first_transitioned = _call(
-        service, executor,
+        service,
+        executor,
         task=task,
         request_id="dispatch-1",
         task_state_version=task.state_version,
@@ -315,7 +315,8 @@ def test_initiate_owner_dispatch_returns_existing_on_idempotent_retry(tmp_path: 
     assert len(executor.calls) == 1
 
     second_dispatch, second_created, second_transitioned = _call(
-        service, executor,
+        service,
+        executor,
         task=task,
         request_id="dispatch-1",
         task_state_version=task.state_version,
@@ -340,7 +341,8 @@ def test_initiate_owner_dispatch_blocks_on_stale_task_version(tmp_path: Path) ->
 
     with pytest.raises(ControlPlaneError) as error:
         _call(
-            service, executor,
+            service,
+            executor,
             task=task,
             request_id="dispatch-stale",
             task_state_version=99,  # wrong on purpose
@@ -371,7 +373,8 @@ def test_initiate_owner_dispatch_blocks_on_non_dispatchable_state(tmp_path: Path
 
     with pytest.raises(ControlPlaneError) as error:
         _call(
-            service, executor,
+            service,
+            executor,
             task=live_task,
             request_id="dispatch-running",
             task_state_version=live_task.state_version,
@@ -402,7 +405,8 @@ def test_initiate_owner_dispatch_blocks_on_missing_project_id(tmp_path: Path) ->
 
     with pytest.raises(ControlPlaneError) as error:
         _call(
-            service, executor,
+            service,
+            executor,
             task=task,
             request_id="dispatch-no-project",
             task_state_version=task.state_version,
@@ -419,14 +423,13 @@ def test_initiate_owner_dispatch_blocks_on_missing_base_sha(tmp_path: Path) -> N
     executor = _RecordingExecutor()
     project_id = _register_project(service, tmp_path)
     _submit_task(service, project_id)
-    service.store.connection.execute(
-        "UPDATE tasks SET base_sha=NULL WHERE task_id=?", ("task-1",)
-    )
+    service.store.connection.execute("UPDATE tasks SET base_sha=NULL WHERE task_id=?", ("task-1",))
     live_task = service.store.get_task("task-1")
 
     with pytest.raises(ControlPlaneError) as error:
         _call(
-            service, executor,
+            service,
+            executor,
             task=live_task,
             request_id="dispatch-no-base-sha",
             task_state_version=live_task.state_version,
@@ -442,10 +445,7 @@ def test_initiate_owner_dispatch_authority_default_is_owner_initiated() -> None:
     pre-WP5a-1 default for future SUPERVISED_AUTO callers.
     """
 
-    assert (
-        AUTHORITY_OWNER_INITIATED_EXECUTION
-        == DispatchAuthority.OWNER_INITIATED_EXECUTION.value
-    )
+    assert AUTHORITY_OWNER_INITIATED_EXECUTION == DispatchAuthority.OWNER_INITIATED_EXECUTION.value
 
 
 def test_initiate_owner_dispatch_propagates_reserve_value_error(tmp_path: Path) -> None:
@@ -492,7 +492,8 @@ def test_initiate_owner_dispatch_with_none_executor_skips_thread(tmp_path: Path)
     task = _submit_task(service, project_id)
 
     dispatch, created, transitioned = _call(
-        service, None,
+        service,
+        None,
         task=task,
         request_id="dispatch-no-exec",
         task_state_version=task.state_version,

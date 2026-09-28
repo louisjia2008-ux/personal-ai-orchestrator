@@ -326,9 +326,7 @@ def test_task_policy_override_wins_and_is_persisted_with_decision(tmp_path) -> N
         project_policy_overrides={
             "project-1": RoutingPolicy(objective=RoutingObjective.QUOTA_SAVER)
         },
-        task_policy_overrides={
-            "task-1": RoutingPolicy(objective=RoutingObjective.SPEED_FIRST)
-        },
+        task_policy_overrides={"task-1": RoutingPolicy(objective=RoutingObjective.SPEED_FIRST)},
         runtime_availability={"m3-sub": True},
     )
     service.set_task_profile(

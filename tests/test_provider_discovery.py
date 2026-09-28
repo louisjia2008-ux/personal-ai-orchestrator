@@ -58,6 +58,7 @@ from personal_ai_orchestrator.provider_registry_store import (
 # Fixtures and helpers
 # -----------------------------------------------------------------------------
 
+
 @pytest.fixture
 def fake_provider_list_output() -> str:
     return (
@@ -105,6 +106,7 @@ def tmp_state_root(tmp_path: Path) -> Path:
 # Constants and exports
 # -----------------------------------------------------------------------------
 
+
 def test_constants_present() -> None:
     assert DISCOVERY_SUBPROCESS_TIMEOUT_SECONDS > 0
     assert DISCOVERY_SUBPROCESS_MAX_OUTPUT_BYTES >= 1024
@@ -123,10 +125,10 @@ def test_default_families_have_required_keys() -> None:
         # have ``env_variables``.
         if spec.auth != "none":
             assert spec.env_variables, (
-            f"{spec.provider_id} is auth={spec.auth} but has no env_variables"
+                f"{spec.provider_id} is auth={spec.auth} but has no env_variables"
             )
             assert spec.provider_label_keywords, (
-            f"{spec.provider_id} is auth={spec.auth} but has no provider_label_keywords"
+                f"{spec.provider_id} is auth={spec.auth} but has no provider_label_keywords"
             )
 
 
@@ -138,6 +140,7 @@ def test_default_families_are_unique() -> None:
 # -----------------------------------------------------------------------------
 # ANSI stripping and secret redaction
 # -----------------------------------------------------------------------------
+
 
 def test_ansi_stripper_removes_color_codes(fake_provider_list_output: str) -> None:
     # The parser must strip ANSI codes — if it doesn't, the secret
@@ -168,6 +171,7 @@ def test_redaction_preserves_harmless_text() -> None:
 # Provider list parsing
 # -----------------------------------------------------------------------------
 
+
 def test_parse_provider_list_recognizes_credentials_section(fake_provider_list_output: str) -> None:
     presence = _parse_provider_list(fake_provider_list_output)
     # The parser now keeps the full display label (P4.2.4-A.1 §22) so
@@ -197,13 +201,7 @@ def test_parse_provider_list_handles_empty_output() -> None:
 def test_parse_provider_list_rejects_secret_in_label() -> None:
     """A canary in the upstream output must be redacted before parsing."""
 
-    poisoned = (
-        "┌  Credentials\n"
-        "│\n"
-        "●  sk-canary1234567890abcdef\n"
-        "│\n"
-        "└  1 credentials\n"
-    )
+    poisoned = "┌  Credentials\n│\n●  sk-canary1234567890abcdef\n│\n└  1 credentials\n"
     # Belt-and-suspenders: the output that survives redaction must not
     # contain the canary. We do not call _parse_provider_list on the
     # raw string — _run_opencode would redact first.
@@ -214,6 +212,7 @@ def test_parse_provider_list_rejects_secret_in_label() -> None:
 # -----------------------------------------------------------------------------
 # Model catalog parsing
 # -----------------------------------------------------------------------------
+
 
 def test_parse_model_catalog_groups_by_provider(fake_models_output: str) -> None:
     parsed = _parse_model_catalog(fake_models_output)
@@ -243,6 +242,7 @@ def test_parse_model_catalog_rejects_secret_lines() -> None:
 # -----------------------------------------------------------------------------
 # Subprocess wrapper
 # -----------------------------------------------------------------------------
+
 
 def test_subprocess_result_serializes_safely() -> None:
     result = SubprocessResult(
@@ -274,6 +274,7 @@ def test_resolve_opencode_returns_none_for_missing_path(tmp_path: Path) -> None:
 # Region inference
 # -----------------------------------------------------------------------------
 
+
 def test_infer_region_cn_vs_international() -> None:
     cn = ProviderFamilySpec(
         provider_id="minimax-cn",
@@ -303,6 +304,7 @@ def test_infer_region_cn_vs_international() -> None:
 # -----------------------------------------------------------------------------
 # Subprocess environment isolation (P4.2.4-A.1 §15)
 # -----------------------------------------------------------------------------
+
 
 def test_build_subprocess_env_excludes_known_credential_vars(
     monkeypatch: pytest.MonkeyPatch,
@@ -338,7 +340,8 @@ def test_build_subprocess_env_excludes_known_credential_vars(
 
 
 def test_subprocess_does_not_inherit_credential_env_values(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Inject canary credential env values; run a Python child that prints
     its full environment; prove the canary values never appear in the
@@ -443,6 +446,7 @@ def test_subprocess_kills_child_on_timeout(tmp_path: Path) -> None:
 # Build registry
 # -----------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(
     _resolve_opencode(None) is None,
     reason="opencode CLI not available in this environment",
@@ -491,6 +495,7 @@ def test_build_registry_rejects_secret_in_discovery_result() -> None:
 # -----------------------------------------------------------------------------
 # Discovery round-trip
 # -----------------------------------------------------------------------------
+
 
 def test_discover_returns_typed_outcome() -> None:
     outcome = discover()
@@ -682,6 +687,7 @@ def test_auth_presence_distinguishes_credentials_from_environment() -> None:
 # CN / INTERNATIONAL auth-truth semantics (P4.2.4-A.1 §22)
 # -----------------------------------------------------------------------------
 
+
 def test_auth_truth_cn_label_does_not_authenticate_intl_surface() -> None:
     """A ``MiniMax CN`` label in the credentials store must NOT cause the
     international surfaces to report ``AUTH_FROM_ENV_PRESENCE`` and vice
@@ -719,8 +725,7 @@ def test_auth_truth_cn_label_does_not_authenticate_intl_surface() -> None:
 
 
 def test_auth_truth_intl_label_does_not_authenticate_cn_surface() -> None:
-    """Symmetric to :f``test_auth_truth_cn_label_does_not_authenticate_intl_surface``.
-    """
+    """Symmetric to :f``test_auth_truth_cn_label_does_not_authenticate_intl_surface``."""
 
     presence_intl_only = _AuthPresence(
         credentials_section_labels=frozenset({"MiniMax International"}),
@@ -755,13 +760,18 @@ def test_auth_truth_parenthetical_region_hint_authenticates_only_matching_region
     # Real-world OpenCode labels both surfaces as ``MiniMax Token Plan``
     # but distinguishes them with the parenthetical endpoint.
     presence = _AuthPresence(
-        credentials_section_labels=frozenset({
-            "MiniMax Token Plan (api.minimaxi.com) api",
-            "MiniMax Token Plan (api.minimax.io) api",
-        }),
-        credentials_region_hints=frozenset({
-            "api.minimaxi.com", "api.minimax.io",
-        }),
+        credentials_section_labels=frozenset(
+            {
+                "MiniMax Token Plan (api.minimaxi.com) api",
+                "MiniMax Token Plan (api.minimax.io) api",
+            }
+        ),
+        credentials_region_hints=frozenset(
+            {
+                "api.minimaxi.com",
+                "api.minimax.io",
+            }
+        ),
         environment_section_labels=frozenset(),
         env_variable_names_seen=frozenset(),
     )
@@ -801,7 +811,7 @@ def test_provider_discovery_fields_are_independent() -> None:
         region="CN",
         in_credentials_store=False,
         catalog_discovered=False,
-        credential_evidence_present=True,        # env var present
+        credential_evidence_present=True,  # env var present
         credential_region_verified=False,
         credential_plan_surface_verified=False,
         credential_scope_verified=False,
@@ -823,24 +833,28 @@ def test_provider_discovery_fields_are_independent() -> None:
             "source_method": "opencode_cli_inspection",
             "discovery_state": "DISCOVERED",
             "last_error_code": None,
-            "providers": [record.to_dict() if False else {  # type: ignore[unreachable]
-                "provider_id": record.provider_id,
-                "display_name": record.display_name,
-                "auth_status": record.auth_status.value,
-                "execution_status": record.execution_status.value,
-                "evidence_source": record.evidence_source,
-                "model_skus": list(record.model_skus),
-                "env_variables_present": list(record.env_variables_present),
-                "region": record.region,
-                "in_credentials_store": record.in_credentials_store,
-                "catalog_discovered": record.catalog_discovered,
-                "credential_evidence_present": record.credential_evidence_present,
-                "credential_region_verified": record.credential_region_verified,
-                "credential_plan_surface_verified": record.credential_plan_surface_verified,
-                "credential_scope_verified": record.credential_scope_verified,
-                "execution_verified": record.execution_verified,
-                "observed_at": record.observed_at.isoformat(),
-            }],
+            "providers": [
+                record.to_dict()
+                if False
+                else {  # type: ignore[unreachable]
+                    "provider_id": record.provider_id,
+                    "display_name": record.display_name,
+                    "auth_status": record.auth_status.value,
+                    "execution_status": record.execution_status.value,
+                    "evidence_source": record.evidence_source,
+                    "model_skus": list(record.model_skus),
+                    "env_variables_present": list(record.env_variables_present),
+                    "region": record.region,
+                    "in_credentials_store": record.in_credentials_store,
+                    "catalog_discovered": record.catalog_discovered,
+                    "credential_evidence_present": record.credential_evidence_present,
+                    "credential_region_verified": record.credential_region_verified,
+                    "credential_plan_surface_verified": record.credential_plan_surface_verified,
+                    "credential_scope_verified": record.credential_scope_verified,
+                    "execution_verified": record.execution_verified,
+                    "observed_at": record.observed_at.isoformat(),
+                }
+            ],
         }
     )
     assert restored.providers[0].credential_scope_verified is False
@@ -901,6 +915,7 @@ def test_env_blocklist_covers_required_provider_credentials() -> None:
 # -----------------------------------------------------------------------------
 # Registry persistence
 # -----------------------------------------------------------------------------
+
 
 def test_save_and_load_round_trip(tmp_state_root: Path) -> None:
     result = _make_discovery_result(
@@ -1002,6 +1017,7 @@ def test_upgrade_from_empty_bootstrap_persists_snapshot(tmp_state_root: Path) ->
 # Manager
 # -----------------------------------------------------------------------------
 
+
 def test_manager_starts_pending_when_no_snapshot(tmp_state_root: Path) -> None:
     manager = ProviderRegistryManager(runtime_state_root=tmp_state_root)
     status = manager.status()
@@ -1053,6 +1069,7 @@ def test_manager_status_projection() -> None:
 # Helpers
 # -----------------------------------------------------------------------------
 
+
 def _make_discovery_result(
     *,
     providers: tuple[ProviderDiscovery, ...] = (),
@@ -1078,8 +1095,10 @@ def _make_discovery_result(
 # Single-startup-contract (P4.2.4-A.1 §22)
 # -----------------------------------------------------------------------------
 
+
 def test_first_boot_runs_exactly_one_discovery_cycle(
-    tmp_state_root: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_state_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cold first launch with no persisted snapshot must run exactly one
     discovery cycle.
@@ -1135,7 +1154,8 @@ def test_first_boot_runs_exactly_one_discovery_cycle(
 
 
 def test_subsequent_boot_does_not_rerun_discovery_when_snapshot_persists(
-    tmp_state_root: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_state_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Subsequent boot must rehydrate from disk and MUST NOT invoke
     ``discover()`` at all — not from the constructor and not from a
@@ -1187,8 +1207,7 @@ def test_subsequent_boot_does_not_rerun_discovery_when_snapshot_persists(
     # Synthetic account and execution target are present.
     assert "zai-coding-plan" in registry.accounts
     assert any(
-        t.model_sku_id == "zai-coding-plan/glm-5.3"
-        for t in registry.execution_targets.values()
+        t.model_sku_id == "zai-coding-plan/glm-5.3" for t in registry.execution_targets.values()
     )
 
     # bootstrap_if_empty must be a no-op even though the catalog is the
@@ -1198,7 +1217,8 @@ def test_subsequent_boot_does_not_rerun_discovery_when_snapshot_persists(
 
 
 def test_manager_rehydrates_full_registry_from_persisted_snapshot(
-    tmp_state_root: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_state_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Static registry = empty; dynamic registry = provider + account +
     model + target; after boot, the in-memory state matches the persisted
@@ -1302,7 +1322,8 @@ def test_manager_rejects_unknown_persisted_schema_fail_closed(
 
 
 def test_explicit_refresh_runs_exactly_one_cycle(
-    tmp_state_root: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_state_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An explicit refresh must run exactly one discovery cycle, and the
     cycle count metric must reflect that.
@@ -1379,24 +1400,16 @@ def _make_opencode_discover(
 
     def _run(argv, **_kwargs):
         if argv == ("--version",):
-            return SubprocessResult(
-                (str(executable), *argv), 0, "fixture\n", "", False
-            )
+            return SubprocessResult((str(executable), *argv), 0, "fixture\n", "", False)
         if argv == ("providers", "list"):
             return SubprocessResult(
                 (str(executable), *argv), 0, "┌  Credentials\n└  0\n", "", False
             )
         if argv == ("models", "opencode"):
-            return SubprocessResult(
-                (str(executable), *argv), 0, raw_models_text, "", False
-            )
-        return SubprocessResult(
-            (str(executable), *argv), 1, "No models found", "", False
-        )
+            return SubprocessResult((str(executable), *argv), 0, raw_models_text, "", False)
+        return SubprocessResult((str(executable), *argv), 1, "No models found", "", False)
 
-    mod = __import__(
-        "personal_ai_orchestrator.provider_discovery", fromlist=["mod"]
-    )
+    mod = __import__("personal_ai_orchestrator.provider_discovery", fromlist=["mod"])
     monkeypatch.setattr(mod, "_resolve_opencode", _resolve)
     monkeypatch.setattr(mod, "_run_opencode", _run)
 
@@ -1407,9 +1420,7 @@ class _FakeAudit:
     def __init__(self) -> None:
         self.events: list[tuple[str, dict[str, object]]] = []
 
-    def record_system_event(
-        self, event_type: str, payload: dict[str, object]
-    ) -> None:
+    def record_system_event(self, event_type: str, payload: dict[str, object]) -> None:
         self.events.append((event_type, payload))
 
 
@@ -1418,9 +1429,7 @@ def test_opencode_family_lists_seven_skus_with_none_auth(
 ) -> None:
     """PROVIDER_FAMILIES advertises 7 free SKUs and the auth=None marker."""
 
-    found = next(
-        spec for spec in PROVIDER_FAMILIES if spec.provider_id == "opencode"
-    )
+    found = next(spec for spec in PROVIDER_FAMILIES if spec.provider_id == "opencode")
     assert found.auth == "none"
     assert found.pool_kind == "unmetered"
     assert len(found.free_model_skus) == 7
@@ -1442,15 +1451,16 @@ def test_discover_classifies_only_free_model_skus_into_opencode_registry(
     """
 
     fixture_text = (
-        "opencode/big-pickle\n"                                   # listed, no suffix
-        "opencode/ling-3.0-flash-fin-free\n"                       # listed
-        "opencode/mimo-v2.5-free\n"                                # listed
-        "opencode/futuristic-new-model-free\n"                     # suffix unlisted
-        "opencode/gpt-5\n"                                         # unclassified
+        "opencode/big-pickle\n"  # listed, no suffix
+        "opencode/ling-3.0-flash-fin-free\n"  # listed
+        "opencode/mimo-v2.5-free\n"  # listed
+        "opencode/futuristic-new-model-free\n"  # suffix unlisted
+        "opencode/gpt-5\n"  # unclassified
     )
     audit = _FakeAudit()
     _make_opencode_discover(monkeypatch, tmp_path, fixture_text, audit.events)
     import personal_ai_orchestrator.provider_discovery as mod
+
     monkeypatch.setattr(mod, "discover", None)  # placeholder; module imported by callers
 
     outcome = discover(families=(opencode_family,), audit=audit)
@@ -1469,12 +1479,10 @@ def test_discover_classifies_only_free_model_skus_into_opencode_registry(
 
     # Audit log captures each non-listed SKU once.
     suffix_unlisted = [
-        payload for event, payload in audit.events
-        if event == "FREE_MODEL_SUFFIX_UNLISTED"
+        payload for event, payload in audit.events if event == "FREE_MODEL_SUFFIX_UNLISTED"
     ]
     unclassified = [
-        payload for event, payload in audit.events
-        if event == "OPENCODE_MODEL_UNCLASSIFIED"
+        payload for event, payload in audit.events if event == "OPENCODE_MODEL_UNCLASSIFIED"
     ]
     assert len(suffix_unlisted) == 1
     assert suffix_unlisted[0]["sku"] == "futuristic-new-model-free"
@@ -1502,9 +1510,9 @@ def test_discover_dedups_free_model_events_within_one_call(
 
     fixture_text = (
         "opencode/big-pickle\n"
-        "opencode/big-pickle\n"             # duplicate listed SKU
+        "opencode/big-pickle\n"  # duplicate listed SKU
         "opencode/futuristic-new-model-free\n"
-        "opencode/futuristic-new-model-free\n"   # duplicate suffix-unlisted
+        "opencode/futuristic-new-model-free\n"  # duplicate suffix-unlisted
     )
     audit = _FakeAudit()
     _make_opencode_discover(monkeypatch, tmp_path, fixture_text, audit.events)
@@ -1512,17 +1520,13 @@ def test_discover_dedups_free_model_events_within_one_call(
     outcome = discover(families=(opencode_family,), audit=audit)
 
     assert outcome.error_code is None
-    suffix_unlisted = [
-        p for e, p in audit.events if e == "FREE_MODEL_SUFFIX_UNLISTED"
-    ]
+    suffix_unlisted = [p for e, p in audit.events if e == "FREE_MODEL_SUFFIX_UNLISTED"]
     # Listed SKU dedup happens upstream (``tuple(...)`` over a list); the
     # important assertion is that ``big-pickle`` survives one entry, not
     # two. The suffix-unlisted dedup is per-cycle set membership.
     assert len(suffix_unlisted) == 1
     assert opencode_family.provider_id == "opencode"
-    opencode_record = next(
-        p for p in outcome.result.providers if p.provider_id == "opencode"
-    )
+    opencode_record = next(p for p in outcome.result.providers if p.provider_id == "opencode")
     # Listed SKU appears once even though the raw output had two lines.
     assert opencode_record.model_skus.count("big-pickle") == 1
 
@@ -1538,19 +1542,13 @@ def test_discover_with_no_audit_sink_stays_silent(
     the registry — only the audit side-effect is suppressed.
     """
 
-    fixture_text = (
-        "opencode/big-pickle\n"
-        "opencode/futuristic-new-model-free\n"
-        "opencode/gpt-5\n"
-    )
+    fixture_text = "opencode/big-pickle\nopencode/futuristic-new-model-free\nopencode/gpt-5\n"
     _make_opencode_discover(monkeypatch, tmp_path, fixture_text, [])
 
     outcome = discover(families=(opencode_family,), audit=None)
     assert outcome.error_code is None
     assert outcome.result is not None
-    assert any(
-        "big-pickle" in p.model_skus for p in outcome.result.providers
-    )
+    assert any("big-pickle" in p.model_skus for p in outcome.result.providers)
 
 
 def test_provider_discovery_carries_pool_kind_and_auth_kind(

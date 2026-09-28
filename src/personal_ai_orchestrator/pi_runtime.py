@@ -64,7 +64,7 @@ PI_PROVIDER_ALIASES: dict[str, str] = {
 # ``-e`` loads this trusted TypeScript file directly, while all imports are
 # Node built-ins. This avoids relying on global npm module resolution merely
 # to enforce the guard.
-PI_WORKTREE_GUARD_SOURCE = r'''import { existsSync, realpathSync } from "node:fs";
+PI_WORKTREE_GUARD_SOURCE = r"""import { existsSync, realpathSync } from "node:fs";
 import {
   dirname,
   isAbsolute,
@@ -169,7 +169,7 @@ export default function (pi: any) {
     }
   });
 }
-'''
+"""
 
 
 @dataclass(frozen=True)
@@ -259,17 +259,23 @@ def build_pi_json_argv(
     if config.delegation_enabled and delegation_tool_path is None:
         raise PiDelegationActivationError("TRUSTED_TOOL_MISSING")
     if config.delegation_enabled and any(
-        arg.split("=", 1)[0] in {
-            "--tools", "-t", "--exclude-tools", "--no-tools", "--no-builtin-tools",
-            "-e", "--extension", "--no-extensions", "--",
+        arg.split("=", 1)[0]
+        in {
+            "--tools",
+            "-t",
+            "--exclude-tools",
+            "--no-tools",
+            "--no-builtin-tools",
+            "-e",
+            "--extension",
+            "--no-extensions",
+            "--",
         }
         for arg in config.extra_args
     ):
         raise PiDelegationActivationError("CONFLICTING_TOOL_CONFIGURATION")
     tools = PI_ALLOWED_TOOLS + ((PI5_TOOL_NAME,) if config.delegation_enabled else ())
-    extensions = (
-        ("-e", str(delegation_tool_path)) if config.delegation_enabled else ()
-    )
+    extensions = ("-e", str(delegation_tool_path)) if config.delegation_enabled else ()
     return (
         config.pi_bin,
         "--mode",

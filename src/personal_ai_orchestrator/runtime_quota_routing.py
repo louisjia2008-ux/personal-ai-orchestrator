@@ -47,8 +47,7 @@ def quota_pool_id_for_target(
         # Explicit facts own their temporal/ambiguity semantics. Never mask an
         # expired, future, or ambiguous binding with discovery metadata.
         if any(
-            fact.model_sku_id == model.id
-            and fact.execution_target_id in (None, target.id)
+            fact.model_sku_id == model.id and fact.execution_target_id in (None, target.id)
             for fact in registry.quota_bindings
         ):
             return None

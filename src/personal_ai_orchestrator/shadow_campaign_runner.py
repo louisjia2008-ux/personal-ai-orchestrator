@@ -271,6 +271,7 @@ def _worker_failure_classification(worker: WorkerExecutionResult) -> FailureClas
         from personal_ai_orchestrator.worker_outcome_classifier import (
             classify_worker_failure,
         )
+
         verdict = classify_worker_failure(
             exit_code=1,
             stderr_tail=worker.stderr_tail,
@@ -813,7 +814,9 @@ def write_campaign_report(
     availability_target_id = (
         observations[-1].manual_execution_target_id
         if observations
-        else None if queue is None else queue.execution_target_id
+        else None
+        if queue is None
+        else queue.execution_target_id
     )
     availability = (
         None

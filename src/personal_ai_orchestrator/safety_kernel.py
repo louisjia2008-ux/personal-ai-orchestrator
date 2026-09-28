@@ -417,12 +417,8 @@ def shadow_identity_payload(pending: Any) -> str:
             "provider_id": pending.provider_id,
             "quota_pool_id": pending.quota_pool_id,
             "task_family": pending.task_family,
-            "quota_confidence": (
-                None if quota_confidence is None else quota_confidence.value
-            ),
-            "collector_status": (
-                None if collector_status is None else collector_status.value
-            ),
+            "quota_confidence": (None if quota_confidence is None else quota_confidence.value),
+            "collector_status": (None if collector_status is None else collector_status.value),
             "predicted_burn_fraction": pending.predicted_burn_fraction,
         }
     )
@@ -604,9 +600,7 @@ class SafetyKernelStore:
         # M1 WP2: tier floor for the dispatch target. Default "T1" so
         # every existing row satisfies the new constraint without a
         # migration script. New submits may pass any of T0/T1/T2/T3.
-        self._ensure_column(
-            "tasks", "min_tier", "TEXT NOT NULL DEFAULT 'T1'"
-        )
+        self._ensure_column("tasks", "min_tier", "TEXT NOT NULL DEFAULT 'T1'")
         # M1 WP5a-1: AUTO_PLANNED / AUTO_GRACE bookkeeping. All four
         # columns default to NULL so a pre-WP5a-1 task row reads
         # cleanly and ``AUTO_*`` state machines never trip on legacy
@@ -853,9 +847,7 @@ class SafetyKernelStore:
         """
 
         if not isinstance(grace_seconds, int) or grace_seconds < 1 or grace_seconds > 86_400:
-            raise ValueError(
-                "grace_seconds must be an integer between 1 and 86400 (24h)"
-            )
+            raise ValueError("grace_seconds must be an integer between 1 and 86400 (24h)")
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             self.get_project(project_id)
@@ -1116,10 +1108,14 @@ class SafetyKernelStore:
                     "SELECT task_id,status FROM runs WHERE run_id=?", (parent_run_id,)
                 ).fetchone()
                 if (
-                    run is None or run["task_id"] != parent_id or run["status"] != "RUNNING"
+                    run is None
+                    or run["task_id"] != parent_id
+                    or run["status"] != "RUNNING"
                     or parent.state is not TaskState.RUNNING
-                    or parent.project_id != project_id or parent.base_sha != base_sha
-                    or parent.working_subpath != working_subpath or parent_id == task_id
+                    or parent.project_id != project_id
+                    or parent.base_sha != base_sha
+                    or parent.working_subpath != working_subpath
+                    or parent_id == task_id
                     or parent.request_id.startswith("pi5-child-submit-")
                     or parent.scheduling_policy == "MANUAL"
                 ):
@@ -1179,9 +1175,14 @@ class SafetyKernelStore:
                     "working_subpath": working_subpath,
                     "scheduling_policy": scheduling_policy,
                     "manual_execution_target_id": manual_execution_target_id,
-                    **({"delegated_parent_task_id": delegated_parent[0],
-                        "delegated_parent_run_id": delegated_parent[1]}
-                       if delegated_parent is not None else {}),
+                    **(
+                        {
+                            "delegated_parent_task_id": delegated_parent[0],
+                            "delegated_parent_run_id": delegated_parent[1],
+                        }
+                        if delegated_parent is not None
+                        else {}
+                    ),
                 },
             )
             self.connection.execute("COMMIT")
@@ -1191,7 +1192,9 @@ class SafetyKernelStore:
         return self.get_task(task_id)
 
     def get_task(self, task_id: str) -> TaskRecord:
-        row = self.connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+        row = self.connection.execute(
+            "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
+        ).fetchone()
         if row is None:
             raise KeyError(task_id)
         return self._task_from_row(row)
@@ -1401,11 +1404,11 @@ class SafetyKernelStore:
         # Build the UPDATE column list dynamically so a pre-WP5a-1
         # call that does not pass the new fields stays byte-equivalent
         # (the SQL only touches the columns the call site touched).
-        update_columns = (
-            "state=?, state_version=?, updated_at=?"
-        )
+        update_columns = "state=?, state_version=?, updated_at=?"
         update_values: list[object] = [
-            new_state.value, next_version, stamp,
+            new_state.value,
+            next_version,
+            stamp,
         ]
         if auto_decision_id is not None:
             update_columns += ", auto_decision_id=?"
@@ -1590,9 +1593,7 @@ class SafetyKernelStore:
         try:
             current = self.get_task(task_id)
             if current.state is not TaskState.AUTO_GRACE:
-                raise ValueError(
-                    f"auto ack requires AUTO_GRACE, task is {current.state.value}"
-                )
+                raise ValueError(f"auto ack requires AUTO_GRACE, task is {current.state.value}")
             if current.auto_acked_at is not None:
                 self.connection.execute("COMMIT")
                 return current
@@ -1746,8 +1747,7 @@ class SafetyKernelStore:
             }
             if not allowed_source and allow_blocked:
                 allowed_source = (
-                    current.state is TaskState.BLOCKED
-                    and current.auto_decision_id is not None
+                    current.state is TaskState.BLOCKED and current.auto_decision_id is not None
                 )
             if not allowed_source:
                 raise ValueError(
@@ -1784,9 +1784,7 @@ class SafetyKernelStore:
             }
             self._audit(task_id, event_type, payload)
             if previous_decision_id is not None:
-                self._enqueue_cleanup_intent_locked(
-                    previous_decision_id, task_id, reason, stamp
-                )
+                self._enqueue_cleanup_intent_locked(previous_decision_id, task_id, reason, stamp)
             self.connection.execute("COMMIT")
         except Exception:
             self.connection.execute("ROLLBACK")
@@ -1924,8 +1922,7 @@ class SafetyKernelStore:
 
         stamp = _now()
         existing = self.connection.execute(
-            "SELECT payload_json FROM auto_shadow_finalize_outbox "
-            "WHERE finalization_id=?",
+            "SELECT payload_json FROM auto_shadow_finalize_outbox WHERE finalization_id=?",
             (intent.finalization_id,),
         ).fetchone()
         if existing is not None:
@@ -2039,8 +2036,7 @@ class SafetyKernelStore:
         """True when ANY finalize intent (open or completed) exists."""
 
         row = self.connection.execute(
-            "SELECT 1 FROM auto_shadow_finalize_outbox "
-            "WHERE pending_id=? LIMIT 1",
+            "SELECT 1 FROM auto_shadow_finalize_outbox WHERE pending_id=? LIMIT 1",
             (pending_id,),
         ).fetchone()
         return row is not None
@@ -2491,9 +2487,7 @@ class SafetyKernelStore:
             # Round 6 §8: the durable authority owns the source state —
             # re-derived here inside BEGIN IMMEDIATE, never trusted
             # from the caller alone.
-            authority_state = expected_source_state_for_dispatch_authority(
-                dispatch["authority"]
-            )
+            authority_state = expected_source_state_for_dispatch_authority(dispatch["authority"])
             if expected_state is not None and expected_state is not authority_state:
                 raise ValueError(
                     "expected_state conflicts with the dispatch authority's"
@@ -2502,9 +2496,7 @@ class SafetyKernelStore:
             expected_state = authority_state
             task = self.get_task(task_id)
             if task.state is not expected_state:
-                raise ValueError(
-                    f"dispatched worker can only start from {expected_state.value}"
-                )
+                raise ValueError(f"dispatched worker can only start from {expected_state.value}")
             if task.state_version != expected_task_version:
                 raise RuntimeError("stale task state_version")
             workspace = self.get_workspace(task_id)

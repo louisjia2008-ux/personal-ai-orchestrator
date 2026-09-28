@@ -322,16 +322,12 @@ class OwnerDispatchExecutor:
         # quota / worktree / writer side effect can have happened yet:
         # this is the first gate after the durable row load).
         try:
-            expected_state = expected_source_state_for_dispatch_authority(
-                dispatch.authority
-            )
+            expected_state = expected_source_state_for_dispatch_authority(dispatch.authority)
         except ValueError:
             store.mark_owner_dispatch_blocked(
                 request_id,
                 failure_code="UNKNOWN_DISPATCH_AUTHORITY",
-                failure_reason=(
-                    "dispatch authority has no legal worker source state"
-                ),
+                failure_reason=("dispatch authority has no legal worker source state"),
             )
             store.close()
             return
@@ -606,9 +602,7 @@ class OwnerDispatchExecutor:
                 # The owner asked for this kill; the cancel transaction
                 # owns the final state. Give it the chance to finish.
                 try:
-                    await asyncio.wait_for(
-                        execution.cancel_completed.wait(), timeout=15.0
-                    )
+                    await asyncio.wait_for(execution.cancel_completed.wait(), timeout=15.0)
                 except TimeoutError:
                     pass
             if execution.cancel_requested.is_set() and exit_code != 0:
@@ -623,9 +617,7 @@ class OwnerDispatchExecutor:
                         store.mark_owner_dispatch_cancelled(request_id)
                     store.close()
                     return
-            result = self._host_result_envelope(
-                exit_code, stdout, stderr, truncated=truncated
-            )
+            result = self._host_result_envelope(exit_code, stdout, stderr, truncated=truncated)
             next_state = record_worker_exit(
                 store,
                 task_id=dispatch.task_id,
@@ -633,9 +625,7 @@ class OwnerDispatchExecutor:
                 exit_code=exit_code,
                 worker_result=result,
             )
-            real_invocation_succeeded = (
-                exit_code == 0 and next_state is TaskState.WORKER_FINISHED
-            )
+            real_invocation_succeeded = exit_code == 0 and next_state is TaskState.WORKER_FINISHED
             # M1 WP4: classify the worker outcome and write the
             # ``QUOTA_BLOCKED`` evidence + ``observe_*`` journal
             # row when the classifier flags a rate-limit / quota
@@ -673,9 +663,7 @@ class OwnerDispatchExecutor:
                 supervised, grace_seconds=self.config.worker_grace_seconds
             )
             worker_exit_code = exit_code
-            result = self._host_result_envelope(
-                exit_code, b"", b"", truncated=False, timeout=True
-            )
+            result = self._host_result_envelope(exit_code, b"", b"", truncated=False, timeout=True)
             next_state = record_worker_exit(
                 store,
                 task_id=dispatch.task_id,
@@ -698,9 +686,7 @@ class OwnerDispatchExecutor:
                 store.finish_owner_dispatch(
                     request_id,
                     failure_code=f"TASK_{task_now.state.value}",
-                    failure_reason=(
-                        "task finalized concurrently during worker execution"
-                    ),
+                    failure_reason=("task finalized concurrently during worker execution"),
                 )
             store.close()
             return
@@ -912,9 +898,7 @@ class OwnerDispatchExecutor:
         execution = self.execution_supervisor.get(task_id)
         if execution is None:
             return False
-        future = asyncio.run_coroutine_threadsafe(
-            self._cancel_on_loop(execution), execution.loop
-        )
+        future = asyncio.run_coroutine_threadsafe(self._cancel_on_loop(execution), execution.loop)
         return bool(future.result(timeout=timeout))
 
     async def _cancel_on_loop(self, execution: ActiveExecution) -> bool:
@@ -1071,9 +1055,7 @@ class OwnerDispatchExecutor:
                     "SELECT status FROM runs WHERE run_id=?", (run_id,)
                 ).fetchone()
                 if run is not None and run["status"] == "RUNNING":
-                    store.finish_run(
-                        run_id, status="FAILED", result=failure_payload
-                    )
+                    store.finish_run(run_id, status="FAILED", result=failure_payload)
                 store.transition_task(
                     dispatch.task_id,
                     TaskState.BLOCKED,
@@ -1548,7 +1530,9 @@ class OwnerDispatchExecutor:
         is_unmetered = bool(family and family.pool_kind == "unmetered")
         previous = self._quota_availability_journal.load(execution_target_id)
         quota_pool_id = quota_pool_id_for_target(
-            self._registry_provider(), execution_target_id=execution_target_id, now=observed_at,
+            self._registry_provider(),
+            execution_target_id=execution_target_id,
+            now=observed_at,
         )
         if quota_pool_id is None:
             return None
@@ -1619,14 +1603,20 @@ class OwnerDispatchExecutor:
         provider_id = self._provider_id(dispatch)
         execution_target_id = dispatch.execution_target_id
         quota_pool_id = quota_pool_id_for_target(
-            self._registry_provider(), execution_target_id=execution_target_id, now=now,
+            self._registry_provider(),
+            execution_target_id=execution_target_id,
+            now=now,
         )
         if quota_pool_id is None:
             return QuotaAdmission(
-                admitted=False, failure_code="QUOTA_BINDING_UNKNOWN", collected=False,
+                admitted=False,
+                failure_code="QUOTA_BINDING_UNKNOWN",
+                collected=False,
                 evidence=unknown_availability(
-                    execution_target_id=execution_target_id, provider_id=provider_id,
-                    quota_pool_id="unbound", observed_at=now,
+                    execution_target_id=execution_target_id,
+                    provider_id=provider_id,
+                    quota_pool_id="unbound",
+                    observed_at=now,
                 ),
             )
 
@@ -1675,10 +1665,7 @@ class OwnerDispatchExecutor:
             result: QuotaCollectionResult = collector.collect()
             # A collector cannot silently redirect an explicitly bound target
             # to an unrelated balance. Unnamed legacy results cannot prove identity.
-            if (
-                result.snapshot is not None
-                and result.snapshot.quota_pool_id != quota_pool_id
-            ):
+            if result.snapshot is not None and result.snapshot.quota_pool_id != quota_pool_id:
                 result = QuotaCollectionResult(status=QuotaCollectionStatus.UNKNOWN)
             evidence = self._snapshot_to_availability(
                 result,
@@ -1831,9 +1818,9 @@ class OwnerDispatchExecutor:
             store,
             dispatch.task_id,
             "PROCESS_CREATE_STARTED",
-            self._supervisor.inspect_contract(
-                argv, cwd=worktree.worktree_path, env=env
-            ).evolved(spawn_stage=SpawnStage.PROCESS_CREATE_STARTED),
+            self._supervisor.inspect_contract(argv, cwd=worktree.worktree_path, env=env).evolved(
+                spawn_stage=SpawnStage.PROCESS_CREATE_STARTED
+            ),
         )
         return await self._supervisor.start(
             argv,
@@ -1952,15 +1939,12 @@ class OwnerDispatchExecutor:
                 pass
         task = store.get_task(dispatch.task_id)
         try:
-            authority_source_state = (
-                expected_source_state_for_dispatch_authority(dispatch.authority)
+            authority_source_state = expected_source_state_for_dispatch_authority(
+                dispatch.authority
             )
         except ValueError:
             authority_source_state = None  # unknown authority: never mutate
-        if (
-            authority_source_state is not None
-            and task.state is authority_source_state
-        ):
+        if authority_source_state is not None and task.state is authority_source_state:
             store.transition_task(
                 dispatch.task_id,
                 TaskState.BLOCKED,

@@ -103,6 +103,7 @@ from personal_ai_orchestrator.switch_lease import SwitchLeaseAuthority
 #: running — the control-only daemon deliberately never registers it.
 SUPERVISED_AUTO_STEP_NAME = "supervised-auto"
 
+
 #: Routing request id contract (§9): stable per auto decision, no
 #: timestamps, no per-tick randomness.
 def supervised_auto_routing_request_id(auto_decision_id: str) -> str:
@@ -230,8 +231,7 @@ def _finalize_kwargs_from_intent_row(row: Any) -> dict[str, Any]:
         "observed_burn_fraction": row["observed_burn_fraction"],
         "execution_success": bool(row["execution_success"]),
         "verification_success": (
-            None if row["verification_success"] is None
-            else bool(row["verification_success"])
+            None if row["verification_success"] is None else bool(row["verification_success"])
         ),
         "quality_outcome": _enum(ShadowQualityOutcome, row["quality_outcome"]),
         "failure_class": _enum(ShadowFailureClass, row["failure_class"]),
@@ -273,9 +273,7 @@ def _expected_observation_from_intent(row: Any) -> ShadowObservation | None:
         quota_confidence=EvidenceConfidence(
             identity.get("quota_confidence") or EvidenceConfidence.UNKNOWN.value
         ),
-        collector_status=(
-            QuotaCollectionStatus(collector_status) if collector_status else None
-        ),
+        collector_status=(QuotaCollectionStatus(collector_status) if collector_status else None),
         predicted_burn_fraction=identity.get("predicted_burn_fraction"),
         **kwargs,
     )
@@ -306,9 +304,7 @@ def _pending_proves_intent_identity(pending: Any, row: Any) -> bool:
     )
 
 
-def _observation_proves_intent(
-    journal: ShadowEvidenceJournal, row: Any
-) -> bool:
+def _observation_proves_intent(journal: ShadowEvidenceJournal, row: Any) -> bool:
     """§14/§15: prove the observation is the intent's EXACT semantic result.
 
     ``observation_id`` is only a digest of the identity payload — it
@@ -428,9 +424,7 @@ def drain_auto_shadow_finalize_outbox(
                 pass
             continue
         try:
-            shadow_journal.finalize_pending(
-                pending_id, **_finalize_kwargs_from_intent_row(row)
-            )
+            shadow_journal.finalize_pending(pending_id, **_finalize_kwargs_from_intent_row(row))
         except (OSError, ValueError) as error:
             # Leave the intent open; the retry event is sanitized.
             try:
@@ -761,9 +755,7 @@ class SupervisedAutoStep:
             if self._mode() == "SUPERVISED_AUTO":
                 for task in self._tasks_in_state(TaskState.READY):
                     self._try_plan(task, now)
-                for task in self._tasks_in_state(
-                    TaskState.AUTO_PLANNED, TaskState.AUTO_GRACE
-                ):
+                for task in self._tasks_in_state(TaskState.AUTO_PLANNED, TaskState.AUTO_GRACE):
                     self._advance(task, now)
             self._reconcile_supervised_auto_dispatches(now)
             self._close_terminal_auto_lifecycles()
@@ -911,9 +903,7 @@ class SupervisedAutoStep:
                 validate_execution_target_launch(
                     self._registry_provider(),
                     execution_target_id=top.execution_target_id,
-                    runtime_available=self._runtime_available_provider(
-                        top.execution_target_id
-                    ),
+                    runtime_available=self._runtime_available_provider(top.execution_target_id),
                     execution_evidence_journal=self._execution_evidence_journal,
                 )
             except RuntimeError:
@@ -1051,9 +1041,7 @@ class SupervisedAutoStep:
             return  # countdown still running
         self._dispatch_auto_task(task, now, trigger="grace_expired")
 
-    def _dispatch_auto_task(
-        self, task: TaskRecord, now: datetime, *, trigger: str
-    ) -> None:
+    def _dispatch_auto_task(self, task: TaskRecord, now: datetime, *, trigger: str) -> None:
         """§3.4 step 4: re-admit and dispatch, or abort fail-closed.
 
         Revalidation happens immediately before the durable reservation so
@@ -1139,9 +1127,7 @@ class SupervisedAutoStep:
                 and self._executor is not None
                 and not self._has_active_run(fresh.task_id)
             ):
-                live_registry = getattr(
-                    self._executor, "execution_supervisor", None
-                )
+                live_registry = getattr(self._executor, "execution_supervisor", None)
                 live = None if live_registry is None else live_registry.get(fresh.task_id)
                 if live is None:
                     threading.Thread(
@@ -1244,8 +1230,7 @@ class SupervisedAutoStep:
         """
 
         rows = self._store.connection.execute(
-            "SELECT task_id FROM tasks WHERE auto_decision_id IS NOT NULL "
-            "AND state IN (?,?)",
+            "SELECT task_id FROM tasks WHERE auto_decision_id IS NOT NULL AND state IN (?,?)",
             (TaskState.AUTO_GRACE.value, TaskState.BLOCKED.value),
         ).fetchall()
         for row in rows:
@@ -1257,11 +1242,7 @@ class SupervisedAutoStep:
             # auto decision id there is no current lifecycle to close.
             if task.auto_decision_id is None:  # pragma: no cover — raced clear
                 continue
-            expected_version = (
-                task.state_version
-                if task.state is TaskState.AUTO_GRACE
-                else None
-            )
+            expected_version = task.state_version if task.state is TaskState.AUTO_GRACE else None
             correlation = correlate_supervised_auto_execution(
                 self._store,
                 task_id=task.task_id,
@@ -1338,8 +1319,7 @@ class SupervisedAutoStep:
         """
 
         rows = self._store.connection.execute(
-            "SELECT task_id FROM tasks WHERE auto_decision_id IS NOT NULL "
-            "AND state IN (?,?,?,?,?)",
+            "SELECT task_id FROM tasks WHERE auto_decision_id IS NOT NULL AND state IN (?,?,?,?,?)",
             tuple(state.value for state in _AUTO_TERMINAL_STATES),
         ).fetchall()
         for row in rows:
@@ -1407,9 +1387,7 @@ class SupervisedAutoStep:
         )
         self._drain_shadow_finalize_outbox()
 
-    def _enqueue_reconstructed_finalize_intent(
-        self, task: TaskRecord, pending_id: str
-    ) -> bool:
+    def _enqueue_reconstructed_finalize_intent(self, task: TaskRecord, pending_id: str) -> bool:
         """Rebuild a finalize intent from durable truth (§14 case C).
 
         Returns False when reconstruction is impossible (fail closed).
@@ -1452,19 +1430,13 @@ class SupervisedAutoStep:
                 execution_success=observed.execution_success,
                 verification_success=observed.verification_success,
                 quality_outcome=(
-                    observed.quality_outcome.value
-                    if observed.quality_outcome is not None
-                    else None
+                    observed.quality_outcome.value if observed.quality_outcome is not None else None
                 ),
                 failure_class=(
-                    observed.failure_class.value
-                    if observed.failure_class is not None
-                    else None
+                    observed.failure_class.value if observed.failure_class is not None else None
                 ),
                 failure_stage=(
-                    observed.failure_stage.value
-                    if observed.failure_stage is not None
-                    else None
+                    observed.failure_stage.value if observed.failure_stage is not None else None
                 ),
                 regression_detected=observed.regression_detected,
                 attempts_to_green=observed.attempts_to_green,
@@ -1488,9 +1460,7 @@ class SupervisedAutoStep:
                 request_id=pending.request_id,
                 decision_id=pending.decision_id,
                 verified=task.state is TaskState.VERIFIED,
-                execution_success=(
-                    run_status is not None and run_status["status"] == "FINISHED"
-                ),
+                execution_success=(run_status is not None and run_status["status"] == "FINISHED"),
                 verification_success=None,
                 observed_at=datetime.now(UTC).isoformat(),
                 identity_json=shadow_identity_payload(pending),
@@ -1647,10 +1617,7 @@ class SupervisedAutoStep:
                 derived: str | None = None
                 if provider_id is not None and target is not None:
                     for pool in registry.quota_pools.values():
-                        if (
-                            pool.snapshot is not None
-                            and pool.snapshot.provider_id == provider_id
-                        ):
+                        if pool.snapshot is not None and pool.snapshot.provider_id == provider_id:
                             derived = pool.snapshot.id
                             break
                 quota_snapshot_ids = (derived or "quota-unknown",)
@@ -1662,10 +1629,8 @@ class SupervisedAutoStep:
                     decision_id=decision.decision_id,
                     manual_execution_target_id=target_id,
                     scheduler_execution_target_id=target_id,
-                    catalog_snapshot_id=decision.catalog_snapshot_id
-                    or self._catalog_snapshot_id,
-                    policy_snapshot_id=decision.policy_snapshot_id
-                    or "policy-unknown",
+                    catalog_snapshot_id=decision.catalog_snapshot_id or self._catalog_snapshot_id,
+                    policy_snapshot_id=decision.policy_snapshot_id or "policy-unknown",
                     quota_snapshot_ids=quota_snapshot_ids,
                     provider_id=provider_id,
                     task_family="unknown",

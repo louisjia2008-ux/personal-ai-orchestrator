@@ -93,9 +93,9 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
             ]
             | None
         ) = None
-        self.delegation_scope_trace_sink: (
-            Callable[[PI5B3GScopeValidationResult], None] | None
-        ) = None
+        self.delegation_scope_trace_sink: Callable[[PI5B3GScopeValidationResult], None] | None = (
+            None
+        )
         self._delegation_brokers: dict[str, UnixDelegationBrokerServer] = {}
         super().__init__(**kwargs)  # type: ignore[arg-type]
 
@@ -263,9 +263,9 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
             store,
             dispatch.task_id,
             "PROCESS_CREATE_STARTED",
-            self._supervisor.inspect_contract(
-                argv, cwd=worktree.worktree_path, env=env
-            ).evolved(spawn_stage=SpawnStage.PROCESS_CREATE_STARTED),
+            self._supervisor.inspect_contract(argv, cwd=worktree.worktree_path, env=env).evolved(
+                spawn_stage=SpawnStage.PROCESS_CREATE_STARTED
+            ),
         )
         return await self._supervisor.start(
             argv,
@@ -390,9 +390,7 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
         stderr = worker_result.get("stderr_tail")
         error_message = worker_result.get("pi_error_message")
         diagnostic_parts = [
-            value
-            for value in (stderr, error_message)
-            if isinstance(value, str) and value
+            value for value in (stderr, error_message) if isinstance(value, str) and value
         ]
         return classify_worker_failure(
             exit_code=exit_code,

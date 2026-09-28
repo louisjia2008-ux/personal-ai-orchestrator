@@ -256,7 +256,8 @@ def _read_owner_keychain_secret(account: str) -> SecretValue | None:
     return SecretValue(value) if value else None
 
 
-class QuotaCredentialResolver:    """Resolves the single credential one quota collector is allowed to use.
+class QuotaCredentialResolver:
+    """Resolves the single credential one quota collector is allowed to use.
 
     Resolution order is environment first, then the owner-managed PAO
     Keychain, then the OpenCode auth store. The environment remains the

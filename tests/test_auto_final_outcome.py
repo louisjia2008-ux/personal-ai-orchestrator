@@ -54,8 +54,7 @@ def _system_events(store: SafetyKernelStore, event_type: str) -> list:
 
 def _cleanup_rows(store: SafetyKernelStore, pending_id: str) -> list:
     return store.connection.execute(
-        "SELECT pending_id, completed_at FROM auto_shadow_cleanup_outbox"
-        " WHERE pending_id=?",
+        "SELECT pending_id, completed_at FROM auto_shadow_cleanup_outbox WHERE pending_id=?",
         (pending_id,),
     ).fetchall()
 
@@ -239,9 +238,7 @@ def test_terminal_sweep_missing_pending_preserves_metadata(tmp_path) -> None:
     assert _cleanup_rows(env.store, decision) == []  # no discard promise
     rows = _finalize_rows(env.store)
     assert rows == []  # nothing completed, nothing fabricated
-    assert len(
-        _system_events(env.store, "AUTO_SHADOW_FINALIZE_RECONSTRUCTION_FAILED")
-    ) == 1
+    assert len(_system_events(env.store, "AUTO_SHADOW_FINALIZE_RECONSTRUCTION_FAILED")) == 1
 
 
 def test_durable_intent_allows_clear_and_outbox_alone_recovers(tmp_path) -> None:
@@ -406,8 +403,7 @@ def test_divergent_observed_at_is_not_proof(tmp_path) -> None:
         verified=False,
         execution_success=True,
         verification_success=True,
-        observed_at=datetime.fromisoformat(intent.observed_at)
-        + timedelta(seconds=1),
+        observed_at=datetime.fromisoformat(intent.observed_at) + timedelta(seconds=1),
     )
     env.shadow.discard_pending(decision)
 
