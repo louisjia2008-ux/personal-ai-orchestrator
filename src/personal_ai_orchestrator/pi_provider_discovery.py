@@ -172,9 +172,7 @@ class PiProviderDiscovery:
         auth_reason = payload.get("auth_reason")
         auth_type = payload.get("auth_kind", "api_key")
         pool_kind = payload.get("pool_kind", "windowed")
-        if not isinstance(env_raw, list) or not all(
-            isinstance(value, str) for value in env_raw
-        ):
+        if not isinstance(env_raw, list) or not all(isinstance(value, str) for value in env_raw):
             raise ValueError("invalid Pi provider environment metadata")
         if not isinstance(auth_type, str) or not isinstance(pool_kind, str):
             raise ValueError("invalid Pi provider metadata")
@@ -275,9 +273,7 @@ class PiDiscoveryResult:
             raise ValueError("invalid Pi discovery timestamp/state") from exc
         if discovered_at.tzinfo is None:
             discovered_at = discovered_at.replace(tzinfo=UTC)
-        providers = tuple(
-            PiProviderDiscovery.from_dict(item) for item in providers_raw
-        )
+        providers = tuple(PiProviderDiscovery.from_dict(item) for item in providers_raw)
         if len(providers) != payload.get("provider_count"):
             raise ValueError("Pi provider_count does not match provider records")
         expected_targets = sum(len(provider.model_skus) for provider in providers)
@@ -499,9 +495,7 @@ def discover_pi(
             error_message=f"pi --version exited with code {version_result.returncode}",
         )
     pi_version = (
-        version_result.stdout.strip().splitlines()[0]
-        if version_result.stdout
-        else "unknown"
+        version_result.stdout.strip().splitlines()[0] if version_result.stdout else "unknown"
     )
 
     records: list[PiProviderDiscovery] = []
@@ -659,9 +653,7 @@ def build_pi_registry(result: PiDiscoveryResult) -> ModelRegistry:
             "execution_targets": {
                 key: value.model_dump() for key, value in execution_targets.items()
             },
-            "catalog_snapshots": {
-                snapshot_id: catalog_snapshot.model_dump(mode="json")
-            },
+            "catalog_snapshots": {snapshot_id: catalog_snapshot.model_dump(mode="json")},
         },
     }
     assert_sanitized(snapshot)

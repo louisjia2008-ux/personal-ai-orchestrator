@@ -144,8 +144,11 @@ def _observation(
         source=source,
     )
     snapshot = QuotaSnapshot(
-        quota_pool_id="pool", observed_at=now, source=source,
-        state=QuotaState.AVAILABLE, confidence=EvidenceConfidence.EXACT,
+        quota_pool_id="pool",
+        observed_at=now,
+        source=source,
+        state=QuotaState.AVAILABLE,
+        confidence=EvidenceConfidence.EXACT,
         windows=(window,),
     )
     return QuotaProviderObservation(
@@ -251,9 +254,7 @@ def _env(
         runtime_availability={"m3-sub": True},
         verification_journal=VerificationEvidenceJournal(tmp_path),
         quota_availability_journal=quota_journal,
-        owner_execution=OwnerExecutionSettings(
-            tmp_path / "owner-execution.json", initial=True
-        ),
+        owner_execution=OwnerExecutionSettings(tmp_path / "owner-execution.json", initial=True),
         scheduling_settings=settings,
         execution_evidence_journal=evidence_journal,
         quota_refresh_service=quota_observation
@@ -275,10 +276,7 @@ def _env(
 
 
 def _audit_types(env: _Env, task_id: str = "task-1") -> list[str]:
-    return [
-        event["event_type"]
-        for event in env.store.audit_events(task_id)
-    ]
+    return [event["event_type"] for event in env.store.audit_events(task_id)]
 
 
 # ---------------------------------------------------------------------------
@@ -311,9 +309,7 @@ def test_project_opt_out_skips_planning(tmp_path) -> None:
 def test_non_ready_task_is_not_planned(tmp_path) -> None:
     env = _env(tmp_path)
     # Move the task out of READY before the tick.
-    env.store.transition_task(
-        "task-1", TaskState.BLOCKED, reason="owner blocked for test"
-    )
+    env.store.transition_task("task-1", TaskState.BLOCKED, reason="owner blocked for test")
     env.tick(NOW)
     assert env.store.get_task("task-1").state is TaskState.BLOCKED
 
@@ -476,9 +472,7 @@ def test_frozen_decision_survives_crash_before_transition(tmp_path) -> None:
     env = _env(tmp_path)
     step = env.service._supervised_auto_step()  # noqa: SLF001 — test hook
     task = env.store.get_task("task-1")
-    request_id = supervised_auto_routing_request_id(
-        supervised_auto_decision_id(task)
-    )
+    request_id = supervised_auto_routing_request_id(supervised_auto_decision_id(task))
     decision = step._freeze_decision(  # noqa: SLF001 — test hook
         task=task,
         request_id=request_id,
@@ -509,9 +503,7 @@ def test_unattended_project_gets_deadline_immediately(tmp_path) -> None:
     task = env.store.get_task("task-1")
     assert task.auto_grace_deadline_at is not None
     assert task.auto_acked_at is None
-    assert datetime.fromisoformat(task.auto_grace_deadline_at) == NOW + timedelta(
-        seconds=300
-    )
+    assert datetime.fromisoformat(task.auto_grace_deadline_at) == NOW + timedelta(seconds=300)
 
 
 def test_attended_project_waits_for_ack(tmp_path) -> None:
@@ -600,9 +592,7 @@ def test_grace_expiry_dispatches_exactly_once(tmp_path) -> None:
     assert row.authority == "SUPERVISED_AUTO"
     assert row.execution_target_id == "m3-sub"
     dispatched = [
-        e
-        for e in env.store.audit_events("task-1")
-        if e["event_type"] == "AUTO_DISPATCHED"
+        e for e in env.store.audit_events("task-1") if e["event_type"] == "AUTO_DISPATCHED"
     ]
     assert len(dispatched) == 1
     assert dispatched[0]["payload"]["trigger"] == "grace_expired"
@@ -706,9 +696,7 @@ def test_mode_change_to_manual_aborts_auto_grace(tmp_path) -> None:
     # §23/§32: every auto column clears — the abort truth lives in the
     # audit trail, not on the active task row.
     assert task.auto_reason is None
-    aborted = [
-        e for e in env.store.audit_events("task-1") if e["event_type"] == "AUTO_ABORTED"
-    ]
+    aborted = [e for e in env.store.audit_events("task-1") if e["event_type"] == "AUTO_ABORTED"]
     assert any(e["payload"]["reason"] == "mode_changed" for e in aborted)
     # Pending shadow discarded.
     assert env.shadow.load_pending_all() == ()
@@ -750,9 +738,7 @@ def test_project_disable_aborts_auto_grace(tmp_path) -> None:
     task = env.store.get_task("task-1")
     assert task.state is TaskState.READY
     assert task.auto_decision_id is None
-    aborted = [
-        e for e in env.store.audit_events("task-1") if e["event_type"] == "AUTO_ABORTED"
-    ]
+    aborted = [e for e in env.store.audit_events("task-1") if e["event_type"] == "AUTO_ABORTED"]
     assert any(e["payload"]["reason"] == "project_auto_disabled" for e in aborted)
 
 
@@ -780,9 +766,7 @@ def test_unacked_timeout_after_24h_aborts(tmp_path) -> None:
     task = env.store.get_task("task-1")
     assert task.state is TaskState.READY
     assert task.auto_decision_id is None
-    aborted = [
-        e for e in env.store.audit_events("task-1") if e["event_type"] == "AUTO_ABORTED"
-    ]
+    aborted = [e for e in env.store.audit_events("task-1") if e["event_type"] == "AUTO_ABORTED"]
     assert any(e["payload"]["reason"] == "unacked_timeout" for e in aborted)
     assert env.shadow.load_pending_all() == ()
 

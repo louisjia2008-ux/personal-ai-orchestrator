@@ -90,9 +90,13 @@ class _QuotaRefresh:
         }
 
     def observations(self):
-        return tuple(SimpleNamespace(provider_id=p) for p in (
-            "minimax-cn-coding-plan", "alternate-plan",
-        ))
+        return tuple(
+            SimpleNamespace(provider_id=p)
+            for p in (
+                "minimax-cn-coding-plan",
+                "alternate-plan",
+            )
+        )
 
     def snapshot_for_pool(self, pool):
         return self._snapshots.get(pool)

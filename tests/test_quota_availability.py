@@ -252,9 +252,7 @@ def test_uncertain_locked_resets_when_an_unknown_follows_a_success() -> None:
     )
     assert recovered.consecutive_failures == 0
     assert next_unknown.consecutive_failures == 1
-    assert next_unknown.state_at(now=NOW + timedelta(minutes=2)) is (
-        QuotaAvailabilityState.UNKNOWN
-    )
+    assert next_unknown.state_at(now=NOW + timedelta(minutes=2)) is (QuotaAvailabilityState.UNKNOWN)
 
 
 # -----------------------------------------------------------------------------
@@ -392,10 +390,7 @@ def test_windowed_observe_exhaustion_baseline_remains_windowed() -> None:
         observed_at=NOW,
         sanitized_reason_code="USAGE_LIMIT",
     )
-    assert (
-        exhausted.previous_state_baseline
-        is QuotaAvailabilityState.AVAILABLE_OBSERVED
-    )
+    assert exhausted.previous_state_baseline is QuotaAvailabilityState.AVAILABLE_OBSERVED
     assert (
         exhausted.state_at(now=NOW + timedelta(seconds=7200))
         is QuotaAvailabilityState.RECOVERY_PROBE_DUE

@@ -125,15 +125,11 @@ def _zai_collector(token: SecretValue, quota_pool_id: str) -> QuotaCollector:
 
 
 def _minimax_cn_collector(token: SecretValue, quota_pool_id: str) -> QuotaCollector:
-    return MiniMaxQuotaCollector(
-        bearer_token=token, region="cn", quota_pool_id=quota_pool_id
-    )
+    return MiniMaxQuotaCollector(bearer_token=token, region="cn", quota_pool_id=quota_pool_id)
 
 
 def _minimax_global_collector(token: SecretValue, quota_pool_id: str) -> QuotaCollector:
-    return MiniMaxQuotaCollector(
-        bearer_token=token, region="global", quota_pool_id=quota_pool_id
-    )
+    return MiniMaxQuotaCollector(bearer_token=token, region="global", quota_pool_id=quota_pool_id)
 
 
 #: Read-only quota sources keyed by the discovery provider family id. A family

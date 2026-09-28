@@ -86,9 +86,7 @@ def test_comparable_pair_rejects_identity_or_cycle_mismatch(mutation):
     elif mutation == "window":
         after = after.model_copy(
             update={
-                "windows": tuple(
-                    w.model_copy(update={"window_id": "other"}) for w in after.windows
-                )
+                "windows": tuple(w.model_copy(update={"window_id": "other"}) for w in after.windows)
             }
         )
     elif mutation == "reset":
@@ -111,19 +109,25 @@ def test_comparable_pair_rejects_identity_or_cycle_mismatch(mutation):
 
 def test_baseline_rejects_wrong_pool_unknown_or_imprecise_snapshot():
     before, _ = _pair()
-    assert build_quota_baseline(
-        observation_id="obs",
-        provider_id="zai-coding-plan",
-        quota_pool_id="other",
-        snapshot=before,
-    ) is None
+    assert (
+        build_quota_baseline(
+            observation_id="obs",
+            provider_id="zai-coding-plan",
+            quota_pool_id="other",
+            snapshot=before,
+        )
+        is None
+    )
     unknown = before.model_copy(update={"confidence": EvidenceConfidence.UNKNOWN})
-    assert build_quota_baseline(
-        observation_id="obs",
-        provider_id="zai-coding-plan",
-        quota_pool_id=POOL,
-        snapshot=unknown,
-    ) is None
+    assert (
+        build_quota_baseline(
+            observation_id="obs",
+            provider_id="zai-coding-plan",
+            quota_pool_id=POOL,
+            snapshot=unknown,
+        )
+        is None
+    )
     imprecise = before.model_copy(
         update={
             "windows": tuple(
@@ -138,12 +142,15 @@ def test_baseline_rejects_wrong_pool_unknown_or_imprecise_snapshot():
             )
         }
     )
-    assert build_quota_baseline(
-        observation_id="obs",
-        provider_id="zai-coding-plan",
-        quota_pool_id=POOL,
-        snapshot=imprecise,
-    ) is None
+    assert (
+        build_quota_baseline(
+            observation_id="obs",
+            provider_id="zai-coding-plan",
+            quota_pool_id=POOL,
+            snapshot=imprecise,
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

@@ -224,15 +224,11 @@ class ShadowObservation(FrozenModel):
         )
         migrated.setdefault(
             "failure_class",
-            ShadowFailureClass.NONE.value
-            if verified
-            else ShadowFailureClass.UNKNOWN_FAILURE.value,
+            ShadowFailureClass.NONE.value if verified else ShadowFailureClass.UNKNOWN_FAILURE.value,
         )
         migrated.setdefault(
             "failure_stage",
-            ShadowFailureStage.NONE.value
-            if verified
-            else ShadowFailureStage.INFRASTRUCTURE.value,
+            ShadowFailureStage.NONE.value if verified else ShadowFailureStage.INFRASTRUCTURE.value,
         )
         return migrated
 
@@ -241,7 +237,10 @@ class ShadowObservation(FrozenModel):
         if self.scheduler_execution_target_id is None and self.recommendation_followed:
             raise ValueError("cannot follow a missing scheduler recommendation")
         expected = self.scheduler_execution_target_id == self.manual_execution_target_id
-        if self.scheduler_execution_target_id is not None and self.recommendation_followed != expected:
+        if (
+            self.scheduler_execution_target_id is not None
+            and self.recommendation_followed != expected
+        ):
             raise ValueError("recommendation_followed conflicts with target identities")
         if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
             raise ValueError("observed_at must be timezone-aware")
@@ -249,7 +248,10 @@ class ShadowObservation(FrozenModel):
             raise ValueError("verified observations must carry VERIFIED quality_outcome")
         if self.verified and self.failure_class is not ShadowFailureClass.NONE:
             raise ValueError("verified observations must not carry a failure_class")
-        if self.failure_class is ShadowFailureClass.NONE and self.failure_stage is not ShadowFailureStage.NONE:
+        if (
+            self.failure_class is ShadowFailureClass.NONE
+            and self.failure_stage is not ShadowFailureStage.NONE
+        ):
             raise ValueError("NONE failure class must use NONE failure stage")
         return self
 
@@ -296,9 +298,13 @@ class ShadowObservation(FrozenModel):
                 ShadowQualityOutcome.VERIFIED if verified else ShadowQualityOutcome.UNKNOWN
             )
         if failure_class is None:
-            failure_class = ShadowFailureClass.NONE if verified else ShadowFailureClass.UNKNOWN_FAILURE
+            failure_class = (
+                ShadowFailureClass.NONE if verified else ShadowFailureClass.UNKNOWN_FAILURE
+            )
         if failure_stage is None:
-            failure_stage = ShadowFailureStage.NONE if verified else ShadowFailureStage.INFRASTRUCTURE
+            failure_stage = (
+                ShadowFailureStage.NONE if verified else ShadowFailureStage.INFRASTRUCTURE
+            )
         identity_payload = {
             "task_id": task_id,
             "request_id": request_id,
@@ -563,16 +569,24 @@ class ShadowEvidenceJournal:
             for path in sorted(self.pending_directory.glob("*.json"))
         )
 
-    def _reset_references_for(self, observation: ShadowObservation) -> tuple[ResetCycleReference, ...]:
+    def _reset_references_for(
+        self, observation: ShadowObservation
+    ) -> tuple[ResetCycleReference, ...]:
         references: list[ResetCycleReference] = []
         for reset_cycle_id in observation.reset_cycle_ids:
             try:
                 reference = self.load_reset_cycle(reset_cycle_id)
             except FileNotFoundError as error:
                 raise ValueError(f"missing reset cycle reference: {reset_cycle_id}") from error
-            if observation.provider_id is not None and reference.provider_id != observation.provider_id:
+            if (
+                observation.provider_id is not None
+                and reference.provider_id != observation.provider_id
+            ):
                 raise ValueError("reset cycle provider_id does not match observation")
-            if observation.quota_pool_id is not None and reference.quota_pool_id != observation.quota_pool_id:
+            if (
+                observation.quota_pool_id is not None
+                and reference.quota_pool_id != observation.quota_pool_id
+            ):
                 raise ValueError("reset cycle quota_pool_id does not match observation")
             references.append(reference)
         return tuple(references)
@@ -790,7 +804,9 @@ class ShadowEvidenceJournal:
         reset_cycles = {cycle for item in observations for cycle in item.reset_cycle_ids}
         real_reset_cycles = self._real_reset_ids_for_items(observations)
         synthetic_reset_cycles = self._synthetic_reset_ids_for_items(observations)
-        unknown_quota = sum(item.quota_confidence is EvidenceConfidence.UNKNOWN for item in observations)
+        unknown_quota = sum(
+            item.quota_confidence is EvidenceConfidence.UNKNOWN for item in observations
+        )
         verified = sum(item.verified for item in observations)
         regressions = sum(item.regression_detected for item in observations)
         matches = sum(item.recommendation_followed for item in observations)
@@ -869,8 +885,7 @@ class ShadowEvidenceJournal:
             real_reset_cycles = self._real_reset_ids_for_items(items)
             matches = sum(item.recommendation_followed for item in items)
             disagreements = sum(
-                item.scheduler_execution_target_id is not None
-                and not item.recommendation_followed
+                item.scheduler_execution_target_id is not None and not item.recommendation_followed
                 for item in items
             )
             attempts = [

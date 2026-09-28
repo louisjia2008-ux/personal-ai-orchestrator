@@ -259,8 +259,7 @@ def test_collect_candidates_uses_launch_authority_not_historical_verification(
             execution_evidence_journal=journal,
         )
         candidate = {
-            item.execution_target_id: item
-            for item in service.collect_candidates(now=now)
+            item.execution_target_id: item for item in service.collect_candidates(now=now)
         }["m2-sub"]
         assert candidate.verified is False
         assert candidate.verified_stale is True
@@ -303,8 +302,7 @@ def test_collect_candidates_latest_failure_revokes_historical_launch_authority(
             execution_evidence_journal=journal,
         )
         candidate = {
-            item.execution_target_id: item
-            for item in service.collect_candidates(now=now)
+            item.execution_target_id: item for item in service.collect_candidates(now=now)
         }["m2-sub"]
         assert candidate.verified is False
         assert candidate.verified_stale is True
@@ -316,8 +314,7 @@ def test_collect_candidates_latest_failure_revokes_historical_launch_authority(
             now=now,
         )
         m2 = next(
-            item for item in recommendation.evaluations
-            if item.execution_target_id == "m2-sub"
+            item for item in recommendation.evaluations if item.execution_target_id == "m2-sub"
         )
         assert m2.admitted is False
         assert "execution target has not been runtime-verified" in m2.reasons
@@ -393,7 +390,8 @@ def test_recommend_for_task_runs_deterministic_scoring(tmp_path: Path) -> None:
         task = _make_task(store)
         service = _make_service(store, availability, registry)
         recommendation, candidates, invalid_min_tier = service.recommend_for_task(
-            task, policy=RoutingObjective.BALANCED,
+            task,
+            policy=RoutingObjective.BALANCED,
         )
         assert invalid_min_tier is None
         assert len(candidates) == len(recommendation.evaluations)
@@ -425,7 +423,8 @@ def test_recommend_for_task_records_task_min_tier_invalid(tmp_path: Path) -> Non
 
         service = _make_service(store, availability, registry)
         recommendation, candidates, invalid_min_tier = service.recommend_for_task(
-            task, policy=RoutingObjective.BALANCED,
+            task,
+            policy=RoutingObjective.BALANCED,
         )
         assert invalid_min_tier == "T_CORRUPT"
         # No exception; ranking falls back to T1 and surfaces a
@@ -435,8 +434,7 @@ def test_recommend_for_task_records_task_min_tier_invalid(tmp_path: Path) -> Non
                 reasons_text = " ".join(evaluation.reasons)
                 assert "min_tier_invalid_assumed_T1" in reasons_text
         row = store.connection.execute(
-            "SELECT event_type FROM audit_events "
-            "WHERE event_type='TASK_MIN_TIER_INVALID'"
+            "SELECT event_type FROM audit_events WHERE event_type='TASK_MIN_TIER_INVALID'"
         ).fetchone()
         assert row is not None
     finally:
@@ -456,7 +454,8 @@ def test_recommend_for_task_passes_candidates_to_view_construction(
         service = _make_service(store, availability, registry)
         direct_candidates = service.collect_candidates()
         recommendation, service_candidates, _ = service.recommend_for_task(
-            task, policy=RoutingObjective.BALANCED,
+            task,
+            policy=RoutingObjective.BALANCED,
         )
         assert [c.execution_target_id for c in service_candidates] == [
             c.execution_target_id for c in direct_candidates

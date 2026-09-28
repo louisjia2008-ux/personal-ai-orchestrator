@@ -89,9 +89,7 @@ def _coerce_used_fraction(used_fraction: float | None) -> float | None:
     return used_fraction
 
 
-def infer_window_started_at(
-    *, reset_at: datetime, duration_seconds: float
-) -> datetime:
+def infer_window_started_at(*, reset_at: datetime, duration_seconds: float) -> datetime:
     """Infer ``reset_at - duration_seconds`` for windows the collector omits.
 
     The kind → duration lookup lives in :mod:`model_registry`; callers
@@ -108,9 +106,7 @@ def infer_window_started_at(
 
     _require_aware(reset_at, field_name="reset_at")
     if duration_seconds <= 0.0:
-        raise ValueError(
-            "duration_seconds must be > 0; check kind.duration_seconds() first"
-        )
+        raise ValueError("duration_seconds must be > 0; check kind.duration_seconds() first")
     return reset_at - timedelta(seconds=duration_seconds)
 
 

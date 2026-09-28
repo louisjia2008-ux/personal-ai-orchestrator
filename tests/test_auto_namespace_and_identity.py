@@ -146,9 +146,7 @@ def _pollute_deterministic_request_id(
             dispatch_id or f"owner-dispatch-{request_id}",
             request_id,
             task_id or task.task_id,
-            task_state_version
-            if task_state_version is not None
-            else task.state_version,
+            task_state_version if task_state_version is not None else task.state_version,
             target,
             authority,
             "RESERVED",
@@ -233,9 +231,7 @@ def test_wrong_tuple_dimensions_rejected(tmp_path, mutation) -> None:
 
     env = _env(tmp_path, unattended=True, grace_seconds=300)
     _plan(env)
-    request_id = _pollute_deterministic_request_id(
-        env, authority="SUPERVISED_AUTO", **mutation
-    )
+    request_id = _pollute_deterministic_request_id(env, authority="SUPERVISED_AUTO", **mutation)
 
     env.tick(_TICK_LATER)
 
@@ -337,9 +333,7 @@ def test_present_pending_target_mismatch_stays_open(tmp_path) -> None:
     assert len(rows) == 1 and rows[0]["completed_at"] is None
     assert env.shadow.load_all() == ()
     # Pending B was NOT discarded.
-    assert env.shadow.load_pending(decision).manual_execution_target_id == (
-        "attacker-target"
-    )
+    assert env.shadow.load_pending(decision).manual_execution_target_id == ("attacker-target")
     events = env.store.connection.execute(
         "SELECT payload_json FROM audit_events"
         " WHERE event_type='AUTO_SHADOW_FINALIZE_RETRY_FAILED'"
@@ -357,9 +351,7 @@ def test_present_pending_target_mismatch_stays_open(tmp_path) -> None:
         pytest.param({"provider_id": "other-provider"}, id="provider"),
     ],
 )
-def test_present_pending_identity_field_mismatch_fails_closed(
-    tmp_path, updates
-) -> None:
+def test_present_pending_identity_field_mismatch_fails_closed(tmp_path, updates) -> None:
     """IDENTITY-3 (§19): snapshot/quota/provider divergence stays OPEN."""
 
     env, decision, _intent = _proof_env(tmp_path)
@@ -404,9 +396,7 @@ def test_finalize_return_without_observation_proof_is_not_success(
 
     env, decision, _intent = _proof_env(tmp_path)
 
-    drained = drain_auto_shadow_finalize_outbox(
-        env.store, _SilentFinalizeJournal(env.shadow)
-    )
+    drained = drain_auto_shadow_finalize_outbox(env.store, _SilentFinalizeJournal(env.shadow))
 
     assert drained == 0
     rows = _finalize_rows(env.store)
@@ -478,9 +468,7 @@ def test_observation_only_proof_uses_real_routing_decision_id(tmp_path) -> None:
     metadata clear is authorized by the exact finalized observation."""
 
     env, decision = _recovery_env(tmp_path, task_verified=True)
-    routing = env.store.routing_decision_by_request_id(
-        supervised_auto_routing_request_id(decision)
-    )
+    routing = env.store.routing_decision_by_request_id(supervised_auto_routing_request_id(decision))
     assert routing is not None
     assert routing["decision_id"].startswith("route-")
 
@@ -494,9 +482,7 @@ def test_observation_only_proof_uses_real_routing_decision_id(tmp_path) -> None:
     env.shadow.discard_pending(decision)
 
     assert (
-        real_execution_recovery_proof(
-            env.store, env.shadow, task_id="task-1", pending_id=decision
-        )
+        real_execution_recovery_proof(env.store, env.shadow, task_id="task-1", pending_id=decision)
         is True
     )
 
@@ -540,9 +526,7 @@ def test_auto_decision_id_as_decision_id_does_not_prove(tmp_path) -> None:
     _observation_with_decision_id(env, decision, verified=True)
 
     assert (
-        real_execution_recovery_proof(
-            env.store, env.shadow, task_id="task-1", pending_id=decision
-        )
+        real_execution_recovery_proof(env.store, env.shadow, task_id="task-1", pending_id=decision)
         is False
     )
 
@@ -561,9 +545,7 @@ def test_terminal_verdict_mismatch_does_not_prove(
     never recovery proof — metadata stays preserved."""
 
     env, decision = _recovery_env(tmp_path, task_verified=task_verified)
-    routing = env.store.routing_decision_by_request_id(
-        supervised_auto_routing_request_id(decision)
-    )
+    routing = env.store.routing_decision_by_request_id(supervised_auto_routing_request_id(decision))
     assert routing is not None
     pending = env.shadow.load_pending(decision)
     env.shadow.append(
@@ -592,8 +574,6 @@ def test_terminal_verdict_mismatch_does_not_prove(
     env.shadow.discard_pending(decision)
 
     assert (
-        real_execution_recovery_proof(
-            env.store, env.shadow, task_id="task-1", pending_id=decision
-        )
+        real_execution_recovery_proof(env.store, env.shadow, task_id="task-1", pending_id=decision)
         is False
     )

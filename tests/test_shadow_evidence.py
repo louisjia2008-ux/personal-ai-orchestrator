@@ -255,9 +255,7 @@ def test_reset_reference_conflict_is_rejected(tmp_path) -> None:
     journal.append_reset_cycle(reset_ref("minimax-week-1"))
 
     with pytest.raises(ValueError, match="different content"):
-        journal.append_reset_cycle(
-            reset_ref("minimax-week-1", quota_pool_id="other-pool")
-        )
+        journal.append_reset_cycle(reset_ref("minimax-week-1", quota_pool_id="other-pool"))
 
 
 def test_reset_reference_provider_and_pool_must_match_observation(tmp_path) -> None:
@@ -469,7 +467,6 @@ def test_shadow_readiness_uses_quality_eligible_not_total_operational_attempts(
     assert summary.policy_blocks == 12
     assert summary.review_eligible is False
     assert any(
-        "quality-eligible observations; have 8" in reason
-        for reason in summary.blocking_reasons
+        "quality-eligible observations; have 8" in reason for reason in summary.blocking_reasons
     )
     assert all("have 20" not in reason for reason in summary.blocking_reasons)

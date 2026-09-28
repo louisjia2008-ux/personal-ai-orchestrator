@@ -136,9 +136,7 @@ def _service(
     root.mkdir(exist_ok=True)
     refresh = QuotaRefreshService(
         runtime_state_root=root,
-        connected_provider_ids=(
-            manager.connected_provider_ids if manager is not None else tuple
-        ),
+        connected_provider_ids=(manager.connected_provider_ids if manager is not None else tuple),
         collectors=collectors,
         environ={},
         auth_store_paths=(),
@@ -191,9 +189,7 @@ def test_no_connected_provider_state(tmp_path: Path, manager) -> None:
     assert view.summary.connected_provider_count == 0
 
 
-def test_connected_provider_with_zero_quota_pools_stays_visible(
-    tmp_path: Path, manager
-) -> None:
+def test_connected_provider_with_zero_quota_pools_stays_visible(tmp_path: Path, manager) -> None:
     """Required regression case (§14).
 
     CONNECTED + zero observations must not equal "provider invisible", and
@@ -218,9 +214,7 @@ def test_connected_provider_with_zero_quota_pools_stays_visible(
     assert card.failure_reason == QuotaRefreshReason.CREDENTIAL_NOT_AVAILABLE.value
 
 
-def test_connect_makes_provider_immediately_quota_visible(
-    tmp_path: Path, manager
-) -> None:
+def test_connect_makes_provider_immediately_quota_visible(tmp_path: Path, manager) -> None:
     """§11 — no app restart, no discovery cycle, no quota evidence required."""
 
     service = _service(tmp_path, manager)
@@ -230,9 +224,7 @@ def test_connect_makes_provider_immediately_quota_visible(
     assert [card.provider_id for card in view.providers] == ["minimax-cn-coding-plan"]
 
 
-def test_disconnect_removes_provider_from_quota_projection(
-    tmp_path: Path, manager
-) -> None:
+def test_disconnect_removes_provider_from_quota_projection(tmp_path: Path, manager) -> None:
     """§18 — a disconnected provider must not still read as currently usable."""
 
     service = _service(tmp_path, manager)
@@ -244,9 +236,7 @@ def test_disconnect_removes_provider_from_quota_projection(
     assert view.state == QuotaPageState.NO_CONNECTED_PROVIDER.value
 
 
-def test_summary_counts_unknown_as_connected_but_not_observable(
-    tmp_path: Path, manager
-) -> None:
+def test_summary_counts_unknown_as_connected_but_not_observable(tmp_path: Path, manager) -> None:
     """§15 — UNKNOWN is never classified as healthy/observable."""
 
     service = _service(tmp_path, manager)
@@ -265,9 +255,7 @@ def test_summary_counts_unknown_as_connected_but_not_observable(
 # ---------------------------------------------------------------------------
 
 
-def test_quota_refresh_is_distinct_from_provider_discovery(
-    tmp_path: Path, manager
-) -> None:
+def test_quota_refresh_is_distinct_from_provider_discovery(tmp_path: Path, manager) -> None:
     service = _service(tmp_path, manager)
     service.connect_provider({"provider_id": "zai-coding-plan"})
     before = manager.discovery_cycle_count()
@@ -281,9 +269,7 @@ def test_provider_refresh_does_not_collect_quota(tmp_path: Path, manager) -> Non
     collector = _StubCollector(
         QuotaCollectionResult(status=QuotaCollectionStatus.SUCCESS, snapshot=None)
     )
-    service = _service(
-        tmp_path, manager, collectors={"zai-coding-plan": collector}
-    )
+    service = _service(tmp_path, manager, collectors={"zai-coding-plan": collector})
     service.connect_provider({"provider_id": "zai-coding-plan"})
     service.refresh_providers()
     assert collector.calls == 0
@@ -301,9 +287,7 @@ def test_quota_refresh_issues_only_read_only_gets(tmp_path: Path, manager) -> No
             }
         }
     )
-    collector = ZAIQuotaCollector(
-        authorization_token="token-not-persisted", transport=transport
-    )
+    collector = ZAIQuotaCollector(authorization_token="token-not-persisted", transport=transport)
     service = _service(tmp_path, manager, collectors={"zai-coding-plan": collector})
     service.connect_provider({"provider_id": "zai-coding-plan"})
     service.refresh_quota()
@@ -341,9 +325,7 @@ def test_assert_read_only_collector_rejects_billable_surface() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_successful_refresh_renders_real_windows_and_feeds_history(
-    tmp_path: Path, manager
-) -> None:
+def test_successful_refresh_renders_real_windows_and_feeds_history(tmp_path: Path, manager) -> None:
     transport = _RecordingTransport(
         {
             "model_remains": [
@@ -361,9 +343,7 @@ def test_successful_refresh_renders_real_windows_and_feeds_history(
     collector = MiniMaxQuotaCollector(
         bearer_token="token-not-persisted", region="cn", transport=transport
     )
-    service = _service(
-        tmp_path, manager, collectors={"minimax-cn-coding-plan": collector}
-    )
+    service = _service(tmp_path, manager, collectors={"minimax-cn-coding-plan": collector})
     service.connect_provider({"provider_id": "minimax-cn-coding-plan"})
 
     result = service.refresh_quota()
@@ -390,16 +370,12 @@ def test_successful_refresh_renders_real_windows_and_feeds_history(
     assert recorded["weekly"] == pytest.approx(0.17)
 
 
-def test_unknown_confidence_never_fabricates_a_percentage(
-    tmp_path: Path, manager
-) -> None:
+def test_unknown_confidence_never_fabricates_a_percentage(tmp_path: Path, manager) -> None:
     """§13 — UNKNOWN renders no percentage and no progress input."""
 
     # A payload the collector cannot interpret yields UNKNOWN, not 0%.
     transport = _RecordingTransport({"data": {"limits": []}})
-    collector = ZAIQuotaCollector(
-        authorization_token="token-not-persisted", transport=transport
-    )
+    collector = ZAIQuotaCollector(authorization_token="token-not-persisted", transport=transport)
     service = _service(tmp_path, manager, collectors={"zai-coding-plan": collector})
     service.connect_provider({"provider_id": "zai-coding-plan"})
     view = service.refresh_quota().overview
@@ -415,17 +391,13 @@ def test_unknown_confidence_never_fabricates_a_percentage(
     assert service.quota_history().observations == ()
 
 
-def test_estimated_confidence_is_preserved_not_upgraded(
-    tmp_path: Path, manager
-) -> None:
+def test_estimated_confidence_is_preserved_not_upgraded(tmp_path: Path, manager) -> None:
     """Z.AI derives remaining from a usage percentage: ESTIMATED, not EXACT."""
 
     transport = _RecordingTransport(
         {"data": {"limits": [{"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 30.0}]}}
     )
-    collector = ZAIQuotaCollector(
-        authorization_token="token-not-persisted", transport=transport
-    )
+    collector = ZAIQuotaCollector(authorization_token="token-not-persisted", transport=transport)
     service = _service(tmp_path, manager, collectors={"zai-coding-plan": collector})
     service.connect_provider({"provider_id": "zai-coding-plan"})
     card = service.refresh_quota().overview.providers[0]
@@ -456,15 +428,9 @@ def test_failed_collector_keeps_provider_visible_with_sanitized_reason(
     assert card.failure_reason == "CREDENTIAL_NOT_AVAILABLE"
 
 
-def test_refresh_failure_after_success_keeps_last_known_good(
-    tmp_path: Path, manager
-) -> None:
+def test_refresh_failure_after_success_keeps_last_known_good(tmp_path: Path, manager) -> None:
     payload = {
-        "data": {
-            "limits": [
-                {"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 10.0}
-            ]
-        }
+        "data": {"limits": [{"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 10.0}]}
     }
     transport = _RecordingTransport(payload)
     good = ZAIQuotaCollector(authorization_token="t", transport=transport)
@@ -486,9 +452,7 @@ def test_refresh_failure_after_success_keeps_last_known_good(
     assert card.last_refresh_status == "STALE"
 
 
-def test_provider_scoped_refresh_only_touches_that_provider(
-    tmp_path: Path, manager
-) -> None:
+def test_provider_scoped_refresh_only_touches_that_provider(tmp_path: Path, manager) -> None:
     zai = _StubCollector(
         QuotaCollectionResult(status=QuotaCollectionStatus.UNKNOWN, error_category=None)
     )
@@ -520,9 +484,7 @@ def test_refresh_of_unconnected_provider_is_a_no_op(tmp_path: Path, manager) -> 
     assert collector.calls == 0
 
 
-def test_video_scope_never_suppresses_the_coding_quota_figure(
-    tmp_path: Path, manager
-) -> None:
+def test_video_scope_never_suppresses_the_coding_quota_figure(tmp_path: Path, manager) -> None:
     """A video balance must not blank the provider's coding quota.
 
     ``general`` and ``video`` are workload scopes, not models and not two views
@@ -556,9 +518,7 @@ def test_video_scope_never_suppresses_the_coding_quota_figure(
     collector = MiniMaxQuotaCollector(
         bearer_token="token-not-persisted", region="cn", transport=transport
     )
-    service = _service(
-        tmp_path, manager, collectors={"minimax-cn-coding-plan": collector}
-    )
+    service = _service(tmp_path, manager, collectors={"minimax-cn-coding-plan": collector})
     service.connect_provider({"provider_id": "minimax-cn-coding-plan"})
     card = service.refresh_quota().overview.providers[0]
 
@@ -637,9 +597,7 @@ def test_empty_provider_payload_reports_no_entries(tmp_path: Path, manager) -> N
     collector = MiniMaxQuotaCollector(
         bearer_token="t", region="cn", transport=_RecordingTransport({"model_remains": []})
     )
-    service = _service(
-        tmp_path, manager, collectors={"minimax-cn-coding-plan": collector}
-    )
+    service = _service(tmp_path, manager, collectors={"minimax-cn-coding-plan": collector})
     service.connect_provider({"provider_id": "minimax-cn-coding-plan"})
     card = service.refresh_quota().overview.providers[0]
     assert card.failure_reason == "PROVIDER_REPORTED_NO_QUOTA_ENTRIES"
@@ -655,9 +613,7 @@ def test_zai_empty_limits_reports_no_entries(tmp_path: Path, manager) -> None:
     assert card.failure_reason == "PROVIDER_REPORTED_NO_QUOTA_ENTRIES"
 
 
-def test_unknown_status_without_category_still_reports_a_reason(
-    tmp_path: Path, manager
-) -> None:
+def test_unknown_status_without_category_still_reports_a_reason(tmp_path: Path, manager) -> None:
     collector = _StubCollector(
         QuotaCollectionResult(status=QuotaCollectionStatus.UNKNOWN, error_category=None)
     )
@@ -667,9 +623,7 @@ def test_unknown_status_without_category_still_reports_a_reason(
     assert card.failure_reason == "PROVIDER_QUOTA_NOT_INTERPRETABLE"
 
 
-def test_anonymous_provider_entries_still_produce_an_exact_figure(
-    tmp_path: Path, manager
-) -> None:
+def test_anonymous_provider_entries_still_produce_an_exact_figure(tmp_path: Path, manager) -> None:
     """An unnamed bar has no workload label, and must still be read.
 
     Workload classification narrows what is read; it must not require a name
@@ -685,9 +639,7 @@ def test_anonymous_provider_entries_still_produce_an_exact_figure(
         region="cn",
         transport=_RecordingTransport({"model_remains": [dict(entry), dict(entry)]}),
     )
-    service = _service(
-        tmp_path, manager, collectors={"minimax-cn-coding-plan": collector}
-    )
+    service = _service(tmp_path, manager, collectors={"minimax-cn-coding-plan": collector})
     service.connect_provider({"provider_id": "minimax-cn-coding-plan"})
     card = service.refresh_quota().overview.providers[0]
     assert card.quota_state == "OBSERVED"
@@ -713,9 +665,7 @@ def test_minimax_aliases_share_regional_pools() -> None:
     assert sources["minimax-cn"].quota_pool_id != sources["minimax"].quota_pool_id
 
 
-def test_collector_is_built_from_environment_credential_only(
-    tmp_path: Path, manager
-) -> None:
+def test_collector_is_built_from_environment_credential_only(tmp_path: Path, manager) -> None:
     root = tmp_path / "runtime-state"
     root.mkdir(exist_ok=True)
     manager.connect_provider("zai-coding-plan")
@@ -739,17 +689,9 @@ def test_collector_is_built_from_environment_credential_only(
 
 def test_quota_state_files_never_contain_credentials(tmp_path: Path, manager) -> None:
     transport = _RecordingTransport(
-        {
-            "data": {
-                "limits": [
-                    {"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 55.0}
-                ]
-            }
-        }
+        {"data": {"limits": [{"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 55.0}]}}
     )
-    collector = ZAIQuotaCollector(
-        authorization_token="super-secret-token", transport=transport
-    )
+    collector = ZAIQuotaCollector(authorization_token="super-secret-token", transport=transport)
     service = _service(tmp_path, manager, collectors={"zai-coding-plan": collector})
     service.connect_provider({"provider_id": "zai-coding-plan"})
     service.refresh_quota()
@@ -769,9 +711,7 @@ def test_quota_state_files_never_contain_credentials(tmp_path: Path, manager) ->
 # ---------------------------------------------------------------------------
 
 
-def test_minimax_general_quota_makes_two_providers_observable(
-    tmp_path: Path, manager
-) -> None:
+def test_minimax_general_quota_makes_two_providers_observable(tmp_path: Path, manager) -> None:
     """§17 — video ambiguity must not hold MiniMax in UNKNOWN.
 
     Both providers report a real coding figure, so both are observable. Before
@@ -839,16 +779,12 @@ def test_minimax_general_quota_makes_two_providers_observable(
     assert windows["weekly"].remaining_fraction == pytest.approx(0.59)
     # ...and the video observation reaches the client, classified as such.
     video = [
-        item
-        for item in minimax_plan.model_equivalents
-        if item.workload_scope == "VIDEO_GENERATION"
+        item for item in minimax_plan.model_equivalents if item.workload_scope == "VIDEO_GENERATION"
     ]
     assert {item.scope_id for item in video} == {"video"}
 
 
-def test_glm_semantics_are_untouched_by_the_minimax_projection(
-    tmp_path: Path, manager
-) -> None:
+def test_glm_semantics_are_untouched_by_the_minimax_projection(tmp_path: Path, manager) -> None:
     """§10 — GLM keeps its own provider-authoritative windows and product name."""
 
     glm = ZAIQuotaCollector(
@@ -856,9 +792,7 @@ def test_glm_semantics_are_untouched_by_the_minimax_projection(
         transport=_RecordingTransport(
             {
                 "data": {
-                    "limits": [
-                        {"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 30.0}
-                    ]
+                    "limits": [{"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 30.0}]
                 }
             }
         ),
@@ -876,9 +810,7 @@ def test_glm_semantics_are_untouched_by_the_minimax_projection(
     assert plan.model_equivalents == ()
 
 
-def test_scoped_acceptance_refresh_fails_closed_without_a_provider(
-    tmp_path: Path, manager
-) -> None:
+def test_scoped_acceptance_refresh_fails_closed_without_a_provider(tmp_path: Path, manager) -> None:
     """§25 — a scoped refresh with no target must stop, never widen.
 
     The previous acceptance run omitted ``provider_id`` and refreshed every
@@ -889,9 +821,7 @@ def test_scoped_acceptance_refresh_fails_closed_without_a_provider(
     minimax_transport = _RecordingTransport(
         {"model_remains": [{"model": "general", "current_interval_remaining_percent": 95}]}
     )
-    minimax = MiniMaxQuotaCollector(
-        bearer_token="t", region="cn", transport=minimax_transport
-    )
+    minimax = MiniMaxQuotaCollector(bearer_token="t", region="cn", transport=minimax_transport)
     glm_transport = _RecordingTransport({"data": {"limits": []}})
     glm = ZAIQuotaCollector(authorization_token="t", transport=glm_transport)
     service = _service(
@@ -933,9 +863,7 @@ def test_scoped_refresh_rejects_a_result_that_touched_other_providers(
         scoped_quota_refresh(_WideningClient(), provider_id="zai-coding-plan")
 
 
-def test_the_all_provider_refresh_must_be_named_to_be_invoked(
-    tmp_path: Path, manager
-) -> None:
+def test_the_all_provider_refresh_must_be_named_to_be_invoked(tmp_path: Path, manager) -> None:
     """The product-wide operation still exists — as a deliberate call."""
 
     glm_transport = _RecordingTransport({"data": {"limits": []}})
@@ -943,9 +871,7 @@ def test_the_all_provider_refresh_must_be_named_to_be_invoked(
         tmp_path,
         manager,
         collectors={
-            "zai-coding-plan": ZAIQuotaCollector(
-                authorization_token="t", transport=glm_transport
-            )
+            "zai-coding-plan": ZAIQuotaCollector(authorization_token="t", transport=glm_transport)
         },
     )
     service.connect_provider({"provider_id": "zai-coding-plan"})

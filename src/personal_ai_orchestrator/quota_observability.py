@@ -170,9 +170,7 @@ def render_quota_explanation(
     ]
     for window in trace.windows:
         remaining = (
-            "UNKNOWN"
-            if window.remaining_fraction is None
-            else f"{window.remaining_fraction:.1%}"
+            "UNKNOWN" if window.remaining_fraction is None else f"{window.remaining_fraction:.1%}"
         )
         reset = window.reset_at.isoformat() if window.reset_at is not None else "UNKNOWN"
         pace = "UNKNOWN" if window.pace is None else f"{window.pace:.3f}"

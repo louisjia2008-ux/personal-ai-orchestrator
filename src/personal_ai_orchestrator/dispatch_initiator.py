@@ -91,6 +91,7 @@ def _is_reserved_auto_dispatch_request_id(request_id: str) -> bool:
 
     return is_reserved_auto_dispatch_request_id(request_id)
 
+
 if TYPE_CHECKING:
     from personal_ai_orchestrator.dispatch_executor import DispatchExecutor
     from personal_ai_orchestrator.safety_kernel import (
@@ -202,12 +203,9 @@ def initiate_owner_dispatch(
     # authority, so it is unaffected. Invalid owner-supplied input is a
     # 400 (the control plane's invalid-input convention, matching
     # ``invalid_request_id``), not a 409 conflict: nothing was reserved.
-    if (
-        authority == AUTHORITY_OWNER_INITIATED_EXECUTION
-        and (
-            _is_reserved_auto_dispatch_request_id(request_id)
-            or request_id.startswith("pi5-child-dispatch-")
-        )
+    if authority == AUTHORITY_OWNER_INITIATED_EXECUTION and (
+        _is_reserved_auto_dispatch_request_id(request_id)
+        or request_id.startswith("pi5-child-dispatch-")
     ):
         raise _control_plane_error(400, "reserved_dispatch_request_id_namespace")
     dispatch, created = store.reserve_owner_dispatch(
@@ -271,24 +269,17 @@ def initiate_owner_dispatch(
     effective_registry = registry_provider()
     if provider_registry_manager is not None:
         target = effective_registry.execution_targets.get(execution_target_id)
-        model = (
-            effective_registry.models.get(target.model_sku_id)
-            if target is not None
-            else None
-        )
+        model = effective_registry.models.get(target.model_sku_id) if target is not None else None
         connected_provider_ids = provider_registry_manager.routing_connected_provider_ids()
         if model is None or model.provider_id not in connected_provider_ids:
             store.mark_owner_dispatch_blocked(
                 request_id,
                 failure_code="PROVIDER_NOT_CONNECTED",
                 failure_reason=(
-                    "execution target provider is not connected or "
-                    "runtime-authenticated by owner"
+                    "execution target provider is not connected or runtime-authenticated by owner"
                 ),
             )
-            raise _control_plane_error(
-                409, "provider_not_connected"
-            ) from None
+            raise _control_plane_error(409, "provider_not_connected") from None
     try:
         validate_execution_target_launch(
             effective_registry,

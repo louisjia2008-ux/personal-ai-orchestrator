@@ -230,10 +230,7 @@ class DaemonSupervisor:
                         "consecutive_failures": state.consecutive_failures,
                     },
                 )
-            if (
-                state.consecutive_failures >= CONSECUTIVE_FAILURE_THRESHOLD
-                and not state.in_backoff
-            ):
+            if state.consecutive_failures >= CONSECUTIVE_FAILURE_THRESHOLD and not state.in_backoff:
                 state.in_backoff = True
                 state.ticks_since_last_run = 0
                 if self._audit_store is not None:
@@ -249,10 +246,7 @@ class DaemonSupervisor:
         duration_ms = (time.monotonic() - start) * 1000.0
         state.last_run_at = now
         state.last_duration_ms = duration_ms
-        if (
-            state.in_backoff
-            or state.consecutive_failures > 0
-        ):
+        if state.in_backoff or state.consecutive_failures > 0:
             if self._audit_store is not None:
                 self._audit_store.record_system_event(
                     SUPERVISOR_STEP_RECOVERED,
@@ -264,10 +258,7 @@ class DaemonSupervisor:
         state.consecutive_failures = 0
         state.in_backoff = False
         state.ticks_since_last_run = 0
-        if (
-            self._warn_threshold is not None
-            and duration_ms / 1000.0 > self._warn_threshold
-        ):
+        if self._warn_threshold is not None and duration_ms / 1000.0 > self._warn_threshold:
             LOG.warning(
                 "supervisor step %s took %.0fms (threshold %.0fms)",
                 state.name,
@@ -300,6 +291,7 @@ class DaemonSupervisor:
     @property
     def interval_seconds(self) -> float:
         return self._interval
+
 
 def build_default_supervisor(
     *,

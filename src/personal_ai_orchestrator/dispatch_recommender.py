@@ -110,9 +110,7 @@ class DispatchCandidateInput:
     tier_match_reason: str | None = None
 
 
-def source_pressure_for(
-    windows: Sequence[CandidateWindowInput], *, now: datetime
-) -> BurnPressure:
+def source_pressure_for(windows: Sequence[CandidateWindowInput], *, now: datetime) -> BurnPressure:
     """Pick the WEEKLY window and return its ``assess`` pressure.
 
     No WEEKLY window → ``UNMETERED``. A WEEKLY window without the data
@@ -196,10 +194,7 @@ def _hard_eligibility(
     # M1 WP3 5h smoothing. Walk the candidate\'s windows; trip the
     # gate on any FIVE_HOUR window with a tripped ``rolling_hourly_cap``
     # AND a tier mismatch.
-    if (
-        candidate.tier is not None
-        and candidate.tier != min_tier
-    ):
+    if candidate.tier is not None and candidate.tier != min_tier:
         for window in candidate.windows:
             if window.kind is not QuotaWindowKind.FIVE_HOUR:
                 continue
@@ -290,7 +285,8 @@ def _score(
 
     headroom_min, headroom_mean = _headroom(candidate)
     freshness_value = _freshness_value(
-        observed_at=candidate.evidence_observed_at, now=now,
+        observed_at=candidate.evidence_observed_at,
+        now=now,
     )
 
     # M1 WP2 capability fit: pure tier function. The penalty is
@@ -303,9 +299,7 @@ def _score(
     # QUALITY_FIRST weight amplified freshness by 1.4× and the
     # BURN_DOWN weight crushed it to 0.4× — neither was intended.
     effective_tier = candidate.tier if candidate.tier is not None else ModelTier.T1
-    capability_fit = 1.0 - 0.1 * (
-        tier_index(min_tier) - tier_index(effective_tier)
-    )
+    capability_fit = 1.0 - 0.1 * (tier_index(min_tier) - tier_index(effective_tier))
     # The penalty is clamped so a far-above-min tier cannot push
     # capability_fit below zero — the scoring math stays readable.
     capability_fit = max(0.0, min(1.0, capability_fit))
@@ -401,18 +395,12 @@ def recommend_owner_dispatch(
 
     # M1 WP3: MANUAL → BALANCED preset for scoring; the reason tag
     # makes the override visible on the panel.
-    effective_policy = (
-        RoutingObjective.BALANCED
-        if policy is RoutingObjective.MANUAL
-        else policy
-    )
+    effective_policy = RoutingObjective.BALANCED if policy is RoutingObjective.MANUAL else policy
     manual_override = policy is RoutingObjective.MANUAL
 
     evaluations: list[CandidateEvaluation] = []
     for candidate in candidates:
-        eligible, ineligible_reason = _hard_eligibility(
-            candidate, now=now, min_tier=min_tier
-        )
+        eligible, ineligible_reason = _hard_eligibility(candidate, now=now, min_tier=min_tier)
         if not eligible:
             evaluations.append(
                 CandidateEvaluation(
@@ -443,8 +431,7 @@ def recommend_owner_dispatch(
         )
         freshness_confidence = (
             EvidenceConfidence.EXACT
-            if _fresh_age_days is not None
-            and 0 <= _fresh_age_days <= 7.0
+            if _fresh_age_days is not None and 0 <= _fresh_age_days <= 7.0
             else EvidenceConfidence.UNKNOWN
         )
         per_component_meta = {
@@ -456,9 +443,8 @@ def recommend_owner_dispatch(
             "pressure_term": (
                 effective_weights.pressure,
                 EvidenceConfidence.EXACT
-                if candidate.windows and source_pressure_for(
-                    candidate.windows, now=now
-                ) is not BurnPressure.UNMETERED
+                if candidate.windows
+                and source_pressure_for(candidate.windows, now=now) is not BurnPressure.UNMETERED
                 else EvidenceConfidence.UNKNOWN,
                 "burn_curve.weekly",
             ),
@@ -486,9 +472,7 @@ def recommend_owner_dispatch(
             ),
         }
         tier_reason = (
-            "tier_unknown_assumed_T1"
-            if candidate.tier is None
-            else f"tier={candidate.tier.value}"
+            "tier_unknown_assumed_T1" if candidate.tier is None else f"tier={candidate.tier.value}"
         )
         invalid_reason = (
             f"min_tier_invalid_assumed_T1(raw={invalid_min_tier!r})"
@@ -527,9 +511,7 @@ def recommend_owner_dispatch(
         if invalid_reason:
             reasons_str = reasons_str + ", " + invalid_reason
         if manual_override:
-            reasons_str = (
-                reasons_str + ", manual_policy_recommendation_uses_balanced"
-            )
+            reasons_str = reasons_str + ", manual_policy_recommendation_uses_balanced"
         if pressure_reason:
             reasons_str = reasons_str + ", " + pressure_reason
         if headroom_reason:
@@ -583,9 +565,14 @@ def recommend_owner_dispatch(
     return DispatchRecommendation(policy=policy, evaluations=tuple(evaluations))
 
 
-def _component(name: str, raw_value: float, *, weight: float | None = None,
-              confidence: EvidenceConfidence | None = None,
-              source: str | None = None) -> ScoreComponent:
+def _component(
+    name: str,
+    raw_value: float,
+    *,
+    weight: float | None = None,
+    confidence: EvidenceConfidence | None = None,
+    source: str | None = None,
+) -> ScoreComponent:
     # Local re-export shim so this module stays decoupled from
     # scheduler's exported ScoreComponent. Keeps the recommendation
     # value object identical to the rest of the scheduler's output.

@@ -53,9 +53,7 @@ class PAODelegationChildPort:
         *,
         state_db: str | Path,
         executor: Any,
-        recommendation_factory: Callable[
-            [SafetyKernelStore], DispatchRecommendationService
-        ],
+        recommendation_factory: Callable[[SafetyKernelStore], DispatchRecommendationService],
         registry_provider: Callable[[], Any],
         runtime_available_provider: Callable[[str], bool],
         provider_registry_manager: Any = None,
@@ -63,8 +61,7 @@ class PAODelegationChildPort:
         delegation_shadow_journal: DelegationShadowJournal | None = None,
         delegation_outcome_journal: DelegationOutcomeJournal | None = None,
         task_profile_provider: Callable[[str], Any | None] | None = None,
-        policy_resolution_provider: Callable[[SafetyKernelStore, Any], Any | None]
-        | None = None,
+        policy_resolution_provider: Callable[[SafetyKernelStore, Any], Any | None] | None = None,
         quota_calibration_enabled: bool = False,
         quota_refresh_service: Any = None,
         quota_calibration_journal: DelegationQuotaCalibrationJournal | None = None,
@@ -138,9 +135,7 @@ class PAODelegationChildPort:
         if provider_id is None:
             return
         try:
-            snapshot = self.quota_refresh_service.snapshot_for_pool(
-                shadow.child_quota_pool_id
-            )
+            snapshot = self.quota_refresh_service.snapshot_for_pool(shadow.child_quota_pool_id)
             baseline = build_quota_baseline(
                 observation_id=shadow.observation_id,
                 provider_id=provider_id,
@@ -295,10 +290,13 @@ class PAODelegationChildPort:
             )
             # Append-only first observation wins. Re-entry must not trigger a
             # second calibration refresh or rewrite an earlier outcome.
-            if outcome_journal.load(
-                observation_id=observation_id,
-                phase=DelegationOutcomePhase.CHILD_FINAL,
-            ) is not None:
+            if (
+                outcome_journal.load(
+                    observation_id=observation_id,
+                    phase=DelegationOutcomePhase.CHILD_FINAL,
+                )
+                is not None
+            ):
                 return
             shadow = shadow_journal.load(observation_id)
             if shadow is None:
@@ -373,10 +371,13 @@ class PAODelegationChildPort:
                 return
             for shadow in shadow_journal.records_for_parent_run(parent_run_id):
                 try:
-                    if outcome_journal.load(
-                        observation_id=shadow.observation_id,
-                        phase=DelegationOutcomePhase.PARENT_FINAL,
-                    ) is not None:
+                    if (
+                        outcome_journal.load(
+                            observation_id=shadow.observation_id,
+                            phase=DelegationOutcomePhase.PARENT_FINAL,
+                        )
+                        is not None
+                    ):
                         continue
                     record = build_delegation_outcome_record(
                         store=store,
@@ -438,9 +439,7 @@ class PAODelegationChildPort:
                         state="BLOCKED",
                     )
                 store.get_project(plan.project_id)
-                policy = RoutingObjective(
-                    parent.scheduling_policy or RoutingObjective.BALANCED
-                )
+                policy = RoutingObjective(parent.scheduling_policy or RoutingObjective.BALANCED)
                 if policy is RoutingObjective.MANUAL or self.executor is None:
                     return self._finish_result(
                         store=store,

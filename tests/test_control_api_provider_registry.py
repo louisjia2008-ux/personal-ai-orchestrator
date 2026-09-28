@@ -64,7 +64,8 @@ def _empty_static_registry() -> ModelRegistry:
 
 
 def _dynamic_manager_with_provider(
-    tmp_state_root: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_state_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> ProviderRegistryManager:
     """Build a manager whose ``registry()`` returns a synthetic dynamic
     registry with one provider, one synthetic account, one model, and
@@ -125,7 +126,8 @@ def _build_service(
 
 
 def test_providers_uses_effective_registry_accounts_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When ``manager.registry()`` returns a dynamic registry with one
     synthetic account, the Control API must report ``account_count=1``
@@ -230,7 +232,8 @@ def test_target_health_static_verification_matches_launch_gate(tmp_path: Path) -
 
 
 def test_provider_connections_separate_connected_from_available_to_add(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime_state_root = tmp_path / "runtime-state"
     runtime_state_root.mkdir()
@@ -261,7 +264,8 @@ def test_provider_connections_separate_connected_from_available_to_add(
 
 
 def test_provider_connection_survives_restart_and_disconnect_is_local_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime_state_root = tmp_path / "runtime-state"
     runtime_state_root.mkdir()

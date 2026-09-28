@@ -250,11 +250,7 @@ def _agreed_number(values: list[float]) -> float | None:
 
 
 def _field_values(entries: list[dict[str, Any]], name: str) -> list[float]:
-    return [
-        value
-        for value in (_number(entry.get(name)) for entry in entries)
-        if value is not None
-    ]
+    return [value for value in (_number(entry.get(name)) for entry in entries) if value is not None]
 
 
 def _plan_level_window(
@@ -314,9 +310,7 @@ def _entries_for_workload(
     coding capacity in either direction.
     """
 
-    return list(
-        select_for_workload([(entry, kind) for entry, _, kind in classified], workload)
-    )
+    return list(select_for_workload([(entry, kind) for entry, _, kind in classified], workload))
 
 
 def _has_unreadable_percent(entries: list[dict[str, Any]]) -> bool:
@@ -515,9 +509,7 @@ def normalize_minimax_quota(
     # video window's reset time is not this plan's coding reset time.
     interval_start = _millis_datetime(_agreed_number(_field_values(relevant, "start_time")))
     interval_end = _millis_datetime(_agreed_number(_field_values(relevant, "end_time")))
-    weekly_start = _millis_datetime(
-        _agreed_number(_field_values(relevant, "weekly_start_time"))
-    )
+    weekly_start = _millis_datetime(_agreed_number(_field_values(relevant, "weekly_start_time")))
     weekly_end = _millis_datetime(_agreed_number(_field_values(relevant, "weekly_end_time")))
 
     if interval_fraction is None:
@@ -588,9 +580,7 @@ def normalize_minimax_quota(
         ),
     )
 
-    readable = [
-        window for window in windows if window.confidence is not EvidenceConfidence.UNKNOWN
-    ]
+    readable = [window for window in windows if window.confidence is not EvidenceConfidence.UNKNOWN]
     confidence = (
         EvidenceConfidence.EXACT
         # Every window must be readable before the plan as a whole is EXACT:
@@ -616,9 +606,7 @@ def normalize_minimax_quota(
     # would be a fabrication dressed up as provider evidence.
     covered = tuple(
         dict.fromkeys(
-            view.scope_id
-            for view in equivalents
-            if view.scope_kind is EquivalentScopeKind.MODEL
+            view.scope_id for view in equivalents if view.scope_kind is EquivalentScopeKind.MODEL
         )
     )
 
@@ -653,9 +641,7 @@ def normalize_minimax_quota(
         confidence=confidence,
         source=source.model_copy(update={"confidence": confidence}),
         unknown_reason=(
-            minimax_unknown_reason(
-                payload, provider_id=provider_id, workload=workload_scope
-            )
+            minimax_unknown_reason(payload, provider_id=provider_id, workload=workload_scope)
             if confidence is EvidenceConfidence.UNKNOWN
             else None
         ),

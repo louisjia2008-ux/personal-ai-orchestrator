@@ -37,7 +37,9 @@ def test_initial_provider_classes_all_have_explicit_audit_records() -> None:
     providers = {record.provider_id for record in records}
     assert {"minimax", "zai", "openai", "anthropic", "deepseek", "local"} <= providers
 
-    assert quota_observability("openai", "codex-chatgpt-plan").confidence is EvidenceConfidence.UNKNOWN
+    assert (
+        quota_observability("openai", "codex-chatgpt-plan").confidence is EvidenceConfidence.UNKNOWN
+    )
     assert quota_observability("anthropic", "claude-plan").confidence is EvidenceConfidence.UNKNOWN
     assert quota_observability("deepseek", "api").confidence is EvidenceConfidence.EXACT
     assert quota_observability("local", "unmetered").runtime_status == "UNMETERED_CONFIG_TRUTH"

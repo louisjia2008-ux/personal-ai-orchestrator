@@ -125,9 +125,7 @@ class ProcessSpawnError(RuntimeError):
         )
 
 
-_OBSERVED_PROCESS: contextvars.ContextVar[
-    tuple[ProcessSupervisor, SupervisedProcess] | None
-]
+_OBSERVED_PROCESS: contextvars.ContextVar[tuple[ProcessSupervisor, SupervisedProcess] | None]
 
 
 @dataclass
@@ -219,9 +217,7 @@ class ProcessSupervisor:
         except Exception as error:
             safe_errno = error.errno if isinstance(error, OSError) else None
             raise ProcessSpawnError(
-                diagnostics.evolved(
-                    exception_class=type(error).__name__, safe_errno=safe_errno
-                )
+                diagnostics.evolved(exception_class=type(error).__name__, safe_errno=safe_errno)
             ) from error
         diagnostics = diagnostics.evolved(
             spawn_stage=SpawnStage.PROCESS_CREATED,

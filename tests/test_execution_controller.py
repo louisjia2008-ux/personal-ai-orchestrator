@@ -230,9 +230,7 @@ def _launch_registry(*, static_verified: bool = False) -> ModelRegistry:
 
 def test_launch_verification_accepts_static_authority() -> None:
     registry = _launch_registry(static_verified=True)
-    assert execution_target_has_launch_verification(
-        registry, execution_target_id="target"
-    )
+    assert execution_target_has_launch_verification(registry, execution_target_id="target")
     validate_execution_target_launch(
         registry,
         execution_target_id="target",
@@ -602,6 +600,7 @@ def test_unexpected_exit_keeps_only_sanitized_transcript_tails(tmp_path: Path) -
     ).fetchone()
     assert row["status"] == "FAILED"
     import json as _json
+
     result = _json.loads(row["result_json"])
     # Fail-closed: host-derived metadata is gone; the worker's narration
     # is the only thing that survives so the owner can see WHY.
@@ -653,6 +652,4 @@ def test_human_reason_for_failure_names_exit_code_and_signal() -> None:
     assert _human_reason_for_failure(exit_code=None, signal=9) == (
         "worker exited unexpectedly (signal 9)"
     )
-    assert _human_reason_for_failure(exit_code=None, signal=None) == (
-        "worker exited unexpectedly"
-    )
+    assert _human_reason_for_failure(exit_code=None, signal=None) == ("worker exited unexpectedly")

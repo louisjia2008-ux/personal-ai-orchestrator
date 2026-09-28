@@ -38,9 +38,7 @@ def test_control_only_signal_handler_avoids_event_set_and_cleanup(monkeypatch, t
             return self.requested
 
         def set(self) -> None:
-            assert not signal_state["inside_handler"], (
-                "signal handler called threading.Event.set()"
-            )
+            assert not signal_state["inside_handler"], "signal handler called threading.Event.set()"
             calls.append("supervisor_stop.set")
             self.requested = True
 
@@ -112,9 +110,7 @@ def test_control_only_signal_handler_avoids_event_set_and_cleanup(monkeypatch, t
     monkeypatch.setattr(daemon_module, "load_runtime_config", lambda _path: object())
     monkeypatch.setattr(daemon_module, "ProviderRegistryManager", lambda **_kwargs: manager)
     monkeypatch.setattr(daemon_module, "build_service", lambda **_kwargs: service)
-    monkeypatch.setattr(
-        daemon_module, "build_control_service", lambda **_kwargs: control_service
-    )
+    monkeypatch.setattr(daemon_module, "build_control_service", lambda **_kwargs: control_service)
     monkeypatch.setattr(daemon_module, "build_default_supervisor", lambda **_kwargs: supervisor)
     monkeypatch.setattr(daemon_module, "DelegationCampaignControlPlaneServer", FakeServer)
     monkeypatch.setattr(daemon_module.threading, "Event", GuardedEvent)

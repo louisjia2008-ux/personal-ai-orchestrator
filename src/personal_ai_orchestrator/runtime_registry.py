@@ -39,9 +39,7 @@ def merge_runtime_registries(
         existing = models.get(model_id)
         if existing is not None:
             if existing.provider_id != model.provider_id:
-                raise ValueError(
-                    f"runtime registry model provider conflict for {model_id!r}"
-                )
+                raise ValueError(f"runtime registry model provider conflict for {model_id!r}")
             continue
         models[model_id] = model
 
@@ -49,9 +47,7 @@ def merge_runtime_registries(
     for target_id, target in additional.execution_targets.items():
         existing = execution_targets.get(target_id)
         if existing is not None and existing != target:
-            raise ValueError(
-                f"runtime registry execution target conflict for {target_id!r}"
-            )
+            raise ValueError(f"runtime registry execution target conflict for {target_id!r}")
         execution_targets[target_id] = target
 
     merged = ModelRegistry(

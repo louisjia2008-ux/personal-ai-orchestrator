@@ -524,32 +524,20 @@ def apply_verification_result(
             quality_outcome=(
                 shadow_quality_outcome.value
                 if shadow_quality_outcome is not None
-                else (
-                    # Host-safety failure, not a model/verifier quality
-                    # failure: the most accurate existing taxonomy for a
-                    # mutated main repo (round 4 §6).
-                    ShadowQualityOutcome.OPERATIONAL_FAILED.value
-                    if main_repo_mutated
-                    else None
-                )
+                # Host-safety failure, not a model/verifier quality
+                # failure: the most accurate existing taxonomy for a
+                # mutated main repo (round 4 §6).
+                else (ShadowQualityOutcome.OPERATIONAL_FAILED.value if main_repo_mutated else None)
             ),
             failure_class=(
                 shadow_failure_class.value
                 if shadow_failure_class is not None
-                else (
-                    ShadowFailureClass.INFRA_FAILURE.value
-                    if main_repo_mutated
-                    else None
-                )
+                else (ShadowFailureClass.INFRA_FAILURE.value if main_repo_mutated else None)
             ),
             failure_stage=(
                 shadow_failure_stage.value
                 if shadow_failure_stage is not None
-                else (
-                    ShadowFailureStage.INFRASTRUCTURE.value
-                    if main_repo_mutated
-                    else None
-                )
+                else (ShadowFailureStage.INFRASTRUCTURE.value if main_repo_mutated else None)
             ),
             regression_detected=shadow_regression_detected,
             attempts_to_green=shadow_attempts_to_green,

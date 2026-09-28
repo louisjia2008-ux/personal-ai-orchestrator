@@ -201,8 +201,7 @@ def test_recommend_dispatch_records_TAS_K_MIN_TIER_INVALID_and_assumes_T1(
         "TASK_MIN_TIER_INVALID", {"task_id": "tier-task", "raw": "T9"}
     )
     rows = service.store.connection.execute(
-        "SELECT payload_json FROM audit_events "
-        "WHERE event_type = 'TASK_MIN_TIER_INVALID'"
+        "SELECT payload_json FROM audit_events WHERE event_type = 'TASK_MIN_TIER_INVALID'"
     ).fetchall()
     assert len(rows) == 1
     import json as _json
@@ -291,6 +290,7 @@ def test_recommend_dispatch_uses_T1_default_when_task_min_tier_is_corrupt(
     else:  # pragma: no cover — defensive only
         pytest.fail("expected ValueError on T9 but the enum accepted it")
 
+
 def test_recommend_dispatch_candidate_view_exposes_headroom_min(
     tmp_path: Path,
 ) -> None:
@@ -321,6 +321,7 @@ def test_recommend_dispatch_candidate_view_exposes_headroom_min(
     from personal_ai_orchestrator.control_api import (
         DispatchRecommendationCandidate,
     )
+
     fields = DispatchRecommendationCandidate.model_fields
     assert "headroom_min" in fields
     assert fields["headroom_min"].default is None

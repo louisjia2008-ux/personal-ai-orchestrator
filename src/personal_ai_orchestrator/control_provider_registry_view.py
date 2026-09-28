@@ -68,8 +68,7 @@ class ControlPlaneProviderRegistryView:
                 for target in pi_registry.execution_targets.values()
                 if (
                     pi_registry.models.get(target.model_sku_id) is not None
-                    and pi_registry.models[target.model_sku_id].provider_id
-                    == provider.provider_id
+                    and pi_registry.models[target.model_sku_id].provider_id == provider.provider_id
                 )
             ]
             runtime_available = any(

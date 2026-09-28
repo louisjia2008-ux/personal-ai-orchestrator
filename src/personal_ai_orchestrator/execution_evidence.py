@@ -122,9 +122,7 @@ class ExecutionEvidenceJournal:
         path = self.path_for(evidence_id)
         if not path.exists():
             return None
-        return ExecutionVerificationEvidence.model_validate_json(
-            path.read_text(encoding="utf-8")
-        )
+        return ExecutionVerificationEvidence.model_validate_json(path.read_text(encoding="utf-8"))
 
     def latest_for_target(
         self,

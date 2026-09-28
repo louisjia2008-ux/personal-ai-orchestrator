@@ -34,9 +34,7 @@ def _validated_identifier(value: str) -> str:
     return value
 
 
-def delegation_child_task_id(
-    *, parent_task_id: str, parent_run_id: str, ordinal: int
-) -> str:
+def delegation_child_task_id(*, parent_task_id: str, parent_run_id: str, ordinal: int) -> str:
     """Mint the stable child task ID from host-bound parent identity."""
 
     if not parent_task_id or not parent_run_id:

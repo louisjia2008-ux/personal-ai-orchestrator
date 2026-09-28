@@ -115,8 +115,7 @@ def run_execution_probe(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Establish durable execution-verification evidence via one "
-            "real worker invocation"
+            "Establish durable execution-verification evidence via one real worker invocation"
         )
     )
     parser.add_argument("--opencode", default="opencode")

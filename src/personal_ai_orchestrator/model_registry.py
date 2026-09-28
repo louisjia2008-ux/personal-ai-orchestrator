@@ -375,8 +375,7 @@ class QuotaSnapshot(RegistryModel):
         return tuple(
             window
             for window in self.windows
-            if window.is_active(at=reference)
-            and (not required or window.window_kind in required)
+            if window.is_active(at=reference) and (not required or window.window_kind in required)
         )
 
     def known_min_pace(
@@ -703,7 +702,9 @@ class ModelRegistry(RegistryModel):
             if target.model_sku_id != model_sku_id:
                 raise ValueError(f"{label} execution target does not match model SKU")
             if target.account_id != self._account_id_for_quota_pool(quota_pool_id):
-                raise ValueError(f"{label} execution target account does not match quota pool account")
+                raise ValueError(
+                    f"{label} execution target account does not match quota pool account"
+                )
 
     @staticmethod
     def _fact_applies(
@@ -762,7 +763,9 @@ class ModelRegistry(RegistryModel):
         ]
         if execution_target_id is not None:
             specific = [
-                binding for binding in applicable if binding.execution_target_id == execution_target_id
+                binding
+                for binding in applicable
+                if binding.execution_target_id == execution_target_id
             ]
             if specific:
                 return specific
@@ -850,7 +853,9 @@ class ModelRegistry(RegistryModel):
             specific = [
                 rule for rule in applicable if rule.execution_target_id == execution_target_id
             ]
-            candidates = specific or [rule for rule in applicable if rule.execution_target_id is None]
+            candidates = specific or [
+                rule for rule in applicable if rule.execution_target_id is None
+            ]
         else:
             generic = [rule for rule in applicable if rule.execution_target_id is None]
             candidates = generic or applicable

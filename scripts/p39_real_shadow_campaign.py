@@ -86,8 +86,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_invoice.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from invoice import cents_for_amount\n\n\n"
                         "class InvoiceTests(unittest.TestCase):\n"
                         "    def test_rounds_half_up_to_cents(self) -> None:\n"
@@ -127,8 +126,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_pricing.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from pricing import discounted_cents\n\n\n"
                         "class PricingTests(unittest.TestCase):\n"
                         "    def test_applies_percent_discount(self) -> None:\n"
@@ -167,8 +165,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_flags.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from flags import parse_enabled\n\n\n"
                         "class FlagTests(unittest.TestCase):\n"
                         "    def test_accepts_yes(self) -> None:\n"
@@ -212,8 +209,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_stats.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from stats import median\n\n\n"
                         "class StatsTests(unittest.TestCase):\n"
                         "    def test_sorts_before_median(self) -> None:\n"
@@ -251,8 +247,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_dates.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from dates import date_label\n\n\n"
                         "class DateTests(unittest.TestCase):\n"
                         "    def test_zero_pads_month_and_day(self) -> None:\n"
@@ -290,8 +285,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_ranges.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from ranges import clamp\n\n\n"
                         "class RangeTests(unittest.TestCase):\n"
                         "    def test_clamps_below_minimum(self) -> None:\n"
@@ -341,8 +335,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_slugs.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from slugs import slugify\n\n\n"
                         "class SlugTests(unittest.TestCase):\n"
                         "    def test_lowercases_words(self) -> None:\n"
@@ -391,8 +384,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_percent.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from percent import bounded_percent\n\n\n"
                         "class PercentTests(unittest.TestCase):\n"
                         "    def test_clamps_negative(self) -> None:\n"
@@ -441,8 +433,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_defaults.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from defaults import default_if_none\n\n\n"
                         "class DefaultTests(unittest.TestCase):\n"
                         "    def test_keeps_non_none_value(self) -> None:\n"
@@ -491,8 +482,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_dedupe.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from dedupe import dedupe\n\n\n"
                         "class DedupeTests(unittest.TestCase):\n"
                         "    def test_removes_duplicates(self) -> None:\n"
@@ -545,8 +535,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_text_stats.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from text_stats import unique_word_count, word_count\n\n\n"
                         "class TextStatsTests(unittest.TestCase):\n"
                         "    def test_counts_words(self) -> None:\n"
@@ -601,8 +590,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_average.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from average import average, count_values\n\n\n"
                         "class AverageTests(unittest.TestCase):\n"
                         "    def test_average_ignores_none(self) -> None:\n"
@@ -654,8 +642,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_names.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from names import display_name, initials\n\n\n"
                         "class NameTests(unittest.TestCase):\n"
                         "    def test_display_name_strips_parts(self) -> None:\n"
@@ -711,8 +698,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_query.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from query import export_url, search_url\n\n\n"
                         "class QueryTests(unittest.TestCase):\n"
                         "    def test_search_url(self) -> None:\n"
@@ -767,8 +753,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_inventory.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from inventory import order_tax, order_total\n\n\n"
                         "class InventoryTests(unittest.TestCase):\n"
                         "    def test_total(self) -> None:\n"
@@ -826,8 +811,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_report.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from report import report_slug\n\n\n"
                         "class ReportTests(unittest.TestCase):\n"
                         "    def test_report_slug_has_prefix(self) -> None:\n"
@@ -886,8 +870,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_checkout.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from checkout import total_with_tax\n\n\n"
                         "class CheckoutTests(unittest.TestCase):\n"
                         "    def test_total_uses_new_tax_rate(self) -> None:\n"
@@ -942,8 +925,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_render.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from render import page_title\n\n\n"
                         "class RenderTests(unittest.TestCase):\n"
                         "    def test_default_title_has_prefix(self) -> None:\n"
@@ -1004,8 +986,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_routes.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from routes import article_path\n\n\n"
                         "class RouteTests(unittest.TestCase):\n"
                         "    def test_article_path_has_articles_prefix(self) -> None:\n"
@@ -1069,8 +1050,7 @@ def campaign_cases() -> tuple[DeclarativeShadowCase, ...]:
                 CampaignFile(
                     path="tests/test_summary.py",
                     content=(
-                        common_import
-                        + "import unittest\n\n"
+                        common_import + "import unittest\n\n"
                         "from summary import pass_rate_label\n\n\n"
                         "class SummaryTests(unittest.TestCase):\n"
                         "    def test_pass_rate_label_is_percent(self) -> None:\n"
@@ -1138,9 +1118,9 @@ class _SubprocessWorkerHandle:
         exit_code = self.process.returncode
         stderr_tail = stderr[-4000:]
         if timed_out:
-            stderr_tail = (
-                f"WORKER_TIMEOUT after {self.timeout_seconds} seconds\n" + stderr_tail
-            )[-4000:]
+            stderr_tail = (f"WORKER_TIMEOUT after {self.timeout_seconds} seconds\n" + stderr_tail)[
+                -4000:
+            ]
         if exit_code == 0 and len(stderr) > 2000:
             stderr_tail = "OMITTED_SUCCESSFUL_CODEX_CLI_DIAGNOSTICS"
         return WorkerExecutionResult(
