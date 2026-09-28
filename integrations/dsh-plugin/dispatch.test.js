@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { TARGETS, applyPolicy, fallbackPolicy, dispatchTask } from "./dispatch.js";
+import { TARGETS, applyPolicy, fallbackPolicy, dispatchTask, jevAsk } from "./dispatch.js";
 
 const byTid = (tid) => TARGETS.find((t) => t.tid === tid);
 const admitted = [
@@ -79,4 +79,21 @@ test("dispatchTask survives a bogus jev reply and sends real candidate ids", asy
     ["dsh:deepseek-v4-flash", "dsh:deepseek-v4-pro"],
   );
   assert.match(sentState.candidates[0].quota, /pay-as-you-go/);
+});
+
+test("jevAsk gives up immediately on 401", async (t) => {
+  const f = t.mock.method(globalThis, "fetch", async () => new Response("bad key", { status: 401 }));
+  const started = Date.now();
+  await assert.rejects(jevAsk({}, {}, "k"), /jev HTTP 401: bad key/);
+  assert.equal(f.mock.callCount(), 1);
+  assert.ok(Date.now() - started < 500, "no backoff sleep on a non-retryable error");
+});
+
+test("jevAsk retries transient 5xx and then succeeds", async (t) => {
+  let n = 0;
+  const f = t.mock.method(globalThis, "fetch", async () =>
+    ++n === 1 ? new Response("overloaded", { status: 529 }) : Response.json({ ok: 1 }),
+  );
+  assert.deepEqual(await jevAsk({}, {}, "k"), { ok: 1 });
+  assert.equal(f.mock.callCount(), 2);
 });

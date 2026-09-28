@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { TARGETS, applyPolicy, fallbackPolicy } from "./dispatch.ts";
+import { TARGETS, applyPolicy, fallbackPolicy, jevAsk } from "./dispatch.ts";
 
 const byTid = (tid: string) => TARGETS.find((t) => t.tid === tid)!;
 const admitted = [
@@ -42,4 +42,18 @@ test("fallback on jev outage keeps a T3 target", () => {
   const r = fallbackPolicy(admitted, "HTTP 503");
   assert.equal(r.decision, "pi@zai-glm-5.3");
   assert.equal(r.confidence, null);
+});
+
+test("jevAsk gives up immediately on 401", async (t) => {
+  const prevKey = process.env.TYPESAFE_API_KEY;
+  process.env.TYPESAFE_API_KEY = "test";
+  t.after(() => {
+    if (prevKey === undefined) delete process.env.TYPESAFE_API_KEY;
+    else process.env.TYPESAFE_API_KEY = prevKey;
+  });
+  const f = t.mock.method(globalThis, "fetch", async () => new Response("bad key", { status: 401 }));
+  const started = Date.now();
+  await assert.rejects(jevAsk({}, {}), /jev HTTP 401: bad key/);
+  assert.equal(f.mock.callCount(), 1);
+  assert.ok(Date.now() - started < 500, "no backoff sleep on a non-retryable error");
 });
