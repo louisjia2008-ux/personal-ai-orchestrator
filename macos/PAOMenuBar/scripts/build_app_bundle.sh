@@ -80,6 +80,7 @@ STAMP
   --noconfirm \
   --onefile \
   --name pao-daemon \
+  --paths "${REPO_DIR}/src" \
   --distpath "${DAEMON_DIST}" \
   --workpath "${DAEMON_BUILD}" \
   --specpath "${DAEMON_SPEC}" \
