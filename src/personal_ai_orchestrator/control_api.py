@@ -50,7 +50,7 @@ from personal_ai_orchestrator.dispatch_recommender import (
     source_pressure_for,
 )
 from personal_ai_orchestrator.execution_controller import (
-    project_execution_target_verification,
+    execution_target_has_launch_verification,
 )
 from personal_ai_orchestrator.execution_evidence import (
     ExecutionEvidenceJournal,
@@ -66,6 +66,7 @@ from personal_ai_orchestrator.quota_availability import (
     QuotaAvailabilityJournal,
     QuotaAvailabilityState,
 )
+from personal_ai_orchestrator.quota_credentials import CredentialSource
 from personal_ai_orchestrator.quota_equivalent_capacity import (
     EquivalentCapacityEstimate,
     estimate_equivalent_capacity,
@@ -614,17 +615,21 @@ class ExecutionTargetHealthView(_ViewModel):
     runtime_id: str
     enabled: bool
     execution_verified: bool
-    #: True when historical VERIFIED evidence remains useful diagnostically
-    #: but no longer carries current launch authority, either because newer
-    #: evidence demoted it or because it exceeded the launch-age cap.
+    #: Historical verification is diagnostic. This bit is the current
+    #: execution launch authority: enabled + fresh/latest verification +
+    #: runtime availability. It intentionally excludes quota/task/safety gates.
+    execution_launch_authorized: bool = False
+    #: Timestamp of the historical VERIFIED evidence surfaced above, when it
+    #: came from the append-only execution evidence journal. Static registry
+    #: authority has no observation timestamp and therefore leaves this null.
+    execution_verification_observed_at: str | None = None
+    #: True when historical VERIFIED evidence exists but no longer matches the
+    #: current journal/age authority. This remains diagnostic only.
     execution_verified_stale: bool = False
     #: Current full launch authority from the same verification rule used by
     #: owner dispatch, plus enabled/runtime availability. Historical VERIFIED
     #: evidence may stay visible while this is false.
     launch_authorized: bool = False
-    #: Timestamp of the historical VERIFIED evidence when evidence-backed.
-    #: Static registry verification has no observation timestamp.
-    execution_verification_observed_at: str | None = None
     runtime_available: bool | None = None
     observed_availability: ObservedAvailabilityView | None = None
     # M1 WP2: capability tier for this target. ``None`` means the
@@ -956,6 +961,18 @@ class QuotaRefreshResultView(_ViewModel):
 
     refreshed_provider_ids: tuple[str, ...] = ()
     overview: QuotaOverviewView
+
+
+class QuotaCredentialAuthorizationRequest(_ViewModel):
+    """Secret-bearing request; repr is deliberately suppressed."""
+
+    credential: str = Field(min_length=1, max_length=16_384, repr=False)
+
+
+class QuotaCredentialAuthorizationView(_ViewModel):
+    provider_id: str
+    authorized: bool
+    source: str
 
 
 class ProviderConnectionView(_ViewModel):
@@ -2891,26 +2908,42 @@ class ControlPlaneService:
                     sanitized_reason_code=evidence.sanitized_reason_code,
                     consecutive_failures=evidence.consecutive_failures,
                 )
-        # Historical verification remains a diagnostic surface, while the
-        # launch bit below is derived from the same latest-row + age rule as
-        # owner dispatch. This prevents age-expired or demoted history from
-        # being presented as currently actionable.
-        verification = project_execution_target_verification(
-            self._effective_registry(),
-            execution_target_id=target.id,
-            execution_evidence_journal=self.execution_evidence_journal,
-            now=datetime.now(UTC),
-        )
-        execution_verified = verification.historical_verified
-        execution_verified_stale = verification.verified_stale
+        # Historical verification stays visible for diagnostics, including
+        # demote-fallback. Launch authority is projected separately from the
+        # same canonical freshness rule used at the final execution boundary.
+        execution_verified = bool(target.execution_verified)
+        execution_verified_stale = False
+        execution_verification_observed_at: str | None = None
+        verified_evidence = None
+        stale_since = None
+        if self.execution_evidence_journal is not None:
+            try:
+                verified_evidence, stale_since = (
+                    self.execution_evidence_journal.latest_verified_for_target(target.id)
+                )
+            except Exception:
+                verified_evidence, stale_since = None, None
+            if verified_evidence is not None:
+                execution_verified = True
+                execution_verification_observed_at = verified_evidence.observed_at.isoformat()
+
         runtime_available = (
             self.runtime_availability.get(target.id)
             if target.id in self.runtime_availability
             else self._runtime_available(target.id)
         )
-        launch_authorized = bool(
-            target.enabled and verification.launch_verified and runtime_available
+        launch_verification = execution_target_has_launch_verification(
+            self._effective_registry(),
+            execution_target_id=target.id,
+            execution_evidence_journal=self.execution_evidence_journal,
         )
+        execution_launch_authorized = bool(
+            target.enabled and runtime_available and launch_verification
+        )
+        if verified_evidence is not None:
+            execution_verified_stale = stale_since is not None or (
+                not launch_verification and not target.execution_verified
+            )
         # M1 WP2: classify the target against the host-owned tier
         # table. ``None`` means the table is not wired (ad-hoc CLI) or
         # could not classify the target — both surface as ``tier=None``
@@ -2926,13 +2959,10 @@ class ControlPlaneService:
             runtime_id=target.runtime_id,
             enabled=target.enabled,
             execution_verified=execution_verified,
+            execution_launch_authorized=execution_launch_authorized,
+            launch_authorized=execution_launch_authorized,
+            execution_verification_observed_at=execution_verification_observed_at,
             execution_verified_stale=execution_verified_stale,
-            launch_authorized=launch_authorized,
-            execution_verification_observed_at=(
-                verification.verified_observed_at.isoformat()
-                if verification.verified_observed_at is not None
-                else None
-            ),
             runtime_available=runtime_available,
             observed_availability=observed,
             tier=tier_value,
@@ -3758,6 +3788,48 @@ class ControlPlaneService:
             except Exception:
                 continue
 
+    def authorize_quota_credential(
+        self,
+        provider_id: str,
+        payload: dict[str, Any],
+    ) -> QuotaCredentialAuthorizationView:
+        """Accept explicit owner authority for read-only quota telemetry only."""
+
+        self._validate_identifier("provider_id", provider_id)
+        if self.quota_refresh_service is None:
+            raise ControlPlaneError(503, "quota_service_unavailable")
+        request = QuotaCredentialAuthorizationRequest.model_validate(payload)
+        try:
+            self.quota_refresh_service.authorize_owner_credential(
+                provider_id,
+                request.credential,
+            )
+        except KeyError as exc:
+            raise ControlPlaneError(404, "quota_provider_unsupported") from exc
+        except ValueError as exc:
+            raise ControlPlaneError(400, "invalid_quota_credential") from exc
+        return QuotaCredentialAuthorizationView(
+            provider_id=provider_id,
+            authorized=True,
+            source=CredentialSource.OWNER_SESSION.value,
+        )
+
+    def revoke_quota_credential(
+        self,
+        provider_id: str,
+    ) -> QuotaCredentialAuthorizationView:
+        """Revoke quota telemetry authority without touching execution auth."""
+
+        self._validate_identifier("provider_id", provider_id)
+        if self.quota_refresh_service is None:
+            raise ControlPlaneError(503, "quota_service_unavailable")
+        self.quota_refresh_service.revoke_owner_credential(provider_id)
+        return QuotaCredentialAuthorizationView(
+            provider_id=provider_id,
+            authorized=False,
+            source=CredentialSource.NONE.value,
+        )
+
     def active_status(self) -> ActiveStatusView:
         gate = self.activation_gate
         return ActiveStatusView(
@@ -4272,6 +4344,40 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                         return
                     target = QuotaRefreshRequest.model_validate(payload).provider_id
                 self._view(200, request_service.refresh_quota(target))
+                return
+
+            if count == 3 and rest[0] == "providers" and rest[2] == "quota-credential":
+                if method != "PUT":
+                    self._json(405, {"error": "method_not_allowed"})
+                    return
+                payload = self._read_json()
+                if payload is None:
+                    return
+                self._view(
+                    200,
+                    request_service.authorize_quota_credential(rest[1], payload),
+                )
+                return
+
+            if (
+                count == 4
+                and rest[0] == "providers"
+                and rest[2] == "quota-credential"
+                and rest[3] == "revoke"
+            ):
+                if method != "POST":
+                    self._json(405, {"error": "method_not_allowed"})
+                    return
+                # Parameterless revocation: the credential is never echoed back.
+                length = int(self.headers.get("content-length", "0") or 0)
+                if length > 0:
+                    payload = self._read_json()
+                    if payload is None:
+                        return
+                self._view(
+                    200,
+                    request_service.revoke_quota_credential(rest[1]),
+                )
                 return
 
             if (

@@ -47,6 +47,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -77,6 +78,9 @@ class CredentialSource(StrEnum):
     """Where a resolved quota credential came from. Sanitized; owner-facing."""
 
     ENVIRONMENT = "ENVIRONMENT"
+    #: Explicit owner authorization imported from the macOS app's Keychain for
+    #: this daemon session. The daemon never persists this value.
+    OWNER_SESSION = "OWNER_SESSION"
     OWNER_KEYCHAIN = "OWNER_KEYCHAIN"
     OPENCODE_AUTH_STORE = "OPENCODE_AUTH_STORE"
     NONE = "NONE"
@@ -279,6 +283,34 @@ class QuotaCredentialResolver:
             auth_store_paths if auth_store_paths is not None else default_opencode_auth_paths()
         )
         self._owner_keychain_lookup = owner_keychain_lookup or _read_owner_keychain_secret
+        self._owner_session: dict[str, SecretValue] = {}
+        self._owner_lock = threading.RLock()
+
+    def authorize_owner_session(self, provider_id: str, credential: str) -> None:
+        """Authorize one read-only quota credential for this daemon session.
+
+        Persistence belongs to the owner-facing macOS Keychain. The daemon
+        deliberately keeps only a redacting :class:`SecretValue` in memory,
+        so SQLite/runtime JSON/evidence never become a second secret store.
+        """
+
+        if provider_id not in self._specs:
+            raise KeyError("unsupported_quota_provider")
+        if not credential:
+            raise ValueError("empty_quota_credential")
+        with self._owner_lock:
+            self._owner_session[provider_id] = SecretValue(credential)
+
+    def revoke_owner_session(self, provider_id: str) -> bool:
+        """Revoke only the explicit quota-telemetry authority."""
+
+        with self._owner_lock:
+            return self._owner_session.pop(provider_id, None) is not None
+
+    def owner_session_present(self, provider_id: str) -> bool:
+        with self._owner_lock:
+            secret = self._owner_session.get(provider_id)
+            return secret is not None and bool(secret)
 
     def resolve(self, provider_id: str) -> ResolvedQuotaCredential:
         spec = self._specs.get(provider_id)
@@ -297,6 +329,15 @@ class QuotaCredentialResolver:
                     source=CredentialSource.ENVIRONMENT,
                     secret=SecretValue(value),
                 )
+
+        with self._owner_lock:
+            owner_secret = self._owner_session.get(provider_id)
+        if owner_secret is not None and bool(owner_secret):
+            return ResolvedQuotaCredential(
+                provider_id=provider_id,
+                source=CredentialSource.OWNER_SESSION,
+                secret=owner_secret,
+            )
 
         for account in spec.owner_keychain_accounts:
             try:

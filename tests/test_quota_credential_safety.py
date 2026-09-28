@@ -214,21 +214,61 @@ def test_auth_store_covers_the_gui_launched_daemon(tmp_path: Path) -> None:
     assert resolved.source is CredentialSource.OPENCODE_AUTH_STORE
 
 
-def test_owner_keychain_precedes_opencode_store(tmp_path: Path) -> None:
-    paths = _auth_store(
-        tmp_path,
-        {"zai-coding-plan": {"type": "api", "key": "store"}},
-    )
+def test_owner_session_credential_is_explicit_and_redacted() -> None:
+    resolver = _resolver({})
+    resolver.authorize_owner_session("zai-coding-plan", CANARY)
 
-    resolved = _resolver(
-        {},
-        paths,
-        keychain={"zai-coding-plan": CANARY},
-    ).resolve("zai-coding-plan")
+    resolved = resolver.resolve("zai-coding-plan")
 
-    assert resolved.source is CredentialSource.OWNER_KEYCHAIN
+    assert resolved.present is True
+    assert resolved.source is CredentialSource.OWNER_SESSION
+    assert CANARY not in repr(resolved)
+    assert resolver.owner_session_present("zai-coding-plan") is True
+
+
+def test_environment_remains_higher_precedence_than_owner_session() -> None:
+    resolver = _resolver({"ZAI_API_KEY": "environment"})
+    resolver.authorize_owner_session("zai-coding-plan", CANARY)
+
+    resolved = resolver.resolve("zai-coding-plan")
+
+    assert resolved.source is CredentialSource.ENVIRONMENT
+    assert resolved.secret is not None
+    assert resolved.secret.reveal() == "environment"
+
+
+def test_owner_session_overrides_standing_opencode_store(tmp_path: Path) -> None:
+    paths = _auth_store(tmp_path, {"zai-coding-plan": {"type": "api", "key": "store"}})
+    resolver = _resolver({}, paths)
+    resolver.authorize_owner_session("zai-coding-plan", CANARY)
+
+    resolved = resolver.resolve("zai-coding-plan")
+
+    assert resolved.source is CredentialSource.OWNER_SESSION
     assert resolved.secret is not None
     assert resolved.secret.reveal() == CANARY
+
+
+def test_revoking_owner_session_falls_back_without_touching_other_auth(
+    tmp_path: Path,
+) -> None:
+    paths = _auth_store(tmp_path, {"zai-coding-plan": {"type": "api", "key": "store"}})
+    resolver = _resolver({}, paths)
+    resolver.authorize_owner_session("zai-coding-plan", CANARY)
+
+    assert resolver.revoke_owner_session("zai-coding-plan") is True
+    assert resolver.owner_session_present("zai-coding-plan") is False
+    resolved = resolver.resolve("zai-coding-plan")
+    assert resolved.source is CredentialSource.OPENCODE_AUTH_STORE
+    assert resolved.secret is not None
+    assert resolved.secret.reveal() == "store"
+
+
+def test_owner_session_rejects_unknown_provider() -> None:
+    resolver = _resolver({})
+
+    with pytest.raises(KeyError, match="unsupported_quota_provider"):
+        resolver.authorize_owner_session("unknown-provider", CANARY)
 
 
 def test_environment_takes_precedence_over_the_store(tmp_path: Path) -> None:

@@ -91,7 +91,7 @@ def probe_zai(key: str) -> tuple[QuotaWindow, ...] | None:
         "WEEKLY",
     ]
     return tuple(
-        QuotaWindow(kind, used, reset) for kind, (reset, used) in zip(kinds, windows, strict=False)
+        QuotaWindow(kind, used, reset) for kind, (reset, used) in zip(kinds, windows, strict=True)
     )
 
 

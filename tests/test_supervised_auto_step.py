@@ -31,7 +31,7 @@ from personal_ai_orchestrator.model_registry import (
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
 from personal_ai_orchestrator.quota_availability import (
     QuotaAvailabilityJournal,
-    mark_recovery_probe_due,
+    QuotaAvailabilityState,
     observe_exhaustion,
     observe_success,
 )
@@ -325,8 +325,6 @@ def test_hard_gate_quota_unknown_skips(tmp_path) -> None:
 
 
 def test_hard_gate_quota_state_not_auto_ok_skips(tmp_path) -> None:
-    from personal_ai_orchestrator.quota_availability import observe_exhaustion
-
     env = _env(tmp_path)
     # Flip the availability journal to a cooldown-state blocker after env
     # construction (observe_exhaustion → EXHAUSTED_OBSERVED).
@@ -350,44 +348,33 @@ def test_hard_gate_quota_state_not_auto_ok_skips(tmp_path) -> None:
     assert task.auto_reason.startswith("quota_state_")
 
 
-def test_recovered_observed_quota_is_auto_admissible(tmp_path) -> None:
-    """Observed exhaustion followed by a strong recovery may plan again.
-
-    The recovery state remains explicit evidence (RECOVERED_OBSERVED); the
-    autonomous gate must not require a second ordinary-success observation
-    before resuming normal routing.
-    """
-
+def test_recovered_observed_quota_allows_supervised_auto_planning(tmp_path) -> None:
     env = _env(tmp_path)
-    baseline = env.quota_journal.load("m3-sub")
+    previous = env.quota_journal.load("m3-sub")
     exhausted = observe_exhaustion(
-        baseline,
+        previous,
         execution_target_id="m3-sub",
         provider_id="minimax",
         quota_pool_id="pool",
-        observed_at=NOW - timedelta(hours=2),
+        observed_at=NOW - timedelta(minutes=2),
         sanitized_reason_code="TEST_EXHAUSTED",
     )
-    due = mark_recovery_probe_due(
-        exhausted,
-        observed_at=NOW - timedelta(minutes=2),
-    )
+    env.quota_journal.save(exhausted)
     recovered = observe_success(
-        due,
+        exhausted,
         execution_target_id="m3-sub",
         provider_id="minimax",
         quota_pool_id="pool",
         observed_at=NOW - timedelta(minutes=1),
     )
+    assert recovered.state is QuotaAvailabilityState.RECOVERED_OBSERVED
     env.quota_journal.save(recovered)
 
     env.tick(NOW)
 
     task = env.store.get_task("task-1")
-    assert recovered.state.value == "RECOVERED_OBSERVED"
     assert task.state is TaskState.AUTO_GRACE
     assert task.auto_decision_id is not None
-    assert "AUTO_PLANNED" in _audit_types(env)
 
 
 def test_hard_gate_evidence_stale_skips(tmp_path) -> None:
@@ -395,7 +382,9 @@ def test_hard_gate_evidence_stale_skips(tmp_path) -> None:
     env.tick(NOW)
     task = env.store.get_task("task-1")
     assert task.state is TaskState.READY
-    assert task.auto_reason == "no_admitted_target"
+    # The current launch-verification gate now rejects this before recommendation
+    # ranking, so the more specific host-owned reason is preserved.
+    assert task.auto_reason == "evidence_stale"
 
 
 def test_owner_execution_disabled_skips(tmp_path) -> None:

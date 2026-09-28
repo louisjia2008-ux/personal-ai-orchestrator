@@ -82,11 +82,10 @@ class DispatchCandidateInput:
     model_sku_id: str
     runtime_available: bool
     verified: bool
-    # True when historical VERIFIED evidence exists but is not current
-    # launch authority (for example: latest evidence is non-VERIFIED, or the
-    # latest VERIFIED row exceeded the launch-age cap). The host service
-    # separately sets ``verified=False`` in those cases so admission cannot
-    # be broader than the launch boundary.
+    # Diagnostic historical-staleness signal. The service sets ``verified``
+    # from current launch verification authority, so a demote-fallback or
+    # age-expired target is already fail-closed before ranking. This flag only
+    # explains why historical VERIFIED evidence is no longer actionable.
     verified_stale: bool = False
     # Observed quota windows for this target (e.g. 5h + weekly remaining
     # fractions). Empty list means "no observation was reported".

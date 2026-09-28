@@ -169,9 +169,13 @@ final class OwnerLocalizationTests: XCTestCase {
     // MARK: - Risks localize from raw_code, not the daemon's English
 
     func testRiskTextLocalizesFromRawCodeAndCount() {
+        // Keep the daemon fallback deliberately different from the English
+        // catalog. On an English CI host the real localized sentence may be
+        // identical to the daemon's normal English wording, which cannot prove
+        // that raw_code localization rather than fallback was used.
         let risk = RiskItemView(
-            title: "3 quota pool(s) have unknown limits",
-            detail: "Unknown quota is valid, but the UI cannot show reliable percentages.",
+            title: "daemon fallback title",
+            detail: "daemon fallback detail",
             severity: "UNKNOWN",
             destination: "quota",
             rawCode: "QUOTA_UNKNOWN",

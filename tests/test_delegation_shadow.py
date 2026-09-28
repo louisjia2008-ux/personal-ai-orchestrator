@@ -161,6 +161,7 @@ def test_daemon_wires_shadow_journal_without_creating_files(tmp_path):
         pi_runtime_manager=lambda: object(),
         set_verified_execution_lookup=lambda _: None,
         connected_provider_ids=lambda: (),
+        routing_connected_provider_ids=lambda: (),
         runtime_available=lambda _: True,
     )
     runtime_root = tmp_path / "runtime"

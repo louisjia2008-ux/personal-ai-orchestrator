@@ -113,7 +113,7 @@ public final class DaemonLifecycleController: ObservableObject {
                     return
                 }
                 if self.preexistingDaemonWasRefusedForBuild() {
-                    try await self.terminateRefusedDaemon()
+                    try await self.terminateStaleOwnedDaemon()
                 }
                 try await self.launchBundledDaemon()
             }
@@ -131,59 +131,31 @@ public final class DaemonLifecycleController: ObservableObject {
         return false
     }
 
-    /// Terminate exactly the daemon process whose build was refused.
+    /// Terminate only the exact process serving our control socket.
     ///
-    /// The old implementation used `pkill -f <helper path>`, which made a
-    /// command-line substring the ownership boundary. This path instead pins
-    /// the pid + opaque per-process identity obtained from the daemon itself,
-    /// re-reads that identity immediately before SIGTERM, and refuses to signal
-    /// if either value changed. A pre-identity daemon therefore fails closed
-    /// rather than falling back to a broad process match.
-    private func terminateRefusedDaemon() async throws {
-        guard let expected = refusedDaemonIdentity else {
-            throw LifecycleError.staleDaemonIdentityUnavailable
-        }
+    /// A command-line substring is not process ownership. Resolve the peer PID
+    /// from the connected Unix socket, verify that PID's executable is this
+    /// bundle's helper, then send exactly one SIGTERM. If any identity fact is
+    /// missing or disagrees, fail closed instead of risking an unrelated kill
+    /// or launching a second daemon against the same SQLite state.
+    private func terminateStaleOwnedDaemon() async throws {
+        let identity = try DaemonProcessOwnership.validatedSocketOwner(
+            socketPath: configuration.layout.socketPath,
+            expectedHelperPath: configuration.helperURL.path
+        )
+        try DaemonProcessOwnership.signalTermination(pid: identity.pid)
 
-        let current: HealthView
-        do {
-            current = try await client.health()
-        } catch {
-            // The refused daemon exited between the build check and cleanup.
-            // No process remains to signal; allow a fresh launch.
-            refusedDaemonIdentity = nil
-            try? await Task.sleep(for: .milliseconds(250))
-            return
-        }
-
-        guard let actual = DaemonProcessIdentity(health: current),
-              actual == expected
-        else {
-            throw LifecycleError.staleDaemonIdentityChanged
-        }
-
-        errno = 0
-        let signalResult = Darwin.kill(pid_t(expected.processId), SIGTERM)
-        if signalResult != 0 && errno != ESRCH {
-            throw LifecycleError.staleDaemonSignalFailed
-        }
-
-        let deadline = Date().addingTimeInterval(5.0)
+        let deadline = Date().addingTimeInterval(10.0)
         while Date() < deadline {
-            do {
-                let health = try await client.health()
-                guard let identity = DaemonProcessIdentity(health: health) else {
-                    throw LifecycleError.staleDaemonIdentityChanged
-                }
-                if identity != expected {
-                    // Another daemon appeared before we finished. Do not touch
-                    // it and do not launch a second copy in the same pass.
-                    throw LifecycleError.staleDaemonIdentityChanged
-                }
-            } catch let error as LifecycleError {
-                throw error
-            } catch {
-                refusedDaemonIdentity = nil
-                try? await Task.sleep(for: .milliseconds(250))
+            let processGone = !DaemonProcessOwnership.isAlive(pid: identity.pid)
+            let socketGone = !FileManager.default.fileExists(
+                atPath: configuration.layout.socketPath
+            )
+            if processGone && socketGone {
+                // The packaged-daemon acceptance already proves that signaling
+                // the serving child cleanly reaps the PyInstaller parent and
+                // releases SQLite. Keep a short settle time before rebind.
+                try await Task.sleep(for: .milliseconds(200))
                 return
             }
             try await Task.sleep(for: .milliseconds(100))
@@ -324,6 +296,7 @@ public final class DaemonLifecycleController: ObservableObject {
         case staleDaemonTerminationTimeout
         case exitedEarly(Int32)
         case startupTimeout(Data?)
+        case staleDaemonTerminationTimeout
     }
 
     private func sanitizedReason(_ error: Error) -> String {
@@ -344,6 +317,16 @@ public final class DaemonLifecycleController: ObservableObject {
             return "helper_exited_\(status)"
         case LifecycleError.startupTimeout(let data):
             return sanitizedStderr(data)
+        case LifecycleError.staleDaemonTerminationTimeout:
+            return "stale_daemon_termination_timeout"
+        case DaemonProcessOwnershipError.socketOwnerUnavailable:
+            return "stale_daemon_owner_unavailable"
+        case DaemonProcessOwnershipError.executableUnavailable:
+            return "stale_daemon_executable_unavailable"
+        case DaemonProcessOwnershipError.executableMismatch:
+            return "stale_daemon_identity_mismatch"
+        case DaemonProcessOwnershipError.signalFailed:
+            return "stale_daemon_signal_failed"
         default:
             return "startup_failed"
         }
