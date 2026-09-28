@@ -31,6 +31,9 @@ pao = "personal_ai_orchestrator.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Tests import shared fixtures as `tests.<module>`; make bare `pytest` work
+# the same as `python -m pytest` (which adds the cwd to sys.path).
+pythonpath = ["."]
 asyncio_mode = "auto"
 markers = [
   "flaky: opt-in retry decorator provided by pytest-rerunfailures; the daemon SIGINT shutdown race is the only known consumer in this repo.",
