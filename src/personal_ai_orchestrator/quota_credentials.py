@@ -17,8 +17,9 @@ Three credential contracts, deliberately kept apart
 
 Fixing quota by handing every provider credential to every child process would
 erase that separation, so resolution here is narrow: one explicitly permitted
-environment variable and one explicitly permitted entry in the OpenCode auth
-store, per provider surface.
+environment variable, explicit owner-managed PAO Keychain account(s), and one
+explicitly permitted entry in the OpenCode auth store, per provider surface.
+The Keychain path is opt-in and never inspects or copies Pi credential storage.
 
 Why the auth store is read at all
 ---------------------------------
@@ -44,12 +45,16 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping
+import subprocess
+import sys
+import threading
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 REDACTED = "***REDACTED***"
+OWNER_QUOTA_KEYCHAIN_SERVICE = "personal-ai-orchestrator.quota"
 
 #: Field names OpenCode uses for the credential inside an auth-store entry.
 _AUTH_STORE_KEY_FIELDS: tuple[str, ...] = ("key", "apiKey", "api_key", "token", "accessToken")
@@ -73,6 +78,10 @@ class CredentialSource(StrEnum):
     """Where a resolved quota credential came from. Sanitized; owner-facing."""
 
     ENVIRONMENT = "ENVIRONMENT"
+    #: Explicit owner authorization imported from the macOS app's Keychain for
+    #: this daemon session. The daemon never persists this value.
+    OWNER_SESSION = "OWNER_SESSION"
+    OWNER_KEYCHAIN = "OWNER_KEYCHAIN"
     OPENCODE_AUTH_STORE = "OPENCODE_AUTH_STORE"
     NONE = "NONE"
 
@@ -135,6 +144,10 @@ class QuotaCredentialSpec:
 
     provider_id: str
     env_var: str | None = None
+    #: Explicit owner-managed macOS Keychain accounts this quota surface may
+    #: read. This is intentionally separate from Pi execution authentication:
+    #: nothing here discovers, copies, or parses Pi credential storage.
+    owner_keychain_accounts: tuple[str, ...] = ()
     opencode_auth_provider_ids: tuple[str, ...] = ()
 
 
@@ -209,13 +222,51 @@ def _extract_secret(entry: object) -> SecretValue | None:
     return None
 
 
+def _read_owner_keychain_secret(account: str) -> SecretValue | None:
+    """Read one explicitly owner-managed macOS Keychain quota credential.
+
+    The secret is requested by stable service/account identity and captured
+    only in memory. It never appears in argv, logs, persisted PAO state, or
+    provider discovery. Non-macOS hosts and lookup failures simply return
+    ``None`` so test/Linux paths stay fail-closed.
+    """
+
+    if sys.platform != "darwin":
+        return None
+    security = Path("/usr/bin/security")
+    if not security.is_file():
+        return None
+    try:
+        completed = subprocess.run(
+            [
+                str(security),
+                "find-generic-password",
+                "-s",
+                OWNER_QUOTA_KEYCHAIN_SERVICE,
+                "-a",
+                account,
+                "-w",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    value = completed.stdout.rstrip("\r\n")
+    return SecretValue(value) if value else None
+
+
 class QuotaCredentialResolver:
     """Resolves the single credential one quota collector is allowed to use.
 
-    Resolution order is environment first, then the OpenCode auth store. The
-    environment wins because it is the explicit, per-run override an operator
-    or a test sets deliberately; the store is the standing fact about how the
-    owner signed in.
+    Resolution order is environment first, then the owner-managed PAO
+    Keychain, then the OpenCode auth store. The environment remains the
+    explicit per-run override; the Keychain is the owner's explicit quota-only
+    authorization; OpenCode is the existing standing provider credential.
     """
 
     def __init__(
@@ -224,12 +275,42 @@ class QuotaCredentialResolver:
         specs: Mapping[str, QuotaCredentialSpec],
         environ: Mapping[str, str] | None = None,
         auth_store_paths: tuple[Path, ...] | None = None,
+        owner_keychain_lookup: Callable[[str], SecretValue | None] | None = None,
     ) -> None:
         self._specs = dict(specs)
         self._environ = environ if environ is not None else os.environ
         self._auth_store_paths = (
             auth_store_paths if auth_store_paths is not None else default_opencode_auth_paths()
         )
+        self._owner_keychain_lookup = owner_keychain_lookup or _read_owner_keychain_secret
+        self._owner_session: dict[str, SecretValue] = {}
+        self._owner_lock = threading.RLock()
+
+    def authorize_owner_session(self, provider_id: str, credential: str) -> None:
+        """Authorize one read-only quota credential for this daemon session.
+
+        Persistence belongs to the owner-facing macOS Keychain. The daemon
+        deliberately keeps only a redacting :class:`SecretValue` in memory,
+        so SQLite/runtime JSON/evidence never become a second secret store.
+        """
+
+        if provider_id not in self._specs:
+            raise KeyError("unsupported_quota_provider")
+        if not credential:
+            raise ValueError("empty_quota_credential")
+        with self._owner_lock:
+            self._owner_session[provider_id] = SecretValue(credential)
+
+    def revoke_owner_session(self, provider_id: str) -> bool:
+        """Revoke only the explicit quota-telemetry authority."""
+
+        with self._owner_lock:
+            return self._owner_session.pop(provider_id, None) is not None
+
+    def owner_session_present(self, provider_id: str) -> bool:
+        with self._owner_lock:
+            secret = self._owner_session.get(provider_id)
+            return secret is not None and bool(secret)
 
     def resolve(self, provider_id: str) -> ResolvedQuotaCredential:
         spec = self._specs.get(provider_id)
@@ -247,6 +328,27 @@ class QuotaCredentialResolver:
                     provider_id=provider_id,
                     source=CredentialSource.ENVIRONMENT,
                     secret=SecretValue(value),
+                )
+
+        with self._owner_lock:
+            owner_secret = self._owner_session.get(provider_id)
+        if owner_secret is not None and bool(owner_secret):
+            return ResolvedQuotaCredential(
+                provider_id=provider_id,
+                source=CredentialSource.OWNER_SESSION,
+                secret=owner_secret,
+            )
+
+        for account in spec.owner_keychain_accounts:
+            try:
+                secret = self._owner_keychain_lookup(account)
+            except Exception:
+                secret = None
+            if secret is not None:
+                return ResolvedQuotaCredential(
+                    provider_id=provider_id,
+                    source=CredentialSource.OWNER_KEYCHAIN,
+                    secret=secret,
                 )
 
         for path in self._auth_store_paths:
@@ -276,6 +378,7 @@ class QuotaCredentialResolver:
 
 __all__ = [
     "REDACTED",
+    "OWNER_QUOTA_KEYCHAIN_SERVICE",
     "CredentialScope",
     "CredentialSource",
     "QuotaCredentialResolver",

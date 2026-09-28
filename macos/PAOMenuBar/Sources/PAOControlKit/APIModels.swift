@@ -45,6 +45,11 @@ public struct SupervisorStepView: Decodable, Equatable, Sendable {
 public struct HealthView: Decodable, Equatable, Sendable {
     public let status: String
     public let apiVersion: String
+    /// Exact daemon server pid + opaque per-process token. Optional so a
+    /// pre-identity daemon remains decodable; lifecycle replacement then
+    /// fails closed instead of broad-matching processes.
+    public let processId: Int32?
+    public let processInstanceId: String?
     public let lastTickAt: String?
     public let tickIntervalSeconds: Double?
     public let supervisorSteps: [SupervisorStepView]
@@ -56,6 +61,8 @@ public struct HealthView: Decodable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case status
         case apiVersion = "api_version"
+        case processId = "process_id"
+        case processInstanceId = "process_instance_id"
         case lastTickAt = "last_tick_at"
         case tickIntervalSeconds = "tick_interval_seconds"
         case supervisorSteps = "supervisor_steps"
@@ -66,6 +73,8 @@ public struct HealthView: Decodable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.status = try container.decode(String.self, forKey: .status)
         self.apiVersion = try container.decode(String.self, forKey: .apiVersion)
+        self.processId = try container.decodeIfPresent(Int32.self, forKey: .processId)
+        self.processInstanceId = try container.decodeIfPresent(String.self, forKey: .processInstanceId)
         self.lastTickAt = try container.decodeIfPresent(String.self, forKey: .lastTickAt)
         self.tickIntervalSeconds = try container.decodeIfPresent(Double.self, forKey: .tickIntervalSeconds)
         self.supervisorSteps = try container.decodeIfPresent([SupervisorStepView].self, forKey: .supervisorSteps) ?? []
@@ -522,7 +531,12 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
     public let runtimeId: String
     public let enabled: Bool
     public let executionVerified: Bool?
+    public let executionLaunchAuthorized: Bool?
+    public let executionVerificationObservedAt: String?
     public let executionVerifiedStale: Bool?
+    /// Canonical current launch authority from the daemon. Nil only when
+    /// talking to a pre-contract daemon; owner controls must then fail closed.
+    public let launchAuthorized: Bool?
     public let runtimeAvailable: Bool?
     public let observedAvailability: ObservedAvailabilityView?
     /// M1 WP2: capability tier for this target. ``nil`` means the
@@ -547,7 +561,10 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
 
     public var id: String { executionTargetId }
     public var isExecutionVerified: Bool { executionVerified ?? false }
+    public var isExecutionLaunchAuthorized: Bool { executionLaunchAuthorized ?? false }
     public var isExecutionVerifiedStale: Bool { executionVerifiedStale ?? false }
+    /// Fail closed when the daemon does not expose the canonical launch bit.
+    public var isLaunchAuthorized: Bool { launchAuthorized ?? false }
 
     enum CodingKeys: String, CodingKey {
         case executionTargetId = "execution_target_id"
@@ -555,7 +572,10 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
         case runtimeId = "runtime_id"
         case enabled
         case executionVerified = "execution_verified"
+        case executionLaunchAuthorized = "execution_launch_authorized"
+        case executionVerificationObservedAt = "execution_verification_observed_at"
         case executionVerifiedStale = "execution_verified_stale"
+        case launchAuthorized = "launch_authorized"
         case runtimeAvailable = "runtime_available"
         case observedAvailability = "observed_availability"
         case tier
@@ -570,7 +590,10 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
         runtimeId: String,
         enabled: Bool,
         executionVerified: Bool? = nil,
+        executionLaunchAuthorized: Bool? = nil,
+        executionVerificationObservedAt: String? = nil,
         executionVerifiedStale: Bool? = nil,
+        launchAuthorized: Bool? = nil,
         runtimeAvailable: Bool? = nil,
         observedAvailability: ObservedAvailabilityView? = nil,
         tier: String? = nil,
@@ -583,7 +606,10 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
         self.runtimeId = runtimeId
         self.enabled = enabled
         self.executionVerified = executionVerified
+        self.executionLaunchAuthorized = executionLaunchAuthorized
+        self.executionVerificationObservedAt = executionVerificationObservedAt
         self.executionVerifiedStale = executionVerifiedStale
+        self.launchAuthorized = launchAuthorized
         self.runtimeAvailable = runtimeAvailable
         self.observedAvailability = observedAvailability
         self.tier = tier
@@ -599,9 +625,16 @@ public struct ExecutionTargetHealthView: Codable, Equatable, Identifiable, Senda
         runtimeId = try container.decode(String.self, forKey: .runtimeId)
         enabled = try container.decode(Bool.self, forKey: .enabled)
         executionVerified = try container.decodeIfPresent(Bool.self, forKey: .executionVerified)
+        executionLaunchAuthorized = try container.decodeIfPresent(
+            Bool.self, forKey: .executionLaunchAuthorized
+        )
+        executionVerificationObservedAt = try container.decodeIfPresent(
+            String.self, forKey: .executionVerificationObservedAt
+        )
         executionVerifiedStale = try container.decodeIfPresent(
             Bool.self, forKey: .executionVerifiedStale
         )
+        launchAuthorized = try container.decodeIfPresent(Bool.self, forKey: .launchAuthorized)
         runtimeAvailable = try container.decodeIfPresent(Bool.self, forKey: .runtimeAvailable)
         observedAvailability = try container.decodeIfPresent(
             ObservedAvailabilityView.self, forKey: .observedAvailability

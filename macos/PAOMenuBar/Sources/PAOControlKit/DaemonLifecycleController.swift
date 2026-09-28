@@ -42,6 +42,21 @@ public enum DaemonLifecycleStatus: Equatable, Sendable {
     }
 }
 
+public struct DaemonProcessIdentity: Equatable, Sendable {
+    public let processId: Int32
+    public let instanceId: String
+
+    public init?(health: HealthView) {
+        guard let processId = health.processId,
+              processId > 1,
+              let instanceId = health.processInstanceId,
+              !instanceId.isEmpty
+        else { return nil }
+        self.processId = processId
+        self.instanceId = instanceId
+    }
+}
+
 @MainActor
 public final class DaemonLifecycleController: ObservableObject {
     @Published public private(set) var status: DaemonLifecycleStatus = .unknown {
@@ -55,6 +70,9 @@ public final class DaemonLifecycleController: ObservableObject {
     private let client: PAOControlClient
     private var ownedProcess: Process?
     private var startupTask: Task<Void, Never>?
+    /// Exact identity of the reachable daemon whose build was refused.
+    /// Never derived from argv/path/process-name matching.
+    private var refusedDaemonIdentity: DaemonProcessIdentity?
 
     public init(configuration: DaemonLaunchConfiguration, client: PAOControlClient) {
         self.configuration = configuration
@@ -95,7 +113,7 @@ public final class DaemonLifecycleController: ObservableObject {
                     return
                 }
                 if self.preexistingDaemonWasRefusedForBuild() {
-                    await self.terminateStaleHelpers()
+                    try await self.terminateStaleOwnedDaemon()
                 }
                 try await self.launchBundledDaemon()
             }
@@ -113,36 +131,47 @@ public final class DaemonLifecycleController: ObservableObject {
         return false
     }
 
-    /// Terminate daemon helpers left behind by an earlier app generation.
+    /// Terminate only the exact process serving our control socket.
     ///
-    /// Without this, every app rebuild strands the old helper: it keeps
-    /// serving from the unlinked socket inode while the new helper binds
-    /// the path — two processes writing one state database. Only this
-    /// bundle's own absolute helper path is ever signaled, so nothing
-    /// outside this app's product can be matched.
-    private func terminateStaleHelpers() async {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        process.arguments = ["-f", configuration.helperURL.path]
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            // Best effort: a failed cleanup must not block launching ours.
+    /// A command-line substring is not process ownership. Resolve the peer PID
+    /// from the connected Unix socket, verify that PID's executable is this
+    /// bundle's helper, then send exactly one SIGTERM. If any identity fact is
+    /// missing or disagrees, fail closed instead of risking an unrelated kill
+    /// or launching a second daemon against the same SQLite state.
+    private func terminateStaleOwnedDaemon() async throws {
+        let identity = try DaemonProcessOwnership.validatedSocketOwner(
+            socketPath: configuration.layout.socketPath,
+            expectedHelperPath: configuration.helperURL.path
+        )
+        try DaemonProcessOwnership.signalTermination(pid: identity.pid)
+
+        let deadline = Date().addingTimeInterval(10.0)
+        while Date() < deadline {
+            let processGone = !DaemonProcessOwnership.isAlive(pid: identity.pid)
+            let socketGone = !FileManager.default.fileExists(
+                atPath: configuration.layout.socketPath
+            )
+            if processGone && socketGone {
+                // The packaged-daemon acceptance already proves that signaling
+                // the serving child cleanly reaps the PyInstaller parent and
+                // releases SQLite. Keep a short settle time before rebind.
+                try await Task.sleep(for: .milliseconds(200))
+                return
+            }
+            try await Task.sleep(for: .milliseconds(100))
         }
-        // Give the exited helpers a moment to release the socket and
-        // sqlite handles before the new daemon binds the same path.
-        try? await Task.sleep(for: .milliseconds(500))
+        throw LifecycleError.staleDaemonTerminationTimeout
     }
 
     private func healthIsCompatible() async -> Bool {
         do {
             let health = try await client.health()
             guard health.isCompatible else {
+                refusedDaemonIdentity = nil
                 status = .versionMismatch(version: health.apiVersion)
                 return false
             }
-            return await buildIsCompatible()
+            return await buildIsCompatible(health: health)
         } catch {
             return false
         }
@@ -158,20 +187,26 @@ public final class DaemonLifecycleController: ObservableObject {
     /// Only a *known* mismatch is refused. When either side cannot state its
     /// commit, nothing can be concluded, and refusing on that basis would make
     /// an unstamped development build unable to start at all.
-    private func buildIsCompatible() async -> Bool {
+    private func buildIsCompatible(health: HealthView) async -> Bool {
         let daemonCommit: String?
         do {
             daemonCommit = try await client.build().commitSHA
         } catch {
             // A daemon that cannot answer /v1/build predates the endpoint;
-            // that is indeterminate, not a mismatch.
+            // that is indeterminate, not a mismatch. Do not retain an identity
+            // from an earlier failed comparison.
+            refusedDaemonIdentity = nil
             return true
         }
         let compatibility = BuildCompatibility.compare(
             app: BuildIdentity.current,
             daemonCommitSHA: daemonCommit
         )
-        guard case .mismatched(let app, let daemon) = compatibility else { return true }
+        guard case .mismatched(let app, let daemon) = compatibility else {
+            refusedDaemonIdentity = nil
+            return true
+        }
+        refusedDaemonIdentity = DaemonProcessIdentity(health: health)
         status = .buildMismatch(app: app, daemon: daemon)
         return false
     }
@@ -255,6 +290,10 @@ public final class DaemonLifecycleController: ObservableObject {
     private enum LifecycleError: Error {
         case helperMissing
         case lockUnavailable
+        case staleDaemonIdentityUnavailable
+        case staleDaemonIdentityChanged
+        case staleDaemonSignalFailed
+        case staleDaemonTerminationTimeout
         case exitedEarly(Int32)
         case startupTimeout(Data?)
     }
@@ -265,10 +304,26 @@ public final class DaemonLifecycleController: ObservableObject {
             return "helper_missing"
         case LifecycleError.lockUnavailable:
             return "startup_lock_unavailable"
+        case LifecycleError.staleDaemonIdentityUnavailable:
+            return "stale_daemon_identity_unavailable"
+        case LifecycleError.staleDaemonIdentityChanged:
+            return "stale_daemon_identity_changed"
+        case LifecycleError.staleDaemonSignalFailed:
+            return "stale_daemon_signal_failed"
+        case LifecycleError.staleDaemonTerminationTimeout:
+            return "stale_daemon_termination_timeout"
         case LifecycleError.exitedEarly(let status):
             return "helper_exited_\(status)"
         case LifecycleError.startupTimeout(let data):
             return sanitizedStderr(data)
+        case DaemonProcessOwnershipError.socketOwnerUnavailable:
+            return "stale_daemon_owner_unavailable"
+        case DaemonProcessOwnershipError.executableUnavailable:
+            return "stale_daemon_executable_unavailable"
+        case DaemonProcessOwnershipError.executableMismatch:
+            return "stale_daemon_identity_mismatch"
+        case DaemonProcessOwnershipError.signalFailed:
+            return "stale_daemon_signal_failed"
         default:
             return "startup_failed"
         }

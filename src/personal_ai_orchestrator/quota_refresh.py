@@ -116,6 +116,10 @@ class QuotaSourceSpec:
     #: signed in. An explicit allowlist keeps that fallback narrow.
     opencode_auth_provider_ids: tuple[str, ...]
     factory: Callable[[SecretValue, str], QuotaCollector]
+    #: Stable account ids in PAO's owner-managed Keychain namespace. These
+    #: authorize read-only quota collection only; they are not Pi execution
+    #: credentials and are never populated by inspecting Pi storage.
+    owner_keychain_accounts: tuple[str, ...] = ()
 
 
 def _zai_collector(token: SecretValue, quota_pool_id: str) -> QuotaCollector:
@@ -144,6 +148,7 @@ QUOTA_SOURCES: tuple[QuotaSourceSpec, ...] = (
         credential_env_var="ZAI_API_KEY",
         opencode_auth_provider_ids=("zai-coding-plan", "zai", "z-ai", "z.ai"),
         factory=_zai_collector,
+        owner_keychain_accounts=("zai-coding-plan",),
     ),
     QuotaSourceSpec(
         provider_id="minimax-cn",
@@ -153,6 +158,7 @@ QUOTA_SOURCES: tuple[QuotaSourceSpec, ...] = (
         credential_env_var="MINIMAX_API_KEY",
         opencode_auth_provider_ids=("minimax-cn", "minimax-cn-coding-plan"),
         factory=_minimax_cn_collector,
+        owner_keychain_accounts=("minimax-cn-coding-plan",),
     ),
     QuotaSourceSpec(
         provider_id="minimax-cn-coding-plan",
@@ -162,6 +168,7 @@ QUOTA_SOURCES: tuple[QuotaSourceSpec, ...] = (
         credential_env_var="MINIMAX_API_KEY",
         opencode_auth_provider_ids=("minimax-cn-coding-plan", "minimax-cn"),
         factory=_minimax_cn_collector,
+        owner_keychain_accounts=("minimax-cn-coding-plan",),
     ),
     QuotaSourceSpec(
         provider_id="minimax",
@@ -171,6 +178,7 @@ QUOTA_SOURCES: tuple[QuotaSourceSpec, ...] = (
         credential_env_var="MINIMAX_API_KEY",
         opencode_auth_provider_ids=("minimax", "minimax-coding-plan"),
         factory=_minimax_global_collector,
+        owner_keychain_accounts=("minimax-coding-plan",),
     ),
     QuotaSourceSpec(
         provider_id="minimax-coding-plan",
@@ -180,17 +188,21 @@ QUOTA_SOURCES: tuple[QuotaSourceSpec, ...] = (
         credential_env_var="MINIMAX_API_KEY",
         opencode_auth_provider_ids=("minimax-coding-plan", "minimax"),
         factory=_minimax_global_collector,
+        owner_keychain_accounts=("minimax-coding-plan",),
     ),
 )
 
 #: The credential references each surface is permitted to read. This *is* the
-#: quota credential contract (§26): it names one environment variable and one
-#: set of auth-store entries per surface, and nothing else. Discovery still runs
-#: with credential values stripped, and execution auth is unaffected.
+#: quota credential contract (§26): it names one environment variable, explicit
+#: owner-managed PAO Keychain account(s), and one set of OpenCode auth-store
+#: entries per surface, and nothing else. Discovery still runs with credential
+#: values stripped, Pi storage is never inspected, and execution auth is
+#: unaffected.
 QUOTA_CREDENTIAL_SPECS: Mapping[str, QuotaCredentialSpec] = {
     spec.provider_id: QuotaCredentialSpec(
         provider_id=spec.provider_id,
         env_var=spec.credential_env_var,
+        owner_keychain_accounts=spec.owner_keychain_accounts,
         opencode_auth_provider_ids=spec.opencode_auth_provider_ids,
     )
     for spec in QUOTA_SOURCES
@@ -466,6 +478,27 @@ class QuotaRefreshService:
     # ------------------------------------------------------------------
     # Write path
     # ------------------------------------------------------------------
+
+    def authorize_owner_credential(self, provider_id: str, credential: str) -> None:
+        """Install an explicit read-only quota credential in memory only."""
+
+        self._credentials.authorize_owner_session(provider_id, credential)
+        with self._lock:
+            self._credential_source[provider_id] = CredentialSource.OWNER_SESSION.value
+
+    def revoke_owner_credential(self, provider_id: str) -> bool:
+        """Remove only the owner-session quota credential.
+
+        Execution/Pi authentication is a separate authority and is untouched.
+        """
+
+        removed = self._credentials.revoke_owner_session(provider_id)
+        with self._lock:
+            self._credential_source.pop(provider_id, None)
+        return removed
+
+    def owner_credential_present(self, provider_id: str) -> bool:
+        return self._credentials.owner_session_present(provider_id)
 
     def refresh(self, provider_id: str | None = None) -> tuple[QuotaProviderObservation, ...]:
         """Collect quota for one or all connected providers.

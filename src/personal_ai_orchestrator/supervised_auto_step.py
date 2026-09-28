@@ -151,6 +151,10 @@ _EVIDENCE_FRESH_SECONDS = 7 * 86_400
 _AUTO_OK_QUOTA_STATES = {
     QuotaAvailabilityState.AVAILABLE_OBSERVED,
     QuotaAvailabilityState.AVAILABLE_UNMETERED,
+    # Strong positive evidence after proven exhaustion is a recovered,
+    # host-observed capacity state. Keep the state distinct for audit while
+    # admitting it wherever ordinary observed quota is safe for AUTO.
+    QuotaAvailabilityState.RECOVERED_OBSERVED,
 }
 
 #: Post-RUNNING terminal states whose auto metadata is inert (§32): the

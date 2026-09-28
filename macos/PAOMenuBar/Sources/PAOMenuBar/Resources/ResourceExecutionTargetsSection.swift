@@ -41,10 +41,10 @@ struct ResourceExecutionTargetsSection: View {
 struct ExecutionTargetRow: View {
     let target: ExecutionTargetHealthView
 
-    /// Enabled *and* execution-verified. Either alone is not a runnable target,
-    /// and reporting one as the other would offer the owner a target the
-    /// scheduler would refuse.
-    private var isRunnable: Bool { target.enabled && target.isExecutionVerified }
+    /// Current daemon launch authority. Historical VERIFIED evidence remains
+    /// visible in Advanced, but it cannot make an age-expired or latest-failed
+    /// target appear runnable.
+    private var isRunnable: Bool { target.isExecutionLaunchAuthorized }
 
     /// M1 WP2: SF Symbol for the tier chip. ``bolt`` (T0), ``gear``
     /// (T1), ``hare`` (T2), ``leaf`` (T3). ``questionmark.circle``

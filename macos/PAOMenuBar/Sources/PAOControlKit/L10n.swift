@@ -193,6 +193,13 @@ public enum L10n {
         "quota.plan.otherScopes", "quota.plan.otherScopesFooter",
         "quota.reason.noEntries", "quota.reason.fieldsUnavailable",
         "quota.reason.notInterpretable", "quota.reason.credentialMissing",
+        "quota.credentials.title", "quota.credentials.explanation",
+        "quota.credentials.authorized", "quota.credentials.none",
+        "quota.credentials.accessibilityAuthorized", "quota.credentials.placeholder",
+        "quota.credentials.save", "quota.credentials.revoke",
+        "quota.credentials.footer", "quota.credentials.notice.saved",
+        "quota.credentials.notice.saveFailed", "quota.credentials.notice.revoked",
+        "quota.credentials.notice.revokeFailed",
         "quota.reason.authRequired", "quota.reason.rateLimited", "quota.reason.providerError",
         "quota.reason.notConnected", "detail.currentPhase", "detail.elapsed", "detail.stop",
         "detail.stop.help", "detail.filesChanged", "detail.noWorktree",
@@ -1107,6 +1114,25 @@ public enum L10n {
         tr("quota.plan.otherScopesFooter")
     }
     public static var quotaPlanCredentialSource: String { tr("quota.plan.credentialSource") }
+    public static var quotaCredentialsTitle: String { tr("quota.credentials.title") }
+    public static var quotaCredentialsExplanation: String { tr("quota.credentials.explanation") }
+    public static var quotaCredentialAuthorized: String { tr("quota.credentials.authorized") }
+    public static var quotaCredentialNone: String { tr("quota.credentials.none") }
+    public static var quotaCredentialAccessibilityAuthorized: String {
+        tr("quota.credentials.accessibilityAuthorized")
+    }
+    public static var quotaCredentialPlaceholder: String { tr("quota.credentials.placeholder") }
+    public static var quotaCredentialSave: String { tr("quota.credentials.save") }
+    public static var quotaCredentialRevoke: String { tr("quota.credentials.revoke") }
+    public static var quotaCredentialsFooter: String { tr("quota.credentials.footer") }
+    public static var quotaCredentialSaved: String { tr("quota.credentials.notice.saved") }
+    public static var quotaCredentialSaveFailed: String {
+        tr("quota.credentials.notice.saveFailed")
+    }
+    public static var quotaCredentialRevoked: String { tr("quota.credentials.notice.revoked") }
+    public static var quotaCredentialRevokeFailed: String {
+        tr("quota.credentials.notice.revokeFailed")
+    }
     public static var quotaPlanUnitLabel: String { tr("quota.plan.unitLabel") }
     public static var quotaPlanConsumedLabel: String { tr("quota.plan.consumedLabel") }
     public static var quotaPlanSamplesLabel: String { tr("quota.plan.samplesLabel") }

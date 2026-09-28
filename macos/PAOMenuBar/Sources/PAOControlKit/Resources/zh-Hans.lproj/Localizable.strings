@@ -516,6 +516,19 @@
 "quota.credential.environment" = "环境变量";
 "quota.credential.authStore" = "OpenCode 登录凭据";
 "quota.credential.none" = "不可用";
+"quota.credentials.title" = "额度 API 凭据";
+"quota.credentials.explanation" = "执行登录与额度遥测相互独立。PAO 绝不会复制 Pi 登录信息。只有在 Pi 可以运行模型、但额度仍为 UNKNOWN 时，才在此添加提供商 API 凭据。";
+"quota.credentials.authorized" = "已授权额度凭据";
+"quota.credentials.none" = "没有 PAO 额度凭据";
+"quota.credentials.accessibilityAuthorized" = "已授权";
+"quota.credentials.placeholder" = "提供商 API 凭据";
+"quota.credentials.save" = "存入钥匙串";
+"quota.credentials.revoke" = "撤销";
+"quota.credentials.footer" = "该凭据仅用于只读额度采集。添加或撤销它不会更改 Pi 执行身份验证。";
+"quota.credentials.notice.saved" = "额度凭据已存入 macOS 钥匙串。";
+"quota.credentials.notice.saveFailed" = "无法将额度凭据存入 macOS 钥匙串。";
+"quota.credentials.notice.revoked" = "额度凭据已撤销，Pi 执行身份验证未发生变化。";
+"quota.credentials.notice.revokeFailed" = "无法从 macOS 钥匙串撤销额度凭据。";
 
 /* P4.2.6.5.1 workload-scope projection: which provider scope the coding
    dashboard reads, and why an observed scope is absent from it */

@@ -28,6 +28,11 @@ from personal_ai_orchestrator.execution_controller import (
     apply_verification_result,
     begin_verification,
 )
+from personal_ai_orchestrator.execution_evidence import (
+    ExecutionEvidenceJournal,
+    ExecutionVerificationOutcome,
+    build_execution_evidence,
+)
 from personal_ai_orchestrator.model_registry import (
     Account,
     CapabilityProfile,
@@ -235,6 +240,12 @@ def test_health_roundtrip(harness):
     health = harness.client.health()
     assert health.status == "ok"
     assert health.api_version == "v1"
+    assert health.process_id == os.getpid()
+    assert len(health.process_instance_id) >= 16
+    # One daemon process keeps one opaque identity across reads.
+    again = harness.client.health()
+    assert again.process_id == health.process_id
+    assert again.process_instance_id == health.process_instance_id
 
 
 def test_socket_is_permission_restricted(harness):
@@ -1151,9 +1162,42 @@ def test_provider_health_is_sanitized(harness):
     target = provider.execution_targets[0]
     assert target.execution_target_id == "m3-sub"
     assert target.runtime_available is True
+    assert target.execution_verified is True
+    assert target.execution_verified_stale is False
+    assert target.launch_authorized is True
+    assert target.execution_verification_observed_at is None
     assert target.observed_availability is not None
     assert target.observed_availability.state == "UNKNOWN"
     assert target.observed_availability.confidence == EvidenceConfidence.UNKNOWN.value
+
+
+def test_provider_health_keeps_expired_verified_history_but_denies_launch(harness) -> None:
+    now = datetime.now(UTC)
+    target = harness.service.registry.execution_targets["m3-sub"].model_copy(
+        update={"execution_verified": False}
+    )
+    harness.service.registry = harness.service.registry.model_copy(
+        update={"execution_targets": {"m3-sub": target}}
+    )
+    journal = ExecutionEvidenceJournal(harness.tmp_path / "execution-runtime")
+    observed = now - timedelta(days=31)
+    journal.append(
+        build_execution_evidence(
+            provider_id="minimax",
+            execution_target_id="m3-sub",
+            model_sku_id="m3",
+            observed_at=observed,
+            result=ExecutionVerificationOutcome.VERIFIED,
+            reason_code="TEST_EXPIRED_VERIFIED",
+        )
+    )
+    harness.service.execution_evidence_journal = journal
+
+    target_view = harness.client.providers().providers[0].execution_targets[0]
+    assert target_view.execution_verified is True
+    assert target_view.execution_verified_stale is True
+    assert target_view.launch_authorized is False
+    assert target_view.execution_verification_observed_at == observed.isoformat()
 
 
 def test_quota_is_connection_based_not_pool_based(harness):

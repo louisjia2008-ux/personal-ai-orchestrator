@@ -32,6 +32,9 @@ from personal_ai_orchestrator.dispatch_recommender import (
     DispatchRecommendation,
     recommend_owner_dispatch,
 )
+from personal_ai_orchestrator.execution_controller import (
+    execution_target_has_launch_verification,
+)
 from personal_ai_orchestrator.model_tiers import ModelTier
 from personal_ai_orchestrator.quota_availability import QuotaAvailabilityState
 from personal_ai_orchestrator.runtime_quota_routing import (
@@ -143,7 +146,12 @@ class DispatchRecommendationService:
             else:
                 runtime_available = self._runtime_availability_fallback(target_id)
 
-            verified = False
+            verified = execution_target_has_launch_verification(
+                registry,
+                execution_target_id=target_id,
+                execution_evidence_journal=self._execution_evidence_journal,
+                now=now,
+            )
             verified_stale = False
             evidence_observed_at: datetime | None = None
             if self._execution_evidence_journal is not None:
@@ -154,9 +162,11 @@ class DispatchRecommendationService:
                 except Exception:
                     verified_evidence, stale_since = None, None
                 if verified_evidence is not None:
-                    verified = True
                     evidence_observed_at = verified_evidence.observed_at
-                    verified_stale = stale_since is not None
+                    # Keep historical VERIFIED evidence visible for diagnostics,
+                    # but mark demote-fallback and age expiry stale. The
+                    # launch-safe verified bit above remains fail-closed.
+                    verified_stale = stale_since is not None or not verified
 
             availability_state = QuotaAvailabilityState.UNKNOWN
             if self._quota_availability_journal is not None:

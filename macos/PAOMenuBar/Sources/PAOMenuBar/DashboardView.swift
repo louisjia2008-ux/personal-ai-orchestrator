@@ -915,7 +915,8 @@ private struct ClientSettingsSection: View {
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            DashboardCard(title: L10n.ownerExecutionSetting, symbol: "person.badge.key") {
+            QuotaCredentialSettingsCard()
+                        DashboardCard(title: L10n.ownerExecutionSetting, symbol: "person.badge.key") {
                 let enabled = store.ownerExecutionSettings?.ownerInitiatedExecutionEnabled ?? false
                 Toggle(L10n.ownerExecutionToggle, isOn: Binding(
                     get: { enabled },

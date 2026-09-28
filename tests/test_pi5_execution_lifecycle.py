@@ -201,6 +201,7 @@ def test_daemon_injects_same_router_and_host_recommendation(tmp_path, enabled):
         pi_runtime_manager=lambda: object(),
         set_verified_execution_lookup=lambda _: None,
         connected_provider_ids=lambda: (),
+        routing_connected_provider_ids=lambda: (),
         runtime_available=lambda _: True,
     )
     kwargs = {"pi_runtime": PiRuntimeConfig(delegation_enabled=True)} if enabled else {}
