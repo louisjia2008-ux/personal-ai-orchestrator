@@ -544,7 +544,7 @@ class OwnerDispatchExecutor:
                     durable_run_created=True,
                 ),
             )
-            self._emergency_repair(
+            await self._emergency_repair_and_reap(
                 store,
                 request_id,
                 dispatch,
@@ -693,7 +693,7 @@ class OwnerDispatchExecutor:
         except Exception as error:
             # Final executor safety net after RUNNING was granted: kill
             # the exact child and fail the run/task/dispatch/lock closed.
-            self._emergency_repair(
+            await self._emergency_repair_and_reap(
                 store,
                 request_id,
                 dispatch,
@@ -1077,6 +1077,41 @@ class OwnerDispatchExecutor:
                 ),
             )
         except Exception:
+            pass
+
+    async def _emergency_repair_and_reap(
+        self,
+        store: SafetyKernelStore,
+        request_id: str,
+        dispatch: OwnerDispatchRecord,
+        supervised: SupervisedProcess,
+        run_id: str,
+        writer_token: str,
+        *,
+        error: BaseException | None = None,
+    ) -> None:
+        """Repair durable state and wait until the killed child is reaped.
+
+        Ordinary async failure paths can guarantee that no child remains
+        observable after ``execute_async`` returns. The synchronous repair
+        remains available to the cancellation/loop-teardown path, where an
+        additional await could itself be cancelled.
+        """
+
+        self._emergency_repair(
+            store,
+            request_id,
+            dispatch,
+            supervised,
+            run_id,
+            writer_token,
+            error=error,
+        )
+        try:
+            await supervised.process.wait()
+        except Exception:
+            # Durable state has already been repaired fail-closed. A process
+            # implementation that cannot be awaited must not prevent cleanup.
             pass
 
     def _open_store(self) -> SafetyKernelStore:
