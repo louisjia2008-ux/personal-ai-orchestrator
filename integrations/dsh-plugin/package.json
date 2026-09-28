@@ -4,6 +4,9 @@
   "description": "Jev quota-aware model dispatch for DeepSeek Harness: live pool probes (ZAI/MiniMax token plans, DeepSeek prepaid balance), burn-first weekly-quota maximization, per-turn routing via the agent/request waterfall.",
   "type": "module",
   "main": "index.js",
+  "scripts": {
+    "test": "node --test dispatch.test.js"
+  },
   "files": ["index.js", "dispatch.js", "cordis.patch.yml", "README.md"],
   "keywords": ["dsh-plugin"],
   "license": "MIT",

@@ -23,6 +23,7 @@ const CONFIDENCE_FLOOR = 0.45;
 const DEFER_THRESHOLD = 0.6;
 const POOL_MIN_BALANCE_CNY = 1.0;
 const PRO_MIN_BALANCE_CNY = 10.0;
+const UNKNOWN_TIER_SCORE = 3; // no usable Jev tier → never downgrade quality
 
 const ZAI_QUOTA_URL = "https://api.z.ai/api/monitor/usage/quota/limit";
 const MM_QUOTA_URL = "https://api.minimaxi.com/v1/token_plan/remains";
@@ -334,43 +335,87 @@ function deterministicPick(admitted, score) {
   })[0];
 }
 
-function applyPolicy(admitted, answers) {
-  const route = answers.route;
-  const tierScore = answers.task_tier.score;
-  let decision = route.choice;
-  let mode = "jev";
-  let reason = `jev choice (confidence ${route.confidence.toFixed(2)})`;
+const targetId = (c) => `dsh:${c.target.tid}`;
 
-  if (route.confidence < CONFIDENCE_FLOOR) {
-    const pick = deterministicPick(admitted, tierScore);
-    decision = `dsh:${pick.target.tid}`;
+function finite(x) {
+  return typeof x === "number" && Number.isFinite(x) ? x : null;
+}
+
+/**
+ * Validate Jev's answers. Returns null when the route answer is unusable;
+ * a missing tier score degrades to the conservative T3 floor and a missing
+ * noul disables defer advice.
+ */
+function readAnswers(body) {
+  const a = body?.answers;
+  const choice = a?.route?.choice;
+  const confidence = finite(a?.route?.confidence);
+  if (typeof choice !== "string" || confidence === null) return null;
+  return {
+    choice,
+    confidence,
+    tierScore: finite(a?.task_tier?.score) ?? UNKNOWN_TIER_SCORE,
+    noul: finite(a?.defer_acceptable?.noul),
+  };
+}
+
+/** Decision without Jev: unknown task tier → assume T3 so quality is never downgraded. */
+export function fallbackPolicy(admitted, cause) {
+  const pick = deterministicPick(admitted, UNKNOWN_TIER_SCORE);
+  return {
+    decision: targetId(pick),
+    target: pick.target,
+    mode: "jev_unavailable",
+    reason: `jev unavailable (${cause}) → burn-first deterministic fallback at T3 floor`,
+    tierScore: null,
+    confidence: null,
+    deferAdvice: null,
+  };
+}
+
+export function applyPolicy(admitted, body) {
+  const answers = readAnswers(body);
+  if (!answers) return fallbackPolicy(admitted, "malformed answers");
+  const { choice, confidence, tierScore, noul } = answers;
+
+  let chosen = admitted.find((c) => targetId(c) === choice);
+  let mode = "jev";
+  let reason = `jev choice (confidence ${confidence.toFixed(2)})`;
+
+  if (!chosen) {
+    chosen = deterministicPick(admitted, tierScore);
+    mode = "invalid_choice";
+    reason = `jev chose ${JSON.stringify(choice)}, not an admitted target → burn-first deterministic fallback`;
+  } else if (confidence < CONFIDENCE_FLOOR) {
+    chosen = deterministicPick(admitted, tierScore);
     mode = "fallback_policy";
-    reason = `jev confidence ${route.confidence.toFixed(2)} below floor → burn-first deterministic fallback`;
+    reason = `jev confidence ${confidence.toFixed(2)} below floor → burn-first deterministic fallback`;
   }
 
   const floor = tierFloor(tierScore);
-  const chosen = admitted.find((c) => `dsh:${c.target.tid}` === decision);
-  if (chosen && chosen.target.tier < floor) {
+  if (chosen.target.tier < floor) {
     const pick = deterministicPick(admitted, tierScore);
-    decision = `dsh:${pick.target.tid}`;
-    mode = "policy_override";
-    reason = `jev chose T${chosen.target.tier} for a T${floor} task → tier floor enforced in code`;
+    if (pick !== chosen) {
+      reason = `jev chose T${chosen.target.tier} for a T${floor} task → tier floor enforced in code`;
+      mode = "policy_override";
+      chosen = pick;
+    }
   }
 
-  const finalPick = admitted.find((c) => `dsh:${c.target.tid}` === decision);
   const deferAdvice =
-    (finalPick?.windows ?? []).some((w) => w.pressure === "CRITICAL") &&
-    answers.defer_acceptable.noul > DEFER_THRESHOLD
-      ? `chosen pool is CRITICAL-pressed and deferral looks acceptable (noul ${answers.defer_acceptable.noul.toFixed(2)}) → consider queueing until reset`
+    (chosen.windows ?? []).some((w) => w.pressure === "CRITICAL") &&
+    noul !== null &&
+    noul > DEFER_THRESHOLD
+      ? `chosen pool is CRITICAL-pressed and deferral looks acceptable (noul ${noul.toFixed(2)}) → consider queueing until reset`
       : null;
 
   return {
-    decision,
-    target: finalPick.target,
+    decision: targetId(chosen),
+    target: chosen.target,
     mode,
     reason,
     tierScore,
-    confidence: route.confidence,
+    confidence,
     deferAdvice,
   };
 }
@@ -426,12 +471,17 @@ export async function dispatchTask(prompt, { keys, providers } = {}) {
     task: { source: "dsh", prompt },
     now: new Date().toISOString(),
     economics: "burn-first: maximize utilization of paid weekly quota; paygo is last resort",
-    candidates: admitted.map((c) => candidateView(c, c.windows, ds?.balance ?? null)),
+    candidates: admitted.map((c) => candidateView(c.target, c.windows, ds?.balance ?? null)),
     excluded_by_hard_gates: gates,
   };
 
-  const body = await jevAsk(state, buildQuestions(admitted, ds?.balance ?? null), apiKey);
-  const policy = applyPolicy(admitted, body.answers);
+  let policy;
+  try {
+    const body = await jevAsk(state, buildQuestions(admitted, ds?.balance ?? null), apiKey);
+    policy = applyPolicy(admitted, body);
+  } catch (e) {
+    policy = fallbackPolicy(admitted, String(e?.message ?? e).slice(0, 200));
+  }
 
   return {
     ...policy,
