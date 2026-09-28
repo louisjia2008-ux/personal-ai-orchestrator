@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/louisjia2008-ux/personal-ai-orchestrator/security/advisories/new
+    about: Report vulnerabilities privately; never post credentials in an issue.

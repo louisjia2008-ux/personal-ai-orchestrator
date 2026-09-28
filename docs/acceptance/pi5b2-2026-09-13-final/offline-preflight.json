@@ -1,5 +1,5 @@
 {
-  "FIXTURE_REPO": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/fixture",
+  "FIXTURE_REPO": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/fixture",
   "BASE_SHA": "0431845631c193ef9c1a63108cc2a954d44ea827",
   "MAIN_HEAD_BEFORE": "0431845631c193ef9c1a63108cc2a954d44ea827",
   "MAIN_STATUS_BEFORE": "",

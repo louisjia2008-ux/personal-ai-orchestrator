@@ -81,6 +81,7 @@ class ApprovalAuthority:
         approval_id: str,
         *,
         approved: bool,
+        request_id: str | None = None,
     ) -> ApprovalRecord:
         target = ApprovalStatus.APPROVED if approved else ApprovalStatus.REJECTED
         self.store.connection.execute("BEGIN IMMEDIATE")
@@ -107,7 +108,12 @@ class ApprovalAuthority:
             self.store._audit(
                 current.task_id,
                 "APPROVAL_RESOLVED",
-                {"approval_id": approval_id, "kind": current.kind.value, "status": target.value},
+                {
+                    "approval_id": approval_id,
+                    "kind": current.kind.value,
+                    "status": target.value,
+                    **({"request_id": request_id} if request_id is not None else {}),
+                },
             )
             self.store.connection.execute("COMMIT")
         except Exception:

@@ -69,14 +69,14 @@
   "workspaces": [
     {
       "task_id": "pi5b2-final-parent",
-      "worktree_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent",
+      "worktree_path": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/pi5b2-final-parent",
       "base_sha": "0431845631c193ef9c1a63108cc2a954d44ea827",
       "writer_released": true,
       "writer_acquired_at_cleared": true
     },
     {
       "task_id": "pi5-child-fde92b4ef8466950ec06",
-      "worktree_path": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pi5b2-real-acceptance-20260913-final/worktrees/pi5-child-fde92b4ef8466950ec06",
+      "worktree_path": "/tmp/pao-acceptance/pi5b2-real-acceptance-20260913-final/worktrees/pi5-child-fde92b4ef8466950ec06",
       "base_sha": "0431845631c193ef9c1a63108cc2a954d44ea827",
       "writer_released": true,
       "writer_acquired_at_cleared": true

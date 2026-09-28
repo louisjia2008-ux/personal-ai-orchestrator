@@ -4,10 +4,10 @@
   "bootloader_pid": 71945,
   "app_pid": 71928,
   "argv": [
-    "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-product-main-64a45a3/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon"
+    "/tmp/pao-acceptance/pao-product-main-64a45a3/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon"
   ],
   "cwd": "/Users/<user>/Library/Application Support/Personal AI Orchestrator",
-  "binary": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-product-main-64a45a3/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon",
+  "binary": "/tmp/pao-acceptance/pao-product-main-64a45a3/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon",
   "binary_sha256": "979658a25f506ee19275afca7c36bbdc88e05f5d53cd26f4ca7edb42bbe76930",
   "build": {
     "api_version": "v1",

@@ -5,7 +5,7 @@
 The currently executed semantic gate is **not repository-owned production
 code**. It is `validate_dynamic_child_scope` in the external campaign host:
 
-`/Volumes/Taoruide外接/AI LLM TOOLS/pi5b3g-real-campaign-execution-20260913/run_campaign.py:82-114`
+`/tmp/pao-acceptance/pi5b3g-real-campaign-execution-20260913/run_campaign.py:82-114`
 
 It combines Python regex/substring checks with structured fields already
 validated by Pydantic. It is not a parser, AST, polarity-aware phrase matcher,

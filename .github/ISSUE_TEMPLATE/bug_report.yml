@@ -1,0 +1,50 @@
+name: Bug report
+description: Report a reproducible PAO defect without including credentials or private data.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: Do not paste credentials, auth files, private paths, or raw provider transcripts. Use GitHub Security Advisories for vulnerabilities.
+  - type: input
+    id: commit
+    attributes:
+      label: Exact commit
+      placeholder: 40-character Git SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - Python core / CLI
+        - OpenCode / dispatch adapter
+        - macOS client / widget
+        - Telegram / DeskPet bridge
+        - Provider / quota integration
+        - Documentation / packaging
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include sanitized inputs, expected result, actual result, and which gate was observed.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and relevant tool versions. Do not include usernames or personal paths.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials, auth data, private paths, and personal content.
+          required: true
+        - label: I did not reinterpret UNKNOWN or an unobserved gate as success.
+          required: true

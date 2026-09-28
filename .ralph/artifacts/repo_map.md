@@ -4,13 +4,13 @@ Observed 2026-09-14 (Asia/Shanghai), before source edits.
 
 ## Repository and integration base
 
-- Repository root: `/Volumes/Taoruide外接/AI LLM TOOLS/pao-daemon-graceful-sigterm`.
+- Repository root: `/tmp/pao-acceptance/pao-daemon-graceful-sigterm`.
 - Branch: `fix/pao-daemon-graceful-sigterm`.
 - Baseline: `3f15e6de8b03f190cb43c25890151f56e55ffd29`, the exact head of Draft PR #53, `feat/pi-delegation-real-shadow-campaign-05b3g`.
 - `origin/main`: `01646ebe435b9fd5ae607506d3b3c64241e517e1` after a normal fetch.
 - Baseline is 50 commits ahead of `origin/main` and contains merged PI-5B2 plus PI-5B3A–G lineage.
 - The old deployed build commit `64a45a3adaafb42cac2c6a55a3ac0db31c06f059` is an ancestor of the baseline.
-- Original evidence and detached production worktrees were clean and left unchanged. The dirty outer `/Volumes/Taoruide外接` repository is out of scope.
+- Original evidence and detached production worktrees were clean and left unchanged. The dirty outer `/tmp/pao-acceptance` repository is out of scope.
 
 ## Exact signal and cleanup path
 

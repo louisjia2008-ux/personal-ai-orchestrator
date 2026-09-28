@@ -34,7 +34,7 @@
     "helper_sha256": "2fd4500fb62110e3b9b83ce4265e8cb56a8d8aecdfd1f9b6318629cf6580e127",
     "architecture": "arm64",
     "codesign": "PASS_ADHOC_STRICT_AND_DEEP",
-    "app_path": "/Volumes/Taoruide外接/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app"
+    "app_path": "/tmp/pao-acceptance/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app"
   },
   "canonical_acceptance": {
     "initial_parent_pid": 20261,

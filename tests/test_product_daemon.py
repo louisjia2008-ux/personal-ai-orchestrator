@@ -116,6 +116,28 @@ def test_default_product_config_is_credential_free_setup_required() -> None:
     assert config.catalog_snapshot_id == "product-bootstrap-empty-registry-v1"
 
 
+def test_product_daemon_credential_check_delegates_without_bootstrap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import personal_ai_orchestrator.product_daemon as product_daemon
+
+    captured: list[list[str]] = []
+
+    def _fake_daemon_main(argv, *, provider_registry_manager=None):
+        assert provider_registry_manager is None
+        captured.append(argv)
+        return 0
+
+    def _unexpected_bootstrap(*_args, **_kwargs):
+        raise AssertionError("credential diagnostic must not bootstrap runtime state")
+
+    monkeypatch.setattr(product_daemon, "daemon_main", _fake_daemon_main)
+    monkeypatch.setattr(product_daemon, "bootstrap_application_support", _unexpected_bootstrap)
+
+    assert product_daemon.main(["--quota-credential-check", "zai-coding-plan"]) == 0
+    assert captured == [["--quota-credential-check", "zai-coding-plan"]]
+
+
 def test_product_daemon_builds_control_only_daemon_argv() -> None:
     layout = default_application_support_layout(Path("/Users/example"))
     argv = build_daemon_argv(layout, host="127.0.0.1", port=8765)

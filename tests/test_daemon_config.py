@@ -1,8 +1,10 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
+from personal_ai_orchestrator import daemon as daemon_module
 from personal_ai_orchestrator.daemon import (
     build_control_service,
     build_service,
@@ -10,6 +12,7 @@ from personal_ai_orchestrator.daemon import (
 )
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
+from personal_ai_orchestrator.quota_credentials import CredentialSource
 from personal_ai_orchestrator.runtime_config import RuntimeConfig
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
 from personal_ai_orchestrator.scheduler import TaskProfile
@@ -130,3 +133,42 @@ def test_runtime_config_rejects_unknown_target_refs() -> None:
             registry=ModelRegistry(),
             runtime_availability={"missing-target": True},
         )
+
+
+def test_quota_credential_check_emits_presence_without_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canary = "fixture-secret-must-not-render"
+
+    class FakeResolver:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def resolve(self, provider_id: str):
+            assert provider_id == "zai-coding-plan"
+            return SimpleNamespace(
+                present=True,
+                source=CredentialSource.OWNER_KEYCHAIN,
+                secret=canary,
+            )
+
+    monkeypatch.setattr(daemon_module, "QuotaCredentialResolver", FakeResolver)
+    result = daemon_module.main(
+        [
+            "--config",
+            "unused.json",
+            "--state-db",
+            "unused.sqlite3",
+            "--runtime-state-root",
+            "unused-state",
+            "--quota-credential-check",
+            "zai-coding-plan",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert canary not in output
+    assert '"present": true' in output
+    assert '"source": "OWNER_KEYCHAIN"' in output

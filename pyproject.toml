@@ -28,6 +28,7 @@ macos-package = [
 
 [project.scripts]
 pao = "personal_ai_orchestrator.cli:main"
+pao-client-bridge = "personal_ai_orchestrator.client_cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1225,7 +1225,7 @@ def test_active_status_fail_closed(harness):
     assert "P3.5 Shadow evidence not accepted" in view.blocking_reasons
 
 
-def test_approvals_read_only(harness):
+def test_approvals_are_listed_and_only_existing_records_can_be_resolved(harness):
     harness.store.submit_task(task_id="task-a", request_id="req-a", intent="approval")
     authority = ApprovalAuthority(harness.store)
     authority.request(
@@ -1240,6 +1240,38 @@ def test_approvals_read_only(harness):
     single = harness.client.get_approval("approval-1")
     assert single.kind == ApprovalKind.HIGH_RISK_EXECUTION.value
 
+    resolved = harness.client.resolve_approval(
+        "approval-1",
+        request_id="client-approval-1",
+        approved=True,
+    )
+    assert resolved.status == "APPROVED"
+
+    # A duplicate client message is idempotent; it cannot create a second
+    # approval or second resolution transition.
+    replayed = harness.client.resolve_approval(
+        "approval-1",
+        request_id="client-approval-1",
+        approved=True,
+    )
+    assert replayed == resolved
+    assert [
+        event["event_type"]
+        for event in harness.store.audit_events("task-a")
+        if event["event_type"] == "APPROVAL_RESOLVED"
+    ] == ["APPROVAL_RESOLVED"]
+
+    with pytest.raises(ControlPlaneError) as conflicting:
+        harness.client.resolve_approval(
+            "approval-1",
+            request_id="client-approval-opposite",
+            approved=False,
+        )
+    assert conflicting.value.status == 409
+    assert conflicting.value.code == "approval_already_resolved"
+
+    # The client can never create a new approval; only the host Safety Kernel
+    # can put an approval record into PENDING.
     status, body = _raw_request(
         harness.socket_path,
         "POST",

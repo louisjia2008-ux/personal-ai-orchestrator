@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "helper": "/Volumes/Taoruide\u5916\u63a5/AI LLM TOOLS/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon",
+  "helper": "/tmp/pao-acceptance/pao-daemon-graceful-sigterm/macos/PAOMenuBar/dist/Personal AI Orchestrator.app/Contents/Helpers/pao-daemon",
   "home": "/private/tmp/pao-packaged-02aef3uo",
   "cycles_requested": 5,
   "routes": [

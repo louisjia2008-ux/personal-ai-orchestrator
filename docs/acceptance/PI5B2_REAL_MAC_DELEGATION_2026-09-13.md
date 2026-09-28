@@ -54,7 +54,7 @@ actual Pi tool activation. No repair or further model budget is implied here.
 | PARENT_RUN_ID | `run-owner-dispatch-pi5b2-real-parent-dispatch` |
 | PARENT_DISPATCH_ID | `owner-dispatch-pi5b2-real-parent-dispatch` |
 | PARENT_POLICY | BALANCED, non-MANUAL |
-| PARENT_WORKTREE | `/Volumes/Taoruide外接/AI LLM TOOLS/pi5b2-real-acceptance-20260913/worktrees/pi5b2-real-parent` |
+| PARENT_WORKTREE | `/tmp/pao-acceptance/pi5b2-real-acceptance-20260913/worktrees/pi5b2-real-parent` |
 | BROKER_SOCKET_PERMISSIONS | `0600`; private directory `0700` |
 | BROKER_ACTIVATED_AFTER_DURABLE_RUNNING | YES; see observed ordering below |
 | DELEGATION_REQUEST_COUNT | 0 |
@@ -91,7 +91,7 @@ actual Pi tool activation. No repair or further model budget is implied here.
 ## Frozen fixture, verifiers, and timing
 
 `FIXTURE_REPO` is
-`/Volumes/Taoruide外接/AI LLM TOOLS/pi5b2-real-acceptance-20260913/fixture`.
+`/tmp/pao-acceptance/pi5b2-real-acceptance-20260913/fixture`.
 `BASE_SHA` and `MAIN_HEAD_BEFORE` are
 `7bb8752a7a73207bc7d3863645fec8a2b159e0ba`; `MAIN_STATUS_BEFORE` was empty.
 The empty source checkout stayed unchanged; the host allocated a separate linked

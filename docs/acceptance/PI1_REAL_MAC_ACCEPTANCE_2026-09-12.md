@@ -110,7 +110,7 @@ remains the only Pi behavior tested here, and it has not changed.
 ## Sanitized baseline sanity (no Pi involved)
 
 Run from the acceptance worktree
-(`/Volumes/Taoruide外接/pi1-mac-acceptance`,
+(`/tmp/pao-acceptance/pi1-mac-acceptance`,
 branch `pi1-mac-acceptance`, tracking
 `origin/feat/pi-runtime-spike-01`,
 HEAD `44747c0af52c5a28e5b7ef420526aea8411eb7e8`):

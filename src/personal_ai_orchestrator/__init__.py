@@ -1,6 +1,3 @@
-"""Personal AI Orchestrator.
-
-The package is intentionally minimal while ACP feasibility and safety boundaries are validated.
-"""
+"""Personal AI Orchestrator safety kernel and resource scheduler."""
 
 __version__ = "0.0.1"

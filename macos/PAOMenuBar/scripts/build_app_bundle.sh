@@ -75,11 +75,15 @@ cat > "${DAEMON_STAMP_DIR}/_build_stamp.json" <<STAMP
 }
 STAMP
 
-"${PYTHON}" -m PyInstaller \
+# Force the checkout source ahead of any editable install carried by the
+# packaging interpreter.  ``--paths`` alone is appended after interpreter
+# paths and can otherwise freeze a different checkout of the same package.
+PYTHONPATH="${REPO_DIR}/src" "${PYTHON}" -m PyInstaller \
   --clean \
   --noconfirm \
   --onefile \
   --name pao-daemon \
+  --paths "${REPO_DIR}/src" \
   --distpath "${DAEMON_DIST}" \
   --workpath "${DAEMON_BUILD}" \
   --specpath "${DAEMON_SPEC}" \

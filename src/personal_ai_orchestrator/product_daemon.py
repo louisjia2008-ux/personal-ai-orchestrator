@@ -33,6 +33,7 @@ from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryM
 from personal_ai_orchestrator.provider_registry_store import (
     EMPTY_BOOTSTRAP_SNAPSHOT_ID,
 )
+from personal_ai_orchestrator.quota_refresh import QUOTA_CREDENTIAL_SPECS
 from personal_ai_orchestrator.runtime_config import (
     ApplicationSupportLayout,
     RuntimeConfig,
@@ -106,6 +107,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--host", default="127.0.0.1", choices=("127.0.0.1", "::1", "localhost"))
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument(
+        "--quota-credential-check",
+        choices=tuple(sorted(QUOTA_CREDENTIAL_SPECS)),
+        default=None,
+        help=(
+            "read one allowlisted quota credential source and exit with sanitized "
+            "presence/provenance JSON; never boots the daemon or calls a provider"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -226,6 +236,8 @@ def ensure_execution_policies(
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.quota_credential_check is not None:
+        return daemon_main(["--quota-credential-check", args.quota_credential_check])
     try:
         layout = bootstrap_application_support(
             default_product_config(),
