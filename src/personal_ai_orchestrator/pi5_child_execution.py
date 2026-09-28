@@ -44,6 +44,13 @@ from personal_ai_orchestrator.safety_kernel import (
 from personal_ai_orchestrator.scheduler import RoutingObjective
 
 _TERMINAL = frozenset({"VERIFIED", "BLOCKED", "FAILED", "CANCELLED", "COMPLETED"})
+_TERMINAL_DISPATCH = frozenset(
+    {
+        OwnerDispatchStatus.FINISHED,
+        OwnerDispatchStatus.BLOCKED,
+        OwnerDispatchStatus.CANCELLED,
+    }
+)
 _QUOTA_PAIR_MISSING = "comparable_quota_before_after_not_captured"
 
 
@@ -92,14 +99,32 @@ class PAODelegationChildPort:
         plan: DelegationChildPlan,
         state: str,
         target: str | None = None,
+        *,
+        lifecycle_complete: bool = True,
     ) -> DelegationChildResult:
         # No worker prose is needed to communicate deterministic child truth.
         return DelegationChildResult(
             child_task_id=plan.child_task_id,
             final_state=state,
             selected_execution_target_id=target,
-            verified=state == "VERIFIED",
+            verified=state == "VERIFIED" and lifecycle_complete,
         )
+
+    @staticmethod
+    def _execution_cleanup_complete(
+        store: SafetyKernelStore,
+        task_id: str,
+        dispatch_status: OwnerDispatchStatus,
+    ) -> bool:
+        """Return true only after terminal dispatch and writer cleanup agree."""
+
+        if dispatch_status not in _TERMINAL_DISPATCH:
+            return False
+        try:
+            return store.get_workspace(task_id).writer_token is None
+        except KeyError:
+            # Pre-worker failures can finish without creating a workspace.
+            return True
 
     @staticmethod
     def _block(store: SafetyKernelStore, task_id: str) -> None:
@@ -532,25 +557,29 @@ class PAODelegationChildPort:
             deadline = asyncio.get_running_loop().time() + self.timeout_seconds
             while True:
                 child = store.get_task(plan.child_task_id)
-                if child.state.value in _TERMINAL:
+                dispatch = store.get_owner_dispatch_by_request_id(request_id)
+                if child.state.value in _TERMINAL and self._execution_cleanup_complete(
+                    store,
+                    child.task_id,
+                    dispatch.status,
+                ):
                     return self._finish_result(
                         store=store,
                         plan=plan,
                         state=child.state.value,
                         target=target,
                     )
-                dispatch = store.get_owner_dispatch_by_request_id(request_id)
                 if dispatch.status is OwnerDispatchStatus.BLOCKED:
                     self._block(store, child.task_id)
-                    return self._finish_result(
-                        store=store,
-                        plan=plan,
-                        state="BLOCKED",
-                        target=target,
-                    )
                 if asyncio.get_running_loop().time() >= deadline:
-                    # Timeout is non-verification, never a fabricated terminal state.
-                    return self._result(plan, child.state.value, target)
+                    # Timeout is non-verification, never a fabricated terminal
+                    # state or an assertion that lifecycle cleanup completed.
+                    return self._result(
+                        plan,
+                        child.state.value,
+                        target,
+                        lifecycle_complete=False,
+                    )
                 await asyncio.sleep(self.poll_seconds)
         finally:
             store.close()

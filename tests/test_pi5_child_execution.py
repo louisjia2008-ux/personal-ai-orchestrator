@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -319,6 +321,36 @@ async def test_fake_child_pipeline_reaches_lineage_ownership_and_protocol(tmp_pa
             ).fetchone()[0]
             == 1
         )
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_verified_child_waits_for_writer_and_dispatch_cleanup(tmp_path, monkeypatch):
+    store, _, port, plan, _, _, _ = _setup_campaign_lineage(tmp_path, monkeypatch)
+    release_started = threading.Event()
+    allow_release = threading.Event()
+    original_release = SafetyKernelStore.release_writer
+
+    def delayed_release(child_store, task_id, writer_token):
+        if task_id == plan.child_task_id:
+            release_started.set()
+            assert allow_release.wait(timeout=5)
+        return original_release(child_store, task_id, writer_token)
+
+    monkeypatch.setattr(SafetyKernelStore, "release_writer", delayed_release)
+    execution = asyncio.create_task(port.execute_child(plan))
+    try:
+        assert await asyncio.to_thread(release_started.wait, 5)
+        await asyncio.sleep(0.1)
+        assert not execution.done()
+    finally:
+        allow_release.set()
+
+    result = await execution
+    try:
+        assert result.verified
+        assert store.get_workspace(plan.child_task_id).writer_token is None
     finally:
         store.close()
 
