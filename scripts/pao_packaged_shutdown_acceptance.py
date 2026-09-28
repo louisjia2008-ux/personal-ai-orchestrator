@@ -76,11 +76,7 @@ def _wait_for_child(parent_pid: int, *, deadline: float) -> dict[str, Any]:
 
 
 def _health(socket_path: Path) -> dict[str, Any]:
-    request = (
-        b"GET /v1/health HTTP/1.1\r\n"
-        b"Host: localhost\r\n"
-        b"Connection: close\r\n\r\n"
-    )
+    request = b"GET /v1/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(2.0)
         connection.connect(str(socket_path))
@@ -187,11 +183,7 @@ def _run_cycle(
 ) -> dict[str, Any]:
     socket_path = home / "Library" / "Caches" / "Personal AI Orchestrator" / "control.sock"
     database = (
-        home
-        / "Library"
-        / "Application Support"
-        / "Personal AI Orchestrator"
-        / "state.sqlite3"
+        home / "Library" / "Application Support" / "Personal AI Orchestrator" / "state.sqlite3"
     )
     stdout_path = home / f"cycle-{cycle_number:02d}.stdout.log"
     stderr_path = home / f"cycle-{cycle_number:02d}.stderr.log"
@@ -219,9 +211,7 @@ def _run_cycle(
         target_pid = process.pid if route == "parent" else child["pid"]
         signalled_at = time.monotonic()
         os.kill(target_pid, signal.SIGTERM)
-        returncode = _wait_for_exit(
-            process, deadline=signalled_at + timeout_seconds
-        )
+        returncode = _wait_for_exit(process, deadline=signalled_at + timeout_seconds)
 
     child_after = _process_row(child["pid"])
     parent_after = _process_row(process.pid)
@@ -296,25 +286,19 @@ def main() -> int:
                     timeout_seconds=args.timeout_seconds,
                 )
             )
-            args.evidence.write_text(
-                json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
-            )
+            args.evidence.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
     except Exception as error:
         evidence["result"] = "FAIL"
         evidence["error_type"] = type(error).__name__
         evidence["error"] = str(error)
-        args.evidence.write_text(
-            json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
-        )
+        args.evidence.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
         raise
 
     evidence["cycles_passed"] = len(evidence["cycles"])
     evidence["parent_route_passes"] = sum(
         cycle["route"] == "parent" for cycle in evidence["cycles"]
     )
-    evidence["child_route_passes"] = sum(
-        cycle["route"] == "child" for cycle in evidence["cycles"]
-    )
+    evidence["child_route_passes"] = sum(cycle["route"] == "child" for cycle in evidence["cycles"])
     evidence["result"] = "PASS"
     args.evidence.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(evidence, indent=2))

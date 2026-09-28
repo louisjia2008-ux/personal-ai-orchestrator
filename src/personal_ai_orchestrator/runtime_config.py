@@ -38,8 +38,7 @@ class RuntimeConfig(BaseModel):
         unknown_telemetry = set(self.telemetry) - target_ids
         if unknown_runtime:
             raise ValueError(
-                "runtime_availability references unknown targets: "
-                f"{sorted(unknown_runtime)}"
+                f"runtime_availability references unknown targets: {sorted(unknown_runtime)}"
             )
         if unknown_telemetry:
             raise ValueError(f"telemetry references unknown targets: {sorted(unknown_telemetry)}")

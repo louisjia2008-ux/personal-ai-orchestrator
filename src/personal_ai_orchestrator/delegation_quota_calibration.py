@@ -59,9 +59,7 @@ class DelegationQuotaCalibrationJournal:
         self.directory = Path(root) / "delegation-quota-calibration"
 
     def path_for(self, observation_id: str) -> Path:
-        if not observation_id or any(
-            part in observation_id for part in ("/", "\\", "..")
-        ):
+        if not observation_id or any(part in observation_id for part in ("/", "\\", "..")):
             raise ValueError("unsafe delegation quota observation id")
         return self.directory / f"{observation_id}.json"
 
@@ -74,9 +72,7 @@ class DelegationQuotaCalibrationJournal:
                 target.read_text(encoding="utf-8")
             )
             if existing != record:
-                raise ValueError(
-                    "delegation quota baseline identity already has different content"
-                )
+                raise ValueError("delegation quota baseline identity already has different content")
             return target
         self.directory.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=self.directory)
@@ -99,9 +95,7 @@ class DelegationQuotaCalibrationJournal:
         path = self.path_for(observation_id)
         if not path.exists():
             return None
-        return DelegationQuotaBaselineRecord.model_validate_json(
-            path.read_text(encoding="utf-8")
-        )
+        return DelegationQuotaBaselineRecord.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 def _snapshot_windows(snapshot: Any) -> tuple[DelegationQuotaWindowBaseline, ...] | None:
@@ -218,12 +212,10 @@ def compare_quota_after(
             reason=QuotaPairComparisonReason.IMPRECISE_WINDOW,
         )
     before_keys = tuple(
-        (window.window_id, window.window_kind, window.reset_at)
-        for window in baseline.windows
+        (window.window_id, window.window_kind, window.reset_at) for window in baseline.windows
     )
     after_keys = tuple(
-        (window.window_id, window.window_kind, window.reset_at)
-        for window in after_windows
+        (window.window_id, window.window_kind, window.reset_at) for window in after_windows
     )
     if before_keys != after_keys:
         return DelegationQuotaPairResult(

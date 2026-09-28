@@ -112,9 +112,7 @@ def write_worker_script(
         )
     else:
         script.write_text(
-            "#!/bin/sh\n"
-            f"printf '%s\\n' '{body}' > hello.txt\n"
-            f"exit {exit_code}\n",
+            f"#!/bin/sh\nprintf '%s\\n' '{body}' > hello.txt\nexit {exit_code}\n",
             encoding="utf-8",
         )
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
@@ -193,9 +191,7 @@ def exhausted_result() -> QuotaCollectionResult:
         confidence=EvidenceConfidence.ESTIMATED,
         source=source,
     )
-    return QuotaCollectionResult(
-        status=QuotaCollectionStatus.SUCCESS, snapshot=snapshot
-    )
+    return QuotaCollectionResult(status=QuotaCollectionStatus.SUCCESS, snapshot=snapshot)
 
 
 def available_result() -> QuotaCollectionResult:
@@ -215,9 +211,7 @@ def available_result() -> QuotaCollectionResult:
         confidence=EvidenceConfidence.ESTIMATED,
         source=source,
     )
-    return QuotaCollectionResult(
-        status=QuotaCollectionStatus.SUCCESS, snapshot=snapshot
-    )
+    return QuotaCollectionResult(status=QuotaCollectionStatus.SUCCESS, snapshot=snapshot)
 
 
 class ExecutorHarness:
@@ -342,9 +336,7 @@ def test_worker_permission_config_seeded_into_worktree(tmp_path: Path) -> None:
         opencode_bin=harness.executor.config.opencode_bin,
         verifier_profile=VerifierProfile(
             name="seeded",
-            commands=(
-                VerifierCommand(name="hello-exists", argv=("test", "-f", "hello.txt")),
-            ),
+            commands=(VerifierCommand(name="hello-exists", argv=("test", "-f", "hello.txt")),),
             allowed_paths=("hello.txt", "opencode.json"),
         ),
         worker_permission_config=policy,
@@ -407,9 +399,7 @@ def test_successful_dispatch_reaches_verified_with_durable_evidence(
     assert evidence.result.value == "VERIFIED"
     assert evidence.verification_method.value == "REAL_WORKER_INVOCATION"
     # UNKNOWN quota semantics stay durable and truthful even without a collector.
-    quota = QuotaAvailabilityJournal(harness.runtime_root).load(
-        "zai-coding-plan-glm-5.3"
-    )
+    quota = QuotaAvailabilityJournal(harness.runtime_root).load("zai-coding-plan-glm-5.3")
     assert quota is not None
     assert quota.state.value == "UNKNOWN"
     assert quota.confidence.value == "UNKNOWN"
@@ -451,9 +441,7 @@ def test_post_create_spawn_adapter_failure_is_diagnosed_and_reaped(
             next(item for item in [] if item)
             return process
 
-    worker = write_worker_script(
-        tmp_path / "bin", name="post-create-worker", sleep_seconds=30.0
-    )
+    worker = write_worker_script(tmp_path / "bin", name="post-create-worker", sleep_seconds=30.0)
     harness = ExecutorHarness(tmp_path, worker_bin=worker)
     supervisor = BrokenAccountingSupervisor()
     harness.executor._supervisor = supervisor
@@ -544,9 +532,7 @@ def test_happy_path_records_spawn_state_machine(tmp_path: Path) -> None:
 
     snapshot = harness.snapshot()
     try:
-        events = [
-            event["event_type"] for event in snapshot["store"].audit_events("task-1")
-        ]
+        events = [event["event_type"] for event in snapshot["store"].audit_events("task-1")]
         stages = [
             "WORKER_ARGV_BUILT",
             "PROCESS_CREATE_STARTED",
@@ -656,12 +642,8 @@ def test_protocol_bootstrap_failure_records_started_not_completed(tmp_path: Path
     snapshot = harness.snapshot()
     try:
         events = snapshot["store"].audit_events("task-1")
-        assert any(
-            event["event_type"] == "PROTOCOL_BOOTSTRAP_STARTED" for event in events
-        )
-        assert not any(
-            event["event_type"] == "PROTOCOL_BOOTSTRAP_COMPLETED" for event in events
-        )
+        assert any(event["event_type"] == "PROTOCOL_BOOTSTRAP_STARTED" for event in events)
+        assert not any(event["event_type"] == "PROTOCOL_BOOTSTRAP_COMPLETED" for event in events)
         assert snapshot["task"].state is TaskState.BLOCKED
         assert snapshot["run_status"] == "FAILED"
         assert snapshot["writer_token"] is None
@@ -744,9 +726,7 @@ def test_writer_lock_conflict_blocks(tmp_path: Path) -> None:
 
         base_sha = _git(harness.main_repo, "rev-parse", "HEAD")
         manager = WorktreeManager(harness.worktree_root)
-        managed = manager.create(
-            repo_path=harness.main_repo, task_id="task-1", base_sha=base_sha
-        )
+        managed = manager.create(repo_path=harness.main_repo, task_id="task-1", base_sha=base_sha)
         store.register_workspace(
             task_id="task-1",
             repo_path=str(managed.repo_path),
@@ -770,9 +750,7 @@ def test_writer_lock_conflict_blocks(tmp_path: Path) -> None:
 
 def test_quota_exhausted_blocks_billable_launch(tmp_path: Path) -> None:
     harness = ExecutorHarness(tmp_path)
-    harness.executor._quota_collectors["zai-coding-plan"] = FakeCollector(
-        exhausted_result()
-    )
+    harness.executor._quota_collectors["zai-coding-plan"] = FakeCollector(exhausted_result())
     request_id = harness.reserve()
     harness.run(request_id)
 
@@ -863,9 +841,7 @@ def test_quota_uncertain_locked_blocks_after_three_consecutive_failures(
             previous=streak,
         )
         journal.save(streak)
-    assert streak.state_at(now=datetime.now(UTC)) is (
-        QuotaAvailabilityState.UNCERTAIN_LOCKED
-    )
+    assert streak.state_at(now=datetime.now(UTC)) is (QuotaAvailabilityState.UNCERTAIN_LOCKED)
 
     request_id = harness.reserve()
     harness.run(request_id)
@@ -937,9 +913,7 @@ def test_quota_require_quota_certainty_false_does_not_relax_uncertain_locked(
     evidence = journal.load("zai-coding-plan-glm-5.3")
     assert evidence is not None
     assert evidence.consecutive_failures >= UNCERTAIN_LOCKED_THRESHOLD
-    assert evidence.state_at(now=datetime.now(UTC)) is (
-        QuotaAvailabilityState.UNCERTAIN_LOCKED
-    )
+    assert evidence.state_at(now=datetime.now(UTC)) is (QuotaAvailabilityState.UNCERTAIN_LOCKED)
 
 
 def test_quota_unknown_collector_growth_stays_locked_without_relaxation(
@@ -986,9 +960,7 @@ def test_quota_unknown_collector_growth_stays_locked_without_relaxation(
     evidence = journal.load("zai-coding-plan-glm-5.3")
     assert evidence is not None
     assert evidence.consecutive_failures == UNCERTAIN_LOCKED_THRESHOLD
-    assert evidence.state_at(now=datetime.now(UTC)) is (
-        QuotaAvailabilityState.UNCERTAIN_LOCKED
-    )
+    assert evidence.state_at(now=datetime.now(UTC)) is (QuotaAvailabilityState.UNCERTAIN_LOCKED)
     assert evidence.confidence is EvidenceConfidence.UNKNOWN
 
 
@@ -1021,9 +993,7 @@ def test_quota_uncertain_locked_clears_after_successful_collector_run(
         journal.save(streak)
     # A successful collector produces observe_success() which writes a
     # 0-streak AVAILABLE row and drops the lock.
-    harness.executor._quota_collectors["zai-coding-plan"] = FakeCollector(
-        available_result()
-    )
+    harness.executor._quota_collectors["zai-coding-plan"] = FakeCollector(available_result())
     request_id = harness.reserve()
     harness.run(request_id)
 
@@ -1036,9 +1006,7 @@ def test_quota_uncertain_locked_clears_after_successful_collector_run(
     evidence = journal.load("zai-coding-plan-glm-5.3")
     assert evidence is not None
     assert evidence.consecutive_failures == 0
-    assert evidence.state_at(now=datetime.now(UTC)) is (
-        QuotaAvailabilityState.AVAILABLE_OBSERVED
-    )
+    assert evidence.state_at(now=datetime.now(UTC)) is (QuotaAvailabilityState.AVAILABLE_OBSERVED)
 
 
 def test_quota_two_failures_still_admits_below_threshold(tmp_path: Path) -> None:
@@ -1067,9 +1035,7 @@ def test_quota_two_failures_still_admits_below_threshold(tmp_path: Path) -> None
         journal.save(streak)
     assert streak.state_at(now=datetime.now(UTC)) is QuotaAvailabilityState.UNKNOWN
 
-    harness.executor._quota_collectors["zai-coding-plan"] = FakeCollector(
-        available_result()
-    )
+    harness.executor._quota_collectors["zai-coding-plan"] = FakeCollector(available_result())
     request_id = harness.reserve()
     harness.run(request_id)
 
@@ -1082,9 +1048,7 @@ def test_quota_two_failures_still_admits_below_threshold(tmp_path: Path) -> None
 
 def test_quota_available_collector_admits_and_is_journaled(tmp_path: Path) -> None:
     harness = ExecutorHarness(tmp_path)
-    harness.executor._quota_collectors["zai-coding-plan"] = FakeCollector(
-        available_result()
-    )
+    harness.executor._quota_collectors["zai-coding-plan"] = FakeCollector(available_result())
     request_id = harness.reserve()
     harness.run(request_id)
 
@@ -1124,9 +1088,7 @@ def test_missing_verifier_profile_fails_closed(tmp_path: Path) -> None:
 def test_running_invariant_holds_during_execution(tmp_path: Path) -> None:
     harness = ExecutorHarness(
         tmp_path,
-        worker_bin=write_worker_script(
-            tmp_path / "bin", name="slow-worker", sleep_seconds=5.0
-        ),
+        worker_bin=write_worker_script(tmp_path / "bin", name="slow-worker", sleep_seconds=5.0),
     )
     request_id = harness.reserve()
 
@@ -1166,9 +1128,7 @@ def test_internal_executor_error_after_running_emergency_repairs_state(
 ) -> None:
     harness = ExecutorHarness(
         tmp_path,
-        worker_bin=write_worker_script(
-            tmp_path / "bin", name="repair-worker", sleep_seconds=30.0
-        ),
+        worker_bin=write_worker_script(tmp_path / "bin", name="repair-worker", sleep_seconds=30.0),
     )
     request_id = harness.reserve()
 
@@ -1204,9 +1164,7 @@ def test_emergency_repair_persists_signal_in_run_result_json(tmp_path: Path) -> 
 
     harness = ExecutorHarness(
         tmp_path,
-        worker_bin=write_worker_script(
-            tmp_path / "bin", name="signal-worker", sleep_seconds=30.0
-        ),
+        worker_bin=write_worker_script(tmp_path / "bin", name="signal-worker", sleep_seconds=30.0),
     )
     request_id = harness.reserve()
 
@@ -1290,9 +1248,7 @@ def test_full_product_path_over_http_with_cancellation(tmp_path: Path) -> None:
 
     harness = ExecutorHarness(
         tmp_path,
-        worker_bin=write_worker_script(
-            tmp_path / "bin", name="long-worker", sleep_seconds=30.0
-        ),
+        worker_bin=write_worker_script(tmp_path / "bin", name="long-worker", sleep_seconds=30.0),
     )
     socket_dir = Path(tempfile.mkdtemp(prefix="pao-exec-"))
     socket_path = socket_dir / "control.sock"
@@ -1304,9 +1260,7 @@ def test_full_product_path_over_http_with_cancellation(tmp_path: Path) -> None:
         runtime_availability={"zai-coding-plan-glm-5.3": True},
         verification_journal=VerificationEvidenceJournal(harness.runtime_root),
         quota_availability_journal=QuotaAvailabilityJournal(harness.runtime_root),
-        owner_execution=OwnerExecutionSettings(
-            tmp_path / "owner-execution.json", initial=True
-        ),
+        owner_execution=OwnerExecutionSettings(tmp_path / "owner-execution.json", initial=True),
         execution_evidence_journal=harness.execution_evidence,
         dispatch_executor=harness.executor,
     )
@@ -1393,9 +1347,7 @@ def test_execution_probe_establishes_verified_only_on_real_success(
 
     # A later failing probe is newer adverse evidence: the target must
     # not remain launch-verified.
-    failing_bin = write_worker_script(
-        tmp_path, name="probe-fail", exit_code=7
-    )
+    failing_bin = write_worker_script(tmp_path, name="probe-fail", exit_code=7)
     rendered_fail = run_execution_probe(
         opencode_bin=str(failing_bin),
         provider_id="zai-coding-plan",
@@ -1548,9 +1500,7 @@ def test_host_result_envelope_carries_sanitized_transcript_tails() -> None:
     ).encode()
     big = b"x" * (WORKER_TRANSCRIPT_TAIL_BYTES + 4096) + b"|TAIL-MARK|"
 
-    envelope = executor._host_result_envelope(
-        0, stdout=b"", stderr=big + noisy, truncated=True
-    )
+    envelope = executor._host_result_envelope(0, stdout=b"", stderr=big + noisy, truncated=True)
 
     assert envelope["stdout_bytes"] == 0
     assert envelope["stderr_bytes"] == len(big) + len(noisy)

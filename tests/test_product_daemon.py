@@ -392,6 +392,7 @@ def test_product_daemon_upgraded_install_bootstraps_missing_pi_once(
     assert pi_calls[0] == 1
     assert "pi-zai-coding-plan-glm-5.3" in manager.registry().execution_targets
 
+
 def test_product_daemon_explicit_refresh_discovers_exactly_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -472,15 +473,20 @@ def test_product_daemon_bootstraps_runtime_and_serves_control_plane() -> None:
     # fabricated active control state.  Opening the DB here is a real
     # post-cleanup check, not an assertion against the old connection.
     with sqlite3.connect(layout.state_db) as connection:
-        assert connection.execute("SELECT count(*) FROM tasks WHERE state='RUNNING'").fetchone()[
-            0
-        ] == 0
-        assert connection.execute("SELECT count(*) FROM runs WHERE finished_at IS NULL").fetchone()[
-            0
-        ] == 0
-        assert connection.execute(
-            "SELECT count(*) FROM workspaces WHERE writer_token IS NOT NULL"
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute("SELECT count(*) FROM tasks WHERE state='RUNNING'").fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute("SELECT count(*) FROM runs WHERE finished_at IS NULL").fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM workspaces WHERE writer_token IS NOT NULL"
+            ).fetchone()[0]
+            == 0
+        )
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
 
     # The exact same daemon and state location must immediately restart.  A

@@ -168,9 +168,7 @@ def test_unlike_tasks_are_not_pooled_into_one_average() -> None:
     """Averaging a one-line fix with a twenty-file refactor is how a plausible
     number becomes a wrong one."""
 
-    mixed = samples(10, 10, 10, task_class="small") + samples(
-        400, 400, task_class="large"
-    )
+    mixed = samples(10, 10, 10, task_class="small") + samples(400, 400, task_class="large")
 
     result = estimate(sample_list=mixed, task_class="small")
 

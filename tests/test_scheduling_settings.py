@@ -257,9 +257,7 @@ def test_update_scheduling_settings_legacy_payload_without_mode(
         )
 
         # Legacy caller: only sends the policy field.
-        result = service.update_scheduling_settings(
-            {"default_scheduling_policy": "QUALITY_FIRST"}
-        )
+        result = service.update_scheduling_settings({"default_scheduling_policy": "QUALITY_FIRST"})
         assert result.mode == "SUPERVISED_AUTO"  # unchanged
         assert result.default_scheduling_policy == "QUALITY_FIRST"
     finally:

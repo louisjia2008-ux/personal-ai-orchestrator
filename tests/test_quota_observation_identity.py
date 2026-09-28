@@ -1,4 +1,5 @@
 """PI 5B2.2: cold-process quota identity regression. No provider/worker calls."""
+
 from __future__ import annotations
 
 import json
@@ -58,31 +59,49 @@ def offline(monkeypatch):
 
 
 def _registry():
-    return build_pi_registry(PiDiscoveryResult(
-        discovered_at=NOW, pi_path="fixture-only-never-executed", pi_version="fixture",
-        state=PiDiscoveryState.DISCOVERED,
-        providers=(PiProviderDiscovery(
-            provider_id=PROVIDER, runtime_provider_id="minimax-cn", display_name="MiniMax CN",
-            auth_status=PiAuthStatus.READY, model_skus=("MiniMax-M3", "MiniMax-M2.7"),
-            observed_at=NOW,
-        ),),
-    ))
+    return build_pi_registry(
+        PiDiscoveryResult(
+            discovered_at=NOW,
+            pi_path="fixture-only-never-executed",
+            pi_version="fixture",
+            state=PiDiscoveryState.DISCOVERED,
+            providers=(
+                PiProviderDiscovery(
+                    provider_id=PROVIDER,
+                    runtime_provider_id="minimax-cn",
+                    display_name="MiniMax CN",
+                    auth_status=PiAuthStatus.READY,
+                    model_skus=("MiniMax-M3", "MiniMax-M2.7"),
+                    observed_at=NOW,
+                ),
+            ),
+        )
+    )
 
 
 def _refresh(root):
     return QuotaRefreshService(
-        runtime_state_root=root, connected_provider_ids=lambda: (PROVIDER, "minimax-cn"),
-        environ={}, auth_store_paths=(), now=lambda: NOW,
+        runtime_state_root=root,
+        connected_provider_ids=lambda: (PROVIDER, "minimax-cn"),
+        environ={},
+        auth_store_paths=(),
+        now=lambda: NOW,
     )
 
 
 def _persist(root):
     collector = MiniMaxQuotaCollector(
-        bearer_token="offline-fixture", transport=FakeTransport(minimax_payload()), now=lambda: NOW,
+        bearer_token="offline-fixture",
+        transport=FakeTransport(minimax_payload()),
+        now=lambda: NOW,
     )
     refresh = QuotaRefreshService(
-        runtime_state_root=root, connected_provider_ids=lambda: (PROVIDER,),
-        collectors={PROVIDER: collector}, environ={}, auth_store_paths=(), now=lambda: NOW,
+        runtime_state_root=root,
+        connected_provider_ids=lambda: (PROVIDER,),
+        collectors={PROVIDER: collector},
+        environ={},
+        auth_store_paths=(),
+        now=lambda: NOW,
     )
     observation = refresh.refresh(PROVIDER)[0]
     assert observation.snapshot.quota_pool_id == POOL
@@ -95,14 +114,20 @@ def _recommendation(root, registry=None, now=NOW):
     registry = registry or _registry()
     service = DispatchRecommendationService(
         SimpleNamespace(record_system_event=lambda *_a, **_k: None),
-        registry_provider=lambda: registry, quota_refresh_service=refresh,
+        registry_provider=lambda: registry,
+        quota_refresh_service=refresh,
         execution_evidence_journal=SimpleNamespace(
-            latest_verified_for_target=lambda _: (SimpleNamespace(observed_at=now), None)),
-        quota_availability_journal=QuotaAvailabilityJournal(root), tier_table=None,
-        runtime_availability=None, runtime_availability_fallback=lambda _: True,
+            latest_verified_for_target=lambda _: (SimpleNamespace(observed_at=now), None)
+        ),
+        quota_availability_journal=QuotaAvailabilityJournal(root),
+        tier_table=None,
+        runtime_availability=None,
+        runtime_availability_fallback=lambda _: True,
     )
     result, candidates, _ = service.recommend_for_task(
-        SimpleNamespace(min_tier="T1"), policy=RoutingObjective.BALANCED, now=now,
+        SimpleNamespace(min_tier="T1"),
+        policy=RoutingObjective.BALANCED,
+        now=now,
     )
     return result, candidates
 
@@ -113,8 +138,13 @@ def _parent_admit(root, quota):
     executor._registry_provider = _registry
     executor._quota_availability_journal = QuotaAvailabilityJournal(root)
     executor.config = SimpleNamespace(require_quota_certainty=True)
-    executor._quota_collectors = {PROVIDER: SimpleNamespace(collect=lambda: QuotaCollectionResult(
-        status=QuotaCollectionStatus.SUCCESS, snapshot=quota))}
+    executor._quota_collectors = {
+        PROVIDER: SimpleNamespace(
+            collect=lambda: QuotaCollectionResult(
+                status=QuotaCollectionStatus.SUCCESS, snapshot=quota
+            )
+        )
+    }
     with patch("personal_ai_orchestrator.dispatch_executor.datetime") as clock:
         clock.now.return_value = NOW
         return executor._admit_quota(
@@ -143,10 +173,13 @@ def _cold_report(root):
     assert all(c.remaining_fractions == (0.8, 0.2) for c in candidates)
     assert len(list((root / "quota").glob("quota-*.json"))) == 1
     return {
-        "pool": pool, "snapshot_id": quota.id, "parent_pool": parent.evidence.quota_pool_id,
+        "pool": pool,
+        "snapshot_id": quota.id,
+        "parent_pool": parent.evidence.quota_pool_id,
         "parent_state": parent.evidence.state.value,
         "eligible": [e.execution_target_id for e in recommendation.evaluations if e.admitted],
-        "ephemeral_mapping": refresh._observed_pool_id, "model_calls": 0,
+        "ephemeral_mapping": refresh._observed_pool_id,
+        "model_calls": 0,
     }
 
 
@@ -159,12 +192,26 @@ from tests.test_quota_observation_identity import _persist, _cold_report, _deny_
 socket.socket.connect = _deny_network
 socket.create_connection = _deny_network
 """
-    subprocess.run([sys.executable, "-c", prefix + "\nimport sys; _persist(Path(sys.argv[1]))",
-                    str(tmp_path)], check=True, env=env, capture_output=True, text=True, timeout=20)
+    subprocess.run(
+        [sys.executable, "-c", prefix + "\nimport sys; _persist(Path(sys.argv[1]))", str(tmp_path)],
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
     result = subprocess.run(
-        [sys.executable, "-c", prefix +
-         "\nimport json, sys; print(json.dumps(_cold_report(Path(sys.argv[1]))))", str(tmp_path)],
-        check=True, env=env, capture_output=True, text=True, timeout=20,
+        [
+            sys.executable,
+            "-c",
+            prefix + "\nimport json, sys; print(json.dumps(_cold_report(Path(sys.argv[1]))))",
+            str(tmp_path),
+        ],
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
     )
     report = json.loads(result.stdout)
     assert report["pool"] == report["parent_pool"] == POOL
@@ -186,10 +233,16 @@ def test_shared_observation_and_scarcity_across_targets(tmp_path):
     assert len([e for e in result.evaluations if e.admitted]) == 2
     assert all(len(c.remaining_fractions) == 2 for c in candidates)
     sibling = next(c.execution_target_id for c in candidates if c.execution_target_id != TARGET)
-    QuotaAvailabilityJournal(tmp_path).save(observe_exhaustion(
-        None, execution_target_id=sibling, provider_id="minimax-cn", quota_pool_id=POOL,
-        observed_at=NOW, sanitized_reason_code="FIXTURE_EXHAUSTED",
-    ))
+    QuotaAvailabilityJournal(tmp_path).save(
+        observe_exhaustion(
+            None,
+            execution_target_id=sibling,
+            provider_id="minimax-cn",
+            quota_pool_id=POOL,
+            observed_at=NOW,
+            sanitized_reason_code="FIXTURE_EXHAUSTED",
+        )
+    )
     result, candidates = _recommendation(tmp_path)
     assert result.top_pick is None
     assert all(c.availability_state is QuotaAvailabilityState.COOLDOWN for c in candidates)
@@ -240,7 +293,8 @@ def test_explicit_binding_overrides_static_metadata(tmp_path):
     model = registry.execution_targets[TARGET].model_sku_id
     registry = bind(registry, model, "account-specific-pool", NOW)
     assert quota_pool_id_for_target(registry, execution_target_id=TARGET, now=NOW) == (
-        "account-specific-pool")
+        "account-specific-pool"
+    )
     quota = registry.quota_pools["account-specific-pool"].snapshot
     QuotaSnapshotCache(tmp_path / "quota").write(quota)
     result, _ = _recommendation(tmp_path, registry)
@@ -253,18 +307,30 @@ def test_explicit_binding_overrides_static_metadata(tmp_path):
         (fact.model_copy(update={"confidence": EvidenceConfidence.UNKNOWN}),),
     ):
         modified = registry.model_copy(update={"quota_bindings": facts})
-        assert quota_pool_id_for_target(
-            modified, execution_target_id=TARGET, now=NOW + timedelta(seconds=2),
-        ) is None
+        assert (
+            quota_pool_id_for_target(
+                modified,
+                execution_target_id=TARGET,
+                now=NOW + timedelta(seconds=2),
+            )
+            is None
+        )
 
 
 def test_default_collectors_use_source_identity_and_region(monkeypatch):
-    monkeypatch.setattr("personal_ai_orchestrator.daemon.os.environ", {
-        "MINIMAX_API_KEY": "offline-fixture", "ZAI_API_KEY": "offline-fixture",
-    })
+    monkeypatch.setattr(
+        "personal_ai_orchestrator.daemon.os.environ",
+        {
+            "MINIMAX_API_KEY": "offline-fixture",
+            "ZAI_API_KEY": "offline-fixture",
+        },
+    )
     collectors = default_quota_collectors()
     assert set(collectors) == {
-        "zai-coding-plan", "minimax-coding-plan", PROVIDER, "opencode",
+        "zai-coding-plan",
+        "minimax-coding-plan",
+        PROVIDER,
+        "opencode",
     }
     for provider in set(collectors) - {"opencode"}:
         expected_pool = QUOTA_SOURCE_BY_PROVIDER[provider].quota_pool_id
@@ -302,14 +368,27 @@ def test_misplaced_or_corrupt_cache_fails_closed(tmp_path):
 
 def test_legacy_provider_cooldown_is_read_without_rewriting(tmp_path):
     from personal_ai_orchestrator.runtime_quota_routing import active_shared_pool_blocker
+
     journal = QuotaAvailabilityJournal(tmp_path)
-    journal.save(observe_exhaustion(
-        None, execution_target_id=TARGET, provider_id=PROVIDER, quota_pool_id=PROVIDER,
-        observed_at=NOW, sanitized_reason_code="FIXTURE_LEGACY",
-    ))
+    journal.save(
+        observe_exhaustion(
+            None,
+            execution_target_id=TARGET,
+            provider_id=PROVIDER,
+            quota_pool_id=PROVIDER,
+            observed_at=NOW,
+            sanitized_reason_code="FIXTURE_LEGACY",
+        )
+    )
     path = journal.path_for(TARGET)
     before = path.read_bytes()
-    assert active_shared_pool_blocker(
-        journal, provider_id=PROVIDER, quota_pool_id=POOL, now=NOW,
-    ) is not None
+    assert (
+        active_shared_pool_blocker(
+            journal,
+            provider_id=PROVIDER,
+            quota_pool_id=POOL,
+            now=NOW,
+        )
+        is not None
+    )
     assert path.read_bytes() == before

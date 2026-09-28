@@ -61,9 +61,7 @@ def _candidate(
 def test_quota_saver_prefers_target_with_more_headroom():
     a = _candidate("provider-A/m2.5", remaining=(0.4, 0.5))
     b = _candidate("provider-B/m3", remaining=(0.9, 0.95))
-    result = recommend_owner_dispatch(
-        [a, b], policy=RoutingObjective.QUOTA_SAVER, now=FIXED_NOW
-    )
+    result = recommend_owner_dispatch([a, b], policy=RoutingObjective.QUOTA_SAVER, now=FIXED_NOW)
     assert result.top_pick is not None
     assert result.top_pick.execution_target_id == "provider-B/m3"
     # The admission reasoning names the policy and the binding-window
@@ -80,14 +78,10 @@ def test_exhausted_target_is_excluded_with_explicit_reason():
         remaining=(0.0, 0.9),
         state=QuotaAvailabilityState.EXHAUSTED_OBSERVED,
     )
-    result = recommend_owner_dispatch(
-        [a, b], policy=RoutingObjective.BALANCED, now=FIXED_NOW
-    )
+    result = recommend_owner_dispatch([a, b], policy=RoutingObjective.BALANCED, now=FIXED_NOW)
     eligible_ids = [c.execution_target_id for c in result.evaluations if c.admitted]
     assert eligible_ids == ["provider-A/m2.5"]
-    blocked = next(
-        c for c in result.evaluations if c.execution_target_id == "provider-B/m3"
-    )
+    blocked = next(c for c in result.evaluations if c.execution_target_id == "provider-B/m3")
     assert blocked.admitted is False
     assert any("exhausted" in reason.lower() for reason in blocked.reasons)
 
@@ -95,9 +89,7 @@ def test_exhausted_target_is_excluded_with_explicit_reason():
 def test_unverified_target_is_excluded():
     a = _candidate("provider-A/m2.5", verified=False)
     b = _candidate("provider-B/m3")
-    result = recommend_owner_dispatch(
-        [a, b], policy=RoutingObjective.BALANCED, now=FIXED_NOW
-    )
+    result = recommend_owner_dispatch([a, b], policy=RoutingObjective.BALANCED, now=FIXED_NOW)
     eligible_ids = [c.execution_target_id for c in result.evaluations if c.admitted]
     assert eligible_ids == ["provider-B/m3"]
 
@@ -141,18 +133,14 @@ def test_unknown_quota_state_with_observations_keeps_but_penalizes():
 def test_no_candidates_admits_returns_no_top_pick():
     a = _candidate("provider-A/m2.5", verified=False)
     b = _candidate("provider-B/m3", runtime=False)
-    result = recommend_owner_dispatch(
-        [a, b], policy=RoutingObjective.BALANCED, now=FIXED_NOW
-    )
+    result = recommend_owner_dispatch([a, b], policy=RoutingObjective.BALANCED, now=FIXED_NOW)
     assert result.top_pick is None
     assert all(not c.admitted for c in result.evaluations)
 
 
 def test_score_components_record_what_was_counted():
     a = _candidate("provider-A/m2.5", remaining=(0.9, 0.9), age_days=0)
-    result = recommend_owner_dispatch(
-        [a], policy=RoutingObjective.BALANCED, now=FIXED_NOW
-    )
+    result = recommend_owner_dispatch([a], policy=RoutingObjective.BALANCED, now=FIXED_NOW)
     components = {c.name for c in result.top_pick.score_components}
     # M1 WP3: 5-term shape (commit 2). The previous
     # ``quota_headroom_mean`` is gone — ``headroom_min`` is the binding
@@ -162,9 +150,7 @@ def test_score_components_record_what_was_counted():
     assert "pressure_term" in components
     # Capability fit is declared openly, not omitted: the
     # score_components array lists every input that shaped the total.
-    assert any(
-        c.name == "quality_capability_fit" for c in result.top_pick.score_components
-    )
+    assert any(c.name == "quality_capability_fit" for c in result.top_pick.score_components)
 
 
 # ---------------------------------------------------------------------------
@@ -289,17 +275,13 @@ def test_default_min_tier_is_T1_and_keeps_existing_rankings_unchanged() -> None:
     t0 = _tier_candidate("flagship/m9", tier=ModelTier.T0, tier_match_reason="exact")
     t1 = _tier_candidate("workhorse/m7", tier=ModelTier.T1, tier_match_reason="exact")
     t2 = _tier_candidate("fast/m5", tier=ModelTier.T2, tier_match_reason="exact")
-    result = recommend_owner_dispatch(
-        [t0, t1, t2], policy=RoutingObjective.BALANCED, now=FIXED_NOW
-    )
+    result = recommend_owner_dispatch([t0, t1, t2], policy=RoutingObjective.BALANCED, now=FIXED_NOW)
     # T0 and T1 are at or above the default floor; T2 is below it.
     admitted_ids = {e.execution_target_id for e in result.evaluations if e.admitted}
     assert admitted_ids == {"flagship/m9", "workhorse/m7"}
     blocked = next(e for e in result.evaluations if e.execution_target_id == "fast/m5")
     assert blocked.admitted is False
-    assert any(
-        reason == "tier_below_minimum(tier=T2,min_tier=T1)" for reason in blocked.reasons
-    )
+    assert any(reason == "tier_below_minimum(tier=T2,min_tier=T1)" for reason in blocked.reasons)
 
 
 def test_target_below_min_tier_is_hard_eliminated_with_explicit_reason() -> None:
@@ -310,13 +292,9 @@ def test_target_below_min_tier_is_hard_eliminated_with_explicit_reason() -> None
     result = recommend_owner_dispatch(
         [t0, t2], policy=RoutingObjective.BALANCED, now=FIXED_NOW, min_tier=ModelTier.T0
     )
-    t2_eval = next(
-        e for e in result.evaluations if e.execution_target_id == "fast/m5"
-    )
+    t2_eval = next(e for e in result.evaluations if e.execution_target_id == "fast/m5")
     assert t2_eval.admitted is False
-    assert any(
-        reason == "tier_below_minimum(tier=T2,min_tier=T0)" for reason in t2_eval.reasons
-    )
+    assert any(reason == "tier_below_minimum(tier=T2,min_tier=T0)" for reason in t2_eval.reasons)
 
 
 def test_target_above_min_tier_pays_a_gentle_capability_fit_penalty() -> None:
@@ -340,10 +318,16 @@ def test_target_above_min_tier_pays_a_gentle_capability_fit_penalty() -> None:
     # ``quality_capability_fit`` row so the freshness value is
     # irrelevant.
     t0 = _tier_candidate(
-        "flagship/m9", tier=ModelTier.T0, tier_match_reason="exact", age_days=30,
+        "flagship/m9",
+        tier=ModelTier.T0,
+        tier_match_reason="exact",
+        age_days=30,
     )
     t1 = _tier_candidate(
-        "workhorse/m7", tier=ModelTier.T1, tier_match_reason="exact", age_days=30,
+        "workhorse/m7",
+        tier=ModelTier.T1,
+        tier_match_reason="exact",
+        age_days=30,
     )
     result = recommend_owner_dispatch(
         [t0, t1], policy=RoutingObjective.BALANCED, now=FIXED_NOW, min_tier=ModelTier.T1
@@ -455,19 +439,15 @@ def test_balanced_default_eliminates_t2_floor_and_burn_down_promotes_starved() -
     # row is below the floor and is hard-eliminated; the T0 and
     # T1 rows admit.
     candidates = [
-        _candidate("flagship", remaining=(0.9, 0.9), tier=ModelTier.T0,
-                   tier_match_reason="exact"),
-        _candidate("workhorse", remaining=(0.6, 0.6), tier=ModelTier.T1,
-                   tier_match_reason="exact"),
-        _candidate("fast", remaining=(0.4, 0.4), tier=ModelTier.T2,
-                   tier_match_reason="exact"),
+        _candidate("flagship", remaining=(0.9, 0.9), tier=ModelTier.T0, tier_match_reason="exact"),
+        _candidate("workhorse", remaining=(0.6, 0.6), tier=ModelTier.T1, tier_match_reason="exact"),
+        _candidate("fast", remaining=(0.4, 0.4), tier=ModelTier.T2, tier_match_reason="exact"),
     ]
-    result = recommend_owner_dispatch(
-        candidates, policy=RoutingObjective.BALANCED, now=FIXED_NOW
-    )
+    result = recommend_owner_dispatch(candidates, policy=RoutingObjective.BALANCED, now=FIXED_NOW)
     assert any(
         not e.admitted and "tier_below_minimum" in e.reasons[0]
-        for e in result.evaluations if e.execution_target_id == "fast"
+        for e in result.evaluations
+        if e.execution_target_id == "fast"
     )
 
     # BURN_DOWN: a STARVED WEEKLY source outranks an ON_TRACK
@@ -476,13 +456,17 @@ def test_balanced_default_eliminates_t2_floor_and_burn_down_promotes_starved() -
     # the same data path; what varies between presets is the
     # weight, not whether the source is STARVED.
     starved = _candidate(
-        "starved", remaining=(0.6, 0.6),
-        tier=ModelTier.T1, tier_match_reason="exact",
+        "starved",
+        remaining=(0.6, 0.6),
+        tier=ModelTier.T1,
+        tier_match_reason="exact",
         windows=(_weekly_window(used_fraction=0.20, reset_in_hours=1.0),),
     )
     on_track = _candidate(
-        "on-track", remaining=(0.6, 0.6),
-        tier=ModelTier.T1, tier_match_reason="exact",
+        "on-track",
+        remaining=(0.6, 0.6),
+        tier=ModelTier.T1,
+        tier_match_reason="exact",
         windows=(_weekly_window(used_fraction=0.4),),
     )
     result = recommend_owner_dispatch(
@@ -511,9 +495,7 @@ def test_5h_smoothing_eliminates_target_with_mismatched_tier() -> None:
     result = recommend_owner_dispatch(
         [a, b], policy=RoutingObjective.BALANCED, now=FIXED_NOW, min_tier=ModelTier.T1
     )
-    eliminated = next(
-        e for e in result.evaluations if e.execution_target_id == "flagship/overkill"
-    )
+    eliminated = next(e for e in result.evaluations if e.execution_target_id == "flagship/overkill")
     assert eliminated.admitted is False
     assert any("rolling_window_smoothing" in r for r in eliminated.reasons)
 
@@ -529,9 +511,7 @@ def test_stale_source_pressure_term_is_zero_with_reason() -> None:
         "provider-A/stale",
         windows=(stale,),
     )
-    result = recommend_owner_dispatch(
-        [a], policy=RoutingObjective.BALANCED, now=FIXED_NOW
-    )
+    result = recommend_owner_dispatch([a], policy=RoutingObjective.BALANCED, now=FIXED_NOW)
     top = result.top_pick
     assert top is not None
     assert "burn_stale_ignored" in top.reasons[0]
@@ -579,9 +559,7 @@ def test_score_identity_holds_for_recommender() -> None:
     }
     core_rows = [c for c in top.score_components if c.name in core_names]
     assert {c.name for c in core_rows} == core_names
-    expected = sum(
-        (c.value or 0.0) * (c.weight or 0.0) for c in core_rows
-    )
+    expected = sum((c.value or 0.0) * (c.weight or 0.0) for c in core_rows)
     # The recommender subtracts ``8.0`` when ``availability_state
     # is UNKNOWN``; the fixture's candidate is
     # ``AVAILABLE_OBSERVED`` so the penalty does not fire.
@@ -664,9 +642,7 @@ def test_recommender_headroom_mean_uses_explicit_field_not_effective_pace() -> N
         "provider-A/m3",
         remaining=(0.6, 0.9),
     )
-    result = recommend_owner_dispatch(
-        [candidate], policy=RoutingObjective.BALANCED, now=FIXED_NOW
-    )
+    result = recommend_owner_dispatch([candidate], policy=RoutingObjective.BALANCED, now=FIXED_NOW)
     top = result.top_pick
     assert top is not None
     # ``headroom_mean_fraction`` carries the arithmetic mean of
@@ -708,9 +684,7 @@ def test_recommender_scheduler_paths_agree_effective_pace_contract() -> None:
     """
 
     candidate = _candidate("p/m", remaining=(0.6, 0.9))
-    result = recommend_owner_dispatch(
-        [candidate], policy=RoutingObjective.BALANCED, now=FIXED_NOW
-    )
+    result = recommend_owner_dispatch([candidate], policy=RoutingObjective.BALANCED, now=FIXED_NOW)
     top = result.top_pick
     assert top is not None
     assert top.effective_pace is None
@@ -824,6 +798,4 @@ def test_five_hour_smoothing_does_not_apply_to_unmetered_targets() -> None:
     assert result.top_pick is not None
     assert result.top_pick.admitted is True
     # No rolling-window reason should appear in the list.
-    assert not any(
-        "rolling" in reason.lower() for reason in result.top_pick.reasons
-    )
+    assert not any("rolling" in reason.lower() for reason in result.top_pick.reasons)

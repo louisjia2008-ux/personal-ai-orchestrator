@@ -45,13 +45,9 @@ _TICK_LATER = NOW + timedelta(seconds=301)
 
 def test_authority_to_source_state_mapping() -> None:
     assert (
-        expected_source_state_for_dispatch_authority("OWNER_INITIATED_EXECUTION")
-        is TaskState.READY
+        expected_source_state_for_dispatch_authority("OWNER_INITIATED_EXECUTION") is TaskState.READY
     )
-    assert (
-        expected_source_state_for_dispatch_authority("SUPERVISED_AUTO")
-        is TaskState.AUTO_GRACE
-    )
+    assert expected_source_state_for_dispatch_authority("SUPERVISED_AUTO") is TaskState.AUTO_GRACE
     with pytest.raises(ValueError):
         expected_source_state_for_dispatch_authority("GHOST_AUTHORITY")
 
@@ -192,9 +188,7 @@ def test_supervised_auto_authority_cannot_start_from_ready(tmp_path) -> None:
     from tests.test_dispatch_executor import ExecutorHarness
 
     harness = ExecutorHarness(tmp_path)
-    request_id = _reserve_with(
-        harness, authority="SUPERVISED_AUTO", auto_grace=True
-    )
+    request_id = _reserve_with(harness, authority="SUPERVISED_AUTO", auto_grace=True)
     # The veto / mode abort won: AUTO_GRACE → READY, metadata cleared,
     # MANUAL lock — the owner owns the task again.
     store = SafetyKernelStore(harness.state_db)
@@ -221,9 +215,7 @@ def test_owner_authority_cannot_start_from_auto_grace(tmp_path) -> None:
     from tests.test_dispatch_executor import ExecutorHarness
 
     harness = ExecutorHarness(tmp_path)
-    request_id = _reserve_with(
-        harness, authority="OWNER_INITIATED_EXECUTION", auto_grace=True
-    )
+    request_id = _reserve_with(harness, authority="OWNER_INITIATED_EXECUTION", auto_grace=True)
 
     harness.executor.execute(request_id)
 
@@ -267,9 +259,7 @@ def test_supervised_auto_from_auto_grace_still_starts(tmp_path) -> None:
     from tests.test_dispatch_executor import ExecutorHarness
 
     harness = ExecutorHarness(tmp_path)
-    request_id = _reserve_with(
-        harness, authority="SUPERVISED_AUTO", auto_grace=True
-    )
+    request_id = _reserve_with(harness, authority="SUPERVISED_AUTO", auto_grace=True)
 
     harness.executor.execute(request_id)
 
@@ -290,9 +280,7 @@ def test_owner_from_ready_still_starts(tmp_path) -> None:
     from tests.test_dispatch_executor import ExecutorHarness
 
     harness = ExecutorHarness(tmp_path)
-    request_id = _reserve_with(
-        harness, authority="OWNER_INITIATED_EXECUTION", auto_grace=False
-    )
+    request_id = _reserve_with(harness, authority="OWNER_INITIATED_EXECUTION", auto_grace=False)
 
     harness.executor.execute(request_id)
 
@@ -318,9 +306,7 @@ def test_veto_race_after_spawn_cancels_child_and_keeps_ready(tmp_path) -> None:
     from tests.test_dispatch_executor import ExecutorHarness
 
     harness = ExecutorHarness(tmp_path)
-    request_id = _reserve_with(
-        harness, authority="SUPERVISED_AUTO", auto_grace=True
-    )
+    request_id = _reserve_with(harness, authority="SUPERVISED_AUTO", auto_grace=True)
 
     cancelled: list[object] = []
 
@@ -361,9 +347,7 @@ def test_stale_auto_preworker_failure_does_not_block_ready(tmp_path) -> None:
     from tests.test_dispatch_executor import ExecutorHarness
 
     harness = ExecutorHarness(tmp_path)
-    request_id = _reserve_with(
-        harness, authority="SUPERVISED_AUTO", auto_grace=True
-    )
+    request_id = _reserve_with(harness, authority="SUPERVISED_AUTO", auto_grace=True)
 
     async def failing_spawn(store, dispatch, worktree):
         veto_store = SafetyKernelStore(harness.state_db)
@@ -484,9 +468,7 @@ def _conflict_events(store) -> list:
     "kwargs",
     [
         pytest.param({}, id="foreign-owner-row"),
-        pytest.param(
-            {"authority": "SUPERVISED_AUTO", "target": "TARGET_B"}, id="wrong-target"
-        ),
+        pytest.param({"authority": "SUPERVISED_AUTO", "target": "TARGET_B"}, id="wrong-target"),
         pytest.param({"row_task_id": "task-2"}, id="wrong-task"),
     ],
 )
@@ -501,9 +483,10 @@ def test_foreign_run_is_never_auto_execution_evidence(tmp_path, kwargs) -> None:
         env.store, task_id="task-1", auto_decision_id=decision
     )
     assert correlation is AutoExecutionCorrelation.CONFLICT
-    assert current_supervised_auto_dispatch(
-        env.store, task_id="task-1", auto_decision_id=decision
-    ) is None
+    assert (
+        current_supervised_auto_dispatch(env.store, task_id="task-1", auto_decision_id=decision)
+        is None
+    )
 
     env.tick(_TICK_LATER)
 
@@ -523,9 +506,7 @@ def test_foreign_run_is_never_auto_execution_evidence(tmp_path, kwargs) -> None:
     # The metadata-clear recovery guard also fails closed for a conflict
     # (§26: CONFLICT is NOT pre-worker safe).
     assert (
-        real_execution_recovery_proof(
-            env.store, env.shadow, task_id="task-1", pending_id=decision
-        )
+        real_execution_recovery_proof(env.store, env.shadow, task_id="task-1", pending_id=decision)
         is False
     )
 

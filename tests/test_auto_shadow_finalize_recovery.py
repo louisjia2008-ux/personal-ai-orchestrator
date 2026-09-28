@@ -293,9 +293,7 @@ def test_worker_failure_residue_is_finalized_not_discarded(tmp_path: Path) -> No
     )
     env.store.connection.commit()
     task = env.store.get_task("task-1")
-    env.store.transition_task(
-        "task-1", TaskState.BLOCKED, expected_version=task.state_version
-    )
+    env.store.transition_task("task-1", TaskState.BLOCKED, expected_version=task.state_version)
     assert env.shadow.load_pending(decision) is not None
     env.store.close()
 
@@ -336,9 +334,7 @@ def test_existing_observation_residue_replays_not_diverges(tmp_path: Path) -> No
     )
     before = env.shadow.load_all()[0]
     task = env.store.get_task("task-1")
-    env.store.transition_task(
-        "task-1", TaskState.VERIFIED, expected_version=task.state_version
-    )
+    env.store.transition_task("task-1", TaskState.VERIFIED, expected_version=task.state_version)
     env.store.close()
 
     shadow2 = ShadowEvidenceJournal(tmp_path / "shadow-root")
@@ -403,9 +399,7 @@ def test_intent_payload_conflict_fails_closed(tmp_path: Path) -> None:
     import pytest
 
     with pytest.raises(RuntimeError):
-        env.store.enqueue_shadow_finalization(
-            _intent_for(env, decision, verified=False)
-        )
+        env.store.enqueue_shadow_finalization(_intent_for(env, decision, verified=False))
     assert len(_finalize_rows(env.store)) == 1
     env.store.close()
 

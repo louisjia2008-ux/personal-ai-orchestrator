@@ -67,9 +67,7 @@ def _registry(
     source = _source()
     window = QuotaWindowSnapshot(
         window_id="window-1",
-        window_kind=(
-            QuotaWindowKind.UNMETERED if unmetered else QuotaWindowKind.WEEKLY
-        ),
+        window_kind=(QuotaWindowKind.UNMETERED if unmetered else QuotaWindowKind.WEEKLY),
         remaining_fraction=None if unmetered else 0.60,
         used_fraction=None if unmetered else 0.40,
         window_started_at=None if unmetered else NOW - timedelta(days=1),
@@ -369,8 +367,8 @@ async def test_shadow_and_outcomes_are_separate_append_only_records(tmp_path, mo
         risk=RiskClass.HIGH,
         failure_count=2,
     )
-    port.task_profile_provider = (
-        lambda task_id: parent_profile if task_id == plan.parent_task_id else None
+    port.task_profile_provider = lambda task_id: (
+        parent_profile if task_id == plan.parent_task_id else None
     )
     try:
         result = await port.execute_child(plan)
@@ -391,10 +389,13 @@ async def test_shadow_and_outcomes_are_separate_append_only_records(tmp_path, mo
         assert child_outcome.child_verified is True
         assert child_outcome.parent_state == "RUNNING"
         assert child_outcome.parent_verified is False
-        assert outcomes.load(
-            observation_id=observation_id,
-            phase=DelegationOutcomePhase.PARENT_FINAL,
-        ) is None
+        assert (
+            outcomes.load(
+                observation_id=observation_id,
+                phase=DelegationOutcomePhase.PARENT_FINAL,
+            )
+            is None
+        )
 
         store.finish_run("parent-run", status="FINISHED", result={})
         parent = store.get_task(plan.parent_task_id)

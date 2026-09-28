@@ -72,9 +72,7 @@ class DelegationHostEvidence(RegistryModel):
     resolved_policy_level: SchedulingPolicyLevel | None = None
     host_required_delegation: bool | None = None
     independence_required: bool | None = None
-    child_commercial_mode: DelegationCommercialMode = (
-        DelegationCommercialMode.UNKNOWN
-    )
+    child_commercial_mode: DelegationCommercialMode = DelegationCommercialMode.UNKNOWN
     paid_usage_required: bool | None = None
     parent_quota_pool_id: str | None = None
     child_quota_pool_id: str | None = None
@@ -211,9 +209,7 @@ class DelegationOutcomeJournal:
         path = self.path_for(outcome_id)
         if not path.exists():
             return None
-        return DelegationOutcomeRecord.model_validate_json(
-            path.read_text(encoding="utf-8")
-        )
+        return DelegationOutcomeRecord.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 def resolve_delegation_policy(
@@ -368,9 +364,7 @@ def build_delegation_host_evidence(
     limitations: list[str] = []
 
     if parent_profile is None:
-        limitations.append(
-            "task_profile_failure_count_not_available_in_child_dispatch_context"
-        )
+        limitations.append("task_profile_failure_count_not_available_in_child_dispatch_context")
         parent_risk = None
         parent_failure_count = None
     else:
@@ -378,9 +372,7 @@ def build_delegation_host_evidence(
         parent_failure_count = parent_profile.failure_count
         sources.append("runtime_config.task_profiles[parent]")
 
-    child_estimate = (
-        None if child_profile is None else child_profile.predicted_quota_fraction_p90
-    )
+    child_estimate = None if child_profile is None else child_profile.predicted_quota_fraction_p90
     if child_profile is not None:
         sources.append("runtime_config.task_profiles[child]")
 
@@ -409,9 +401,7 @@ def build_delegation_host_evidence(
         now=now,
     )
     same_pool = (
-        parent_pool == child_pool
-        if parent_pool is not None and child_pool is not None
-        else None
+        parent_pool == child_pool if parent_pool is not None and child_pool is not None else None
     )
     if parent_pool is None:
         limitations.append("parent_quota_pool_unresolved")
@@ -440,9 +430,7 @@ def build_delegation_host_evidence(
         if pool is not None:
             usable_headroom = max(
                 0.0,
-                raw_headroom
-                - pool.reserve_fraction
-                - resolved_policy.uncertainty_margin_fraction,
+                raw_headroom - pool.reserve_fraction - resolved_policy.uncertainty_margin_fraction,
             )
             sources.append("quota_pool.reserve_fraction")
             sources.append("routing_policy.uncertainty_margin_fraction")
@@ -455,7 +443,8 @@ def build_delegation_host_evidence(
     if (
         resolved_policy is not None
         and resolved_policy.require_burn_estimate_for_subscription
-        and mode in {
+        and mode
+        in {
             DelegationCommercialMode.SUBSCRIPTION,
             DelegationCommercialMode.PREPAID,
         }
@@ -537,9 +526,7 @@ def build_delegation_outcome_record(
     except KeyError:
         limitations.append("child_dispatch_not_available")
 
-    child_target = (
-        None if child_dispatch is None else child_dispatch.execution_target_id
-    )
+    child_target = None if child_dispatch is None else child_dispatch.execution_target_id
     child_pool = (
         quota_pool_id_for_target(
             registry,

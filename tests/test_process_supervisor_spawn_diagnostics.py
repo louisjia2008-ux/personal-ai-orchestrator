@@ -73,9 +73,7 @@ def test_argv_shape_does_not_retain_option_or_prompt_values(tmp_path: Path) -> N
 async def test_missing_executable_has_precise_precreate_failure(tmp_path: Path) -> None:
     supervisor = ProcessSupervisor()
     with pytest.raises(ProcessSpawnError) as caught:
-        await supervisor.start(
-            (str(tmp_path / "missing-worker"),), cwd=tmp_path, env={}
-        )
+        await supervisor.start((str(tmp_path / "missing-worker"),), cwd=tmp_path, env={})
 
     detail = caught.value.diagnostics.as_dict()
     assert detail["spawn_stage"] == "PROCESS_CREATE_STARTED"

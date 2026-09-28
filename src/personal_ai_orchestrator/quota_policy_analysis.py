@@ -96,9 +96,7 @@ def simulate_unsupported_quota_policy(
             admitted_for_simulation=accepted,
             blocking_reasons=()
             if accepted
-            else (
-                "provider-exact quota/reset evidence with known reset time is required",
-            ),
+            else ("provider-exact quota/reset evidence with known reset time is required",),
         )
 
     if policy is UnsupportedQuotaPolicy.LOCALLY_MEASURED_CONSERVATIVE:

@@ -58,9 +58,7 @@ def test_tier_index_matches_declaration_order() -> None:
         (ModelTier.T3, ModelTier.T3, True),
     ],
 )
-def test_meets_minimum_full_matrix(
-    tier: ModelTier, min_tier: ModelTier, expected: bool
-) -> None:
+def test_meets_minimum_full_matrix(tier: ModelTier, min_tier: ModelTier, expected: bool) -> None:
     assert meets_minimum(tier, min_tier) is expected
 
 
@@ -204,9 +202,7 @@ def test_lookup_glob_match_uses_longest_pattern() -> None:
 
 
 def test_lookup_no_match_returns_default_entry() -> None:
-    table = TierTable(
-        entries={"opencode-*-free": TierEntry(tier=ModelTier.T3, caps=())}
-    )
+    table = TierTable(entries={"opencode-*-free": TierEntry(tier=ModelTier.T3, caps=())})
     entry, reason = table.lookup("zai-coding-plan-glm-5.3")
     assert reason == "default"
     assert entry == DEFAULT_TIER_ENTRY
@@ -218,9 +214,7 @@ def test_lookup_glob_star_matches_across_dashes() -> None:
     # SKU ``opencode-glm-4.5-free`` and the shortened
     # ``opencode-glm-free``. The host that wants narrower matching
     # must spell out the pattern.
-    table = TierTable(
-        entries={"opencode-*-free": TierEntry(tier=ModelTier.T3, caps=())}
-    )
+    table = TierTable(entries={"opencode-*-free": TierEntry(tier=ModelTier.T3, caps=())})
     entry, reason = table.lookup("opencode-glm-free")
     assert reason == "glob"
     assert entry.tier is ModelTier.T3
@@ -254,9 +248,7 @@ def test_merge_override_pattern_replaces_same_pattern() -> None:
 
 def test_merge_disjoint_patterns_take_union() -> None:
     default = parse_tier_table(DEFAULT_TIER_TABLE_JSON)
-    override = TierTable(
-        entries={"custom-provider-*": TierEntry(tier=ModelTier.T2, caps=())}
-    )
+    override = TierTable(entries={"custom-provider-*": TierEntry(tier=ModelTier.T2, caps=())})
     merged = merge_tier_tables(default, override)
     assert "custom-provider-*" in merged.entries
     assert merged.entries["custom-provider-*"].tier is ModelTier.T2

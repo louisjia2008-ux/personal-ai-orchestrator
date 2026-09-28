@@ -104,9 +104,7 @@ def test_reroute_supersedes_the_decision_it_replaced():
 
 
 def test_declared_but_unassigned_role_is_explicit_not_absent():
-    plan = TaskDetailView.model_validate(
-        _fixture("plan_reviewer_declared_unassigned")
-    ).routing_plan
+    plan = TaskDetailView.model_validate(_fixture("plan_reviewer_declared_unassigned")).routing_plan
     assert "REVIEWER" in plan.declared_roles
     reviewer = next(role for role in plan.roles if role.role == "REVIEWER")
     assert reviewer.status == "UNASSIGNED"
@@ -115,9 +113,7 @@ def test_declared_but_unassigned_role_is_explicit_not_absent():
 
 
 def test_completed_failure_keeps_status_and_outcome_separate():
-    plan = TaskDetailView.model_validate(
-        _fixture("plan_completed_failure_outcome")
-    ).routing_plan
+    plan = TaskDetailView.model_validate(_fixture("plan_completed_failure_outcome")).routing_plan
     reviewer = next(role for role in plan.roles if role.role == "REVIEWER")
     assert reviewer.status == "COMPLETED"
     assert reviewer.outcome == "FAIL"
@@ -153,14 +149,19 @@ def test_unknown_enum_values_are_carried_verbatim():
 
 def test_candidate_and_decision_records_round_trip():
     candidate = RoutingPlanCandidateView(
-        execution_target_id="p/m", provider_id="p", model_sku_id="m",
-        score=0.5, eligible=True, admitted=True, selected=True,
+        execution_target_id="p/m",
+        provider_id="p",
+        model_sku_id="m",
+        score=0.5,
+        eligible=True,
+        admitted=True,
+        selected=True,
     )
     decision = RoutingDecisionRecordView(
-        decision_id="rd-1", role="PRIMARY", created_at="2026-09-03T00:00:00Z",
+        decision_id="rd-1",
+        role="PRIMARY",
+        created_at="2026-09-03T00:00:00Z",
         candidates=(candidate,),
     )
-    restored = RoutingDecisionRecordView.model_validate(
-        json.loads(decision.model_dump_json())
-    )
+    restored = RoutingDecisionRecordView.model_validate(json.loads(decision.model_dump_json()))
     assert restored == decision

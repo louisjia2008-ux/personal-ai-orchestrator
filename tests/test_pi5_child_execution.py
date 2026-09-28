@@ -232,8 +232,7 @@ def _setup_campaign_lineage(tmp_path, monkeypatch, *, corrupt_lineage=False):
             child_dispatch = observer_store.get_owner_dispatch_by_request_id(request_id)
             if corrupt_lineage:
                 observer_store.connection.execute(
-                    "DELETE FROM audit_events WHERE task_id=? "
-                    "AND event_type='TASK_SUBMITTED'",
+                    "DELETE FROM audit_events WHERE task_id=? AND event_type='TASK_SUBMITTED'",
                     (child_dispatch.task_id,),
                 )
             validation = validate_pi5b3g_child_lineage(
@@ -294,9 +293,7 @@ async def test_durable_verified_child_preserves_parent_and_idempotency(tmp_path,
 
 
 @pytest.mark.asyncio
-async def test_fake_child_pipeline_reaches_lineage_ownership_and_protocol(
-    tmp_path, monkeypatch
-):
+async def test_fake_child_pipeline_reaches_lineage_ownership_and_protocol(tmp_path, monkeypatch):
     store, _, port, plan, identity, spawned, lineage_results = _setup_campaign_lineage(
         tmp_path, monkeypatch
     )
@@ -307,9 +304,7 @@ async def test_fake_child_pipeline_reaches_lineage_ownership_and_protocol(
         assert spawned[0].process.returncode == 0
         assert len(lineage_results) == 1 and lineage_results[0].allowed
         assert lineage_results[0].resolved_parent_task_id == identity.parent_task_id
-        events = tuple(
-            event["event_type"] for event in store.audit_events(plan.child_task_id)
-        )
+        events = tuple(event["event_type"] for event in store.audit_events(plan.child_task_id))
         assert events.count("PROCESS_CREATED") == 1
         assert events.count("DURABLE_RUN_REGISTERED") == 1
         assert events.count("WORKER_RUNNING") == 1
@@ -317,10 +312,13 @@ async def test_fake_child_pipeline_reaches_lineage_ownership_and_protocol(
         assert events.count("PROTOCOL_BOOTSTRAP_COMPLETED") == 1
         assert store.get_task(plan.child_task_id).state is TaskState.VERIFIED
         assert store.get_workspace(plan.child_task_id).writer_token is None
-        assert store.connection.execute(
-            "SELECT COUNT(*) FROM runs WHERE task_id=?",
-            (plan.child_task_id,),
-        ).fetchone()[0] == 1
+        assert (
+            store.connection.execute(
+                "SELECT COUNT(*) FROM runs WHERE task_id=?",
+                (plan.child_task_id,),
+            ).fetchone()[0]
+            == 1
+        )
     finally:
         store.close()
 
@@ -348,10 +346,13 @@ async def test_lineage_failure_after_durable_run_reaps_process_and_releases_writ
         ).fetchone()
         assert run is not None and run["status"] != "RUNNING"
         assert executor.execution_supervisor.owned_task_ids() == ()
-        assert store.connection.execute(
-            "SELECT COUNT(*) FROM tasks WHERE task_id=?",
-            (plan.child_task_id,),
-        ).fetchone()[0] == 1
+        assert (
+            store.connection.execute(
+                "SELECT COUNT(*) FROM tasks WHERE task_id=?",
+                (plan.child_task_id,),
+            ).fetchone()[0]
+            == 1
+        )
     finally:
         store.close()
 

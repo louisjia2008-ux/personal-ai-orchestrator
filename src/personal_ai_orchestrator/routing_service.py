@@ -112,9 +112,7 @@ class RoutingService:
                 task = None
 
         task_policy = (
-            self.task_policy_overrides.get(request.task_id)
-            if request.task_id is not None
-            else None
+            self.task_policy_overrides.get(request.task_id) if request.task_id is not None else None
         )
         if task_policy is None and task is not None:
             task_policy = policy_from_name(

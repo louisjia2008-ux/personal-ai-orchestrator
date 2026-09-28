@@ -90,9 +90,7 @@ def build_service(
     service = RoutingService(
         registry=registry,
         registry_provider=(
-            provider_registry_manager.registry
-            if provider_registry_manager is not None
-            else None
+            provider_registry_manager.registry if provider_registry_manager is not None else None
         ),
         store=store,
         catalog_snapshot_id=config.catalog_snapshot_id,
@@ -108,9 +106,7 @@ def build_service(
             if provider_registry_manager is not None
             else None
         ),
-        scheduling_settings=SchedulingSettings(
-            runtime_state_root / "scheduling-settings.json"
-        ),
+        scheduling_settings=SchedulingSettings(runtime_state_root / "scheduling-settings.json"),
     )
     for profile in config.task_profiles:
         service.set_task_profile(profile)
@@ -118,9 +114,7 @@ def build_service(
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Personal AI Orchestrator Shadow routing daemon"
-    )
+    parser = argparse.ArgumentParser(description="Personal AI Orchestrator Shadow routing daemon")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--state-db", type=Path, required=True)
     parser.add_argument("--runtime-state-root", type=Path, required=True)
@@ -290,9 +284,7 @@ def build_control_service(
         model_tiers_path,
         audit=store,
     )
-    scheduling_settings = SchedulingSettings(
-        runtime_state_root / "scheduling-settings.json"
-    )
+    scheduling_settings = SchedulingSettings(runtime_state_root / "scheduling-settings.json")
     task_profiles = {profile.task_id: profile for profile in config.task_profiles}
     delegation_campaign = DelegationCalibrationCampaignStore(
         runtime_state_root / "delegation-calibration-campaign.json"
@@ -398,15 +390,13 @@ def build_control_service(
             delegation_shadow_journal=delegation_shadow_journal,
             delegation_outcome_journal=delegation_outcome_journal,
             task_profile_provider=lambda task_id: task_profiles.get(task_id),
-            policy_resolution_provider=lambda child_store, parent_task: (
-                resolve_delegation_policy(
-                    store=child_store,
-                    task=parent_task,
-                    global_policy=config.policy,
-                    project_policy_overrides=dict(config.project_policy_overrides),
-                    task_policy_overrides=dict(config.task_policy_overrides),
-                    scheduling_settings=scheduling_settings,
-                )
+            policy_resolution_provider=lambda child_store, parent_task: resolve_delegation_policy(
+                store=child_store,
+                task=parent_task,
+                global_policy=config.policy,
+                project_policy_overrides=dict(config.project_policy_overrides),
+                task_policy_overrides=dict(config.task_policy_overrides),
+                scheduling_settings=scheduling_settings,
             ),
             delegation_campaign=delegation_campaign,
             quota_refresh_service=quota_refresh_service,

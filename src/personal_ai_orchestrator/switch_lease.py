@@ -231,9 +231,7 @@ class SwitchLeaseAuthority:
             if record.decision_id != decision_id or record.session_id != session_id:
                 raise ValueError("switch lease resolution does not match its authorization")
             if record.status is not SwitchLeaseStatus.AUTHORIZED:
-                expected = (
-                    SwitchLeaseStatus.COMPLETED if completed else SwitchLeaseStatus.ABORTED
-                )
+                expected = SwitchLeaseStatus.COMPLETED if completed else SwitchLeaseStatus.ABORTED
                 if record.status is expected:
                     self.store.connection.execute("COMMIT")
                     return record

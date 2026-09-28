@@ -64,10 +64,7 @@ async def test_shadow_record_replays_without_changing_verified_execution(tmp_pat
         # estimate. SHADOW must record that absence instead of manufacturing one.
         assert record.facts.predicted_child_burn_fraction is None
         assert "predicted_child_burn_unavailable" in record.limitations
-        assert (
-            DelegationReasonCode.REQUIRED_BURN_ESTIMATE_MISSING
-            in record.decision.reasons
-        )
+        assert DelegationReasonCode.REQUIRED_BURN_ESTIMATE_MISSING in record.decision.reasons
         # A SHADOW denial is observational only: the exact PI-5B2 execution still
         # reached VERIFIED through the ordinary scheduler/quota/verifier chain.
         assert result.verified

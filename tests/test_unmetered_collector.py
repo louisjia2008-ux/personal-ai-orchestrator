@@ -91,10 +91,7 @@ def test_collector_evidence_method_emits_unmetered_baseline() -> None:
         quota_pool_id="opencode",
     )
     assert evidence.state is QuotaAvailabilityState.AVAILABLE_UNMETERED
-    assert (
-        evidence.previous_state_baseline
-        is QuotaAvailabilityState.AVAILABLE_UNMETERED
-    )
+    assert evidence.previous_state_baseline is QuotaAvailabilityState.AVAILABLE_UNMETERED
     assert evidence.consecutive_failures == 0
     # ``observe_success`` defaults confidence to ESTIMATED; the
     # unmetered path keeps that default because the source is local.
