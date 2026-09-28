@@ -18,7 +18,9 @@ dev = [
   "pytest>=8.3,<9",
   "pytest-asyncio>=0.24,<1",
   "pytest-rerunfailures>=14,<15",
-  "ruff>=0.6,<1",
+  # Pinned: new ruff releases add lint rules and would turn CI red on unrelated
+  # pushes. Bump deliberately and fix any new findings in the same change.
+  "ruff==0.16.9",
 ]
 macos-package = [
   "pyinstaller>=6.11,<7",
