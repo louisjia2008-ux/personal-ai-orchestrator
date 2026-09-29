@@ -60,6 +60,24 @@ English | [中文](README.zh.md)
 
 需要环境变量 `TYPESAFE_API_KEY`([获取](https://console.typesafe.ai/keys))。模型凭证留在各宿主的原生存储中。
 
+## 可选的 Telegram 控制 DeepSeek Harness
+
+DSH bundle 现在还包含一个默认关闭的 Telegram 控制器。只有所有者显式
+配置专用 Bot Token 环境变量、用户与聊天双白名单、以及一个固定的绝对
+工作目录后，才会开放以下窄接口：
+
+```text
+/dsh run <自然语言任务>
+/dsh status
+/dsh cancel
+/dsh new
+/dsh help
+```
+
+控制器使用 Harness 的 `ctx.agents` 接口，工具权限、沙箱与审批仍完全由
+所选 Harness profile 控制。它不提供 Telegram shell，也不提供远程绕过审批的
+命令。仅安装插件不会连接 Telegram。详见 [DSH 插件安全与配置说明](integrations/dsh-plugin/README.zh.md)。
+
 ## 解决什么问题
 
 现代编码代理用户同时拥有多家 provider、多种模型 SKU、订阅制编码套餐、API 钱包和本地模型。
