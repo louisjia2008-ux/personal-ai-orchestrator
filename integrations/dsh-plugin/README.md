@@ -97,11 +97,17 @@ input.
 - The bot token is read from one named environment variable and never written
   to state, output, or logs.
 - State contains only the Telegram update offset and chat-to-Harness-session
-  mapping. It is written atomically with mode `0600`.
+  mappings, including each session's canonical workspace path. It is written
+  atomically with mode `0600`.
 - The working directory is resolved locally at startup and cannot be supplied
-  through Telegram.
+  through Telegram. Changing it invalidates saved session mappings while
+  preserving the update offset. Legacy mappings without a workspace path are
+  also discarded; the next task creates a fresh session in the configured cwd.
 - Pre-activation updates are ignored by default, preventing a stale queued
-  message from becoming a command after installation.
+  message from becoming a command after installation. Initial polling failures
+  are retried before new commands can be accepted.
+- Recovered sessions must be idle before a Telegram task is submitted or output
+  listeners are installed. Retry after any externally started turn finishes.
 - Reasoning deltas and local error details are not sent to Telegram. Only
   committed visible assistant text is relayed, with bounded message and output
   sizes.
@@ -120,7 +126,8 @@ you are willing to control remotely.
 npm --prefix integrations/dsh-plugin test
 ```
 
-The unit contract covers command parsing, dual allowlists, fixed-cwd creation,
+The unit contract covers command parsing, dual allowlists, fixed-cwd creation
+and recovery, legacy-state migration, busy-session rejection, startup retry,
 typed cancellation, reasoning suppression, credential-free state, token-safe
 errors, and Telegram message-size bounds. A real DSH composition and a real
 Telegram account are separate acceptance gates; no live bot connection is made

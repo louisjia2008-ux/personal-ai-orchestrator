@@ -70,9 +70,13 @@ webhook，`getUpdates` 会保持失败关闭，直到 Bot 所有者自行处理 
 
 - 必须同时命中用户 ID 与聊天 ID 白名单。
 - Bot Token 只从指定环境变量读取，不写入状态、输出或日志。
-- 状态文件只有 update offset 与聊天到 Harness session 的映射，以 `0600` 原子写入。
-- `cwd` 在本机启动时解析并固定，不能由 Telegram 指定。
-- 默认跳过启用前积压的消息。
+- 状态文件只有 update offset 与聊天到 Harness session 的映射（含每个会话的规范化
+  工作区路径），以 `0600` 原子写入。
+- `cwd` 在本机启动时解析并固定，不能由 Telegram 指定。更改工作目录后，旧会话映射
+  会失效，但 update offset 保留。未记录工作区的旧版映射也会丢弃；下次任务会在
+  当前配置的目录中新建会话。
+- 默认跳过启用前积压的消息；首次轮询失败时会先重试，再接受新命令。
+- 恢复的会话必须空闲，才会提交 Telegram 任务并监听输出；其他来源的任务结束后可重试。
 - 不向 Telegram 发送 reasoning delta 或本机错误细节；只回传已提交的可见回答，
   且任务输入、回复总量和单条消息都有上限。
 - 不提供 Telegram 审批命令；Harness 的审批与沙箱仍由 Harness 本身掌握。
@@ -87,8 +91,9 @@ Harness profile，以及你愿意被远程控制的最小工作区。
 npm --prefix integrations/dsh-plugin test
 ```
 
-单元测试覆盖命令解析、双白名单、固定 cwd、带类型的取消、reasoning 隔离、
-无凭据状态、Token 安全错误和 Telegram 消息长度。真实 DSH 组合与真实 Telegram
+单元测试覆盖命令解析、双白名单、固定 cwd 的创建与恢复、旧版状态迁移、忙碌会话拒绝、
+启动重试、带类型的取消、reasoning 隔离、无凭据状态、Token 安全错误和 Telegram 消息长度。
+真实 DSH 组合与真实 Telegram
 账号是独立验收门；仓库测试不会连接真实 Bot。
 
 包加载、默认关闭的 bundle 以及 enabled 生命周期已在本机 DeepSeek Harness

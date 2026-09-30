@@ -274,7 +274,7 @@ function validState(value) {
   );
 }
 
-/** Credential-free durable state: update offset plus chat-to-session mapping. */
+/** Credential-free durable state: offset plus workspace-bound session mappings. */
 export class TelegramStateStore {
   constructor(path) {
     this.path = path;
@@ -375,8 +375,20 @@ export class DeepSeekTelegramController {
     this.stateStore = stateStore;
     this.logger = logger;
     this.state = stateStore.load();
+    // Old mappings have no workspace identity and cannot be safely resumed.
+    // Keep the bot's update offset while invalidating only those sessions whose
+    // canonical cwd is missing or differs from the current local configuration.
+    let invalidated = false;
+    for (const [chatId, saved] of Object.entries(this.state.chats)) {
+      if (saved.cwd !== config.cwd) {
+        delete this.state.chats[chatId];
+        invalidated = true;
+      }
+    }
+    if (invalidated) this.stateStore.save(this.state);
     this.handles = new Map();
     this.active = new Map();
+    this.submitted = new Map();
     this.cancelled = new Set();
     this.abortController = null;
     this.pollPromise = null;
@@ -404,24 +416,27 @@ export class DeepSeekTelegramController {
   }
 
   async #poll(signal) {
-    if (this.state.offset === null && this.config.ignorePendingOnFirstStart) {
-      const pending = await this.api.getUpdates({ offset: -1, timeoutSeconds: 0, signal });
-      const latest = Array.isArray(pending)
-        ? pending.reduce(
+    let ignorePending = this.state.offset === null && this.config.ignorePendingOnFirstStart;
+    while (!signal.aborted) {
+      try {
+        if (ignorePending) {
+          const pending = await this.api.getUpdates({ offset: -1, timeoutSeconds: 0, signal });
+          if (signal.aborted) return;
+          if (!Array.isArray(pending)) throw new Error("telegram_updates_must_be_an_array");
+          const latest = pending.reduce(
             (value, update) =>
               Number.isSafeInteger(update?.update_id) ? Math.max(value, update.update_id) : value,
             -1,
-          )
-        : -1;
-      if (latest >= 0) {
-        this.state.offset = latest + 1;
-        this.stateStore.save(this.state);
-        this.logger.info?.("pao-telegram-controller ignored queued pre-activation updates");
-      }
-    }
-
-    while (!signal.aborted) {
-      try {
+          );
+          if (latest >= 0) {
+            this.state.offset = latest + 1;
+            this.stateStore.save(this.state);
+            this.logger.info?.("pao-telegram-controller ignored queued pre-activation updates");
+          }
+          // Only advance to normal polling after the bootstrap request and
+          // its state write succeed. Transient startup errors use the retry path.
+          ignorePending = false;
+        }
         const updates = await this.api.getUpdates({
           offset: this.state.offset,
           timeoutSeconds: this.config.pollTimeoutSeconds,
@@ -511,7 +526,6 @@ export class DeepSeekTelegramController {
   }
 
   async #cancel(chatId) {
-    const entry = this.handles.get(chatId);
     if (!this.active.has(chatId)) {
       await this.api.sendText(chatId, "当前没有由 Telegram 启动的运行中任务。");
       return { accepted: false, reason: "not_running" };
@@ -519,8 +533,8 @@ export class DeepSeekTelegramController {
     this.cancelled.add(chatId);
     // Agent creation/resume is asynchronous. A cancel arriving in that small
     // window marks the run cancelled; #execute checks the marker before it can
-    // enqueue the prompt. Once attached, use Harness's typed cancel boundary.
-    entry?.handle.agent.cancel({ kind: "user" });
+    // enqueue the prompt. Once submitted, use Harness's typed cancel boundary.
+    this.submitted.get(chatId)?.cancel({ kind: "user" });
     await this.api.sendText(chatId, "已请求 DeepSeek Harness 停止当前回合。待处理输入也已清空。");
     return { accepted: true, command: "cancel" };
   }
@@ -571,7 +585,6 @@ export class DeepSeekTelegramController {
     // still reject the final Telegram send. A two-sided handler releases the
     // slot without creating an ignored rejecting Promise from finally().
     void completion.then(release, release);
-    await this.api.sendText(chatId, "任务已提交给本机 DeepSeek Harness。使用 /dsh status 查看状态，/dsh cancel 停止。");
     return { accepted: true, command: "run", completion };
   }
 
@@ -584,7 +597,11 @@ export class DeepSeekTelegramController {
     });
     const entry = { handle, owned: true };
     this.handles.set(chatId, entry);
-    this.state.chats[chatId] = { sessionId, createdAt: new Date().toISOString() };
+    this.state.chats[chatId] = {
+      sessionId,
+      cwd: this.config.cwd,
+      createdAt: new Date().toISOString(),
+    };
     this.stateStore.save(this.state);
     return entry;
   }
@@ -615,10 +632,24 @@ export class DeepSeekTelegramController {
     let disposeStream = () => {};
     let disposeSession = () => {};
     let disposeError = () => {};
+    const detach = () => {
+      disposeError();
+      disposeSession();
+      disposeStream();
+      disposeError = disposeSession = disposeStream = () => {};
+      this.submitted.delete(chatId);
+    };
     try {
       const entry = await this.#ensureHandle(chatId);
       const agent = entry.handle.agent;
       if (this.cancelled.has(chatId)) return;
+      // A recovered/live session may be doing work started outside Telegram.
+      // Never subscribe to that turn or queue a followup behind it, since the
+      // session-wide events would otherwise leak unrelated output into our reply.
+      if (agent.status !== "idle") {
+        await this.api.sendText(chatId, "此 Harness 会话已有任务运行中。请等待任务结束后重试。");
+        return;
+      }
       const attempts = new Map();
       const streamedVisible = [];
       const durableVisible = [];
@@ -670,11 +701,26 @@ export class DeepSeekTelegramController {
         if (subject === agent) errors.push(error);
       });
 
+      this.submitted.set(chatId, agent);
       agent.followup({
         content: [{ type: "text", text: prompt }],
         source: { kind: "user" },
       });
+      const acknowledgement = this.api.sendText(
+        chatId,
+        "任务已提交给本机 DeepSeek Harness。使用 /dsh status 查看状态，/dsh cancel 停止。",
+      ).catch((error) => {
+        // A failed receipt must not release a still-running task or its cancel
+        // handle. Keep tracking it until Harness reports the turn idle.
+        this.logger.warn?.(
+          `pao-telegram-controller acknowledgement failed: ${errorText(error, [this.config.token])}`,
+        );
+      });
       await agent.whenIdle();
+      // Stop listening before awaiting Telegram delivery: a later local turn
+      // on this session does not belong in this command's response.
+      detach();
+      await acknowledgement;
 
       if (this.cancelled.has(chatId)) return;
       if (errors.length) throw errors.at(-1);
@@ -685,6 +731,7 @@ export class DeepSeekTelegramController {
         `DeepSeek Harness 已完成：\n\n${limitText(result, this.config.maxReplyChars)}`,
       );
     } catch (error) {
+      detach();
       if (!this.cancelled.has(chatId)) {
         this.logger.warn?.(
           `pao-telegram-controller Harness task failed: ${errorText(error, [this.config.token])}`,
@@ -692,9 +739,7 @@ export class DeepSeekTelegramController {
         await this.api.sendText(chatId, "DeepSeek Harness 任务失败；详细原因仅保留在本机日志中。");
       }
     } finally {
-      disposeError();
-      disposeSession();
-      disposeStream();
+      detach();
     }
   }
 }
