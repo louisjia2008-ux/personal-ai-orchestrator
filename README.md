@@ -61,6 +61,27 @@ Paid token-plan quota is use-it-or-lose-it, so the objective maximizes utilizati
 
 Requires `TYPESAFE_API_KEY` in the environment ([get one](https://console.typesafe.ai/keys)). Model credentials stay in each host's native store.
 
+## Optional Telegram control for DeepSeek Harness
+
+The DSH bundle also contains a default-off Telegram controller. After the
+owner explicitly configures a dedicated Bot Token environment variable, both
+the Telegram user and chat allowlists, and one fixed absolute workspace, the
+following narrow commands become available:
+
+```text
+/dsh run <natural-language task>
+/dsh status
+/dsh cancel
+/dsh new
+/dsh help
+```
+
+The controller uses the Harness `ctx.agents` API and leaves tool access,
+sandboxing, and approvals under the selected Harness profile. It does not
+offer a Telegram shell or a remote approval-bypass command. Installation by
+itself does not connect to Telegram. See the [DSH plugin security and setup
+guide](integrations/dsh-plugin/README.md).
+
 ## What problem this project solves
 
 Modern coding-agent users increasingly have access to multiple providers, model SKUs, subscription coding plans, API wallets, and local models at the same time.

@@ -1,15 +1,31 @@
 {
   "name": "pao-dsh-dispatch",
-  "version": "0.1.0",
-  "description": "Jev quota-aware model dispatch for DeepSeek Harness: live pool probes (ZAI/MiniMax token plans, DeepSeek prepaid balance), burn-first weekly-quota maximization, per-turn routing via the agent/request waterfall.",
+  "version": "0.2.0",
+  "description": "PAO plugins for DeepSeek Harness: Jev quota-aware dispatch and an opt-in, allowlisted Telegram controller.",
   "type": "module",
   "main": "index.js",
-  "scripts": {
-    "test": "node --test dispatch.test.js"
+  "exports": {
+    ".": "./index.js",
+    "./telegram": "./telegram-plugin.js",
+    "./telegram-core": "./telegram.js"
   },
-  "files": ["index.js", "dispatch.js", "cordis.patch.yml", "README.md"],
-  "keywords": ["dsh-plugin"],
+  "scripts": {
+    "test": "node --test dispatch.test.js telegram.test.js"
+  },
+  "files": [
+    "index.js",
+    "dispatch.js",
+    "telegram.js",
+    "telegram-plugin.js",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md"
+  ],
+  "keywords": ["dsh-plugin", "telegram", "deepseek-harness"],
   "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
