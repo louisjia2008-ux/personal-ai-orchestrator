@@ -182,7 +182,12 @@ final class QuotaObservabilityTests: XCTestCase {
         try daemon.start(socketPath: path)
         defer { daemon.stop() }
 
-        let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
+        // This test owns both refreshes. A background refresh can otherwise
+        // clear lastError while the failed quota refresh awaits its fallback.
+        let store = OrchestratorStore(
+            socketPath: path, autoStartDaemon: false, autoRefresh: false,
+            idFactory: { "fixed" }
+        )
         await store.refreshNow()
         XCTAssertNotNil(store.quota)
 
