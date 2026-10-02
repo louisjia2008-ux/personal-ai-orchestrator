@@ -81,7 +81,18 @@ public final class OrchestratorStore: ObservableObject {
     @Published public var menuVisible: Bool = false
     @Published public var dashboardVisible: Bool = false
     @Published public private(set) var isRefreshing: Bool = false
-    @Published public var selectedTaskId: String?
+    @Published public var selectedTaskId: String? {
+        didSet {
+            guard selectedTaskId != oldValue else { return }
+            // Selection belongs to the store, including deep links and keyboard
+            // navigation. Clear the inspector immediately, before a view's
+            // onChange or the next request has a chance to run.
+            taskDetailRequestId = nil
+            selectedTaskDetail = nil
+            clearCancellationNotice()
+            clearDispatchRecommendation()
+        }
+    }
     @Published public var selectedProjectId: String?
     @Published public var selectedSchedulingPolicy: String = "BALANCED"
     @Published public var selectedManualExecutionTargetId: String?
@@ -107,6 +118,7 @@ public final class OrchestratorStore: ObservableObject {
     private var backoffSeconds: Double = 2.0
     private var previousTaskStates: [String: String] = [:]
     private var lastSubmit: (intent: String, at: Date)?
+    private var taskDetailRequestId: UUID?
     private let idFactory: () -> String
 
     /// How many tasks the dashboard asks for.
@@ -135,10 +147,13 @@ public final class OrchestratorStore: ObservableObject {
     /// 10-second default every other call shares.
     private static let quotaRefreshTimeoutSeconds: Double = 30
 
+    /// Set `autoRefresh` to false for explicitly driven clients (including
+    /// deterministic tests); manual refresh and operation methods still work.
     public init(socketPath: String,
                 daemonConfiguration: DaemonLaunchConfiguration? = nil,
                 widgetSnapshotBridge: WidgetSnapshotBridge? = nil,
                 autoStartDaemon: Bool = true,
+                autoRefresh: Bool = true,
                 idFactory: @escaping () -> String = { UUID().uuidString.prefix(12).lowercased() }) {
         self.socketPath = socketPath
         let client = PAOControlClient(socketPath: socketPath)
@@ -157,8 +172,10 @@ public final class OrchestratorStore: ObservableObject {
         if autoStartDaemon {
             daemonLifecycle.ensureStarted()
         }
-        startRefreshing()
-        startQuotaAutoRefresh()
+        if autoRefresh {
+            startRefreshing()
+            startQuotaAutoRefresh()
+        }
     }
 
     deinit {
@@ -167,7 +184,12 @@ public final class OrchestratorStore: ObservableObject {
     }
 
     public var statusSummary: StatusSummary {
-        StatusSummary.derive(connection: connection, tasks: tasks?.tasks ?? [], providers: providers)
+        StatusSummary.derive(
+            connection: connection,
+            tasks: tasks?.tasks ?? [],
+            providers: providers,
+            dashboardCounts: dashboard?.counts
+        )
     }
 
     /// True when the daemon holds more tasks than this client fetched.
@@ -181,6 +203,10 @@ public final class OrchestratorStore: ObservableObject {
     }
 
     public func taskCounts() -> (running: Int, ready: Int, blocked: Int, verified: Int) {
+        // Global menu-bar counters must include tasks beyond the list limit.
+        if let counts = dashboard?.counts {
+            return (counts.running, counts.ready, counts.blocked, counts.verified + counts.completed)
+        }
         let states = (tasks?.tasks ?? []).map(\.state)
         return (
             running: states.filter { $0 == "RUNNING" }.count,
@@ -385,6 +411,7 @@ public final class OrchestratorStore: ObservableObject {
             dashboard = nil
             projects = nil
             pendingProjectPreview = nil
+            taskDetailRequestId = nil
             selectedTaskDetail = nil
             providers = nil
             providerConnections = nil
@@ -629,14 +656,25 @@ public final class OrchestratorStore: ObservableObject {
         cancellationNotice = nil
     }
 
+    /// Refresh the current selection. Callers selecting a task must set
+    /// `selectedTaskId` first; obsolete selection requests are ignored.
     public func loadTaskDetail(taskId: String) async {
+        // A request queued by the previous selection must not replace the
+        // current task, nor may an older same-task refresh overwrite a newer one.
+        guard selectedTaskId == taskId else { return }
+        let requestId = UUID()
+        taskDetailRequestId = requestId
         do {
-            selectedTaskDetail = try await client.taskDetail(taskId)
+            let detail = try await client.taskDetail(taskId)
+            guard taskDetailRequestId == requestId, selectedTaskId == taskId else { return }
+            selectedTaskDetail = detail
             lastError = nil
         } catch let error as PAOClientError {
+            guard taskDetailRequestId == requestId, selectedTaskId == taskId else { return }
             lastError = error
             ClientLog.operation("task-detail", outcome: error.logCode)
         } catch {
+            guard taskDetailRequestId == requestId, selectedTaskId == taskId else { return }
             lastError = .malformedResponse
             ClientLog.operation("task-detail", outcome: "malformed")
         }
@@ -720,7 +758,9 @@ public final class OrchestratorStore: ObservableObject {
             self.lastQuotaRefreshError = error.logCode
             // A failed refresh must not blank the page: keep the last
             // projection and let the card report the failure.
-            self.quota = try? await client.quota()
+            if let quota = try? await client.quota() {
+                self.quota = quota
+            }
             ClientLog.operation("refresh_quota", outcome: error.logCode)
         } catch {
             self.lastQuotaRefreshError = "malformed"
