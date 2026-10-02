@@ -313,3 +313,39 @@ def test_persisted_payload_round_trip_via_http(tmp_path: Path) -> None:
         assert reloaded.mode == "SUPERVISED_AUTO"
     finally:
         store.close()
+
+
+@pytest.mark.parametrize(
+    ("setter", "value"),
+    (("set_default_policy", "SPEED_FIRST"), ("set_mode", "MANUAL")),
+)
+def test_failed_persistence_preserves_live_and_durable_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setter: str, value: str
+) -> None:
+    settings_path = tmp_path / "scheduling.json"
+    settings = SchedulingSettings(settings_path)
+    settings.set_default_policy("QUALITY_FIRST")
+    settings.set_mode("SUPERVISED_AUTO")
+    previous_payload = settings_path.read_bytes()
+
+    def fail_replace(*_args) -> None:
+        raise OSError("simulated storage failure")
+
+    monkeypatch.setattr("personal_ai_orchestrator.scheduling_settings.os.replace", fail_replace)
+    with pytest.raises(OSError, match="simulated storage failure"):
+        getattr(settings, setter)(value)
+
+    assert settings.default_policy == "QUALITY_FIRST"
+    assert settings.mode == "SUPERVISED_AUTO"
+    assert settings_path.read_bytes() == previous_payload
+    assert not list(tmp_path.glob(".scheduling.json.*"))
+
+
+def test_invalid_utf8_settings_fail_closed(tmp_path: Path) -> None:
+    settings_path = tmp_path / "scheduling.json"
+    settings_path.write_bytes(b"\xff\xfeinvalid settings")
+
+    settings = SchedulingSettings(settings_path)
+
+    assert settings.default_policy == "BALANCED"
+    assert settings.mode == "MANUAL"

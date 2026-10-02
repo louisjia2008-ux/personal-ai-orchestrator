@@ -629,3 +629,59 @@ def test_loopback_http_rejects_origin_prefix_spoof(tmp_path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+@pytest.mark.parametrize("record_shadow", [False, True])
+def test_route_uses_one_registry_snapshot_when_provider_refreshes(
+    tmp_path, record_shadow: bool
+) -> None:
+    registry = _registry()
+    provider_calls = 0
+
+    def refreshed_registry() -> ModelRegistry:
+        nonlocal provider_calls
+        provider_calls += 1
+        return registry if provider_calls == 1 else ModelRegistry()
+
+    journal = ShadowEvidenceJournal(tmp_path / "shadow") if record_shadow else None
+    service = RoutingService(
+        registry=registry,
+        registry_provider=refreshed_registry,
+        store=SafetyKernelStore(tmp_path / "state.sqlite3"),
+        catalog_snapshot_id="catalog-1",
+        runtime_availability={"m3-sub": True},
+        shadow_journal=journal,
+        shadow_actual_execution_targets={"task-1": "m3-sub"},
+    )
+    try:
+        service.set_task_profile(TaskProfile(task_id="task-1", predicted_quota_fraction_p90=0.05))
+        service.store.submit_task(task_id="task-1", request_id="task-submit", intent="implement")
+        ready = service.store.transition_task("task-1", TaskState.READY)
+        request = RoutingRequest(
+            request_id="req-refreshing-registry",
+            session_id="session-1",
+            task_id="task-1",
+            task_state_version=ready.state_version,
+            mode=RoutingMode.SHADOW,
+            requested_at=NOW,
+        )
+
+        decision = service.route(request, now=NOW)
+
+        assert decision.selected_execution_target_id == "m3-sub"
+        assert decision.selected_model.provider_id == "minimax"
+        assert provider_calls == 1
+        if journal is not None:
+            pending = journal.load_pending(f"pending-{decision.decision_id}")
+            assert pending.provider_id == "minimax"
+            assert pending.quota_pool_id == "pool"
+            assert pending.quota_confidence is EvidenceConfidence.EXACT
+        assert service.route(request, now=NOW + timedelta(minutes=1)) == decision
+        assert provider_calls == 1
+
+        next_request = request.model_copy(update={"request_id": "req-refreshed-registry"})
+        next_decision = service.route(next_request, now=NOW)
+        assert next_decision.selected_execution_target_id is None
+        assert provider_calls == 2
+    finally:
+        service.store.close()
