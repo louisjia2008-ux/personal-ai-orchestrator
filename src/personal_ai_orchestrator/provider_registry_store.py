@@ -180,7 +180,7 @@ def load(runtime_state_root: Path) -> RegistryLoadOutcome:
     try:
         with target.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return RegistryLoadOutcome(
             status=RegistryLoadStatus.CORRUPT,
             source_path=target,

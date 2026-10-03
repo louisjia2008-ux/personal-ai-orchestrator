@@ -74,6 +74,7 @@ public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var taskCompletionNotice: TaskCompletionNotice?
     @Published public private(set) var daemonBuild: BuildView?
     @Published public private(set) var lastError: PAOClientError?
+    /// Success presentation for the latest submit attempt, never an operation result.
     @Published public private(set) var lastSubmittedTaskId: String?
     @Published public private(set) var submitNotice: SubmitNotice?
     @Published public private(set) var projectNotice: ProjectNotice?
@@ -118,6 +119,7 @@ public final class OrchestratorStore: ObservableObject {
     private var backoffSeconds: Double = 2.0
     private var previousTaskStates: [String: String] = [:]
     private var lastSubmit: (intent: String, at: Date)?
+    private var submitRequestId: UUID?
     private var taskDetailRequestId: UUID?
     private let idFactory: () -> String
 
@@ -421,6 +423,7 @@ public final class OrchestratorStore: ObservableObject {
             lastDispatch = nil
             // Ephemeral operation success state claims daemon authority; once the
             // connection is gone it must not linger as if still authoritative.
+            submitRequestId = nil
             lastSubmittedTaskId = nil
             submitNotice = nil
             projectNotice = nil
@@ -578,28 +581,38 @@ public final class OrchestratorStore: ObservableObject {
         }
     }
 
-    public func quickSubmit(projectId: String?, intent: String) async {
+    /// Return this invocation's outcome, including validation/duplicate failures.
+    /// Blank input has no notice and returns nil. Callers must use this result for
+    /// side effects: another invocation or the post-submit refresh may replace
+    /// the shared presentation before this method resumes.
+    @discardableResult
+    public func quickSubmit(projectId: String?, intent: String) async -> SubmitNotice? {
+        let requestId = UUID()
+        submitRequestId = requestId
+        lastSubmittedTaskId = nil
+        submitNotice = nil
         let trimmed = intent.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else { return nil }
         guard let projectId, !projectId.isEmpty else {
             submitNotice = .projectRequired
-            return
+            return .projectRequired
         }
         if let last = lastSubmit,
            last.intent == trimmed,
            Date().timeIntervalSince(last.at) < Self.duplicateSubmitWindow {
-            submitNotice = .duplicateBlocked(windowSeconds: Int(Self.duplicateSubmitWindow))
-            return
+            let notice = SubmitNotice.duplicateBlocked(windowSeconds: Int(Self.duplicateSubmitWindow))
+            submitNotice = notice
+            return notice
         }
-        let suffix = idFactory()
         // The picked policy must reach the daemon: an App-local selection that never
         // leaves SwiftUI state is indistinguishable from not choosing at all.
         let policy = selectedSchedulingPolicy
         let manualTarget = policy == "MANUAL" ? selectedManualExecutionTargetId : nil
         if policy == "MANUAL", manualTarget == nil {
             submitNotice = .manualTargetRequired
-            return
+            return .manualTargetRequired
         }
+        let suffix = idFactory()
         let request = SubmitRequest(
             taskId: "menubar-\(suffix)",
             requestId: "menubar-req-\(suffix)",
@@ -611,17 +624,28 @@ public final class OrchestratorStore: ObservableObject {
         )
         do {
             let task = try await client.submit(request)
+            let notice = SubmitNotice.submitted(taskId: task.taskId, state: task.state)
             lastSubmit = (trimmed, Date())
-            lastSubmittedTaskId = task.taskId
-            submitNotice = .submitted(taskId: task.taskId, state: task.state)
+            if submitRequestId == requestId {
+                lastSubmittedTaskId = task.taskId
+                submitNotice = notice
+            }
             ClientLog.operation("submit", outcome: "ok")
             await refreshOnce()
+            return notice
         } catch let error as PAOClientError {
-            submitNotice = .failed(detail: error.displayDetail)
+            let notice = SubmitNotice.failed(detail: error.displayDetail)
+            if submitRequestId == requestId {
+                submitNotice = notice
+            }
             ClientLog.operation("submit", outcome: error.logCode)
+            return notice
         } catch {
-            submitNotice = .malformedResponse
+            if submitRequestId == requestId {
+                submitNotice = .malformedResponse
+            }
             ClientLog.operation("submit", outcome: "malformed")
+            return .malformedResponse
         }
     }
 

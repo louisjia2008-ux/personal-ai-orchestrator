@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -83,6 +84,7 @@ from personal_ai_orchestrator.safety_kernel import (
     OwnerDispatchRecord,
     OwnerDispatchStatus,
     SafetyKernelStore,
+    TaskRecord,
     TaskState,
     expected_source_state_for_dispatch_authority,
     shadow_identity_payload,
@@ -1858,6 +1860,24 @@ class OwnerDispatchExecutor:
         ]
         return tuple(argv)
 
+    @staticmethod
+    def _worker_intent(task: TaskRecord) -> str:
+        """Carry the registered project focus without changing worktree authority.
+
+        The working directory and tool guards continue to use the complete
+        isolated worktree. A monorepo subdirectory is task context only; it
+        neither grants additional access nor changes the host verifier scope.
+        """
+        if not task.working_subpath:
+            return task.intent
+        focus = json.dumps(task.working_subpath, ensure_ascii=False)
+        return (
+            f"Selected project directory relative to the worktree root: {focus}\n"
+            "Focus the task on this directory. Paths are relative to the worktree root. "
+            "Existing worktree and tool restrictions still apply.\n\n"
+            f"Task:\n{task.intent}"
+        )
+
     async def _spawn_worker(
         self,
         store: SafetyKernelStore,
@@ -1865,7 +1885,7 @@ class OwnerDispatchExecutor:
         worktree: ManagedWorktree,
     ) -> SupervisedProcess:
         task = store.get_task(dispatch.task_id)
-        argv = self._worker_argv(dispatch, task.intent)
+        argv = self._worker_argv(dispatch, self._worker_intent(task))
         store._audit(
             dispatch.task_id,
             "WORKER_ARGV_BUILT",

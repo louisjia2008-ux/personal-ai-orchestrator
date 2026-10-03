@@ -1706,6 +1706,7 @@ class SafetyKernelStore:
         reason: str,
         event_type: str = "AUTO_ABORTED",
         request_id: str | None = None,
+        request_id_explicit: bool | None = None,
         target: str | None = None,
         force_manual: bool = False,
         allow_blocked: bool = False,
@@ -1782,6 +1783,10 @@ class SafetyKernelStore:
                 "request_id": request_id,
                 "force_manual": force_manual,
             }
+            if request_id_explicit is not None:
+                # Issue #72: distinguish a stable caller key from older
+                # generated cancel IDs in the same atomic veto evidence.
+                payload["request_id_explicit"] = request_id_explicit
             self._audit(task_id, event_type, payload)
             if previous_decision_id is not None:
                 self._enqueue_cleanup_intent_locked(previous_decision_id, task_id, reason, stamp)

@@ -235,7 +235,7 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
         argv = build_pi_json_argv(
             config=replace(self.pi_runtime, delegation_enabled=enabled),
             model_ref=self._pi_model_ref(dispatch),
-            intent=task.intent,
+            intent=self._worker_intent(task),
             guard_path=self._guard_path(),
             delegation_tool_path=tool_path,
         )
