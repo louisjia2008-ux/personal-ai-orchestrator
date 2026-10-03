@@ -393,7 +393,9 @@ def summarize_pi_json_stream(data: bytes) -> PiJsonRunSummary:
             continue
         try:
             event = json.loads(line)
-        except json.JSONDecodeError:
+        except (ValueError, RecursionError):
+            # Decoder limits (integer length / nesting) are invalid protocol
+            # input too; never let worker bytes escape into lifecycle cleanup.
             return invalid("invalid_jsonl")
         if not isinstance(event, dict) or not isinstance(event.get("type"), str):
             return invalid("invalid_event_shape")

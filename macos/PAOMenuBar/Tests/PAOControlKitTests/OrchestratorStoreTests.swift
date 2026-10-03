@@ -167,6 +167,7 @@ final class OrchestratorStoreTests: XCTestCase {
         defer { daemon.stop() }
 
         let store = OrchestratorStore(socketPath: path, idFactory: { "fixed" })
+        store.selectedTaskId = "t-1"
         await store.loadTaskDetail(taskId: "t-1")
         XCTAssertEqual(store.selectedTaskDetail?.task.taskId, "t-1")
         XCTAssertEqual(store.selectedTaskDetail?.routing?.fallbackReason, "quota confidence remained UNKNOWN")

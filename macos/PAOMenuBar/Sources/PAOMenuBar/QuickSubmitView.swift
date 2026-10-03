@@ -5,7 +5,9 @@ import PAOControlKit
 struct QuickSubmitView: View {
     @EnvironmentObject private var store: OrchestratorStore
     @State private var intent: String = ""
-    @State private var submitting: Bool = false
+    @State private var submissionId: UUID?
+
+    private var submitting: Bool { submissionId != nil }
 
     private var onlineProjects: [ProjectView] {
         store.projects?.projects.filter(\.isOnline) ?? []
@@ -101,18 +103,26 @@ struct QuickSubmitView: View {
                 store.selectedProjectId = onlineProjects.first?.projectId
             }
         }
+        .onDisappear { submissionId = nil }
     }
 
     private func submit() {
+        // TextField.onSubmit can fire even when the button is disabled.
+        guard !submitting else { return }
         let value = intent
         let projectId = store.selectedProjectId
-        submitting = true
+        let requestId = UUID()
+        submissionId = requestId
         Task {
-            await store.quickSubmit(projectId: projectId, intent: value)
-            submitting = false
-            if store.lastSubmittedTaskId != nil {
-                intent = ""
+            defer {
+                if submissionId == requestId { submissionId = nil }
             }
+            let result = await store.quickSubmit(projectId: projectId, intent: value)
+            guard submissionId == requestId,
+                  let result, case .submitted = result,
+                  intent == value else { return }
+            // Keep failed drafts and edits made while this request was in flight.
+            intent = ""
         }
     }
 }

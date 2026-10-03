@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -83,6 +84,7 @@ from personal_ai_orchestrator.safety_kernel import (
     OwnerDispatchRecord,
     OwnerDispatchStatus,
     SafetyKernelStore,
+    TaskRecord,
     TaskState,
     expected_source_state_for_dispatch_authority,
     shadow_identity_payload,
@@ -98,6 +100,8 @@ from personal_ai_orchestrator.worktree_manager import ManagedWorktree, WorktreeM
 
 MAX_WORKER_STDOUT_BYTES = 256 * 1024
 MAX_WORKER_STDERR_BYTES = 64 * 1024
+# Host-owned failure status: a deadline cannot become success via graceful exit(0).
+WORKER_TIMEOUT_EXIT = 124
 
 # Bounded, sanitized transcript tails kept in the run result so the owner
 # can see what the worker actually did. The worker's text keeps zero task
@@ -594,18 +598,14 @@ class OwnerDispatchExecutor:
             )
             self._disable_worker_session(request_id)
             worker_exit_code = exit_code
-            if (
-                exit_code != 0
-                and execution.cancel_requested.is_set()
-                and not execution.cancel_completed.is_set()
-            ):
+            if execution.cancel_requested.is_set() and not execution.cancel_completed.is_set():
                 # The owner asked for this kill; the cancel transaction
                 # owns the final state. Give it the chance to finish.
                 try:
                     await asyncio.wait_for(execution.cancel_completed.wait(), timeout=15.0)
                 except TimeoutError:
                     pass
-            if execution.cancel_requested.is_set() and exit_code != 0:
+            if execution.cancel_requested.is_set():
                 task_now = store.get_task(dispatch.task_id)
                 if task_now.state is not TaskState.RUNNING:
                     self.execution_supervisor.unregister(dispatch.task_id)
@@ -659,22 +659,51 @@ class OwnerDispatchExecutor:
             raise
         except TimeoutError:
             self._disable_worker_session(request_id)
-            exit_code = await self._supervisor.cancel(
+            observed_exit_code = await self._supervisor.cancel(
                 supervised, grace_seconds=self.config.worker_grace_seconds
             )
-            worker_exit_code = exit_code
-            result = self._host_result_envelope(exit_code, b"", b"", truncated=False, timeout=True)
+            self._audit_spawn(
+                store,
+                dispatch.task_id,
+                "WORKER_TIMED_OUT",
+                self._supervised_spawn_diagnostics(supervised).evolved(
+                    safe_exit_code=observed_exit_code,
+                    durable_run_created=True,
+                ),
+            )
+            # The deadline is a host failure even if a SIGTERM handler exits 0.
+            # Retain the actual OS exit in diagnostics without allowing it to
+            # authorize verification or successful-execution shadow evidence.
+            worker_exit_code = WORKER_TIMEOUT_EXIT
+            result = self._host_result_envelope(
+                WORKER_TIMEOUT_EXIT, b"", b"", truncated=False, timeout=True
+            )
             next_state = record_worker_exit(
                 store,
                 task_id=dispatch.task_id,
                 run_id=run_id,
-                exit_code=exit_code,
+                exit_code=WORKER_TIMEOUT_EXIT,
                 worker_result=result,
             )
-        except ValueError:
+        except ValueError as error:
             # The task was finalized concurrently (for example by an owner
             # cancellation closing the run first). Never resurrect state.
             task_now = store.get_task(dispatch.task_id)
+            if task_now.state is TaskState.RUNNING:
+                # ValueError can also come from transport/protocol handling.
+                # It is only a concurrent-finalization signal if state proves
+                # that another lifecycle path actually finalized the task.
+                await self._emergency_repair_and_reap(
+                    store,
+                    request_id,
+                    dispatch,
+                    supervised,
+                    run_id,
+                    writer_token,
+                    error=error,
+                )
+                store.close()
+                return
             self.execution_supervisor.unregister(dispatch.task_id)
             try:
                 store.release_writer(dispatch.task_id, writer_token)
@@ -1831,6 +1860,24 @@ class OwnerDispatchExecutor:
         ]
         return tuple(argv)
 
+    @staticmethod
+    def _worker_intent(task: TaskRecord) -> str:
+        """Carry the registered project focus without changing worktree authority.
+
+        The working directory and tool guards continue to use the complete
+        isolated worktree. A monorepo subdirectory is task context only; it
+        neither grants additional access nor changes the host verifier scope.
+        """
+        if not task.working_subpath:
+            return task.intent
+        focus = json.dumps(task.working_subpath, ensure_ascii=False)
+        return (
+            f"Selected project directory relative to the worktree root: {focus}\n"
+            "Focus the task on this directory. Paths are relative to the worktree root. "
+            "Existing worktree and tool restrictions still apply.\n\n"
+            f"Task:\n{task.intent}"
+        )
+
     async def _spawn_worker(
         self,
         store: SafetyKernelStore,
@@ -1838,7 +1885,7 @@ class OwnerDispatchExecutor:
         worktree: ManagedWorktree,
     ) -> SupervisedProcess:
         task = store.get_task(dispatch.task_id)
-        argv = self._worker_argv(dispatch, task.intent)
+        argv = self._worker_argv(dispatch, self._worker_intent(task))
         store._audit(
             dispatch.task_id,
             "WORKER_ARGV_BUILT",
