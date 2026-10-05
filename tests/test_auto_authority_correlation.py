@@ -17,7 +17,6 @@ P1: the tick's threading contract is documented truthfully.
 """
 
 from datetime import timedelta
-from types import SimpleNamespace
 
 import pytest
 
@@ -309,26 +308,35 @@ def test_veto_race_after_spawn_cancels_child_and_keeps_ready(tmp_path) -> None:
     request_id = _reserve_with(harness, authority="SUPERVISED_AUTO", auto_grace=True)
 
     cancelled: list[object] = []
+    original_spawn = harness.executor._spawn_worker
+    original_cleanup = harness.executor._supervisor.cleanup
 
-    async def fake_spawn(store, dispatch, worktree):
-        # The veto lands AFTER allocation/spawn but BEFORE the atomic
-        # start — the tightest legal race window.
+    async def spawn_then_veto(store, dispatch, worktree):
+        # Use an exact supervised fixture child: a fabricated PID cannot prove
+        # cleanup under the process/group receipt contract.
+        supervised = await original_spawn(store, dispatch, worktree)
         veto_store = SafetyKernelStore(harness.state_db)
-        veto_store.abort_auto_lifecycle("task-1", reason="owner_veto")
-        veto_store.close()
-        return SimpleNamespace(pid=999999)
+        try:
+            veto_store.abort_auto_lifecycle("task-1", reason="owner_veto")
+        finally:
+            veto_store.close()
+        return supervised
 
-    async def fake_cancel(supervised, *, grace_seconds):
+    async def observed_cleanup(supervised, **kwargs):
         cancelled.append(supervised)
+        return await original_cleanup(supervised, **kwargs)
 
-    harness.executor._spawn_worker = fake_spawn  # type: ignore[method-assign]
-    harness.executor._supervisor.cancel = fake_cancel  # type: ignore[method-assign]
+    harness.executor._spawn_worker = spawn_then_veto  # type: ignore[method-assign]
+    harness.executor._supervisor.cleanup = observed_cleanup  # type: ignore[method-assign]
 
     harness.executor.execute(request_id)
 
     store = SafetyKernelStore(harness.state_db)
     try:
-        assert len(cancelled) == 1  # the exact child, cancelled exactly once
+        assert len(cancelled) == 1  # the exact child, cleaned exactly once
+        assert cancelled[0].cleanup_result.confirmed
+        assert cancelled[0].cleanup_result.child_reaped
+        assert store.get_workspace("task-1").writer_token is None
         task = store.get_task("task-1")
         assert task.state is TaskState.READY  # veto result respected
         assert task.auto_decision_id is None

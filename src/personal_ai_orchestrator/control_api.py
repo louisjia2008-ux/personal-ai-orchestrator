@@ -2034,6 +2034,8 @@ class ControlPlaneService:
             )
         if task.state in {TaskState.FAILED, TaskState.COMPLETED}:
             raise ControlPlaneError(409, "task_state_is_terminal")
+        if task.state is TaskState.BLOCKED and self.store.has_cleanup_quarantine(task_id):
+            raise ControlPlaneError(409, "worker_cleanup_unknown")
         try:
             updated = self.store.transition_task(
                 task_id,

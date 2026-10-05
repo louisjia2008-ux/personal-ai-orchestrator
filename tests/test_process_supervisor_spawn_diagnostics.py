@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import errno
 import os
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -121,10 +121,10 @@ async def test_invalid_cwd_has_precise_precreate_failure(tmp_path: Path) -> None
 async def test_stdio_setup_failure_is_structured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def fail_create(*args: object, **kwargs: object) -> None:
+    def fail_create(*args: object, **kwargs: object) -> None:
         raise OSError(errno.EMFILE, "too many files")
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fail_create)
+    monkeypatch.setattr(subprocess, "Popen", fail_create)
     supervisor = ProcessSupervisor()
     with pytest.raises(ProcessSpawnError) as caught:
         await supervisor.start(("/usr/bin/true",), cwd=tmp_path, env={})
@@ -148,18 +148,28 @@ async def test_immediate_exit_is_created_owned_and_reaped(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_abort_unowned_reaps_already_exited_process_without_signalling(
+async def test_abort_unowned_keeps_leader_pinned_until_last_group_signal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     supervisor = ProcessSupervisor()
     process = await supervisor.start(("/usr/bin/true",), cwd=tmp_path, env={})
     assert await process.process.wait() == 0
 
-    def forbidden_killpg(pid: int, requested_signal: int) -> None:
-        raise AssertionError((pid, requested_signal))
+    real_killpg = os.killpg
+    signals: list[int] = []
 
-    monkeypatch.setattr(os, "killpg", forbidden_killpg)
+    def checked_killpg(pid: int, requested_signal: int) -> None:
+        assert pid == process.pid
+        if requested_signal:
+            assert process._pinned and not process._reaped
+        else:
+            assert process._reaped
+        signals.append(requested_signal)
+        real_killpg(pid, requested_signal)
+
+    monkeypatch.setattr(os, "killpg", checked_killpg)
     assert await supervisor.abort_unowned(process) == 0
+    assert signals[-1] == 0
     assert supervisor.owned_pids() == ()
 
 

@@ -73,7 +73,8 @@ def test_daemon_build_reconciles_uncertain_execution_before_routing(tmp_path: Pa
     )
     try:
         assert service.store.get_task("task-1").state is TaskState.BLOCKED
-        assert service.store.get_workspace("task-1").writer_token is None
+        assert service.store.get_workspace("task-1").writer_token == "writer-before-restart"
+        assert service.store.has_cleanup_quarantine("task-1")
         run = service.store.connection.execute(
             "SELECT status FROM runs WHERE run_id='run-1'"
         ).fetchone()
