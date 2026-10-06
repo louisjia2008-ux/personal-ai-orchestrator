@@ -100,8 +100,12 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         if args.client == "deskpet":
+            payload = _read_object()
+            if "protocol_version" in payload:
+                _write(client.local_client_v2(payload))
+                return 0
             adapter = DeskPetClientAdapter(gateway, installation_id=args.installation_id)
-            result = adapter.call(DeskPetToolRequest.model_validate(_read_object()))
+            result = adapter.call(DeskPetToolRequest.model_validate(payload))
             _write(result.model_dump(mode="json"))
             return 0
 

@@ -1308,6 +1308,8 @@ class ControlPlaneService:
     #: decisions the tick creates. The daemon wires the runtime config's
     #: value; ad-hoc services fall back to a stable local default.
     catalog_snapshot_id: str = "control-catalog-v1"
+    # One daemon epoch, reused by request-local service clones.
+    process_epoch: str = field(default_factory=lambda: _PROCESS_INSTANCE_ID)
 
     @property
     def owner_initiated_execution_enabled(self) -> bool:
@@ -1336,6 +1338,7 @@ class ControlPlaneService:
             model_tiers_source=self.model_tiers_source,
             shadow_journal=self.shadow_journal,
             catalog_snapshot_id=self.catalog_snapshot_id,
+            process_epoch=self.process_epoch,
         )
 
     @staticmethod
@@ -4127,6 +4130,18 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
             segments, query = self._segments()
             request_service = None
             try:
+                if segments == ("v2", "local-client"):
+                    if method != "POST":
+                        self._json(405, {"error": "method_not_allowed"})
+                        return
+                    payload = self._read_json()
+                    if payload is None:
+                        return
+                    from personal_ai_orchestrator.local_client_v2 import handle_local_client_v2
+
+                    request_service = service.open_request()
+                    self._json(200, handle_local_client_v2(request_service, payload))
+                    return
                 if not segments or segments[0] != CONTROL_API_VERSION:
                     self._json(404, {"error": "not_found"})
                     return
@@ -4155,6 +4170,9 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                 except Exception:
                     pass
                 self._json(503, {"error": "control_plane_unavailable"})
+            finally:
+                if request_service is not None and segments == ("v2", "local-client"):
+                    request_service.store.close()
 
         def _route(
             self,

@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -469,6 +470,26 @@ class SafetyKernelStore:
         if self.path != ":memory:":
             self.connection.execute("PRAGMA journal_mode = WAL")
         self._create_schema()
+        # Identity is additive metadata, not execution authority. A single
+        # INSERT OR IGNORE atomically initializes old/new stores across hosts.
+        self.connection.execute(
+            "INSERT OR IGNORE INTO store_metadata(key,value) VALUES ('store_id',?)",
+            (uuid4().hex,),
+        )
+
+    @property
+    def store_id(self) -> str:
+        row = self.connection.execute(
+            "SELECT value FROM store_metadata WHERE key='store_id'"
+        ).fetchone()
+        value = row["value"] if row is not None else None
+        if (
+            not isinstance(value, str)
+            or len(value) != 32
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise RuntimeError("store identity unavailable")
+        return value
 
     def close(self) -> None:
         self.connection.close()
@@ -476,6 +497,10 @@ class SafetyKernelStore:
     def _create_schema(self) -> None:
         self.connection.executescript(
             """
+            CREATE TABLE IF NOT EXISTS store_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS tasks (
                 task_id TEXT PRIMARY KEY,
                 request_id TEXT NOT NULL UNIQUE,
@@ -924,6 +949,16 @@ class SafetyKernelStore:
             raise RuntimeError("worker attempt executor identity mismatch")
         return attempt
 
+    @staticmethod
+    def _check_manual_target_binding(task: TaskRecord, execution_target_id: str) -> None:
+        # Vetoed AUTO tasks intentionally retain targetless MANUAL semantics.
+        # Only an explicit binding constrains legacy owner dispatch paths.
+        if (
+            task.manual_execution_target_id
+            and task.manual_execution_target_id != execution_target_id
+        ):
+            raise RuntimeError("manual execution target mismatch")
+
     def _check_attempt_launch_authority(self, attempt: WorkerAttemptRecord) -> None:
         if attempt.fenced or attempt.cleanup_state != "UNRESOLVED":
             raise RuntimeError("worker attempt executor is fenced or already completed")
@@ -939,6 +974,7 @@ class SafetyKernelStore:
         ):
             raise RuntimeError("worker attempt lost dispatch authority")
         task = self.get_task(attempt.task_id)
+        self._check_manual_target_binding(task, dispatch["execution_target_id"])
         expected = expected_source_state_for_dispatch_authority(attempt.authority)
         if task.state is not expected or task.state_version != attempt.task_state_version:
             raise RuntimeError("worker attempt lost task state authority")
@@ -3250,6 +3286,7 @@ class SafetyKernelStore:
                 )
             expected_state = authority_state
             task = self.get_task(task_id)
+            self._check_manual_target_binding(task, dispatch["execution_target_id"])
             if task.state is not expected_state:
                 raise ValueError(f"dispatched worker can only start from {expected_state.value}")
             if task.state_version != expected_task_version:

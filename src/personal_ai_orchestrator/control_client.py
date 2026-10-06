@@ -107,6 +107,15 @@ class ControlPlaneClient:
     def _get(self, path: str, view: type[BaseModel]) -> BaseModel:
         return view.model_validate(self._request("GET", path))
 
+    def local_client_v2(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """One v2 request, never retried or routed through v1 mutation methods."""
+        from personal_ai_orchestrator.local_client_v2 import LocalClientRequestV2
+
+        request = LocalClientRequestV2.model_validate(payload)
+        return self._request(
+            "POST", "/v2/local-client", payload=request.model_dump(exclude_none=True)
+        )
+
     def health(self) -> HealthView:
         return self._get("/v1/health", HealthView)  # type: ignore[return-value]
 
