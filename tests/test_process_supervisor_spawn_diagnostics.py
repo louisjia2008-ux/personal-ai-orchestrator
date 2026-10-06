@@ -219,7 +219,22 @@ async def test_local_ownership_index_failure_still_exposes_exact_child(
         observed = supervisor.observed_process()
         assert observed is not None
         pid = observed.pid
-        assert await supervisor.abort_unowned(observed) == -9
+        # start() must finish its retained cleanup before propagating the
+        # post-create error. A later adapter abort consumes that same evidence.
+        receipt = observed.cleanup_result
+        assert receipt is not None and receipt.confirmed
+        assert receipt.child_reaped and receipt.group_empty
+        assert receipt.exit_code is not None
+        assert observed._reaped and not observed._pinned
+        operation, deadline = observed._operation, observed._cleanup_deadline
+        signals = tuple(observed._signals)
+        assert operation is not None and operation.done()
+        assert receipt.deadline_monotonic == deadline
+        assert supervisor.owned_pids() == ()
+        assert await supervisor.abort_unowned(observed) == receipt.exit_code
+        assert observed.cleanup_result is receipt
+        assert observed._operation is operation and observed._cleanup_deadline == deadline
+        assert tuple(observed._signals) == signals == receipt.signals
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
     finally:

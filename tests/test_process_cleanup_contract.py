@@ -974,3 +974,97 @@ async def test_changed_sigchld_policy_withholds_signals_and_preserves_unknown(
     assert not child._pinned
     assert unrelated_process.poll() is None
     assert os.waitpid(child.pid, os.WNOHANG) == (0, 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("probe_name", ["execution_probe", "pi_execution_probe"])
+@pytest.mark.parametrize("failed_pipe", [1, 2])
+@pytest.mark.parametrize("repeat_cancel", [False, True])
+async def test_probe_pipe_setup_error_joins_exact_cleanup_before_propagating(
+    tmp_path,
+    owned_supervisor,
+    unrelated_process,
+    monkeypatch,
+    probe_name,
+    failed_pipe,
+    repeat_cancel,
+):
+    from personal_ai_orchestrator import execution_probe, pi_execution_probe
+
+    module = execution_probe if probe_name == "execution_probe" else pi_execution_probe
+    worker = tmp_path / "offline-probe"
+    worker.write_text(f"#!{sys.executable}\nimport signal,time\nsignal.alarm(8)\ntime.sleep(30)\n")
+    worker.chmod(0o700)
+    monkeypatch.setattr(module, "ProcessSupervisor", lambda: owned_supervisor)
+    ticket = owned_supervisor.begin_spawn_observation(cleanup_budget_seconds=0.3, grace_seconds=0)
+    loop = asyncio.get_running_loop()
+    connect = loop.connect_read_pipe
+    calls = 0
+    failure = OSError("offline pipe attachment failure")
+
+    async def fail_connect(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == failed_pipe:
+            raise failure
+        return await connect(*args, **kwargs)
+
+    monkeypatch.setattr(loop, "connect_read_pipe", fail_connect)
+    entered, release = asyncio.Event(), asyncio.Event()
+    terminate = owned_supervisor._terminate
+
+    async def paused_terminate(supervised):
+        entered.set()
+        await release.wait()
+        await terminate(supervised)
+
+    monkeypatch.setattr(owned_supervisor, "_terminate", paused_terminate)
+    kwargs = {"cwd": tmp_path, "timeout_seconds": 0.2}
+    if module is execution_probe:
+        kwargs.update(opencode_bin=str(worker), model_sku_id="offline/model")
+    else:
+        kwargs.update(
+            pi_bin=str(worker), model_ref="offline/model", guard_path=tmp_path / "guard.ts"
+        )
+    caller = asyncio.create_task(module._probe(**kwargs))
+    started = loop.time()
+    try:
+        await _until(lambda: entered.is_set() or caller.done())
+        child = ticket.supervised
+        assert child is not None
+        operation, deadline = child._operation, child._cleanup_deadline
+        if repeat_cancel and entered.is_set():
+            for _ in range(4):
+                caller.cancel()
+                await asyncio.sleep(0)
+                assert not caller.done()
+                assert child._operation is operation and child._cleanup_deadline == deadline
+        release.set()
+        async with asyncio.timeout(2):
+            with pytest.raises(OSError) as caught:
+                await caller
+        assert caught.value is failure
+        receipt = child.cleanup_result
+        assert receipt is not None, "post-create failure must finish bounded cleanup before return"
+        assert entered.is_set() and operation is not None and operation.done()
+        assert receipt.child_reaped and receipt.group_empty
+        assert receipt.status is CleanupStatus.UNKNOWN
+        failed = child._pipes[failed_pipe - 1]
+        assert failed.error == "PIPE_SETUP_FAILED" and not failed.eof
+        assert receipt.deadline_monotonic == deadline == ticket.deadline_monotonic
+        assert child._operation is operation
+        assert ticket.abort_requested and ticket.creation_finished
+        assert child.pid in owned_supervisor.owned_pids()
+        assert len(owned_supervisor._retained) == 1 and calls == failed_pipe
+        assert (await owned_supervisor.cleanup(child)) is receipt
+        assert loop.time() - started < 1
+        assert unrelated_process.poll() is None
+    finally:
+        release.set()
+        if not caller.done():
+            caller.cancel()
+            await asyncio.wait({caller}, timeout=1)
+        if ticket.supervised is not None and ticket.supervised.cleanup_result is None:
+            # Keep red-baseline teardown inside the live loop as well.
+            await owned_supervisor.abort_spawn(ticket, grace_seconds=0, cleanup_budget_seconds=0.3)
+        owned_supervisor.end_spawn_observation(ticket)

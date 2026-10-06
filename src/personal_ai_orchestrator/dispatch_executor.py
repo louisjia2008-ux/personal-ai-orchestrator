@@ -757,50 +757,72 @@ class OwnerDispatchExecutor:
             store.close()
             raise
         except TimeoutError:
-            self._disable_worker_session(request_id)
-            receipt = await self._join_cleanup_operation(
-                self._cleanup_worker(store, request_id, supervised)
-            )
-            if receipt.status != "CONFIRMED":
-                self._emergency_repair(
-                    store,
-                    request_id,
-                    dispatch,
-                    supervised,
-                    run_id,
-                    writer_token,
-                    error=CleanupIncomplete(receipt),
+            try:
+                self._disable_worker_session(request_id)
+                receipt = await self._join_cleanup_operation(
+                    self._cleanup_worker(store, request_id, supervised)
                 )
-                store.close()
-                return
-            self._audit_spawn(
-                store,
-                dispatch.task_id,
-                "WORKER_TIMED_OUT",
-                self._supervised_spawn_diagnostics(supervised).evolved(
-                    safe_exit_code=receipt.exit_code,
-                    durable_run_created=True,
-                ),
-            )
-            worker_exit_code = WORKER_TIMEOUT_EXIT
-            result = self._host_result_envelope(
-                WORKER_TIMEOUT_EXIT, b"", b"", truncated=False, timeout=True
-            )
-            # Owner cancellation has one terminal transaction, even when its
-            # request overlaps the worker deadline or a graceful OS exit zero.
-            if execution.cancel_requested.is_set():
-                await self._join_cancel(execution)
-                task_now = store.get_task(dispatch.task_id)
-                if task_now.state is TaskState.CANCELLED:
+                if receipt.status != "CONFIRMED":
+                    self._emergency_repair(
+                        store,
+                        request_id,
+                        dispatch,
+                        supervised,
+                        run_id,
+                        writer_token,
+                        error=CleanupIncomplete(receipt),
+                    )
                     store.close()
                     return
-            next_state = record_worker_exit(
-                store,
-                task_id=dispatch.task_id,
-                run_id=run_id,
-                exit_code=WORKER_TIMEOUT_EXIT,
-                worker_result=result,
-            )
+                self._audit_spawn(
+                    store,
+                    dispatch.task_id,
+                    "WORKER_TIMED_OUT",
+                    self._supervised_spawn_diagnostics(supervised).evolved(
+                        safe_exit_code=receipt.exit_code,
+                        durable_run_created=True,
+                    ),
+                )
+                worker_exit_code = WORKER_TIMEOUT_EXIT
+                result = self._host_result_envelope(
+                    WORKER_TIMEOUT_EXIT, b"", b"", truncated=False, timeout=True
+                )
+                # Owner cancellation has one terminal transaction, even when its
+                # request overlaps the worker deadline or a graceful OS exit zero.
+                if execution.cancel_requested.is_set():
+                    await self._join_cancel(execution)
+                    task_now = store.get_task(dispatch.task_id)
+                    if task_now.state is TaskState.CANCELLED:
+                        store.close()
+                        return
+                next_state = record_worker_exit(
+                    store,
+                    task_id=dispatch.task_id,
+                    run_id=run_id,
+                    exit_code=WORKER_TIMEOUT_EXIT,
+                    worker_result=result,
+                )
+            except (Exception, asyncio.CancelledError) as error:
+                # Exceptions raised inside this timeout handler cannot reach
+                # the sibling lifecycle handlers. Reuse their bounded repair
+                # with the original receipt/deadline; never restart the worker.
+                try:
+                    await self._join_cleanup_operation(
+                        self._emergency_repair_and_reap(
+                            store,
+                            request_id,
+                            dispatch,
+                            supervised,
+                            run_id,
+                            writer_token,
+                            error=error,
+                        )
+                    )
+                finally:
+                    store.close()
+                if isinstance(error, asyncio.CancelledError):
+                    raise
+                return
         except ValueError as error:
             # The task was finalized concurrently (for example by an owner
             # cancellation closing the run first). Never resurrect state.

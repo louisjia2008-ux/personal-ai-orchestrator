@@ -490,7 +490,10 @@ class ProcessSupervisor:
         task.add_done_callback(created)
         try:
             return await asyncio.shield(task)
-        except asyncio.CancelledError:
+        except (Exception, asyncio.CancelledError):
+            # Pipe attachment and other post-create failures own the same
+            # exact child as cancellation. Join its retained cleanup before
+            # propagating the original error, even if this caller is cancelled.
             ticket.abort_requested = True
             if ticket.deadline_monotonic is None:
                 ticket.deadline_monotonic = (

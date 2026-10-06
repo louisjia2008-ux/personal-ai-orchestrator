@@ -501,9 +501,14 @@ async def test_timeout_cancel_overlap_has_one_cleanup_and_authoritative_cancel(
     assert lifecycle.executor._supervisor.owned_pids() == ()
 
 
+@pytest.mark.parametrize("timed_out", [False, True])
 async def test_receipt_persistence_failure_keeps_writer_quarantined(
-    lifecycle, monkeypatch: pytest.MonkeyPatch
+    lifecycle, monkeypatch: pytest.MonkeyPatch, timed_out: bool
 ):
+    if timed_out:
+        lifecycle.write_waiting_worker()
+        lifecycle.executor.config = replace(lifecycle.executor.config, worker_timeout_seconds=0.2)
+
     def fail_receipt_commit(self, **kwargs):
         raise sqlite3.OperationalError("offline receipt transaction failure")
 
@@ -1027,4 +1032,115 @@ async def test_stale_completion_cannot_unregister_newer_same_task_identity(lifec
     finally:
         registry.unregister(lifecycle.task_id, supervised=newer.supervised)
     assert registry.get(lifecycle.task_id) is None
+    lifecycle.assert_outcome(cleanup="CONFIRMED")
+
+
+@pytest.mark.parametrize("timed_out", [False, True])
+async def test_one_time_receipt_failure_repairs_normal_and_timeout_state(
+    lifecycle, monkeypatch: pytest.MonkeyPatch, timed_out: bool
+):
+    if timed_out:
+        lifecycle.write_waiting_worker()
+        lifecycle.executor.config = replace(lifecycle.executor.config, worker_timeout_seconds=0.2)
+    original = SafetyKernelStore.complete_worker_attempt
+    receipts = []
+    stores = []
+    operations = []
+
+    def fail_once(store, **kwargs):
+        receipts.append(kwargs["cleanup"])
+        stores.append(store)
+        operations.append(lifecycle.observed[0]._operation)
+        if len(receipts) == 1:
+            raise sqlite3.OperationalError("offline one-time receipt transaction failure")
+        return original(store, **kwargs)
+
+    monkeypatch.setattr(SafetyKernelStore, "complete_worker_attempt", fail_once)
+    await _bounded(lifecycle.start())
+    assert len(receipts) == 2
+    assert receipts[0] == receipts[1]
+    assert operations[0] is operations[1] and operations[0].done()
+    receipt = lifecycle.observed[0].cleanup_result
+    assert receipt.child_reaped and receipt.confirmed
+    assert receipts[0]["deadline_monotonic"] == receipt.deadline_monotonic
+    lifecycle.assert_outcome(cleanup="CONFIRMED")
+    for store in stores:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            store.connection.execute("SELECT 1")
+    store = SafetyKernelStore(lifecycle.state_db)
+    try:
+        dispatch = store.get_owner_dispatch_by_request_id(lifecycle.request_id)
+        assert dispatch.status.value == "BLOCKED"
+        assert dispatch.failure_code == "EXECUTOR_INTERNAL_ERROR"
+        assert "OperationalError" in dispatch.failure_reason
+        assert not store.has_cleanup_quarantine(lifecycle.task_id)
+    finally:
+        store.close()
+    await _bounded(lifecycle.executor.execute_async(lifecycle.request_id))
+    assert len(lifecycle.observed) == 1
+    assert lifecycle.executor._supervisor.owned_pids() == ()
+
+
+async def test_timeout_receipt_repair_survives_repeated_cancellation(
+    lifecycle, monkeypatch: pytest.MonkeyPatch
+):
+    lifecycle.write_waiting_worker()
+    lifecycle.executor.config = replace(lifecycle.executor.config, worker_timeout_seconds=0.2)
+    entered, release = lifecycle.barrier(), lifecycle.barrier()
+    repair = lifecycle.executor._emergency_repair_and_reap
+    commit = SafetyKernelStore.complete_worker_attempt
+    calls = []
+    repair_calls = []
+
+    def fail_once(store, **kwargs):
+        calls.append(kwargs["cleanup"])
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("offline timeout receipt failure")
+        return commit(store, **kwargs)
+
+    async def paused_repair(*args, **kwargs):
+        repair_calls.append(kwargs["error"])
+        entered.set()
+        await release.wait()
+        await repair(*args, **kwargs)
+
+    monkeypatch.setattr(SafetyKernelStore, "complete_worker_attempt", fail_once)
+    monkeypatch.setattr(lifecycle.executor, "_emergency_repair_and_reap", paused_repair)
+    task = lifecycle.start()
+    await _bounded(entered.wait())
+    child = lifecycle.observed[0]
+    receipt, operation = child.cleanup_result, child._operation
+    deadline = receipt.deadline_monotonic
+    for _ in range(4):
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert child._operation is operation and child._cleanup_deadline == deadline
+    release.set()
+    await _bounded(task)
+    assert len(repair_calls) == 1 and isinstance(repair_calls[0], sqlite3.OperationalError)
+    assert len(calls) == 2 and calls[0] == calls[1]
+    assert child.cleanup_result is receipt and child._operation is operation
+    assert len(lifecycle.observed) == 1
+    lifecycle.assert_outcome(cleanup="CONFIRMED")
+
+
+async def test_timeout_terminal_write_failure_repairs_and_closes_store(
+    lifecycle, monkeypatch: pytest.MonkeyPatch
+):
+    lifecycle.write_waiting_worker()
+    lifecycle.executor.config = replace(lifecycle.executor.config, worker_timeout_seconds=0.2)
+    stores = []
+
+    def fail_terminal_write(store, **kwargs):
+        stores.append(store)
+        raise sqlite3.OperationalError("offline timeout terminal write failure")
+
+    monkeypatch.setattr(opencode_module, "record_worker_exit", fail_terminal_write)
+    await _bounded(lifecycle.start())
+    assert len(stores) == 1
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        stores[0].connection.execute("SELECT 1")
+    assert len(lifecycle.observed) == 1
+    assert lifecycle.observed[0].cleanup_result.confirmed
     lifecycle.assert_outcome(cleanup="CONFIRMED")
