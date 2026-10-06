@@ -36,6 +36,9 @@ is a volunteer pre-alpha project, no fixed response-time SLA is promised.
 - Provider credentials remain in approved native stores or narrow in-memory
   request scope and never enter Git, SQLite, evidence, logs, or API views.
 - Client adapters cannot create approval authority or enable Production ACTIVE.
+- Remote Telegram controllers require independent user and chat allowlists,
+  fixed local workspace configuration, and native Harness sandbox/approval
+  enforcement; remote text cannot select a filesystem path or grant approval.
 - Process termination targets an exact host-owned identity; broad process-name
   termination is not an ownership mechanism.
 - Automatic paid overage requires explicit owner policy.
