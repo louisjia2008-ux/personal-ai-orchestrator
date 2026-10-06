@@ -323,7 +323,9 @@ private struct NewTaskSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var intent: String = ""
     @State private var executionTargetId: String = ""
-    @State private var submitting: Bool = false
+    @State private var submissionId: UUID?
+
+    private var submitting: Bool { submissionId != nil }
     let onSubmitted: (String) -> Void
 
     private var onlineProjects: [ProjectView] {
@@ -426,6 +428,7 @@ private struct NewTaskSheet: View {
             HStack {
                 Spacer()
                 Button(L10n.cancel, role: .cancel) {
+                    submissionId = nil
                     dismiss()
                 }
                 .keyboardShortcut(.cancelAction)
@@ -446,22 +449,30 @@ private struct NewTaskSheet: View {
                 store.selectedProjectId = onlineProjects.first?.projectId
             }
         }
+        .onDisappear { submissionId = nil }
     }
 
     private func submit() {
+        guard !submitting else { return }
         let value = intent
         let projectId = store.selectedProjectId
         let target = executionTargetId
-        submitting = true
+        let requestId = UUID()
+        submissionId = requestId
         Task {
-            await store.quickSubmit(projectId: projectId, intent: value)
-            submitting = false
-            if let taskId = store.lastSubmittedTaskId {
-                if !target.isEmpty {
-                    await store.dispatch(taskId: taskId, executionTargetId: target)
-                }
-                onSubmitted(taskId)
+            defer {
+                if submissionId == requestId { submissionId = nil }
             }
+            let result = await store.quickSubmit(projectId: projectId, intent: value)
+            guard submissionId == requestId,
+                  let result, case .submitted(let taskId, _) = result else { return }
+            if !target.isEmpty {
+                await store.dispatch(taskId: taskId, executionTargetId: target)
+            }
+            // Dismissing the sheet while either request runs must not navigate
+            // the dashboard later. A failed submit never dispatches an older task.
+            guard submissionId == requestId else { return }
+            onSubmitted(taskId)
         }
     }
 }

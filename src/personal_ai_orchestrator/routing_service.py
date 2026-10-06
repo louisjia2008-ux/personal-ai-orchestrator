@@ -166,6 +166,7 @@ class RoutingService:
         *,
         reference: datetime,
         policy: RoutingPolicy,
+        registry: ModelRegistry,
     ) -> SchedulerDecision:
         profile = self.task_profiles.get(request.task_id or "")
         if profile is None:
@@ -207,7 +208,7 @@ class RoutingService:
             )
 
         return route_task(
-            self._effective_registry(),
+            registry,
             task=profile,
             now=reference,
             known_at=request.requested_at,
@@ -228,6 +229,7 @@ class RoutingService:
         decision: RoutingDecision,
         scheduler: SchedulerDecision,
         reference: datetime,
+        registry: ModelRegistry,
     ) -> None:
         if self.shadow_journal is None or request.mode is not RoutingMode.SHADOW:
             return
@@ -259,10 +261,10 @@ class RoutingService:
         predicted_burn_fraction = None
         quota_confidence = EvidenceConfidence.UNKNOWN
         collector_status = None
-        actual_target = self._effective_registry().execution_targets.get(manual_target_id)
+        actual_target = registry.execution_targets.get(manual_target_id)
         if actual_target is not None:
             target = actual_target
-            model = self._effective_registry().models[target.model_sku_id]
+            model = registry.models[target.model_sku_id]
             provider_id = model.provider_id
         if actual_evaluation is not None:
             quota_pool_id = actual_evaluation.quota_pool_id
@@ -271,7 +273,7 @@ class RoutingService:
             quota_pool_id = selected_evaluation.quota_pool_id
             predicted_burn_fraction = selected_evaluation.predicted_burn_fraction
         if quota_pool_id is not None:
-            snapshot = self._effective_registry().quota_pools[quota_pool_id].snapshot
+            snapshot = registry.quota_pools[quota_pool_id].snapshot
             quota_confidence = snapshot.confidence
             if snapshot.confidence.value == "UNKNOWN":
                 collector_status = QuotaCollectionStatus.UNKNOWN
@@ -355,15 +357,19 @@ class RoutingService:
         if self.policy_journal is not None:
             self.policy_journal.append(policy_snapshot)
 
+        # Provider refreshes can replace the registry between reads. Scheduling,
+        # serialization, and shadow evidence must all describe the same snapshot.
+        registry = self._effective_registry()
         scheduler = self._scheduler_decision(
             request,
             reference=reference,
             policy=resolved_policy.policy,
+            registry=registry,
         )
         decision = build_routing_decision(
             request,
             scheduler,
-            self._effective_registry(),
+            registry,
             catalog_snapshot_id=self.catalog_snapshot_id,
             policy_snapshot_id=policy_snapshot.id,
             activation_gate=self.activation_gate,
@@ -387,6 +393,7 @@ class RoutingService:
                     decision=existing,
                     scheduler=scheduler,
                     reference=reference,
+                    registry=registry,
                 )
                 return existing
             raise
@@ -395,6 +402,7 @@ class RoutingService:
             decision=decision,
             scheduler=scheduler,
             reference=reference,
+            registry=registry,
         )
         return decision
 

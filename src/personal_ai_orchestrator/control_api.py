@@ -1308,6 +1308,8 @@ class ControlPlaneService:
     #: decisions the tick creates. The daemon wires the runtime config's
     #: value; ad-hoc services fall back to a stable local default.
     catalog_snapshot_id: str = "control-catalog-v1"
+    # One daemon epoch, reused by request-local service clones.
+    process_epoch: str = field(default_factory=lambda: _PROCESS_INSTANCE_ID)
 
     @property
     def owner_initiated_execution_enabled(self) -> bool:
@@ -1336,6 +1338,7 @@ class ControlPlaneService:
             model_tiers_source=self.model_tiers_source,
             shadow_journal=self.shadow_journal,
             catalog_snapshot_id=self.catalog_snapshot_id,
+            process_epoch=self.process_epoch,
         )
 
     @staticmethod
@@ -1840,14 +1843,24 @@ class ControlPlaneService:
         project_view = self._refresh_project_view(project)
         if project_view.storage_availability != ProjectAvailability.ONLINE.value:
             raise ControlPlaneError(409, "project_not_available")
-        try:
-            base_sha = self._git(Path(project.git_root), "rev-parse", "HEAD")
-        except Exception:
-            self.store.update_project_availability(
-                project.project_id,
-                storage_availability=ProjectAvailability.INVALID_REPOSITORY,
-            )
-            raise ControlPlaneError(409, "project_not_available") from None
+        # HEAD is a host-derived submission snapshot, not part of the client's
+        # request. A replay must retain its original snapshot after the owner
+        # commits more work. Storage still validates every semantic request
+        # field; finding a request ID alone never makes a conflict acceptable.
+        existing = self.store.connection.execute(
+            "SELECT base_sha FROM tasks WHERE request_id=?", (request.request_id,)
+        ).fetchone()
+        if existing is not None:
+            base_sha = existing["base_sha"]
+        else:
+            try:
+                base_sha = self._git(Path(project.git_root), "rev-parse", "HEAD")
+            except Exception:
+                self.store.update_project_availability(
+                    project.project_id,
+                    storage_availability=ProjectAvailability.INVALID_REPOSITORY,
+                )
+                raise ControlPlaneError(409, "project_not_available") from None
         scheduling_policy, manual_target = self._validated_task_policy(
             request.scheduling_policy,
             request.manual_execution_target_id,
@@ -1866,20 +1879,33 @@ class ControlPlaneService:
                 400,
                 f"invalid_min_tier: must be one of T0/T1/T2/T3, got {min_tier!r}",
             )
+        submission = {
+            "task_id": request.task_id,
+            "request_id": request.request_id,
+            "intent": request.intent,
+            "project_id": request.project_id,
+            "base_sha": base_sha,
+            "working_subpath": project.working_subpath,
+            "scheduling_policy": scheduling_policy,
+            "manual_execution_target_id": manual_target,
+            "min_tier": min_tier,
+        }
         try:
-            record = self.store.submit_task(
-                task_id=request.task_id,
-                request_id=request.request_id,
-                intent=request.intent,
-                project_id=request.project_id,
-                base_sha=base_sha,
-                working_subpath=project.working_subpath,
-                scheduling_policy=scheduling_policy,
-                manual_execution_target_id=manual_target,
-                min_tier=min_tier,
-            )
+            record = self.store.submit_task(**submission)
         except ValueError:
-            raise ControlPlaneError(400, "conflicting_request_id") from None
+            # Another request can commit between the lookup and the storage
+            # transaction. Retry validation once against its frozen snapshot;
+            # never retry with a fresh ID or bypass storage's conflict checks.
+            raced = self.store.connection.execute(
+                "SELECT base_sha FROM tasks WHERE request_id=?", (request.request_id,)
+            ).fetchone()
+            if existing is not None or raced is None or raced["base_sha"] == base_sha:
+                raise ControlPlaneError(400, "conflicting_request_id") from None
+            submission["base_sha"] = raced["base_sha"]
+            try:
+                record = self.store.submit_task(**submission)
+            except ValueError:
+                raise ControlPlaneError(400, "conflicting_request_id") from None
         return _task_view(record)
 
     def list_tasks(self, *, limit: int = DEFAULT_LIST_LIMIT) -> TaskListView:
@@ -1964,15 +1990,30 @@ class ControlPlaneService:
             task = self.store.get_task(task_id)
         except KeyError:
             raise ControlPlaneError(404, "task_not_found") from None
+        # Read the task before checking the atomic veto audit. If another
+        # request has already published READY, its matching audit must also
+        # be visible; checking in the opposite order could turn a replay into
+        # a fresh READY -> CANCELLED transition (issue #72).
+        if self._cancel_veto_replayed(task_id, request.request_id):
+            return CancelView(task=self.get_task(task_id), cancelled_now=False)
         # M1 WP5a-2 (§3.5): cancel on an AUTO_* task is exactly a veto —
         # back to READY, policy locked MANUAL, pending shadow discarded,
         # auto metadata cleared, audited. No new semantics.
         if task.state in {TaskState.AUTO_PLANNED, TaskState.AUTO_GRACE}:
-            self._veto_auto_lifecycle(
-                task,
-                request_id=request.request_id or f"cancel-{task.task_id}",
-                audit_reason="owner_cancel",
-            )
+            try:
+                self._veto_auto_lifecycle(
+                    task,
+                    request_id=request.request_id,
+                    audit_reason="owner_cancel",
+                )
+            except ControlPlaneError:
+                # A concurrent identical call can commit after the check
+                # above. The original veto and request ID share one storage
+                # transaction, so only that exact completed operation permits
+                # a replay response; unrelated state races still fail closed.
+                if self._cancel_veto_replayed(task_id, request.request_id):
+                    return CancelView(task=self.get_task(task_id), cancelled_now=False)
+                raise
             return CancelView(
                 task=_task_view(self.store.get_task(task_id)),
                 cancelled_now=True,
@@ -1996,6 +2037,8 @@ class ControlPlaneService:
             )
         if task.state in {TaskState.FAILED, TaskState.COMPLETED}:
             raise ControlPlaneError(409, "task_state_is_terminal")
+        if task.state is TaskState.BLOCKED and self.store.has_cleanup_quarantine(task_id):
+            raise ControlPlaneError(409, "worker_cleanup_unknown")
         try:
             updated = self.store.transition_task(
                 task_id,
@@ -2007,11 +2050,40 @@ class ControlPlaneService:
             raise ControlPlaneError(409, "task_state_cannot_be_cancelled") from error
         return CancelView(task=_task_view(updated), cancelled_now=True)
 
+    def _cancel_veto_replayed(self, task_id: str, request_id: str | None) -> bool:
+        """Recognize only a durable, explicitly identified cancel-as-veto.
+
+        IDs are scoped to the task and operation. Calls without an explicit
+        ID retain the existing new-operation semantics; an explicit auto/veto
+        request with the same ID is not a replay of the cancel endpoint.
+        """
+        if request_id is None:
+            return False
+        for event in self.store.audit_events(task_id):
+            payload = event["payload"]
+            if not (
+                event["event_type"] == "AUTO_VETOED"
+                and payload.get("request_id") == request_id
+                and payload.get("reason") == "owner_cancel"
+            ):
+                continue
+            if payload.get("request_id_explicit") is False:
+                continue
+            if payload.get("request_id_explicit") is True:
+                return True
+            # Older builds generated this exact ID for calls without an ID.
+            # Without provenance, it could also be a genuine explicit ID.
+            # Neither a second cancellation nor a success claim is justified.
+            if "request_id_explicit" in payload or request_id == f"cancel-{task_id}":
+                raise ControlPlaneError(409, "cancel_request_identity_ambiguous")
+            return True  # Historical non-generated IDs were necessarily explicit.
+        return False
+
     def _veto_auto_lifecycle(
         self,
         task: TaskRecord,
         *,
-        request_id: str,
+        request_id: str | None,
         audit_reason: str,
     ) -> None:
         """Shared veto core (endpoint veto + cancel-as-veto, §3.5/§23).
@@ -2038,6 +2110,9 @@ class ControlPlaneService:
                 reason=audit_reason,
                 event_type="AUTO_VETOED",
                 request_id=request_id,
+                request_id_explicit=(
+                    request_id is not None if audit_reason == "owner_cancel" else None
+                ),
                 target=target,
                 force_manual=True,
             )
@@ -4055,6 +4130,18 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
             segments, query = self._segments()
             request_service = None
             try:
+                if segments == ("v2", "local-client"):
+                    if method != "POST":
+                        self._json(405, {"error": "method_not_allowed"})
+                        return
+                    payload = self._read_json()
+                    if payload is None:
+                        return
+                    from personal_ai_orchestrator.local_client_v2 import handle_local_client_v2
+
+                    request_service = service.open_request()
+                    self._json(200, handle_local_client_v2(request_service, payload))
+                    return
                 if not segments or segments[0] != CONTROL_API_VERSION:
                     self._json(404, {"error": "not_found"})
                     return
@@ -4083,6 +4170,9 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                 except Exception:
                     pass
                 self._json(503, {"error": "control_plane_unavailable"})
+            finally:
+                if request_service is not None and segments == ("v2", "local-client"):
+                    request_service.store.close()
 
         def _route(
             self,

@@ -102,3 +102,12 @@ changes task state and may be restarted independently of workers.
 - approval is a fixed typed operation;
 - unexpected `argv`/shell fields are rejected;
 - proactive notifications emit only new or changed durable state.
+
+## Opt-in manual execution v2
+
+The separate [local-client v2 contract](LOCAL_CLIENT_V2.md) adds explicit
+registered-target MANUAL submission, owner START, bounded read-only DETAIL,
+original-tuple dispatch reconciliation and manual task cancellation. It binds
+mutations to a durable store identity and the current daemon process epoch.
+Legacy requests without `protocol_version` keep the contract above; v2 does not
+accept approval decisions or enable any autonomous execution mode.

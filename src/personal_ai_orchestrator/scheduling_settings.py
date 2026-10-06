@@ -80,9 +80,9 @@ class SchedulingSettings:
         if value not in SELECTABLE_GLOBAL_POLICIES:
             raise ValueError("unsupported_global_scheduling_policy")
         with self._lock:
-            self._policy = value
             if self._path is not None:
-                self._persist()
+                self._persist(policy=value, mode=self._mode)
+            self._policy = value
             return self._policy
 
     def set_mode(self, value: str) -> str:
@@ -98,9 +98,9 @@ class SchedulingSettings:
         if value not in SELECTABLE_MODES:
             raise ValueError("unsupported_scheduling_mode")
         with self._lock:
-            self._mode = value
             if self._path is not None:
-                self._persist()
+                self._persist(policy=self._policy, mode=value)
+            self._mode = value
             return self._mode
 
     def _load_from_disk(self) -> str | None:
@@ -108,7 +108,7 @@ class SchedulingSettings:
             return None
         try:
             payload = json.loads(self._path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeError, json.JSONDecodeError):
             return None
         if not isinstance(payload, dict) or payload.get("schema") != SCHEMA:
             return None
@@ -125,13 +125,15 @@ class SchedulingSettings:
         self._mode = mode
         return policy
 
-    def _persist(self) -> None:
+    def _persist(self, *, policy: str, mode: str) -> None:
+        """Persist proposed values before publishing them to in-memory readers."""
+
         from datetime import UTC, datetime
 
         payload = {
             "schema": SCHEMA,
-            "default_scheduling_policy": self._policy,
-            "mode": self._mode,
+            "default_scheduling_policy": policy,
+            "mode": mode,
             "updated_at": datetime.now(UTC).isoformat(),
         }
         rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"

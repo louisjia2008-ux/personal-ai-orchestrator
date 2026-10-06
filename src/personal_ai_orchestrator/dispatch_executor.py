@@ -33,13 +33,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import re
 import secrets
 import shutil
-import signal
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -60,6 +61,7 @@ from personal_ai_orchestrator.execution_evidence import (
 )
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.process_supervisor import (
+    CleanupIncomplete,
     ProcessSpawnError,
     ProcessSupervisor,
     SpawnDiagnostics,
@@ -83,6 +85,7 @@ from personal_ai_orchestrator.safety_kernel import (
     OwnerDispatchRecord,
     OwnerDispatchStatus,
     SafetyKernelStore,
+    TaskRecord,
     TaskState,
     expected_source_state_for_dispatch_authority,
     shadow_identity_payload,
@@ -98,6 +101,9 @@ from personal_ai_orchestrator.worktree_manager import ManagedWorktree, WorktreeM
 
 MAX_WORKER_STDOUT_BYTES = 256 * 1024
 MAX_WORKER_STDERR_BYTES = 64 * 1024
+# Host-owned failure status: a deadline cannot become success via graceful exit(0).
+WORKER_TIMEOUT_EXIT = 124
+WORKER_OUTPUT_ERROR_EXIT = 125
 
 # Bounded, sanitized transcript tails kept in the run result so the owner
 # can see what the worker actually did. The worker's text keeps zero task
@@ -172,6 +178,8 @@ class DispatchExecutorConfig:
     opencode_bin: str = "opencode"
     worker_timeout_seconds: float = 1800.0
     worker_grace_seconds: float = 5.0
+    worker_cleanup_budget_seconds: float = 10.0
+    worker_eof_grace_seconds: float = 2.0
     require_quota_certainty: bool = False
     verifier_profile: VerifierProfile | None = None
     extra_worker_args: tuple[str, ...] = ()
@@ -187,6 +195,16 @@ class QuotaAdmission:
 
 
 @dataclass
+class WorkerAttemptIdentity:
+    attempt_id: str
+    executor_id: str
+    dispatch_id: str
+    task_id: str
+    writer_token: str
+    run_id: str
+
+
+@dataclass
 class ActiveExecution:
     task_id: str
     request_id: str
@@ -196,6 +214,8 @@ class ActiveExecution:
     loop: asyncio.AbstractEventLoop
     cancel_requested: asyncio.Event = field(default_factory=asyncio.Event)
     cancel_completed: asyncio.Event = field(default_factory=asyncio.Event)
+    attempt: WorkerAttemptIdentity | None = None
+    cancel_task: asyncio.Task[bool] | None = None
 
 
 class ExecutionSupervisor:
@@ -209,9 +229,11 @@ class ExecutionSupervisor:
         with self._lock:
             self._active[execution.task_id] = execution
 
-    def unregister(self, task_id: str) -> None:
+    def unregister(self, task_id: str, *, supervised: SupervisedProcess) -> None:
         with self._lock:
-            self._active.pop(task_id, None)
+            current = self._active.get(task_id)
+            if current is not None and current.supervised is supervised:
+                self._active.pop(task_id, None)
 
     def get(self, task_id: str) -> ActiveExecution | None:
         with self._lock:
@@ -254,6 +276,11 @@ class OwnerDispatchExecutor:
         # shadow once the run reaches a truthful outcome. ``None`` keeps the
         # owner-dispatch-only behavior (no pending shadow exists to finalize).
         self._shadow_journal = shadow_journal
+        self._executor_id = f"executor-{secrets.token_hex(16)}"
+        self._attempts: dict[str, WorkerAttemptIdentity] = {}
+        self._cleanup_operations: set[asyncio.Task[Any]] = set()
+        self._invocation_lock = threading.Lock()
+        self._inflight_requests: set[str] = set()
 
     # ------------------------------------------------------------------
     # public entrypoints
@@ -288,10 +315,19 @@ class OwnerDispatchExecutor:
                 store.close()
 
     async def execute_async(self, request_id: str) -> None:
+        # Replayed calls must not revoke capabilities or overwrite bookkeeping
+        # belonging to the original invocation on this executor instance.
+        with self._invocation_lock:
+            if request_id in self._inflight_requests:
+                return
+            self._inflight_requests.add(request_id)
         try:
             await self._execute_async(request_id)
         finally:
             self._disable_worker_session(request_id)
+            self._attempts.pop(request_id, None)
+            with self._invocation_lock:
+                self._inflight_requests.discard(request_id)
 
     def _disable_worker_session(self, request_id: str) -> None:
         """Runtime hook: synchronously revoke optional worker capabilities."""
@@ -311,6 +347,11 @@ class OwnerDispatchExecutor:
             store.close()
             return
 
+        # A request identifies its original attempt. Re-entry is observational;
+        # an unresolved or completed attempt never authorizes another launch.
+        if store.get_worker_attempt_for_dispatch(dispatch.dispatch_id) is not None:
+            store.close()
+            return
         task = store.get_task(dispatch.task_id)
         # Round 6 §4-§7: the legal source state is a property of the
         # DURABLE dispatch authority, never of the current task row. A
@@ -392,6 +433,19 @@ class OwnerDispatchExecutor:
         try:
             store.acquire_writer(dispatch.task_id, writer_token)
         except Exception:
+            current_writer = store.get_workspace(dispatch.task_id).writer_token or ""
+            dispatch_writer_prefix = f"writer-{dispatch.dispatch_id}-"
+            same_dispatch_writer = (
+                current_writer.startswith(dispatch_writer_prefix)
+                and re.fullmatch(r"[0-9a-f]{16}", current_writer[len(dispatch_writer_prefix) :])
+                is not None
+            )
+            if (
+                same_dispatch_writer
+                or store.get_worker_attempt_for_dispatch(dispatch.dispatch_id) is not None
+            ):
+                store.close()
+                return
             self._fail_pre_worker(
                 store,
                 request_id,
@@ -421,38 +475,76 @@ class OwnerDispatchExecutor:
             store.close()
             return
 
-        # -- worker spawn + atomic RUNNING -------------------------------
-        spawn_observation = self._supervisor.begin_spawn_observation()
+        # -- durable spawn boundary + atomic RUNNING ----------------------
+        # An unresolved intent itself is the quarantine. It is committed before
+        # crossing the OS boundary, never reconstructed from a best-effort audit.
+        attempt = WorkerAttemptIdentity(
+            attempt_id=f"attempt-{secrets.token_hex(16)}",
+            executor_id=self._executor_id,
+            dispatch_id=dispatch.dispatch_id,
+            task_id=dispatch.task_id,
+            writer_token=writer_token,
+            run_id=f"run-{dispatch.dispatch_id}",
+        )
         try:
-            supervised = await self._spawn_worker(store, dispatch, worktree)
-        except Exception as error:
-            observed = self._supervisor.observed_process()
-            diagnostics = self._spawn_failure_diagnostics(error, observed)
-            if observed is not None:
-                exit_code = await self._supervisor.abort_unowned(observed)
-                diagnostics = diagnostics.evolved(
-                    child_exited_before_ownership=True,
-                    safe_exit_code=exit_code,
-                )
-            self._audit_spawn(
-                store,
-                dispatch.task_id,
-                "WORKER_SPAWN_FAILED_DETAIL",
-                diagnostics,
+            store.begin_worker_attempt(
+                dispatch_id=attempt.dispatch_id,
+                task_id=attempt.task_id,
+                attempt_id=attempt.attempt_id,
+                executor_id=attempt.executor_id,
+                writer_token=attempt.writer_token,
+                expected_task_version=ready_version,
             )
+            self._attempts[request_id] = attempt
+            store.permit_worker_spawn(
+                attempt_id=attempt.attempt_id, executor_id=attempt.executor_id
+            )
+        except Exception:
             self._fail_pre_worker(
                 store,
                 request_id,
                 writer_token=writer_token,
-                failure_code="WORKER_SPAWN_FAILED",
-                failure_reason=(
-                    "worker process failed before durable ownership: "
-                    f"stage={diagnostics.spawn_stage.value} "
-                    f"exception={diagnostics.exception_class or type(error).__name__} "
-                    f"child_created={'yes' if diagnostics.child_created else 'no'}"
-                ),
+                failure_code="WORKER_ATTEMPT_UNAVAILABLE",
+                failure_reason="durable spawn claim could not be established",
             )
             store.close()
+            return
+        spawn_observation = self._supervisor.begin_spawn_observation(
+            cleanup_budget_seconds=self.config.worker_cleanup_budget_seconds,
+            grace_seconds=self.config.worker_grace_seconds,
+        )
+        spawn_observation.creation_guard = lambda: store.worker_spawn_guard(
+            attempt_id=attempt.attempt_id,
+            executor_id=attempt.executor_id,
+            spawn_ticket=attempt.attempt_id,
+        )
+        spawn_task = asyncio.create_task(self._spawn_worker(store, dispatch, worktree))
+        try:
+            supervised = await asyncio.shield(spawn_task)
+            store.record_worker_spawn(
+                attempt_id=attempt.attempt_id,
+                executor_id=attempt.executor_id,
+                spawn_ticket=attempt.attempt_id,
+                pid=supervised.pid,
+            )
+        except (Exception, asyncio.CancelledError) as error:
+            self._disable_worker_session(request_id)
+            if spawn_observation.deadline_monotonic is None:
+                spawn_observation.deadline_monotonic = (
+                    time.monotonic() + self.config.worker_cleanup_budget_seconds
+                )
+            spawn_observation.abort_requested = True
+            spawn_task.cancel()
+            try:
+                await self._join_cleanup_operation(
+                    self._finish_failed_spawn(
+                        store, request_id, dispatch, attempt, spawn_observation, spawn_task, error
+                    )
+                )
+            finally:
+                store.close()
+            if isinstance(error, asyncio.CancelledError):
+                raise
             return
         finally:
             self._supervisor.end_spawn_observation(spawn_observation)
@@ -483,13 +575,16 @@ class OwnerDispatchExecutor:
                 writer_token=writer_token,
                 pid=supervised.pid,
                 expected_state=expected_state,
+                attempt_id=attempt.attempt_id,
+                executor_id=attempt.executor_id,
             )
         except Exception as error:
             # The child exists but is not durably owned: kill the exact
             # child before any state repair so no orphan process remains.
-            exit_code = await self._supervisor.cancel(
-                supervised, grace_seconds=self.config.worker_grace_seconds
+            receipt = await self._join_cleanup_operation(
+                self._cleanup_worker(store, request_id, supervised)
             )
+            exit_code = receipt.exit_code
             self._audit_spawn(
                 store,
                 dispatch.task_id,
@@ -528,6 +623,7 @@ class OwnerDispatchExecutor:
             writer_token=writer_token,
             supervised=supervised,
             loop=asyncio.get_running_loop(),
+            attempt=attempt,
         )
         try:
             self._activate_worker_session(request_id)
@@ -580,6 +676,7 @@ class OwnerDispatchExecutor:
                 ),
             )
             exit_code, stdout, stderr, truncated = await self._wait_for_worker(supervised)
+            self._persist_cleanup(store, attempt, supervised.cleanup_result)
             self._audit_spawn(
                 store,
                 dispatch.task_id,
@@ -594,21 +691,21 @@ class OwnerDispatchExecutor:
             )
             self._disable_worker_session(request_id)
             worker_exit_code = exit_code
-            if (
-                exit_code != 0
-                and execution.cancel_requested.is_set()
-                and not execution.cancel_completed.is_set()
-            ):
+            if execution.cancel_requested.is_set() and not execution.cancel_completed.is_set():
                 # The owner asked for this kill; the cancel transaction
                 # owns the final state. Give it the chance to finish.
                 try:
-                    await asyncio.wait_for(execution.cancel_completed.wait(), timeout=15.0)
+                    deadline = supervised.cleanup_result.deadline_monotonic
+                    await asyncio.wait_for(
+                        execution.cancel_completed.wait(),
+                        timeout=max(0.0, deadline - time.monotonic()),
+                    )
                 except TimeoutError:
-                    pass
-            if execution.cancel_requested.is_set() and exit_code != 0:
+                    raise RuntimeError("cancellation finalization deadline exhausted") from None
+            if execution.cancel_requested.is_set():
                 task_now = store.get_task(dispatch.task_id)
                 if task_now.state is not TaskState.RUNNING:
-                    self.execution_supervisor.unregister(dispatch.task_id)
+                    self.execution_supervisor.unregister(dispatch.task_id, supervised=supervised)
                     try:
                         store.release_writer(dispatch.task_id, writer_token)
                     except Exception:
@@ -617,6 +714,7 @@ class OwnerDispatchExecutor:
                         store.mark_owner_dispatch_cancelled(request_id)
                     store.close()
                     return
+                raise RuntimeError("owner cancellation did not reach a durable terminal state")
             result = self._host_result_envelope(exit_code, stdout, stderr, truncated=truncated)
             next_state = record_worker_exit(
                 store,
@@ -644,38 +742,107 @@ class OwnerDispatchExecutor:
                 worker_result=result,
             )
         except asyncio.CancelledError:
-            # Loop shutdown/cancellation must never strand a live child,
-            # a RUNNING task or the writer lock. Repair synchronously
-            # (no awaits that could re-cancel), then propagate.
-            self._emergency_repair(
-                store,
-                request_id,
-                dispatch,
-                supervised,
-                run_id,
-                writer_token,
-                cancelled=True,
+            # Repeated caller cancellation joins a strongly retained operation;
+            # it cannot cancel cleanup or restart its deadline.
+            await self._join_cleanup_operation(
+                self._emergency_repair_and_reap(
+                    store,
+                    request_id,
+                    dispatch,
+                    supervised,
+                    run_id,
+                    writer_token,
+                )
             )
+            store.close()
             raise
         except TimeoutError:
-            self._disable_worker_session(request_id)
-            exit_code = await self._supervisor.cancel(
-                supervised, grace_seconds=self.config.worker_grace_seconds
-            )
-            worker_exit_code = exit_code
-            result = self._host_result_envelope(exit_code, b"", b"", truncated=False, timeout=True)
-            next_state = record_worker_exit(
-                store,
-                task_id=dispatch.task_id,
-                run_id=run_id,
-                exit_code=exit_code,
-                worker_result=result,
-            )
-        except ValueError:
+            try:
+                self._disable_worker_session(request_id)
+                receipt = await self._join_cleanup_operation(
+                    self._cleanup_worker(store, request_id, supervised)
+                )
+                if receipt.status != "CONFIRMED":
+                    self._emergency_repair(
+                        store,
+                        request_id,
+                        dispatch,
+                        supervised,
+                        run_id,
+                        writer_token,
+                        error=CleanupIncomplete(receipt),
+                    )
+                    store.close()
+                    return
+                self._audit_spawn(
+                    store,
+                    dispatch.task_id,
+                    "WORKER_TIMED_OUT",
+                    self._supervised_spawn_diagnostics(supervised).evolved(
+                        safe_exit_code=receipt.exit_code,
+                        durable_run_created=True,
+                    ),
+                )
+                worker_exit_code = WORKER_TIMEOUT_EXIT
+                result = self._host_result_envelope(
+                    WORKER_TIMEOUT_EXIT, b"", b"", truncated=False, timeout=True
+                )
+                # Owner cancellation has one terminal transaction, even when its
+                # request overlaps the worker deadline or a graceful OS exit zero.
+                if execution.cancel_requested.is_set():
+                    await self._join_cancel(execution)
+                    task_now = store.get_task(dispatch.task_id)
+                    if task_now.state is TaskState.CANCELLED:
+                        store.close()
+                        return
+                next_state = record_worker_exit(
+                    store,
+                    task_id=dispatch.task_id,
+                    run_id=run_id,
+                    exit_code=WORKER_TIMEOUT_EXIT,
+                    worker_result=result,
+                )
+            except (Exception, asyncio.CancelledError) as error:
+                # Exceptions raised inside this timeout handler cannot reach
+                # the sibling lifecycle handlers. Reuse their bounded repair
+                # with the original receipt/deadline; never restart the worker.
+                try:
+                    await self._join_cleanup_operation(
+                        self._emergency_repair_and_reap(
+                            store,
+                            request_id,
+                            dispatch,
+                            supervised,
+                            run_id,
+                            writer_token,
+                            error=error,
+                        )
+                    )
+                finally:
+                    store.close()
+                if isinstance(error, asyncio.CancelledError):
+                    raise
+                return
+        except ValueError as error:
             # The task was finalized concurrently (for example by an owner
             # cancellation closing the run first). Never resurrect state.
             task_now = store.get_task(dispatch.task_id)
-            self.execution_supervisor.unregister(dispatch.task_id)
+            if task_now.state is TaskState.RUNNING:
+                # ValueError can also come from transport/protocol handling.
+                # It is only a concurrent-finalization signal if state proves
+                # that another lifecycle path actually finalized the task.
+                await self._emergency_repair_and_reap(
+                    store,
+                    request_id,
+                    dispatch,
+                    supervised,
+                    run_id,
+                    writer_token,
+                    error=error,
+                )
+                store.close()
+                return
+            self.execution_supervisor.unregister(dispatch.task_id, supervised=supervised)
             try:
                 store.release_writer(dispatch.task_id, writer_token)
             except Exception:
@@ -705,7 +872,7 @@ class OwnerDispatchExecutor:
             store.close()
             return
         finally:
-            self.execution_supervisor.unregister(dispatch.task_id)
+            self.execution_supervisor.unregister(dispatch.task_id, supervised=supervised)
 
         # -- deterministic verification ----------------------------------
         # M1 WP5a-2: when this is a SUPERVISED_AUTO dispatch, the
@@ -902,11 +1069,52 @@ class OwnerDispatchExecutor:
         return bool(future.result(timeout=timeout))
 
     async def _cancel_on_loop(self, execution: ActiveExecution) -> bool:
+        # The first request owns cancellation. Replays join that same operation.
+        if execution.cancel_task is None:
+            execution.cancel_requested.set()
+            execution.cancel_task = asyncio.create_task(self._cancel_once(execution))
+            self._cleanup_operations.add(execution.cancel_task)
+            execution.cancel_task.add_done_callback(self._cleanup_operations.discard)
+        return await asyncio.shield(execution.cancel_task)
+
+    async def _join_cancel(self, execution: ActiveExecution) -> None:
+        if execution.cancel_task is not None:
+            await self._join_cleanup_operation(asyncio.shield(execution.cancel_task))
+        else:
+            await asyncio.wait_for(
+                execution.cancel_completed.wait(),
+                timeout=self.config.worker_cleanup_budget_seconds,
+            )
+
+    async def _cancel_once(self, execution: ActiveExecution) -> bool:
         self._disable_worker_session(execution.request_id)
-        execution.cancel_requested.set()
-        store = self._open_store()
+        store = None
         try:
+            # Process cleanup starts before any SQLite connection/schema work;
+            # a locked database cannot delay termination or reset its budget.
+            receipt = await self._supervisor.cleanup(
+                execution.supervised,
+                grace_seconds=self.config.worker_grace_seconds,
+                cleanup_budget_seconds=self.config.worker_cleanup_budget_seconds,
+            )
+            store = SafetyKernelStore(self._state_db, timeout_seconds=0.0)
+            if execution.attempt is not None:
+                self._persist_cleanup(store, execution.attempt, receipt)
+            if receipt.status != "CONFIRMED":
+                dispatch = store.get_owner_dispatch_by_request_id(execution.request_id)
+                self._emergency_repair(
+                    store,
+                    execution.request_id,
+                    dispatch,
+                    execution.supervised,
+                    execution.run_id,
+                    execution.writer_token,
+                    error=CleanupIncomplete(receipt),
+                )
+                return False
             try:
+                # The controller still owns the exact task/run/writer atomic
+                # transaction. The supervisor reuses its completed receipt.
                 await cancel_worker_run(
                     store,
                     self._supervisor,
@@ -917,26 +1125,173 @@ class OwnerDispatchExecutor:
                     grace_seconds=self.config.worker_grace_seconds,
                 )
             except (ValueError, RuntimeError):
-                # The exact child died (or its exit was recorded) while
-                # cancellation was in flight. Never resurrect state; the
-                # worker-exit path owns the final transition.
-                task_now = store.get_task(execution.task_id)
-                if task_now.state is TaskState.CANCELLED:
-                    return True
+                return store.get_task(execution.task_id).state is TaskState.CANCELLED
+            store.mark_owner_dispatch_cancelled(execution.request_id)
+            return True
+        except Exception as error:
+            if store is None:
                 return False
-            try:
-                store.mark_owner_dispatch_cancelled(execution.request_id)
-            except Exception:
-                pass
+            dispatch = store.get_owner_dispatch_by_request_id(execution.request_id)
+            self._emergency_repair(
+                store,
+                execution.request_id,
+                dispatch,
+                execution.supervised,
+                execution.run_id,
+                execution.writer_token,
+                error=error,
+            )
+            return False
         finally:
-            self.execution_supervisor.unregister(execution.task_id)
-            store.close()
+            self.execution_supervisor.unregister(execution.task_id, supervised=execution.supervised)
+            if store is not None:
+                store.close()
             execution.cancel_completed.set()
-        return True
 
     # ------------------------------------------------------------------
     # internals
     # ------------------------------------------------------------------
+
+    async def _join_cleanup_operation(self, operation: Any) -> Any:
+        """Keep cleanup alive through repeated cancellation without a new budget."""
+        task = asyncio.ensure_future(operation)
+        self._cleanup_operations.add(task)
+        task.add_done_callback(self._cleanup_operations.discard)
+        while True:
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                if task.done():
+                    return task.result()
+                # This caller has already committed to cleanup. The underlying
+                # operation owns its fixed deadline and retains the process.
+                continue
+
+    @staticmethod
+    def _cleanup_busy_budget(store: SafetyKernelStore, deadline: float) -> None:
+        del deadline
+        # Cleanup persistence never waits on a SQLite lock. Reusing a stale
+        # positive busy_timeout across several transactions would multiply the
+        # total deadline; on contention the durable quarantine stays unresolved.
+        store.connection.execute("PRAGMA busy_timeout=0")
+
+    def _persist_cleanup(self, store, attempt, receipt) -> None:
+        if receipt is None:
+            raise RuntimeError("worker cleanup evidence is missing")
+        self._cleanup_busy_budget(store, receipt.deadline_monotonic)
+        payload = receipt.as_dict() | {
+            "state": receipt.status,
+            "spawn_state": "PROCESS_OBSERVED",
+            "leader_exit_observed": receipt.child_exited,
+            "child_reaped": receipt.child_reaped,
+            "scope_empty": receipt.group_empty,
+            "spawn_ticket": attempt.attempt_id,
+            "attempt_id": attempt.attempt_id,
+            "executor_id": attempt.executor_id,
+            "dispatch_id": attempt.dispatch_id,
+            "task_id": attempt.task_id,
+            "writer_token": attempt.writer_token,
+        }
+        store.complete_worker_attempt(
+            attempt_id=attempt.attempt_id, executor_id=attempt.executor_id, cleanup=payload
+        )
+
+    async def _cleanup_worker(self, store, request_id, supervised, *, immediate=False):
+        receipt = await self._supervisor.cleanup(
+            supervised,
+            grace_seconds=0.0 if immediate else self.config.worker_grace_seconds,
+            cleanup_budget_seconds=self.config.worker_cleanup_budget_seconds,
+        )
+        attempt = self._attempts.get(request_id)
+        if attempt is not None:
+            self._persist_cleanup(store, attempt, receipt)
+        return receipt
+
+    async def _finish_failed_spawn(
+        self, store, request_id, dispatch, attempt, ticket, spawn_task, error
+    ) -> None:
+        deadline = ticket.deadline_monotonic
+        if deadline is None:
+            deadline = time.monotonic() + self.config.worker_cleanup_budget_seconds
+            ticket.deadline_monotonic = deadline
+        # The in-memory ticket is fenced first. A failed database write must
+        # never prevent exact-child termination/reap; unresolved durable intent
+        # already prevents every other writer from using this workspace.
+        ticket.abort_requested = True
+        receipt = await self._supervisor.abort_spawn(
+            ticket,
+            grace_seconds=0.0,
+            cleanup_budget_seconds=max(0.0, deadline - time.monotonic()),
+        )
+        self._disable_worker_session(request_id)
+        observed = self._supervisor.observed_process(ticket)
+        diagnostics = self._spawn_failure_diagnostics(error, observed)
+        persistence_error = None
+        try:
+            self._cleanup_busy_budget(store, deadline)
+            store.fence_worker_attempt(
+                attempt_id=attempt.attempt_id, executor_id=attempt.executor_id
+            )
+        except Exception as failure:
+            persistence_error = failure
+        if observed is not None:
+            try:
+                store.record_worker_spawn(
+                    attempt_id=attempt.attempt_id,
+                    executor_id=attempt.executor_id,
+                    spawn_ticket=attempt.attempt_id,
+                    pid=observed.pid,
+                )
+            except Exception as failure:
+                persistence_error = failure
+        try:
+            if receipt is not None:
+                self._persist_cleanup(store, attempt, receipt)
+                diagnostics = diagnostics.evolved(
+                    child_exited_before_ownership=receipt.child_exited,
+                    safe_exit_code=receipt.exit_code,
+                )
+            elif persistence_error is None:
+                # None is positive closed-ticket/no-child evidence, never merely
+                # the absence of a PID while creation is still pending.
+                self._cleanup_busy_budget(store, deadline)
+                store.complete_worker_attempt(
+                    attempt_id=attempt.attempt_id,
+                    executor_id=attempt.executor_id,
+                    cleanup={
+                        "state": "CONFIRMED",
+                        "spawn_state": "SPAWN_FAILED_NO_CHILD",
+                        "child_created": False,
+                        "process_create_failed": True,
+                        "attempt_id": attempt.attempt_id,
+                        "executor_id": attempt.executor_id,
+                        "dispatch_id": attempt.dispatch_id,
+                        "task_id": attempt.task_id,
+                        "writer_token": attempt.writer_token,
+                    },
+                )
+        except Exception as failure:
+            persistence_error = failure
+        # Retrieve an already-finished adapter exception. Never wait indefinitely
+        # for arbitrary adapter code after the spawn coordinator was fenced.
+        if spawn_task.done() and not spawn_task.cancelled():
+            spawn_task.exception()
+        self._audit_spawn(store, dispatch.task_id, "WORKER_SPAWN_FAILED_DETAIL", diagnostics)
+        unknown = persistence_error is not None or (
+            receipt is not None and receipt.status != "CONFIRMED"
+        )
+        self._fail_pre_worker(
+            store,
+            request_id,
+            writer_token=attempt.writer_token,
+            failure_code="WORKER_CLEANUP_UNKNOWN" if unknown else "WORKER_SPAWN_FAILED",
+            failure_reason=(
+                "worker process failed before durable ownership: "
+                f"stage={diagnostics.spawn_stage.value} "
+                f"exception={diagnostics.exception_class or type(error).__name__} "
+                f"child_created={'yes' if diagnostics.child_created else 'no'}"
+            ),
+        )
 
     @staticmethod
     def _audit_spawn(
@@ -1025,11 +1380,10 @@ class OwnerDispatchExecutor:
     ) -> None:
         """Last-resort fail-closed repair after RUNNING was granted.
 
-        Kills the exact supervised child, closes the run row with a
-        human-readable reason, blocks the task, releases the writer lock
-        and blocks the dispatch. Every step is best-effort so one broken
-        step cannot skip the rest. Synchronous by design so it also works
-        during loop teardown.
+        Consumes already-observed cleanup evidence, closes the run with a
+        truthful reason, and blocks the task/dispatch. This synchronous repair
+        cannot prove cleanup or signal a process. Writer release is possible
+        only after the matching durable receipt removed its quarantine.
         """
 
         from personal_ai_orchestrator.execution_controller import (
@@ -1038,30 +1392,32 @@ class OwnerDispatchExecutor:
         )
 
         self._disable_worker_session(request_id)
-        self.execution_supervisor.unregister(dispatch.task_id)
-        self._supervisor.emergency_kill(supervised)
-        # emergency_kill always sends SIGKILL to the process group. Tails
-        # are not drained (the supervisor does not buffer them in this
-        # path), so worker_result is None and only the signal is reported.
+        self.execution_supervisor.unregister(dispatch.task_id, supervised=supervised)
+        receipt = getattr(supervised, "cleanup_result", None)
+        cleanup_confirmed = receipt is not None and receipt.status == "CONFIRMED"
+        try:
+            cleanup_confirmed = cleanup_confirmed and not store.has_cleanup_quarantine(
+                dispatch.task_id
+            )
+        except Exception:
+            cleanup_confirmed = False
+        actual_exit = None if receipt is None else receipt.exit_code
+        actual_signal = -actual_exit if actual_exit is not None and actual_exit < 0 else None
         failure_payload = _failure_result_payload(
-            exit_code=None, signal=signal.SIGKILL, worker_result=None
+            exit_code=actual_exit, signal=actual_signal, worker_result=None
         )
         failure_payload["emergency_repair"] = True
-        reason = _human_reason_for_failure(exit_code=None, signal=signal.SIGKILL)
+        failure_payload["cleanup_state"] = "CONFIRMED" if cleanup_confirmed else "UNKNOWN"
+        reason = _human_reason_for_failure(exit_code=actual_exit, signal=actual_signal)
         try:
-            task = store.get_task(dispatch.task_id)
-            if task.state is TaskState.RUNNING:
-                run = store.connection.execute(
-                    "SELECT status FROM runs WHERE run_id=?", (run_id,)
-                ).fetchone()
-                if run is not None and run["status"] == "RUNNING":
-                    store.finish_run(run_id, status="FAILED", result=failure_payload)
-                store.transition_task(
-                    dispatch.task_id,
-                    TaskState.BLOCKED,
-                    expected_version=task.state_version,
-                    reason=f"executor emergency repair: {reason}",
-                )
+            store.fail_worker_attempt(
+                task_id=dispatch.task_id,
+                run_id=run_id,
+                writer_token=writer_token,
+                pid=supervised.pid,
+                result=failure_payload,
+                reason=f"executor emergency repair: {reason}",
+            )
         except Exception:
             pass
         try:
@@ -1071,9 +1427,13 @@ class OwnerDispatchExecutor:
         try:
             store.mark_owner_dispatch_blocked(
                 request_id,
-                failure_code="EXECUTOR_INTERNAL_ERROR",
+                failure_code=(
+                    "EXECUTOR_INTERNAL_ERROR" if cleanup_confirmed else "WORKER_CLEANUP_UNKNOWN"
+                ),
                 failure_reason=(
-                    f"{type(error).__name__ if error is not None else 'CANCELLED'}; {reason}"
+                    f"{type(error).__name__ if error is not None else 'CANCELLED'}; {reason}; "
+                    "cleanup="
+                    + ("confirmed" if cleanup_confirmed else "unknown; workspace quarantined")
                 ),
             )
         except Exception:
@@ -1090,14 +1450,18 @@ class OwnerDispatchExecutor:
         *,
         error: BaseException | None = None,
     ) -> None:
-        """Repair durable state and wait until the killed child is reaped.
+        """Obtain a bounded cleanup receipt, then conservatively repair state.
 
-        Ordinary async failure paths can guarantee that no child remains
-        observable after ``execute_async`` returns. The synchronous repair
-        remains available to the cancellation/loop-teardown path, where an
-        additional await could itself be cancelled.
+        UNKNOWN or a failed receipt write retains the durable quarantine; an
+        exhausted budget never becomes a claim that the process group exited.
         """
 
+        try:
+            await self._cleanup_worker(store, request_id, supervised, immediate=True)
+        except Exception as cleanup_error:
+            # A failed receipt transaction cannot open the pre-existing durable
+            # quarantine. Preserve the failure and repair only truthful state.
+            error = cleanup_error
         self._emergency_repair(
             store,
             request_id,
@@ -1107,12 +1471,6 @@ class OwnerDispatchExecutor:
             writer_token,
             error=error,
         )
-        try:
-            await supervised.process.wait()
-        except Exception:
-            # Durable state has already been repaired fail-closed. A process
-            # implementation that cannot be awaited must not prevent cleanup.
-            pass
 
     def _open_store(self) -> SafetyKernelStore:
         return self._store_factory()
@@ -1831,6 +2189,24 @@ class OwnerDispatchExecutor:
         ]
         return tuple(argv)
 
+    @staticmethod
+    def _worker_intent(task: TaskRecord) -> str:
+        """Carry the registered project focus without changing worktree authority.
+
+        The working directory and tool guards continue to use the complete
+        isolated worktree. A monorepo subdirectory is task context only; it
+        neither grants additional access nor changes the host verifier scope.
+        """
+        if not task.working_subpath:
+            return task.intent
+        focus = json.dumps(task.working_subpath, ensure_ascii=False)
+        return (
+            f"Selected project directory relative to the worktree root: {focus}\n"
+            "Focus the task on this directory. Paths are relative to the worktree root. "
+            "Existing worktree and tool restrictions still apply.\n\n"
+            f"Task:\n{task.intent}"
+        )
+
     async def _spawn_worker(
         self,
         store: SafetyKernelStore,
@@ -1838,7 +2214,7 @@ class OwnerDispatchExecutor:
         worktree: ManagedWorktree,
     ) -> SupervisedProcess:
         task = store.get_task(dispatch.task_id)
-        argv = self._worker_argv(dispatch, task.intent)
+        argv = self._worker_argv(dispatch, self._worker_intent(task))
         store._audit(
             dispatch.task_id,
             "WORKER_ARGV_BUILT",
@@ -1866,44 +2242,20 @@ class OwnerDispatchExecutor:
     async def _wait_for_worker(
         self, supervised: SupervisedProcess
     ) -> tuple[int, bytes, bytes, bool]:
-        """Bounded-drain wait: only the exact supervised child, capped output."""
-
-        chunks: dict[str, list[bytes]] = {"out": [], "err": []}
-        truncated = False
-
-        async def _drain(stream: Any, cap: int, key: str) -> None:
-            nonlocal truncated
-            total = 0
-            while True:
-                chunk = await stream.read(min(8192, cap + 1))
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total <= cap:
-                    chunks[key].append(chunk)
-                else:
-                    truncated = True
-
-        stdout_task = asyncio.create_task(
-            _drain(supervised.process.stdout, MAX_WORKER_STDOUT_BYTES, "out")
+        result = await self._supervisor.collect(
+            supervised,
+            timeout_seconds=self.config.worker_timeout_seconds,
+            stdout_cap=MAX_WORKER_STDOUT_BYTES,
+            stderr_cap=MAX_WORKER_STDERR_BYTES,
+            grace_seconds=self.config.worker_grace_seconds,
+            cleanup_budget_seconds=self.config.worker_cleanup_budget_seconds,
+            eof_grace_seconds=self.config.worker_eof_grace_seconds,
         )
-        stderr_task = asyncio.create_task(
-            _drain(supervised.process.stderr, MAX_WORKER_STDERR_BYTES, "err")
-        )
-        try:
-            await asyncio.wait_for(
-                supervised.process.wait(), timeout=self.config.worker_timeout_seconds
-            )
-        except TimeoutError:
-            stdout_task.cancel()
-            stderr_task.cancel()
-            raise
-        await asyncio.gather(stdout_task, stderr_task)
-        stdout = b"".join(chunks["out"])
-        stderr = b"".join(chunks["err"])
-        returncode = supervised.process.returncode or 0
-        self._supervisor._children.pop(supervised.pid, None)
-        return returncode, stdout, stderr, truncated
+        # Incomplete host evidence cannot authorize a successful worker result.
+        code = result.exit_code
+        if code == 0 and result.truncated:
+            code = WORKER_OUTPUT_ERROR_EXIT
+        return code, result.stdout, result.stderr, result.truncated
 
     @staticmethod
     def _sanitize_transcript(data: bytes) -> str:

@@ -17,7 +17,6 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
 from personal_ai_orchestrator.dispatch_executor import (
     MAX_WORKER_STDERR_BYTES,
@@ -66,44 +65,22 @@ async def _probe(
         env=build_worker_env(),
     )
 
-    chunks: dict[str, list[bytes]] = {"out": [], "err": []}
-    truncated = False
-
-    async def _drain(stream: Any, cap: int, key: str) -> None:
-        nonlocal truncated
-        total = 0
-        while True:
-            chunk = await stream.read(8192)
-            if not chunk:
-                return
-            remaining = max(0, cap - total)
-            if remaining:
-                chunks[key].append(chunk[:remaining])
-            total += len(chunk)
-            if total > cap:
-                truncated = True
-
-    stdout_task = asyncio.create_task(_drain(supervised.process.stdout, PI_MAX_STDOUT_BYTES, "out"))
-    stderr_task = asyncio.create_task(
-        _drain(supervised.process.stderr, MAX_WORKER_STDERR_BYTES, "err")
-    )
     try:
-        await asyncio.wait_for(
-            supervised.process.wait(),
-            timeout=timeout_seconds,
+        result = await supervisor.collect(
+            supervised,
+            timeout_seconds=timeout_seconds,
+            stdout_cap=PI_MAX_STDOUT_BYTES,
+            stderr_cap=MAX_WORKER_STDERR_BYTES,
+            grace_seconds=5.0,
+            cleanup_budget_seconds=10.0,
+            eof_grace_seconds=2.0,
         )
     except TimeoutError:
-        await supervisor.cancel(supervised, grace_seconds=5.0)
-        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
-        return 124, b"".join(chunks["out"]), b"".join(chunks["err"]), truncated
-    await asyncio.gather(stdout_task, stderr_task)
-
-    return (
-        supervised.process.returncode or 0,
-        b"".join(chunks["out"]),
-        b"".join(chunks["err"]),
-        truncated,
-    )
+        result = supervised.collected_result
+        if result is None:
+            return 124, b"", b"", True
+        return 124, result.stdout, result.stderr, result.truncated
+    return result.exit_code, result.stdout, result.stderr, result.truncated
 
 
 def run_pi_execution_probe(

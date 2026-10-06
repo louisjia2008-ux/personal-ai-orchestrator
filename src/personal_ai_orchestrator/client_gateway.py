@@ -20,12 +20,15 @@ from typing import Any, Protocol
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from personal_ai_orchestrator.control_api import (
+    MAX_LIST_LIMIT,
     ApprovalView,
     CancelView,
+    ControlPlaneError,
     TaskListView,
     TaskView,
     VerificationReportView,
 )
+from personal_ai_orchestrator.control_client import ControlPlaneUnavailable
 
 
 class ClientKind(StrEnum):
@@ -171,7 +174,14 @@ class ExternalClientGateway:
                 request.task_id or "",
                 request_id=request.request_id,
             )
-            summary = "task cancelled" if cancelled.cancelled_now else "task already cancelled"
+            if cancelled.task.state == "READY":
+                summary = "automatic execution vetoed; task remains ready for manual handling"
+            elif cancelled.task.state == "CANCELLED":
+                summary = "task cancelled" if cancelled.cancelled_now else "task already cancelled"
+            else:
+                # A replay returns current truth, including a later execution
+                # or terminal outcome. It must not label that task cancelled.
+                summary = f"cancellation request handled; task state is {cancelled.task.state}"
             return self._task_result(request, cancelled.task, summary)
         if request.operation is ClientOperation.REPORT:
             report = self.client.verification_report(request.task_id or "")
@@ -318,7 +328,18 @@ class DeskPetClientAdapter:
 
 
 class TaskStateNotifier:
-    """Detect meaningful durable state changes without owning worker lifetime."""
+    """Detect observed durable state changes without owning worker lifetime.
+
+    The list endpoint has no pagination: only its newest ``MAX_LIST_LIMIT``
+    tasks can be discovered. Previously seen unfinished tasks are retained
+    and checked by ID after leaving that page. At most ``MAX_LIST_LIMIT``
+    off-page lookups run per poll, rotating fairly even when lookups fail.
+    Memory is bounded by unfinished tasks plus the current discovery page;
+    terminal history is not retained forever. Tasks never seen in a page
+    and intermediate transitions between polls cannot be reported.
+    """
+
+    _TERMINAL_STATES = frozenset({"FAILED", "CANCELLED", "COMPLETED"})
 
     def __init__(self, client: TaskControlClient) -> None:
         self.client = client
@@ -326,12 +347,34 @@ class TaskStateNotifier:
         self._primed = False
 
     def poll(self) -> tuple[TaskStateNotification, ...]:
-        tasks = self.client.list_tasks().tasks
+        tasks = self.client.list_tasks(limit=MAX_LIST_LIMIT).tasks
         current = {task.task_id: (task.state, task.state_version) for task in tasks}
         if not self._primed:
             self._states = current
             self._primed = True
             return ()
+
+        # Absence from a capped page is not evidence of deletion or completion.
+        # Preserve last-observed state until a lookup supplies fresh evidence.
+        pending = {
+            task_id: state
+            for task_id, state in self._states.items()
+            if task_id not in current and state[0] not in self._TERMINAL_STATES
+        }
+        for task_id in tuple(pending)[:MAX_LIST_LIMIT]:
+            previous = pending.pop(task_id)
+            try:
+                task = self.client.get_task(task_id)
+            except ControlPlaneError as error:
+                if error.status == 404 and error.code == "task_not_found":
+                    # A missing record has no observed terminal transition.
+                    continue
+                pending[task_id] = previous
+            except ControlPlaneUnavailable:
+                pending[task_id] = previous
+            else:
+                current[task_id] = (task.state, task.state_version)
+
         notifications = tuple(
             TaskStateNotification(
                 task_id=task_id,
@@ -342,7 +385,14 @@ class TaskStateNotifier:
             for task_id, (state, version) in sorted(current.items())
             if task_id not in self._states or self._states[task_id][0] != state
         )
-        self._states = current
+        # Unchecked/temporarily unavailable IDs stay ahead of successful
+        # lookups on the next poll. Keep terminal states only while on-page.
+        page_ids = {task.task_id for task in tasks}
+        self._states = pending | {
+            task_id: state
+            for task_id, state in current.items()
+            if task_id in page_ids or state[0] not in self._TERMINAL_STATES
+        }
         return notifications
 
 

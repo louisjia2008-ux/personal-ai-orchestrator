@@ -14,7 +14,8 @@ public enum StatusSummary: Equatable, Sendable {
     public static func derive(
         connection: ConnectionState,
         tasks: [TaskView],
-        providers: ProviderHealthListView?
+        providers: ProviderHealthListView?,
+        dashboardCounts: DashboardCountsView? = nil
     ) -> StatusSummary {
         guard connection.isConnected else {
             if case .disconnected(let reason) = connection {
@@ -22,13 +23,18 @@ public enum StatusSummary: Equatable, Sendable {
             }
             return .disconnected(.transportFailure)
         }
-        if tasks.contains(where: { $0.state == "BLOCKED" }) {
+        // The task list is bounded; dashboard counts cover the whole store.
+        let blocked = dashboardCounts.map { $0.blocked > 0 }
+            ?? tasks.contains(where: { $0.state == "BLOCKED" })
+        if blocked {
             return .blocked
         }
         if let providers, providers.containsExhaustedOrCooldown {
             return .quotaLimited
         }
-        if tasks.contains(where: { $0.state == "RUNNING" }) {
+        let running = dashboardCounts.map { $0.running > 0 }
+            ?? tasks.contains(where: { $0.state == "RUNNING" })
+        if running {
             return .working
         }
         return .healthy

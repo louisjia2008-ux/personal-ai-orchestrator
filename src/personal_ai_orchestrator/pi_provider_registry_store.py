@@ -90,7 +90,7 @@ def load(runtime_state_root: Path) -> PiRegistryLoadOutcome:
     try:
         with target.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return PiRegistryLoadOutcome(
             status=PiRegistryLoadStatus.CORRUPT,
             source_path=target,

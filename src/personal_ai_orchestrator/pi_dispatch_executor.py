@@ -8,13 +8,11 @@ and final task authority remain owned by ``OwnerDispatchExecutor``.
 
 from __future__ import annotations
 
-import asyncio
 import shutil
 import tempfile
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
 
 from personal_ai_orchestrator.dispatch_executor import (
     MAX_WORKER_STDERR_BYTES,
@@ -235,7 +233,7 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
         argv = build_pi_json_argv(
             config=replace(self.pi_runtime, delegation_enabled=enabled),
             model_ref=self._pi_model_ref(dispatch),
-            intent=task.intent,
+            intent=self._worker_intent(task),
             guard_path=self._guard_path(),
             delegation_tool_path=tool_path,
         )
@@ -287,44 +285,17 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
     ) -> tuple[int, bytes, bytes, bool]:
         """Drain one Pi JSON stream with a larger but still bounded cap."""
 
-        chunks: dict[str, list[bytes]] = {"out": [], "err": []}
-        truncated = False
-
-        async def _drain(stream: Any, cap: int, key: str) -> None:
-            nonlocal truncated
-            total = 0
-            while True:
-                chunk = await stream.read(8192)
-                if not chunk:
-                    break
-                remaining = max(0, cap - total)
-                if remaining:
-                    chunks[key].append(chunk[:remaining])
-                total += len(chunk)
-                if total > cap:
-                    truncated = True
-
-        stdout_task = asyncio.create_task(
-            _drain(supervised.process.stdout, PI_MAX_STDOUT_BYTES, "out")
+        result = await self._supervisor.collect(
+            supervised,
+            timeout_seconds=self.config.worker_timeout_seconds,
+            stdout_cap=PI_MAX_STDOUT_BYTES,
+            stderr_cap=MAX_WORKER_STDERR_BYTES,
+            grace_seconds=self.config.worker_grace_seconds,
+            cleanup_budget_seconds=self.config.worker_cleanup_budget_seconds,
+            eof_grace_seconds=self.config.worker_eof_grace_seconds,
         )
-        stderr_task = asyncio.create_task(
-            _drain(supervised.process.stderr, MAX_WORKER_STDERR_BYTES, "err")
-        )
-        try:
-            await asyncio.wait_for(
-                supervised.process.wait(), timeout=self.config.worker_timeout_seconds
-            )
-        except TimeoutError:
-            stdout_task.cancel()
-            stderr_task.cancel()
-            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
-            raise
-        await asyncio.gather(stdout_task, stderr_task)
-
-        stdout = b"".join(chunks["out"])
-        stderr = b"".join(chunks["err"])
-        returncode = supervised.process.returncode or 0
-        self._supervisor._children.pop(supervised.pid, None)
+        stdout, stderr, truncated = result.stdout, result.stderr, result.truncated
+        returncode = result.exit_code
 
         if returncode == 0:
             summary = summarize_pi_json_stream(stdout)
