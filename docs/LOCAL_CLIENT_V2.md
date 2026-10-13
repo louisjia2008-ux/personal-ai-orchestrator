@@ -28,6 +28,7 @@ characters. Versions are nonnegative integers; intent is 1–8192 characters.
 - `START`: `task_id`, `task_state_version`, `execution_target_id`,
   `expected_store_id`, `expected_process_epoch`
 - `DETAIL`: `task_id`
+- `CONTINUATION`: `task_id`; read-only, manual copy/export of a safe summary
 - `DISPATCH_STATUS`: the original START's `request_id`, `task_id`,
   `task_state_version`, `execution_target_id`, `expected_store_id`,
   `expected_process_epoch`
@@ -118,7 +119,8 @@ CAPABILITIES and CONTEXT return:
 {
   "capabilities": [
     "manual-submit-v2", "owner-start-v2", "safe-detail-v2",
-    "dispatch-status-v2", "manual-cancel-v2", "host-identity-v2"
+    "dispatch-status-v2", "manual-cancel-v2", "host-identity-v2",
+    "result-delivery-v1", "manual-continuation-v1"
   ],
   "owner_start": {
     "available": true,
@@ -180,6 +182,9 @@ immutable original admission data. Status is RESERVED, STARTED, BLOCKED,
 CANCELLED or FINISHED. `accepted` reflects absence of a failure code, not worker
 completion or answer quality. Failure codes are bounded uppercase machine tokens;
 free-form failure reasons are omitted.
+`recovery_required` also remains true when startup reconciliation closed the
+dispatch with `STARTUP_RECOVERY_REQUIRED`, including observations in the current
+process epoch. This observation never retries the dispatch.
 
 DETAIL is a dedicated bounded SQL read snapshot, not a stripped raw task detail:
 
@@ -188,19 +193,135 @@ DETAIL is a dedicated bounded SQL read snapshot, not a stripped raw task detail:
   "task":{},
   "runs":[{"run_id":"run-example","status":"FINISHED","started_at":"2026-10-06T00:00:00+00:00","finished_at":"2026-10-06T00:00:01+00:00"}],
   "approvals":[{"approval_id":"approval-example","kind":"HIGH_RISK_EXECUTION","status":"PENDING","created_at":"2026-10-06T00:00:00+00:00","resolved_at":null}],
-  "verification":{"status":"NOT_OBSERVED"},
-  "answer_completeness":"UNAVAILABLE",
+  "verification":{"status":"NOT_OBSERVED","evidence_id":null},
+  "answer_completeness":"MISSING",
+  "result":{"schema_version":1,"kind":"HOST_VERIFICATION_REPORT"},
   "truncated":{"runs":false,"approvals":false}
 }
 ```
 
 Runs and approvals are newest-first and capped at 50 each. Machine tokens are
 uppercase and at most 80 characters; timestamps are bounded ISO-shaped strings
-at most 40 characters. `finished_at` and `resolved_at` may be null. Verification
-status is NOT_OBSERVED, IN_PROGRESS, or VERIFIED_EVIDENCE_UNAVAILABLE, derived
-conservatively from task state. No verification evidence/result files are read
-or promoted to success. Answer completeness is always UNAVAILABLE; a worker exit,
-FINISHED dispatch, or VERIFIED task is not a final answer.
+at most 40 characters. `finished_at` and `resolved_at` may be null. The abbreviated
+`result` above is expanded below. Verification status is
+NOT_OBSERVED, IN_PROGRESS, VERIFIED_EVIDENCE_UNAVAILABLE, VERIFIED,
+FAILED_VERIFICATION, or EVIDENCE_CONFLICT. The existing host verification journal
+and the same `TASK_STATE_CHANGED` verification transition used by legacy REPORT
+remain the source of truth. Legacy REPORT is unchanged. A worker exit zero,
+FINISHED dispatch, or VERIFIED task alone never establishes complete delivery.
+
+## Result delivery v1
+
+`DETAIL.payload.result` is a bounded host-verification report, not provider prose
+or a claim that every part of the user's goal was completed. It always has:
+
+```json
+{
+  "schema_version":1,
+  "kind":"HOST_VERIFICATION_REPORT",
+  "binding":{
+    "store_id":"11111111111111111111111111111111",
+    "task_id":"task-example",
+    "run_id":"run-example",
+    "base_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "result_commit":null,
+    "submission_event_id":1,
+    "verification_event_id":8,
+    "verification_evidence_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "task_state":"VERIFIED",
+  "goal":"Fix the requested button behavior",
+  "goal_redacted":false,
+  "completeness":"COMPLETE",
+  "verification":{"status":"VERIFIED","evidence_id":"verify-aaaaaaaaaaaaaaaaaaaaaaaa"},
+  "changed_files":["src/button.py"],
+  "tests":[{"name":"unit tests","status":"PASSED"}],
+  "artifacts":[{
+    "kind":"VERIFICATION_EVIDENCE",
+    "reference":"pao:verification:verify-aaaaaaaaaaaaaaaaaaaaaaaa",
+    "sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }],
+  "limitations":["RESULT_COMMIT_NOT_RECORDED","HOST_REPORT_ONLY"],
+  "truncated":{"goal":false,"changed_files":false,"tests":false},
+  "result_id":"result-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+}
+```
+
+The digests above are illustrative. `result_id` is `result-` plus SHA-256 of the
+whole report excluding `result_id`, encoded with Python's canonical JSON form:
+sorted keys, separators `(',', ':')`, `ensure_ascii=True`, UTF-8, no trailing
+newline. The exact evidence file bytes have a separate SHA-256, attested in the
+same durable audit transaction that accepted the passing verification. Delivery
+requires that digest to match the journal file; modifying content while retaining
+the old evidence ID cannot establish completeness. Older verified records without
+this attestation remain MISSING, and legacy REPORT remains available unchanged.
+
+The binding identifies a particular store/task/run/base commit, audit transitions
+and evidence content. References are opaque PAO identities, not filesystem paths
+or download URLs. Reading computes a projection; it does not create a new result
+store. To retain an older snapshot, save the returned report and digest together.
+Consumers must compare the expected task/store and recompute the digest before
+applying a saved result. A newer observation can legitimately have a different
+digest; do not substitute its binding into an older export. These are integrity
+references within the host-owned store, not signatures or a trust boundary against
+someone who can rewrite both the database and journal.
+
+Completeness values, also returned as `DETAIL.payload.answer_completeness`:
+
+- `MISSING`: no bound, readable host verification report is available. Includes
+  running/verifying work, a missing journal/file, absent audit evidence, invalid
+  evidence, missing or mismatched digest attestation, or a mismatched
+  task/run/base-commit binding.
+- `TRUNCATED`: an otherwise valid report has safe-export omissions or exceeds a
+  bound; an oversized evidence file is also TRUNCATED, with no asserted pass.
+- `FAILED`: task is BLOCKED/FAILED/CANCELLED, verification failed, or the persisted
+  evidence conflicts with a passing transition. Failed verification has no
+  deliverable artifact reference unless it is explicitly bound by the source
+  record; the existing legacy failure transition does not record such a reference.
+- `COMPLETE`: all bounded fields of a consistent, passing host-verification report
+  were delivered. This says nothing about unconfigured tests, native acceptance,
+  signing, provider acceptance, merging, publication or fulfillment of arbitrary
+  natural-language intent. `tests` are configured host verifier stages, which can
+  include hygiene checks. A passed hygiene stage is not a unit-test claim.
+
+Complete delivery requires the task's current VERIFIED/COMPLETED state; a valid
+full 40- or 64-hex base commit matching the original submission audit; the latest
+run and its matching ordered RUN_STARTED/RUN_FINISHED audits; a subsequent
+VERIFYING-to-VERIFIED audit with a valid evidence ID and attested digest; and the
+matching journal entry with at least one passing stage, no failed stage and no
+unexpected paths. An older pass is never attached to a newer run. `result_commit`
+remains null because the source records do not attest a resulting code commit.
+No project filesystem or Git command is consulted by this read.
+
+Limits: evidence files at most 1 MiB; 100 changed files, each at most 256
+characters; 50 named checks, each name at most 80 characters; goal at most 1024
+characters. Audit JSON parsing is capped at 65,536 characters per record, with at
+most 200 recent state transitions considered. The reader rejects journal-file
+and journal-directory symlinks and non-regular evidence files. Unsafe, absolute,
+traversing or credential-like names, controls and suspicious goal lines are
+omitted or replaced with fixed redaction text. Missing fields and omissions
+remain explicit. Arbitrary verifier argv, stdout, stderr, failure text, run
+`result_json`, provider payloads and external session data are never exported.
+Scrubbing is conservative, not a general-purpose secret detector; review any
+export before manually sharing it outside PAO.
+
+## Manual continuation
+
+`CONTINUATION` has the same request shape and identity-checking requirements as
+DETAIL. It returns `{"task": SafeTask, "result": ResultV1, "continuation": SummaryV1}`.
+The summary contains `schema_version:1`, `result_id`, the exact result `binding`,
+`goal`, `completed`, `pending`, `evidence`, `next_step`, `manual_only:true`, a plain
+`text` string for copying, and `summary_id`. The summary ID is `continuation-`
+plus the same canonical SHA-256 convention over the summary excluding its ID.
+Its text has Goal, Completed, Pending, Evidence and Next step sections.
+
+Only the scrubbed PAO task intent, host-verification facts, immutable references
+and fixed guidance enter this export. A failed or missing result states that
+review is pending; it does not invent completed work. The operation reads one DB
+snapshot, has no side effects, and performs no provider call, launch, retry,
+automatic resume or external sharing. A CLI client can copy the returned
+`payload.continuation.text` or save the JSON envelope for manual continuation.
+No external auth store, hidden Codex sessions or private session data are read.
 
 ## Validation boundary
 
@@ -208,3 +329,9 @@ The test suite uses file-backed stores, fake executors/workers and a real HTTP
 handler exercised over an in-memory accepted connection. Real Unix-socket,
 macOS/Electron runtime, provider runtime, signing and release checks are separate
 acceptance gates and must not be implied by these tests.
+
+The additive result/continuation host contract is covered by HTTP-handler and CLI
+tests without sockets. Native UI integration is not implemented by this host
+slice; the Swift client currently has no local-client-v2 model. Native build,
+Swift tests and target-Mac acceptance remain separate required gates for any
+future native integration of this shared contract.

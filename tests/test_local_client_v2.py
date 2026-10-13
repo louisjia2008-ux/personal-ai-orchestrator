@@ -351,14 +351,15 @@ def test_detail_allowlist_bounded_snapshot_never_loads_raw_results(service, monk
     rendered = json.dumps(result)
     assert "VERY_PRIVATE_SECRET" not in rendered
     assert "/private" not in rendered and "98765" not in rendered
-    assert "result" not in rendered and "worker_id" not in rendered
-    assert result["payload"]["answer_completeness"] == "UNAVAILABLE"
+    assert "result_json" not in rendered and "worker_id" not in rendered
+    assert result["payload"]["answer_completeness"] == "MISSING"
     assert result["payload"]["verification"]["status"] == "NOT_OBSERVED"
     assert len(result["payload"]["runs"]) == DETAIL_LIMIT
     assert len(result["payload"]["approvals"]) == DETAIL_LIMIT
     assert result["payload"]["truncated"] == {"runs": True, "approvals": True}
     assert "BEGIN" in queries and "ROLLBACK" in queries
-    assert not any("result_json" in sql or "audit_events" in sql for sql in queries)
+    assert not any("result_json" in sql or "SELECT *" in sql for sql in queries)
+    assert all("SELECT audit_id" in sql for sql in queries if "audit_events" in sql)
 
 
 def test_catalog_bounded_and_omits_sensitive_project_fields(service):
@@ -503,6 +504,7 @@ def test_actual_fakeworker_manual_start_attempt_at_most_once(tmp_path):
     """The v2 route reaches the unchanged fakeworker, verifier and cleanup path."""
     from personal_ai_orchestrator.control_api import ControlPlaneService
     from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
+    from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
     from tests.test_dispatch_executor import ExecutorHarness, _git
 
     harness = ExecutorHarness(tmp_path)
@@ -533,6 +535,7 @@ def test_actual_fakeworker_manual_start_attempt_at_most_once(tmp_path):
         dispatch_executor=Executor(),
         runtime_availability={"zai-coding-plan-glm-5.3": True},
         execution_evidence_journal=harness.execution_evidence,
+        verification_journal=VerificationEvidenceJournal(harness.runtime_root),
     )
     try:
         handle_local_client_v2(
@@ -565,8 +568,18 @@ def test_actual_fakeworker_manual_start_attempt_at_most_once(tmp_path):
         assert store.get_workspace("task-1").writer_token is None
         assert harness.main_unchanged()
         detail = handle_local_client_v2(service, request(service, "DETAIL", task_id="task-1"))
-        assert detail["payload"]["answer_completeness"] == "UNAVAILABLE"
-        assert "result" not in json.dumps(detail)
+        assert detail["payload"]["answer_completeness"] == "COMPLETE"
+        result = detail["payload"]["result"]
+        assert result["changed_files"] == ["hello.txt"]
+        assert (
+            result["binding"]["run_id"]
+            == store.connection.execute("SELECT run_id FROM runs").fetchone()[0]
+        )
+        assert (
+            result["verification"]["evidence_id"]
+            == service.verification_report("task-1").evidence_id
+        )
+        assert "stdout" not in json.dumps(detail) and "stderr" not in json.dumps(detail)
     finally:
         store.close()
 

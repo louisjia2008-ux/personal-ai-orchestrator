@@ -2,7 +2,7 @@
 
 This module translates an explicitly bound owner request into existing host
 operations. It does not tick the scheduler, resolve approvals, grant permissions,
-retry a dispatch, return worker answers, or turn missing evidence into success.
+retry a dispatch, return raw worker answers, or turn missing evidence into success.
 """
 
 from __future__ import annotations
@@ -15,10 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from personal_ai_orchestrator.control_api import ControlPlaneError, ControlPlaneService
 from personal_ai_orchestrator.execution_controller import execution_target_has_launch_verification
+from personal_ai_orchestrator.result_delivery import continuation_summary, result_delivery
 from personal_ai_orchestrator.safety_kernel import (
     OwnerDispatchRecord,
     OwnerDispatchStatus,
-    TaskState,
     owner_dispatch_matches_expected,
 )
 
@@ -31,11 +31,20 @@ CAPABILITIES = (
     "dispatch-status-v2",
     "manual-cancel-v2",
     "host-identity-v2",
+    "result-delivery-v1",
+    "manual-continuation-v1",
 )
 _IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 _IDENTITY_PATTERN = r"^[a-f0-9]{32}$"
 Operation = Literal[
-    "CAPABILITIES", "CONTEXT", "SUBMIT_V2", "START", "DETAIL", "DISPATCH_STATUS", "CANCEL"
+    "CAPABILITIES",
+    "CONTEXT",
+    "SUBMIT_V2",
+    "START",
+    "DETAIL",
+    "DISPATCH_STATUS",
+    "CANCEL",
+    "CONTINUATION",
 ]
 
 
@@ -64,6 +73,7 @@ class LocalClientRequestV2(BaseModel):
             "SUBMIT_V2": {"task_id", "project_id", "intent", "execution_target_id"} | identities,
             "START": {"task_id", "task_state_version", "execution_target_id"} | identities,
             "DETAIL": {"task_id"},
+            "CONTINUATION": {"task_id"},
             "DISPATCH_STATUS": {"task_id", "task_state_version", "execution_target_id"}
             | identities,
             "CANCEL": {"task_id"} | identities,
@@ -219,13 +229,12 @@ def _detail(service: ControlPlaneService, task_id: str) -> dict[str, Any]:
                 FROM approvals WHERE task_id=? ORDER BY rowid DESC LIMIT ?""",
             (task_id, DETAIL_LIMIT + 1),
         ).fetchall()
-        # State is the only bounded verification observation in this contract.
-        # Evidence/result files and audit payloads are deliberately not read.
-        verification = "NOT_OBSERVED"
-        if task["state"] == TaskState.VERIFYING.value:
-            verification = "IN_PROGRESS"
-        elif task["state"] in {TaskState.VERIFIED.value, TaskState.COMPLETED.value}:
-            verification = "VERIFIED_EVIDENCE_UNAVAILABLE"
+        report = result_delivery(
+            service.store.connection,
+            task=task,
+            store_id=service.store.store_id,
+            journal=service.verification_journal,
+        )
         return {
             "task": task,
             "runs": [
@@ -247,8 +256,9 @@ def _detail(service: ControlPlaneService, task_id: str) -> dict[str, Any]:
                 }
                 for row in approvals[:DETAIL_LIMIT]
             ],
-            "verification": {"status": verification},
-            "answer_completeness": "UNAVAILABLE",
+            "verification": report["verification"],
+            "answer_completeness": report["completeness"],
+            "result": report,
             "truncated": {
                 "runs": len(runs) > DETAIL_LIMIT,
                 "approvals": len(approvals) > DETAIL_LIMIT,
@@ -294,8 +304,11 @@ def _dispatch_status(service: ControlPlaneService, request: LocalClientRequestV2
             "accepted": record.failure_code is None,
             "failure_code": _safe_token(record.failure_code),
             "task": _safe_task(service, record.task_id),
-            "recovery_required": request.expected_process_epoch != service.process_epoch
-            and record.status in {OwnerDispatchStatus.RESERVED, OwnerDispatchStatus.STARTED},
+            "recovery_required": record.failure_code == "STARTUP_RECOVERY_REQUIRED"
+            or (
+                request.expected_process_epoch != service.process_epoch
+                and record.status in {OwnerDispatchStatus.RESERVED, OwnerDispatchStatus.STARTED}
+            ),
         }
 
 
@@ -347,13 +360,25 @@ def handle_local_client_v2(service: ControlPlaneService, payload: dict[str, Any]
         result = _dispatch_status(service, request)
     elif request.operation == "DETAIL":
         result = _detail(service, request.task_id)
-    else:
+    elif request.operation == "CONTINUATION":
+        with _read_snapshot(service):
+            task = _safe_task(service, request.task_id)
+            report = result_delivery(
+                service.store.connection,
+                task=task,
+                store_id=store_id,
+                journal=service.verification_journal,
+            )
+            result = {"task": task, "result": report, "continuation": continuation_summary(report)}
+    elif request.operation == "CANCEL":
         _require_manual_task(service, request.task_id)
         cancelled = service.cancel_task(request.task_id, {"request_id": request.request_id})
         result = {
             "task": _safe_task(service, request.task_id),
             "cancelled_now": cancelled.cancelled_now,
         }
+    else:
+        raise ControlPlaneError(400, "unsupported_local_client_operation")
     return {
         "protocol_version": 2,
         "request_id": request.request_id,
