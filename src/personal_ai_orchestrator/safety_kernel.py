@@ -2157,6 +2157,7 @@ class SafetyKernelStore:
         auto_grace_deadline_at: str | None = None,
         auto_acked_at: str | None = None,
         auto_reason: str | None = None,
+        verification_evidence_sha256: str | None = None,
     ) -> None:
         """Transition internals for an ALREADY-OPEN transaction."""
 
@@ -2212,6 +2213,8 @@ class SafetyKernelStore:
             "state_version": next_version,
             "reason": reason,
         }
+        if verification_evidence_sha256 is not None:
+            audit_payload["verification_evidence_sha256"] = verification_evidence_sha256
         if auto_decision_id is not None:
             audit_payload["auto_decision_id"] = auto_decision_id
         if auto_grace_deadline_at is not None:
@@ -2234,6 +2237,7 @@ class SafetyKernelStore:
         target: TaskState,
         reason: str,
         finalize: ShadowFinalizationIntent | None = None,
+        verification_evidence_sha256: str | None = None,
     ) -> TaskState:
         """OPTION A (round 3): terminal truth + shadow-intent in ONE tx.
 
@@ -2247,6 +2251,11 @@ class SafetyKernelStore:
 
         if target not in (TaskState.VERIFIED, TaskState.BLOCKED):
             raise ValueError("verification outcome target must be VERIFIED or BLOCKED")
+        if verification_evidence_sha256 is not None and (
+            len(verification_evidence_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in verification_evidence_sha256)
+        ):
+            raise ValueError("invalid verification evidence digest")
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             current = self.get_task(task_id)
@@ -2257,6 +2266,7 @@ class SafetyKernelStore:
                 target,
                 expected_version=expected_version,
                 reason=reason,
+                verification_evidence_sha256=verification_evidence_sha256,
             )
             if finalize is not None:
                 self._insert_shadow_finalize_locked(finalize)

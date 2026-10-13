@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from hashlib import sha256
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -643,6 +644,13 @@ def apply_verification_result(
         target=target,
         reason=reason,
         finalize=finalize_intent,
+        # The identifier alone cannot detect a later edit retaining the same ID.
+        # Bind the exact canonical bytes accepted by the host to this transition.
+        verification_evidence_sha256=(
+            sha256((result.model_dump_json(indent=2) + "\n").encode("utf-8")).hexdigest()
+            if evidence_matches
+            else None
+        ),
     )
     if finalize_intent is not None:
         # Best-effort inline drain: replays the durable intent so the
