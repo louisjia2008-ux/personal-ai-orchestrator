@@ -1675,19 +1675,20 @@ class ControlPlaneService:
         return scheduling_policy, None
 
     def scheduling_settings_view(self) -> SchedulingSettingsView:
+        policy, mode = self.scheduling_settings.snapshot()
         return SchedulingSettingsView(
-            default_scheduling_policy=self.scheduling_settings.default_policy,
+            default_scheduling_policy=policy,
             selectable_policies=SELECTABLE_GLOBAL_POLICIES,
-            mode=self.scheduling_settings.mode,
+            mode=mode,
             selectable_modes=SELECTABLE_MODES,
         )
 
     def update_scheduling_settings(self, payload: dict[str, Any]) -> SchedulingSettingsView:
         request = SchedulingSettingsUpdateRequest.model_validate(payload)
-        try:
-            self.scheduling_settings.set_default_policy(request.default_scheduling_policy)
-        except ValueError:
-            raise ControlPlaneError(400, "unsupported_global_scheduling_policy") from None
+        # Validate the entire request (including authority) before changing either
+        # setting. Rejected ACTIVE/unknown-mode requests must not change policy.
+        if request.default_scheduling_policy not in SELECTABLE_GLOBAL_POLICIES:
+            raise ControlPlaneError(400, "unsupported_global_scheduling_policy")
         if request.mode is not None:
             try:
                 SchedulingMode(request.mode)
@@ -1703,11 +1704,11 @@ class ControlPlaneService:
                     409,
                     "production_active_not_authorized",
                 )
-            try:
-                previous_mode = self.scheduling_settings.mode
-                self.scheduling_settings.set_mode(request.mode)
-            except ValueError:
-                raise ControlPlaneError(400, "unsupported_scheduling_mode") from None
+        _, previous_mode = self.scheduling_settings.update(
+            default_policy=request.default_scheduling_policy,
+            mode=request.mode,
+        )
+        if request.mode is not None:
             # M1 WP5a-2 (§3.1): leaving SUPERVISED_AUTO aborts every
             # AUTO_PLANNED / AUTO_GRACE task in the same handler — the
             # owner's mode change takes effect immediately, no in-flight

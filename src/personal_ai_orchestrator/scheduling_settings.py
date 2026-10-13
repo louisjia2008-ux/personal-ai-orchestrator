@@ -76,14 +76,38 @@ class SchedulingSettings:
         with self._lock:
             return self._mode
 
-    def set_default_policy(self, value: str) -> str:
-        if value not in SELECTABLE_GLOBAL_POLICIES:
-            raise ValueError("unsupported_global_scheduling_policy")
+    def snapshot(self) -> tuple[str, str]:
+        """Read the policy and mode from one committed settings generation."""
+
         with self._lock:
+            return self._policy, self._mode
+
+    def update(
+        self, *, default_policy: str | None = None, mode: str | None = None
+    ) -> tuple[str, str]:
+        """Validate and commit one settings generation, returning the previous pair.
+
+        Omitted fields retain their value under the same lock as the write. All
+        values are checked before persistence; a failed write publishes neither
+        field in memory. Activation authority remains the facade's responsibility.
+        """
+
+        if default_policy is not None and default_policy not in SELECTABLE_GLOBAL_POLICIES:
+            raise ValueError("unsupported_global_scheduling_policy")
+        if mode is not None and mode not in SELECTABLE_MODES:
+            raise ValueError("unsupported_scheduling_mode")
+        with self._lock:
+            previous = (self._policy, self._mode)
+            proposed_policy = self._policy if default_policy is None else default_policy
+            proposed_mode = self._mode if mode is None else mode
             if self._path is not None:
-                self._persist(policy=value, mode=self._mode)
-            self._policy = value
-            return self._policy
+                self._persist(policy=proposed_policy, mode=proposed_mode)
+            self._policy, self._mode = proposed_policy, proposed_mode
+            return previous
+
+    def set_default_policy(self, value: str) -> str:
+        self.update(default_policy=value)
+        return value
 
     def set_mode(self, value: str) -> str:
         """M1 WP5a-1: persist the orchestrator scheduling mode.
@@ -95,13 +119,8 @@ class SchedulingSettings:
         policy-side-effect logic.
         """
 
-        if value not in SELECTABLE_MODES:
-            raise ValueError("unsupported_scheduling_mode")
-        with self._lock:
-            if self._path is not None:
-                self._persist(policy=self._policy, mode=value)
-            self._mode = value
-            return self._mode
+        self.update(mode=value)
+        return value
 
     def _load_from_disk(self) -> str | None:
         if self._path is None or not self._path.exists():
