@@ -48,7 +48,10 @@ from personal_ai_orchestrator.safety_kernel import (
     OwnerDispatchRecord,
     SafetyKernelStore,
 )
-from personal_ai_orchestrator.worker_outcome_classifier import WorkerFailureClass
+from personal_ai_orchestrator.worker_outcome_classifier import (
+    classify_worker_failure,
+    worker_failure_diagnostics,
+)
 from personal_ai_orchestrator.worktree_manager import ManagedWorktree
 
 
@@ -329,6 +332,29 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
             timeout=timeout,
         )
         summary = summarize_pi_json_stream(stdout)
+        # Only the protocol error channel may supplement stderr. Assistant
+        # content and malformed/incomplete protocol output are not diagnostics.
+        error_message = (
+            summary.final_error_message
+            if (
+                summary.protocol_valid
+                and summary.session_seen
+                and summary.agent_start_seen
+                and summary.agent_end_seen
+                and not truncated
+                and summary.final_stop_reason == "error"
+            )
+            else None
+        )
+        diagnostics = worker_failure_diagnostics(
+            classify_worker_failure(
+                exit_code=exit_code,
+                stderr_tail="\n".join(
+                    value for value in (cls._sanitize_transcript(stderr), error_message) if value
+                ),
+            )
+        )
+        result.update(diagnostics)
         result.update(
             {
                 "runtime": "pi-json",
@@ -340,33 +366,13 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
                 "pi_provider": summary.final_provider,
                 "pi_model": summary.final_model,
                 "pi_stop_reason": summary.final_stop_reason,
-                "pi_error_message": summary.final_error_message,
+                "pi_error_message": (
+                    diagnostics["worker_failure_message"] if error_message else None
+                ),
                 "pi_parse_error": summary.parse_error,
             }
         )
         return result
-
-    def _classify_worker_failure(
-        self,
-        *,
-        exit_code: int,
-        worker_result: dict[str, object],
-    ) -> WorkerFailureClass:
-        """Classify Pi provider errors without persisting raw provider bodies."""
-
-        from personal_ai_orchestrator.worker_outcome_classifier import (
-            classify_worker_failure,
-        )
-
-        stderr = worker_result.get("stderr_tail")
-        error_message = worker_result.get("pi_error_message")
-        diagnostic_parts = [
-            value for value in (stderr, error_message) if isinstance(value, str) and value
-        ]
-        return classify_worker_failure(
-            exit_code=exit_code,
-            stderr_tail="\n".join(diagnostic_parts),
-        )
 
 
 __all__ = ["PiOwnerDispatchExecutor"]

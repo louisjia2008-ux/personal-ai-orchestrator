@@ -1,156 +1,148 @@
-"""M1 WP4 — worker_outcome_classifier tests.
-
-The classifier is the single hook that replaces shadow's old
-``("usage limit", "quota", "rate limit")`` text match (the bare
-``"quota"`` token was the source of the regression risk the user
-flagged in commit 3 of M1 WP4). Tests pin the conservative
-marker list: ``"quota"`` alone must NOT trip the classifier even
-though it would have tripped shadow's old list. ``429`` and
-``"too many requests"`` must trip.
-"""
+"""Offline, synthetic failure taxonomy fixtures: no provider calls or private logs."""
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 import pytest
 
 from personal_ai_orchestrator.worker_outcome_classifier import (
     AUTH_MARKERS,
-    QUOTA_OR_RATE_LIMIT_MARKERS,
+    CONTEXT_MARKERS,
+    OVERLOAD_MARKERS,
+    QUOTA_EXHAUSTED_MARKERS,
+    RATE_LIMIT_MARKERS,
     WorkerFailureClass,
     classify_worker_failure,
+    worker_failure_diagnostics,
+)
+
+FIXTURES = json.loads(
+    (Path(__file__).parent / "fixtures/worker_failures/classifications.json").read_text()
 )
 
 
-def test_exit_zero_is_always_none() -> None:
-    assert classify_worker_failure(exit_code=0, stderr_tail="anything") is WorkerFailureClass.NONE
-    assert classify_worker_failure(exit_code=0, stderr_tail="") is WorkerFailureClass.NONE
-
-
-def test_bare_quota_word_does_not_match() -> None:
-    """A line containing only the bare word ``quota`` stays UNCLASSIFIED.
-
-    This is the regression the user called out: shadow's old
-    list matched the bare ``quota`` substring, and the project's
-    own source mentions ``quota`` 100+ times. The new list
-    matches only phrased versions like ``"quota exceeded"`` or
-    ``"insufficient quota"``.
-    """
-
-    verdict = classify_worker_failure(
-        exit_code=1,
-        stderr_tail=(
-            "Traceback (most recent call last):\n"
-            '  File "/Users/<user>/personal_ai_orchestrator/src/personal_ai_orchestrator/'
-            'quota_availability.py", line 42, in <module>\n'
-            '    raise ValueError("quota pool id is empty")\n'
-        ),
-    )
-    assert verdict is WorkerFailureClass.UNCLASSIFIED
-
-
-def test_quota_or_rate_limit_marker_list_is_conservative() -> None:
-    """The marker list does not include the bare ``"quota"`` token."""
-
-    assert "quota" not in QUOTA_OR_RATE_LIMIT_MARKERS
-    # Each marker must be a non-empty lowercase string.
-    for marker in QUOTA_OR_RATE_LIMIT_MARKERS:
-        assert marker
-        assert marker == marker.lower()
-
-
-def test_classifier_trips_on_canonical_rate_limit_phrases() -> None:
-    """Each canonical phrase returns ``QUOTA_OR_RATE_LIMIT``."""
-
-    for marker in QUOTA_OR_RATE_LIMIT_MARKERS:
-        verdict = classify_worker_failure(exit_code=1, stderr_tail=f"upstream replied: {marker}\n")
-        assert verdict is WorkerFailureClass.QUOTA_OR_RATE_LIMIT, marker
-
-
-def test_classifier_trips_on_429_alone() -> None:
-    """The bare ``429`` HTTP code in stderr trips the classifier."""
-
-    verdict = classify_worker_failure(
-        exit_code=1,
-        stderr_tail="opencode: HTTP 429 - too many requests",
-    )
-    assert verdict is WorkerFailureClass.QUOTA_OR_RATE_LIMIT
-
-
-def test_classifier_is_case_insensitive() -> None:
-    """Uppercase markers still trip (worker stderr may be unbuffered)."""
-
-    verdict = classify_worker_failure(exit_code=1, stderr_tail="RATE LIMIT EXCEEDED")
-    assert verdict is WorkerFailureClass.QUOTA_OR_RATE_LIMIT
-
-
-def test_classifier_trips_on_auth_markers() -> None:
-    """The 401 / 403 / unauthorized phrases return ``AUTH``."""
-
-    for marker in AUTH_MARKERS:
-        verdict = classify_worker_failure(exit_code=1, stderr_tail=f"upstream replied: {marker}\n")
-        assert verdict is WorkerFailureClass.AUTH, marker
-
-
-def test_classifier_quota_takes_precedence_over_auth() -> None:
-    """When both kinds of markers are present, quota wins.
-
-    Quota exhaustion is a more urgent signal than auth because
-    the next observation window is shorter; the worker might
-    re-auth on the next attempt, but the rate-limit cooldown
-    is fixed.
-    """
-
-    verdict = classify_worker_failure(
-        exit_code=1,
-        stderr_tail="error 401: rate limit exceeded",
-    )
-    assert verdict is WorkerFailureClass.QUOTA_OR_RATE_LIMIT
-
-
-def test_classifier_only_inspects_stderr_not_stdout() -> None:
-    """``stdout`` matching a marker does NOT trip the classifier.
-
-    Many models print ``"quota exceeded"`` in plain prose (the
-    rate-limit recovery instructions OpenCode Zen's worker
-    surfaces in the prompt). The classifier reads
-    ``stderr_tail`` only.
-    """
-
-    verdict = classify_worker_failure(
-        exit_code=1,
-        stdout_tail="quota exceeded — please wait and retry",
-        stderr_tail="worker exited with status 1",
-    )
-    assert verdict is WorkerFailureClass.UNCLASSIFIED
-
-
-def test_classifier_empty_stderr_on_failure_is_unclassified() -> None:
-    """A non-zero exit with no stderr is UNCLASSIFIED, not a false-positive quota."""
-
-    verdict = classify_worker_failure(exit_code=1, stderr_tail="")
-    assert verdict is WorkerFailureClass.UNCLASSIFIED
-
-
-def test_classifier_pure_function() -> None:
-    """The classifier has no side effects; calling it twice is a no-op.
-
-    The classification result depends only on its arguments —
-    no globals, no clock, no I/O. This test pins that contract
-    so a future refactor cannot accidentally introduce hidden
-    state.
-    """
-
-    args = {"exit_code": 1, "stderr_tail": "rate limit exceeded"}
+@pytest.mark.parametrize("fixture", FIXTURES, ids=[item["id"] for item in FIXTURES])
+def test_failure_fixtures(fixture: dict[str, str]) -> None:
+    args = {"exit_code": 1, "stderr_tail": fixture["stderr"]}
     first = classify_worker_failure(**args)
-    second = classify_worker_failure(**args)
-    assert first is second
-    assert first is WorkerFailureClass.QUOTA_OR_RATE_LIMIT
+    assert first.value == fixture["expected"]
+    assert classify_worker_failure(**args) is first
+    assert (
+        classify_worker_failure(exit_code=0, stderr_tail=fixture["stderr"])
+        is WorkerFailureClass.NONE
+    )
+    assert (
+        classify_worker_failure(exit_code=None, stderr_tail=fixture["stderr"])
+        is WorkerFailureClass.UNCLASSIFIED
+    )
 
 
-def test_classifier_marker_lists_are_frozen() -> None:
-    """Module-level marker tuples are immutable so a runner cannot mutate them."""
+@pytest.mark.parametrize(
+    ("markers", "expected"),
+    [
+        (QUOTA_EXHAUSTED_MARKERS, WorkerFailureClass.QUOTA_EXHAUSTED),
+        (RATE_LIMIT_MARKERS, WorkerFailureClass.RATE_LIMITED),
+        (OVERLOAD_MARKERS, WorkerFailureClass.SERVER_OVERLOADED),
+        (CONTEXT_MARKERS, WorkerFailureClass.CONTEXT_RESTRICTED),
+        (AUTH_MARKERS, WorkerFailureClass.AUTH),
+    ],
+)
+def test_conservative_marker_groups(markers: tuple[str, ...], expected: WorkerFailureClass) -> None:
+    assert isinstance(markers, tuple)
+    assert "quota" not in markers
+    for marker in markers:
+        assert marker and marker.lower() == marker
+        assert classify_worker_failure(exit_code=1, stderr_tail=marker) is expected
 
-    with pytest.raises((AttributeError, TypeError)):
-        QUOTA_OR_RATE_LIMIT_MARKERS[0] = "quota"  # type: ignore[index]
-    with pytest.raises((AttributeError, TypeError)):
-        AUTH_MARKERS[0] = "auth"  # type: ignore[index]
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        ({"code": "insufficient_quota", "status_code": 429}, WorkerFailureClass.QUOTA_EXHAUSTED),
+        ({"status_code": 429}, WorkerFailureClass.RATE_LIMITED),
+        ({"status_code": 503}, WorkerFailureClass.SERVER_OVERLOADED),
+        ({"code": "context_length_exceeded"}, WorkerFailureClass.CONTEXT_RESTRICTED),
+        ({"type": "authentication_error"}, WorkerFailureClass.AUTH),
+    ],
+)
+def test_structured_transport_precedes_stderr(
+    error: dict[str, object], expected: WorkerFailureClass
+):
+    assert (
+        classify_worker_failure(exit_code=1, stderr_tail="quota exceeded", transport_error=error)
+        is expected
+    )
+
+
+def test_stdout_has_no_failure_authority() -> None:
+    assert (
+        classify_worker_failure(
+            exit_code=1,
+            stderr_tail="worker exited with status 1",
+            stdout_tail='{"error":{"code":"insufficient_quota"}}',
+        )
+        is WorkerFailureClass.UNCLASSIFIED
+    )
+
+
+def test_conflicting_structured_envelopes_stay_unknown() -> None:
+    assert (
+        classify_worker_failure(
+            exit_code=1,
+            stderr_tail='{"error":{"code":"insufficient_quota"}}\n'
+            '{"error":{"type":"authentication_error"}}',
+        )
+        is WorkerFailureClass.UNCLASSIFIED
+    )
+
+
+@pytest.mark.parametrize("payload", ["[" * 10000, "1" * 5000, "null", "true", '"429"'])
+def test_malformed_or_unsupported_structured_fields_stay_unknown(payload: str) -> None:
+    assert (
+        classify_worker_failure(exit_code=1, stderr_tail='{"error":{"status":' + payload + "}}")
+        is WorkerFailureClass.UNCLASSIFIED
+    )
+
+
+def test_diagnostics_only_expose_allowlisted_class_and_message() -> None:
+    verdict = classify_worker_failure(
+        exit_code=1,
+        stderr_tail="HTTP 503: private request /private/example body synthetic-secret",
+    )
+    result = worker_failure_diagnostics(verdict)
+    assert result == {
+        "worker_failure_class": "SERVER_OVERLOADED",
+        "worker_failure_message": "Provider service is temporarily overloaded.",
+    }
+    assert "private" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        {"code": "insufficient_quota", "status": 503},
+        {"code": "context_length_exceeded", "type": "authentication_error"},
+        {"error": {"status": 401}, "status": 503},
+        {"code": "rate_limit_error", "status": 503},
+        {"error": {"status": 429}, "status": 503},
+        {"code": "authentication_error", "type": "rate_limit_error"},
+    ],
+)
+def test_conflicting_structured_fields_cannot_establish_exhaustion(
+    error: dict[str, object],
+) -> None:
+    assert (
+        classify_worker_failure(exit_code=1, stderr_tail="quota exceeded", transport_error=error)
+        is WorkerFailureClass.UNCLASSIFIED
+    )
+
+
+def test_arbitrary_json_output_object_is_not_a_transport_record() -> None:
+    assert (
+        classify_worker_failure(
+            exit_code=1, stderr_tail='{"content":{"error":{"code":"insufficient_quota"}}}'
+        )
+        is WorkerFailureClass.UNCLASSIFIED
+    )

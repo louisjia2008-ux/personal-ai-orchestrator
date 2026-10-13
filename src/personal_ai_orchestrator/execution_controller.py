@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from hashlib import sha256
 from dataclasses import dataclass
@@ -27,6 +28,11 @@ from personal_ai_orchestrator.shadow_evidence import (
 from personal_ai_orchestrator.switch_lease import SwitchLeaseAuthority
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
 from personal_ai_orchestrator.verifier import VerificationResult
+from personal_ai_orchestrator.worker_outcome_classifier import (
+    WorkerFailureClass,
+    classify_worker_failure,
+    worker_failure_diagnostics,
+)
 
 
 _TERMINAL_STATES = {TaskState.FAILED, TaskState.CANCELLED, TaskState.COMPLETED}
@@ -152,28 +158,45 @@ def _failure_result_payload(
     signal: int | None,
     worker_result: Any,
 ) -> dict[str, Any]:
-    """Build a fail-closed run-result payload from the worker's sanitized narration.
+    """Persist allowlisted diagnostics, never a failed provider's raw payload.
 
-    Used by both the normal failure path (non-zero exit code) and the
-    emergency-repair path (process died, no envelope, possibly killed by a
-    signal). The returned dict carries only what the owner needs to make
-    sense of the death: exit code (or signal name), and the worker's own
-    ``stdout_tail`` / ``stderr_tail`` if it had a chance to write them.
-    Host-derived metadata (hashes, byte counts, ``timed_out``) is dropped
-    here on purpose — it carries zero authority and would only obscure the
-    real cause.
+    Worker result fields are diagnostic only. Reconstruct display messages
+    from known classes and validate bounded metadata instead of copying text.
+    Emergency repair with no collected result remains exit/signal evidence.
     """
-
     payload: dict[str, Any] = {}
     if exit_code is not None:
         payload["exit_code"] = exit_code
     if signal is not None:
         payload["signal"] = signal
     if isinstance(worker_result, dict):
-        if isinstance(worker_result.get("stderr_tail"), str):
-            payload["stderr_tail"] = worker_result["stderr_tail"]
-        if isinstance(worker_result.get("stdout_tail"), str):
-            payload["stdout_tail"] = worker_result["stdout_tail"]
+        recorded = worker_result.get("worker_failure_class")
+        verdict = WorkerFailureClass.UNCLASSIFIED
+        if isinstance(recorded, str):
+            try:
+                verdict = WorkerFailureClass(recorded)
+            except ValueError:
+                pass
+        elif recorded is None:
+            stderr = worker_result.get("stderr_tail")
+            verdict = classify_worker_failure(
+                exit_code=exit_code, stderr_tail=stderr if isinstance(stderr, str) else ""
+            )
+        if verdict is WorkerFailureClass.NONE:
+            verdict = WorkerFailureClass.UNCLASSIFIED
+        payload.update(worker_failure_diagnostics(verdict))
+        for name in ("stdout_sha256", "stderr_sha256"):
+            digest = worker_result.get(name)
+            if isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest):
+                payload[name] = digest
+        for name in ("stdout_bytes", "stderr_bytes"):
+            count = worker_result.get(name)
+            if type(count) is int and 0 <= count <= 2**63 - 1:
+                payload[name] = count
+        for name in ("timed_out", "output_truncated"):
+            flag = worker_result.get(name)
+            if type(flag) is bool:
+                payload[name] = flag
     return payload
 
 
@@ -304,12 +327,8 @@ def record_worker_exit(
             reason = "worker cleanup is unresolved; worktree remains quarantined"
         elif exit_code != 0:
             run_status = "FAILED"
-            # Keep the worker's own sanitized narration on failure so the
-            # owner can see WHY the worker died ("Usage limit reached for
-            # 5 hour" and similar). Drop everything else: a failed worker's
-            # host-derived metadata (hashes, byte counts) has no authority
-            # and no value, so the failure record stays fail-closed apart
-            # from the narration itself.
+            # Persist static diagnostics and bounded host metadata. Failure
+            # text may contain private request data and grants no authority.
             persisted_result = _failure_result_payload(
                 exit_code=exit_code, signal=None, worker_result=worker_result
             )
