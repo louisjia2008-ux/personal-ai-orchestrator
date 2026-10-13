@@ -18,7 +18,9 @@ from personal_ai_orchestrator.execution_controller import execution_target_has_l
 from personal_ai_orchestrator.result_delivery import continuation_summary, result_delivery
 from personal_ai_orchestrator.safety_kernel import (
     OwnerDispatchRecord,
+    OwnerDispatchRecoveryError,
     OwnerDispatchStatus,
+    TaskState,
     owner_dispatch_matches_expected,
 )
 
@@ -33,9 +35,12 @@ CAPABILITIES = (
     "host-identity-v2",
     "result-delivery-v1",
     "manual-continuation-v1",
+    "manual-recovery-v1",
+    "recovery-status-v1",
 )
 _IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 _IDENTITY_PATTERN = r"^[a-f0-9]{32}$"
+_DISPATCH_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,142}$"
 Operation = Literal[
     "CAPABILITIES",
     "CONTEXT",
@@ -45,6 +50,8 @@ Operation = Literal[
     "DISPATCH_STATUS",
     "CANCEL",
     "CONTINUATION",
+    "RECOVER",
+    "RECOVERY_STATUS",
 ]
 
 
@@ -63,6 +70,7 @@ class LocalClientRequestV2(BaseModel):
     task_state_version: int | None = Field(default=None, ge=0)
     expected_store_id: str | None = Field(default=None, pattern=_IDENTITY_PATTERN)
     expected_process_epoch: str | None = Field(default=None, pattern=_IDENTITY_PATTERN)
+    prior_dispatch_id: str | None = Field(default=None, pattern=_DISPATCH_ID_PATTERN)
 
     @model_validator(mode="after")
     def exact_operation_shape(self) -> LocalClientRequestV2:
@@ -77,6 +85,8 @@ class LocalClientRequestV2(BaseModel):
             "DISPATCH_STATUS": {"task_id", "task_state_version", "execution_target_id"}
             | identities,
             "CANCEL": {"task_id"} | identities,
+            "RECOVER": {"task_id", "task_state_version", "prior_dispatch_id"} | identities,
+            "RECOVERY_STATUS": {"task_id", "task_state_version", "prior_dispatch_id"} | identities,
         }
         expected = shapes[self.operation]
         optional = set(type(self).model_fields) - {"protocol_version", "operation", "request_id"}
@@ -293,6 +303,12 @@ def _dispatch_status(service: ControlPlaneService, request: LocalClientRequestV2
             authority="OWNER_INITIATED_EXECUTION",
         ):
             raise ControlPlaneError(409, "conflicting_dispatch_request_id")
+        task = _safe_task(service, record.task_id)
+        recovery = service.store.connection.execute(
+            "SELECT substr(request_id,1,129) AS request_id FROM owner_dispatch_recoveries "
+            "WHERE prior_dispatch_id=?",
+            (record.dispatch_id,),
+        ).fetchone()
         return {
             "dispatch_id": record.dispatch_id,
             "request_id": record.request_id,
@@ -303,13 +319,77 @@ def _dispatch_status(service: ControlPlaneService, request: LocalClientRequestV2
             "status": record.status.value,
             "accepted": record.failure_code is None,
             "failure_code": _safe_token(record.failure_code),
-            "task": _safe_task(service, record.task_id),
-            "recovery_required": record.failure_code == "STARTUP_RECOVERY_REQUIRED"
+            "task": task,
+            "recovery_request_id": _safe_id(recovery["request_id"]) if recovery else None,
+            "recovery_required": (
+                record.failure_code == "STARTUP_RECOVERY_REQUIRED"
+                and recovery is None
+                and task["state"] == TaskState.BLOCKED.value
+            )
             or (
                 request.expected_process_epoch != service.process_epoch
                 and record.status in {OwnerDispatchStatus.RESERVED, OwnerDispatchStatus.STARTED}
             ),
         }
+
+
+def _recovery_status(service: ControlPlaneService, request: LocalClientRequestV2) -> dict[str, Any]:
+    """Return the immutable receipt and current state as distinct observations."""
+    with _read_snapshot(service):
+        try:
+            receipt = service.store.get_owner_dispatch_recovery(request.request_id)
+        except KeyError:
+            raise ControlPlaneError(404, "recovery_not_found") from None
+        expected = {
+            "task_id": request.task_id,
+            "task_state_version": request.task_state_version,
+            "prior_dispatch_id": request.prior_dispatch_id,
+            "store_id": request.expected_store_id,
+            "process_epoch": request.expected_process_epoch,
+        }
+        if any(getattr(receipt, key) != value for key, value in expected.items()):
+            raise ControlPlaneError(409, "conflicting_recovery_request_id")
+        return {
+            "recovery": {
+                "request_id": _safe_id(receipt.request_id),
+                "task_id": _safe_id(receipt.task_id),
+                "prior_dispatch_id": request.prior_dispatch_id,
+                "prior_attempt_id": _safe_id(receipt.prior_attempt_id),
+                "task_state_version": receipt.task_state_version,
+                "recovered_task_state_version": receipt.recovered_task_state_version,
+                "store_id": receipt.store_id,
+                "process_epoch": receipt.process_epoch,
+                "created_at": _safe_stamp(receipt.created_at.isoformat()),
+            },
+            "current_task": _safe_task(service, receipt.task_id),
+            "launch_performed": False,
+            "next_step": "REVIEW_CURRENT_TASK_BEFORE_EXPLICIT_START",
+        }
+
+
+def _recover(service: ControlPlaneService, request: LocalClientRequestV2) -> dict[str, Any]:
+    if not service.owner_initiated_execution_enabled:
+        raise ControlPlaneError(403, "owner_initiated_execution_disabled")
+    # Exact replay is historical only, including after a later cancel/start.
+    # A new operation additionally refuses a live in-memory execution claim.
+    try:
+        service.store.get_owner_dispatch_recovery(request.request_id)
+    except KeyError:
+        supervisor = getattr(service.dispatch_executor, "execution_supervisor", None)
+        if supervisor is not None and supervisor.get(request.task_id) is not None:
+            raise ControlPlaneError(409, "recovery_active_execution") from None
+    try:
+        service.store.recover_owner_dispatch(
+            request_id=request.request_id,
+            task_id=request.task_id,
+            expected_task_version=request.task_state_version,
+            prior_dispatch_id=request.prior_dispatch_id,
+            expected_store_id=request.expected_store_id,
+            expected_process_epoch=request.expected_process_epoch,
+        )
+    except OwnerDispatchRecoveryError as error:
+        raise ControlPlaneError(409, error.code) from None
+    return _recovery_status(service, request)
 
 
 def handle_local_client_v2(service: ControlPlaneService, payload: dict[str, Any]) -> dict[str, Any]:
@@ -321,7 +401,7 @@ def handle_local_client_v2(service: ControlPlaneService, payload: dict[str, Any]
     if request.expected_store_id is not None and request.expected_store_id != store_id:
         raise ControlPlaneError(409, "store_identity_mismatch")
     if (
-        request.operation in {"SUBMIT_V2", "START", "CANCEL"}
+        request.operation in {"SUBMIT_V2", "START", "CANCEL", "RECOVER"}
         and request.expected_process_epoch != epoch
     ):
         raise ControlPlaneError(409, "process_epoch_mismatch")
@@ -358,6 +438,10 @@ def handle_local_client_v2(service: ControlPlaneService, payload: dict[str, Any]
         result = _dispatch_status(service, request)
     elif request.operation == "DISPATCH_STATUS":
         result = _dispatch_status(service, request)
+    elif request.operation == "RECOVER":
+        result = _recover(service, request)
+    elif request.operation == "RECOVERY_STATUS":
+        result = _recovery_status(service, request)
     elif request.operation == "DETAIL":
         result = _detail(service, request.task_id)
     elif request.operation == "CONTINUATION":

@@ -480,10 +480,13 @@ def test_startup_recovery_required_survives_current_epoch(service):
     call = start_request(service)
     handle_local_client_v2(service, call)
     assert service.dispatch_executor.started.wait(2)
-    service.store.connection.execute(
-        "UPDATE owner_dispatches SET status='BLOCKED',failure_code='STARTUP_RECOVERY_REQUIRED'"
-    )
+    service.store.reconcile_startup()
     result = handle_local_client_v2(service, call | {"operation": "DISPATCH_STATUS"})
     assert result["payload"]["recovery_required"] is True
     assert result["payload"]["failure_code"] == "STARTUP_RECOVERY_REQUIRED"
     assert service.dispatch_executor.calls == ["start-1"]
+    transition(service, TaskState.CANCELLED)
+    cancelled = handle_local_client_v2(service, call | {"operation": "DISPATCH_STATUS"})
+    assert cancelled["payload"]["status"] == "BLOCKED"
+    assert cancelled["payload"]["task"]["state"] == "CANCELLED"
+    assert cancelled["payload"]["recovery_required"] is False

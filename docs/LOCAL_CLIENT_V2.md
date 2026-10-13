@@ -327,6 +327,41 @@ automatic resume or external sharing. A CLI client can copy the returned
 `payload.continuation.text` or save the JSON envelope for manual continuation.
 No external auth store, hidden Codex sessions or private session data are read.
 
+## Explicit interrupted-task recovery
+
+`manual-recovery-v1` and `recovery-status-v1` advertise two additional operations.
+Both require exactly `request_id`, `task_id`, `task_state_version`,
+`prior_dispatch_id`, `expected_store_id`, and `expected_process_epoch` alongside
+the protocol version and operation. The version is the current interrupted
+BLOCKED generation, not the old START source version.
+
+`RECOVER` requires the current host epoch and enabled owner-execution authority.
+It rejects a live supervised execution and delegates to the transactional,
+proof-gated [recovery contract](OWNER_DISPATCH_RECOVERY_CONTRACT_2026-10-13.md).
+It only prepares an eligible explicitly MANUAL task as READY. It does not call
+an executor or change policy, target, permissions, ACTIVE authority, writer locks
+or cleanup facts. A separate new START must pass every normal admission check.
+Unavailable provider/target/quota authority is never bypassed by recovery.
+
+The response is `{"recovery": HistoricalReceipt, "current_task": SafeTask,
+"launch_performed": false, "next_step": "REVIEW_CURRENT_TASK_BEFORE_EXPLICIT_START"}`.
+The receipt includes the original and recovered task versions, exact previous
+dispatch/attempt identity, request/store/epoch, and timestamp. Its recovered
+version is historical, even if the current task is later CANCELLED or RUNNING.
+
+`RECOVERY_STATUS` is read-only and accepts the original epoch after a restart.
+It compares the complete original tuple and returns the receipt and current
+task separately. A missing receipt is `recovery_not_found`; a conflicting tuple
+is `conflicting_recovery_request_id`. A lost response never authorizes a new
+recovery ID or an automatic START. `DISPATCH_STATUS` keeps the old interrupted
+dispatch BLOCKED; it includes `recovery_request_id` after successful recovery,
+and no longer presents that historical interruption as recovery-required after
+recovery or task cancellation. A recovery-required flag alone is never evidence
+that cleanup is confirmed or that recovery admission will pass.
+
+These are host API/CLI contracts. This change does not add a native recovery
+button or claim that a Swift client can already display these new fields.
+
 ## Validation boundary
 
 The test suite uses file-backed stores, fake executors/workers and a real HTTP
