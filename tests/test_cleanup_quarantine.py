@@ -230,13 +230,14 @@ def test_restart_fences_old_start_but_accepts_matching_late_facts(tmp_path: Path
     store.close()
     store = SafetyKernelStore(tmp_path / "state.db")
     store.reconcile_startup()
-    with pytest.raises(RuntimeError, match="fenced"):
+    with pytest.raises(RuntimeError, match="not reserved"):
         _start(store)
     _complete(store)
     assert not store.has_cleanup_quarantine("task")
     assert store.get_workspace("task").writer_token == "writer"
-    # Facts do not renew launch authority, even if task and dispatch remain READY/RESERVED.
-    with pytest.raises(RuntimeError, match="fenced"):
+    # Facts do not renew launch authority, even after cleanup is confirmed.
+    # The old dispatch remains BLOCKED.
+    with pytest.raises(RuntimeError, match="not reserved"):
         _start(store)
 
 

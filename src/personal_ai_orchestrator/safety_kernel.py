@@ -252,6 +252,13 @@ class ProjectRecord(FrozenModel):
     grace_seconds: int = 120
 
 
+# A presentation closeout is not cleanup proof or renewed launch authority.
+STARTUP_RECOVERY_REQUIRED = "STARTUP_RECOVERY_REQUIRED"
+_STARTUP_RECOVERY_REASON = (
+    "host restart interrupted owner dispatch; explicit recovery requires confirmed cleanup"
+)
+
+
 class OwnerDispatchStatus(StrEnum):
     RESERVED = "RESERVED"
     STARTED = "STARTED"
@@ -273,6 +280,28 @@ class OwnerDispatchRecord(FrozenModel):
     finished_at: datetime | None = None
     failure_code: str | None = None
     failure_reason: str | None = None
+
+
+class OwnerDispatchRecoveryRecord(FrozenModel):
+    """Historical recovery receipt; current task state must be read separately."""
+
+    request_id: str
+    task_id: str
+    prior_dispatch_id: str
+    prior_attempt_id: str
+    task_state_version: int
+    recovered_task_state_version: int
+    store_id: str
+    process_epoch: str
+    created_at: datetime
+
+
+class OwnerDispatchRecoveryError(ValueError):
+    """Stable owner-facing recovery denial without private evidence or paths."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
 
 
 def owner_dispatch_matches_expected(
@@ -607,6 +636,41 @@ class SafetyKernelStore:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS owner_dispatch_interruptions (
+                dispatch_id TEXT PRIMARY KEY REFERENCES owner_dispatches(dispatch_id),
+                task_id TEXT NOT NULL REFERENCES tasks(task_id),
+                attempt_id TEXT REFERENCES worker_attempts(attempt_id),
+                run_id TEXT REFERENCES runs(run_id),
+                original_task_state TEXT NOT NULL,
+                original_task_state_version INTEGER NOT NULL,
+                worktree_path TEXT,
+                interrupted_task_state_version INTEGER,
+                created_at TEXT NOT NULL
+            );
+            CREATE TRIGGER IF NOT EXISTS immutable_owner_dispatch_interruption_update
+                BEFORE UPDATE ON owner_dispatch_interruptions BEGIN
+                SELECT RAISE(ABORT, 'owner dispatch interruptions are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS immutable_owner_dispatch_interruption_delete
+                BEFORE DELETE ON owner_dispatch_interruptions BEGIN
+                SELECT RAISE(ABORT, 'owner dispatch interruptions are immutable'); END;
+            CREATE TABLE IF NOT EXISTS owner_dispatch_recoveries (
+                request_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL REFERENCES tasks(task_id),
+                prior_dispatch_id TEXT NOT NULL UNIQUE
+                    REFERENCES owner_dispatch_interruptions(dispatch_id),
+                prior_attempt_id TEXT NOT NULL REFERENCES worker_attempts(attempt_id),
+                task_state_version INTEGER NOT NULL,
+                recovered_task_state_version INTEGER NOT NULL,
+                store_id TEXT NOT NULL,
+                process_epoch TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TRIGGER IF NOT EXISTS immutable_owner_dispatch_recovery_update
+                BEFORE UPDATE ON owner_dispatch_recoveries BEGIN
+                SELECT RAISE(ABORT, 'owner dispatch recoveries are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS immutable_owner_dispatch_recovery_delete
+                BEFORE DELETE ON owner_dispatch_recoveries BEGIN
+                SELECT RAISE(ABORT, 'owner dispatch recoveries are immutable'); END;
             CREATE INDEX IF NOT EXISTS worker_attempt_quarantine
                 ON worker_attempts(task_id) WHERE cleanup_state != 'CONFIRMED';
             CREATE TABLE IF NOT EXISTS worker_cleanup_receipts (
@@ -1200,6 +1264,66 @@ class SafetyKernelStore:
             raise
         return self.get_worker_attempt(attempt_id)
 
+    @staticmethod
+    def _check_worker_cleanup_facts(attempt: WorkerAttemptRecord, cleanup: dict[str, Any]) -> None:
+        """The same exact evidence rules govern persistence and later recovery."""
+        for key in ("attempt_id", "executor_id", "dispatch_id", "task_id", "writer_token"):
+            if key in cleanup and cleanup[key] != getattr(attempt, key):
+                raise RuntimeError("cleanup receipt does not match exact worker attempt")
+        if cleanup.get("run_id") is not None and cleanup["run_id"] != attempt.run_id:
+            raise RuntimeError("cleanup receipt does not match exact worker run")
+        if (
+            attempt.spawn_ticket is not None
+            and "spawn_ticket" in cleanup
+            and cleanup["spawn_ticket"] != attempt.spawn_ticket
+        ):
+            raise RuntimeError("cleanup receipt does not match exact spawn ticket")
+        if cleanup.get("state") == "CONFIRMED":
+            spawn_state = cleanup.get("spawn_state")
+            if spawn_state == "NOT_STARTED":
+                if attempt.spawn_state != "CLAIMED" or not attempt.fenced:
+                    raise RuntimeError("NOT_STARTED requires fenced, never-entered spawn")
+            elif spawn_state == "SPAWN_FAILED_NO_CHILD":
+                if (
+                    attempt.spawn_state != "SPAWN_ENTERED"
+                    or not attempt.fenced
+                    or attempt.spawn_ticket is not None
+                    or attempt.pid is not None
+                    or cleanup.get("child_created") is not False
+                    or cleanup.get("process_create_failed") is not True
+                ):
+                    raise RuntimeError("spawn failure lacks positive no-child evidence")
+            else:
+                if spawn_state != "PROCESS_OBSERVED":
+                    raise RuntimeError("confirmed cleanup requires explicit observed spawn state")
+                if cleanup.get("scope") != "CREATED_PROCESS_GROUP" or cleanup.get(
+                    "capability"
+                ) not in {"WAITID_WNOWAIT", "WAITPID_REAP_ON_OBSERVE"}:
+                    raise RuntimeError("confirmed cleanup lacks supported ownership scope")
+                if attempt.pid is None or attempt.pid <= 0:
+                    raise RuntimeError("confirmed cleanup requires an observed exact child PID")
+                if not isinstance(cleanup.get("exit_code"), int) or isinstance(
+                    cleanup["exit_code"], bool
+                ):
+                    raise RuntimeError("confirmed cleanup requires an observed exit code")
+                for name in ("stdout", "stderr"):
+                    pipe = cleanup.get(name)
+                    if not isinstance(pipe, dict) or not (
+                        pipe.get("eof") is True
+                        and pipe.get("collector_done") is True
+                        and pipe.get("forced_closed") is False
+                        and "error" in pipe
+                        and pipe["error"] is None
+                    ):
+                        raise RuntimeError("confirmed cleanup lacks complete pipe evidence")
+                if not attempt.spawn_ticket or cleanup.get("spawn_ticket") != attempt.spawn_ticket:
+                    raise RuntimeError("confirmed cleanup requires the exact observed spawn ticket")
+                if not all(
+                    cleanup.get(key) is True
+                    for key in ("leader_exit_observed", "child_reaped", "scope_empty")
+                ):
+                    raise RuntimeError("confirmed cleanup lacks exit, reap or scope evidence")
+
     def complete_worker_attempt(
         self,
         *,
@@ -1220,69 +1344,7 @@ class SafetyKernelStore:
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             attempt = self._check_attempt_executor(attempt_id, executor_id)
-            for key in ("attempt_id", "executor_id", "dispatch_id", "task_id", "writer_token"):
-                if key in cleanup and cleanup[key] != getattr(attempt, key):
-                    raise RuntimeError("cleanup receipt does not match exact worker attempt")
-            if cleanup.get("run_id") is not None and cleanup["run_id"] != attempt.run_id:
-                raise RuntimeError("cleanup receipt does not match exact worker run")
-            if (
-                attempt.spawn_ticket is not None
-                and "spawn_ticket" in cleanup
-                and cleanup["spawn_ticket"] != attempt.spawn_ticket
-            ):
-                raise RuntimeError("cleanup receipt does not match exact spawn ticket")
-            if state == "CONFIRMED":
-                spawn_state = cleanup.get("spawn_state")
-                if spawn_state == "NOT_STARTED":
-                    if attempt.spawn_state != "CLAIMED" or not attempt.fenced:
-                        raise RuntimeError("NOT_STARTED requires fenced, never-entered spawn")
-                elif spawn_state == "SPAWN_FAILED_NO_CHILD":
-                    if (
-                        attempt.spawn_state != "SPAWN_ENTERED"
-                        or not attempt.fenced
-                        or attempt.spawn_ticket is not None
-                        or attempt.pid is not None
-                        or cleanup.get("child_created") is not False
-                        or cleanup.get("process_create_failed") is not True
-                    ):
-                        raise RuntimeError("spawn failure lacks positive no-child evidence")
-                else:
-                    if spawn_state != "PROCESS_OBSERVED":
-                        raise RuntimeError(
-                            "confirmed cleanup requires explicit observed spawn state"
-                        )
-                    if cleanup.get("scope") != "CREATED_PROCESS_GROUP" or cleanup.get(
-                        "capability"
-                    ) not in {"WAITID_WNOWAIT", "WAITPID_REAP_ON_OBSERVE"}:
-                        raise RuntimeError("confirmed cleanup lacks supported ownership scope")
-                    if attempt.pid is None or attempt.pid <= 0:
-                        raise RuntimeError("confirmed cleanup requires an observed exact child PID")
-                    if not isinstance(cleanup.get("exit_code"), int) or isinstance(
-                        cleanup["exit_code"], bool
-                    ):
-                        raise RuntimeError("confirmed cleanup requires an observed exit code")
-                    for name in ("stdout", "stderr"):
-                        pipe = cleanup.get(name)
-                        if not isinstance(pipe, dict) or not (
-                            pipe.get("eof") is True
-                            and pipe.get("collector_done") is True
-                            and pipe.get("forced_closed") is False
-                            and "error" in pipe
-                            and pipe["error"] is None
-                        ):
-                            raise RuntimeError("confirmed cleanup lacks complete pipe evidence")
-                    if (
-                        not attempt.spawn_ticket
-                        or cleanup.get("spawn_ticket") != attempt.spawn_ticket
-                    ):
-                        raise RuntimeError(
-                            "confirmed cleanup requires the exact observed spawn ticket"
-                        )
-                    if not all(
-                        cleanup.get(key) is True
-                        for key in ("leader_exit_observed", "child_reaped", "scope_empty")
-                    ):
-                        raise RuntimeError("confirmed cleanup lacks exit, reap or scope evidence")
+            self._check_worker_cleanup_facts(attempt, cleanup)
             payload = _json(cleanup)
             existing = self.connection.execute(
                 "SELECT payload_json,executor_id FROM worker_cleanup_receipts "
@@ -3486,13 +3548,407 @@ class SafetyKernelStore:
             self.connection.execute("ROLLBACK")
             raise
 
+    def get_owner_dispatch_recovery(self, request_id: str) -> OwnerDispatchRecoveryRecord:
+        row = self.connection.execute(
+            "SELECT * FROM owner_dispatch_recoveries WHERE request_id=?", (request_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(request_id)
+        return OwnerDispatchRecoveryRecord(**dict(row))
+
+    def recover_owner_dispatch(
+        self,
+        *,
+        request_id: str,
+        task_id: str,
+        expected_task_version: int,
+        prior_dispatch_id: str,
+        expected_store_id: str,
+        expected_process_epoch: str,
+    ) -> OwnerDispatchRecoveryRecord:
+        """Explicitly prepare one interrupted MANUAL task for a *new* START.
+
+        The caller must authenticate current owner authority and current host
+        epoch. This method grants no launch/cleanup/writer authority; all cleanup
+        and writer release must already be proven through their existing paths.
+        Replays return a historical receipt, never reset a later task generation.
+        """
+        if not all((request_id, task_id, prior_dispatch_id, expected_process_epoch)):
+            raise OwnerDispatchRecoveryError("invalid_recovery_request")
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            if expected_store_id != self.store_id:
+                raise OwnerDispatchRecoveryError("store_identity_mismatch")
+            existing = self.connection.execute(
+                "SELECT * FROM owner_dispatch_recoveries WHERE request_id=?", (request_id,)
+            ).fetchone()
+            if existing is not None:
+                expected = {
+                    "task_id": task_id,
+                    "prior_dispatch_id": prior_dispatch_id,
+                    "task_state_version": expected_task_version,
+                    "store_id": expected_store_id,
+                    "process_epoch": expected_process_epoch,
+                }
+                if any(existing[key] != value for key, value in expected.items()):
+                    raise OwnerDispatchRecoveryError("conflicting_recovery_request_id")
+                self.connection.execute("COMMIT")
+                return OwnerDispatchRecoveryRecord(**dict(existing))
+            if self.connection.execute(
+                "SELECT 1 FROM owner_dispatch_recoveries WHERE prior_dispatch_id=?",
+                (prior_dispatch_id,),
+            ).fetchone():
+                raise OwnerDispatchRecoveryError("prior_dispatch_already_recovered")
+            try:
+                task = self.get_task(task_id)
+            except KeyError:
+                raise OwnerDispatchRecoveryError("task_not_found") from None
+            dispatch = self.connection.execute(
+                "SELECT * FROM owner_dispatches WHERE dispatch_id=?", (prior_dispatch_id,)
+            ).fetchone()
+            interruption = self.connection.execute(
+                "SELECT * FROM owner_dispatch_interruptions WHERE dispatch_id=?",
+                (prior_dispatch_id,),
+            ).fetchone()
+            if (
+                dispatch is None
+                or interruption is None
+                or dispatch["task_id"] != task_id
+                or interruption["task_id"] != task_id
+                or dispatch["authority"] != AUTHORITY_OWNER_INITIATED_EXECUTION
+                or dispatch["status"] != OwnerDispatchStatus.BLOCKED.value
+                or dispatch["failure_code"] != STARTUP_RECOVERY_REQUIRED
+            ):
+                raise OwnerDispatchRecoveryError("recovery_not_available")
+            if task.scheduling_policy != "MANUAL":
+                raise OwnerDispatchRecoveryError("recovery_requires_manual_task")
+            if task.manual_execution_target_id != dispatch["execution_target_id"]:
+                raise OwnerDispatchRecoveryError("manual_execution_target_mismatch")
+            if (
+                task.state is not TaskState.BLOCKED
+                or task.state_version != expected_task_version
+                or interruption["interrupted_task_state_version"] != expected_task_version
+            ):
+                raise OwnerDispatchRecoveryError("recovery_generation_mismatch")
+            if interruption["attempt_id"] is None:
+                raise OwnerDispatchRecoveryError("recovery_cleanup_unconfirmed")
+            attempt = self.get_worker_attempt(interruption["attempt_id"])
+            if (
+                attempt.task_id != task_id
+                or attempt.dispatch_id != prior_dispatch_id
+                or attempt.dispatch_task_state_version != dispatch["task_state_version"]
+                or attempt.authority != AUTHORITY_OWNER_INITIATED_EXECUTION
+                or not attempt.fenced
+                or attempt.spawn_state == "LEGACY_UNKNOWN"
+                or (interruption["run_id"] is not None and interruption["run_id"] != attempt.run_id)
+            ):
+                raise OwnerDispatchRecoveryError("recovery_attempt_identity_mismatch")
+            if interruption["run_id"] is not None:
+                prior_run = self.connection.execute(
+                    "SELECT task_id,pid FROM runs WHERE run_id=?", (interruption["run_id"],)
+                ).fetchone()
+                if (
+                    prior_run is None
+                    or prior_run["task_id"] != task_id
+                    or prior_run["pid"] != attempt.pid
+                ):
+                    raise OwnerDispatchRecoveryError("recovery_attempt_identity_mismatch")
+            try:
+                workspace = self.get_workspace(task_id)
+            except KeyError:
+                raise OwnerDispatchRecoveryError("recovery_workspace_changed") from None
+            if (
+                workspace.worktree_path != interruption["worktree_path"]
+                or workspace.worktree_path != attempt.worktree_path
+            ):
+                raise OwnerDispatchRecoveryError("recovery_workspace_changed")
+            if workspace.writer_token is not None:
+                raise OwnerDispatchRecoveryError("recovery_writer_held")
+            if (
+                self.connection.execute(
+                    "SELECT 1 FROM runs WHERE task_id=? AND status='RUNNING'", (task_id,)
+                ).fetchone()
+                or self.connection.execute(
+                    """SELECT 1 FROM owner_dispatches WHERE task_id=?
+                   AND status IN ('RESERVED','STARTED')""",
+                    (task_id,),
+                ).fetchone()
+            ):
+                raise OwnerDispatchRecoveryError("recovery_active_execution")
+            if (
+                self.connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='switch_leases'"
+                ).fetchone()
+                and self.connection.execute(
+                    """SELECT 1 FROM switch_leases WHERE task_id=? AND status='AUTHORIZED'
+                   AND expires_at_epoch>CAST(strftime('%s','now') AS INTEGER)""",
+                    (task_id,),
+                ).fetchone()
+            ):
+                raise OwnerDispatchRecoveryError("recovery_active_switch_lease")
+            # Check every task/path claim, not just the old dispatch. A receipt
+            # from one attempt cannot cover another writer or an older legacy
+            # tombstone. Reuse the exact #71 receipt validation, not an inference
+            # from missing run rows, terminal status or cached cleanup_state.
+            claims = self.connection.execute(
+                """SELECT attempt_id FROM worker_attempts
+                   WHERE task_id=? OR worktree_path=?""",
+                (task_id, workspace.worktree_path),
+            ).fetchall()
+            for claim in claims:
+                claimed = self.get_worker_attempt(claim["attempt_id"])
+                receipt = self.connection.execute(
+                    """SELECT * FROM worker_cleanup_receipts WHERE attempt_id=?
+                       AND cleanup_state='CONFIRMED' AND executor_id=?""",
+                    (claimed.attempt_id, claimed.executor_id),
+                ).fetchone()
+                if (
+                    not claimed.fenced
+                    or claimed.spawn_state == "LEGACY_UNKNOWN"
+                    or claimed.cleanup_state != "CONFIRMED"
+                    or receipt is None
+                ):
+                    raise OwnerDispatchRecoveryError("recovery_cleanup_unconfirmed")
+                try:
+                    cleanup = json.loads(receipt["payload_json"])
+                    if not isinstance(cleanup, dict) or cleanup.get("state") != "CONFIRMED":
+                        raise ValueError("invalid cleanup receipt")
+                    if "status" in cleanup and cleanup["status"] != "CONFIRMED":
+                        raise ValueError("conflicting cleanup receipt")
+                    self._check_worker_cleanup_facts(claimed, cleanup)
+                except (ValueError, RuntimeError, TypeError):
+                    raise OwnerDispatchRecoveryError("recovery_cleanup_unconfirmed") from None
+            self._transition_task_tx(
+                task_id,
+                TaskState.READY,
+                expected_version=expected_task_version,
+                reason="owner explicitly recovered interrupted manual dispatch; new START required",
+            )
+            stamp = _now()
+            self.connection.execute(
+                """INSERT INTO owner_dispatch_recoveries(
+                    request_id,task_id,prior_dispatch_id,prior_attempt_id,task_state_version,
+                    recovered_task_state_version,store_id,process_epoch,created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                (
+                    request_id,
+                    task_id,
+                    prior_dispatch_id,
+                    attempt.attempt_id,
+                    expected_task_version,
+                    expected_task_version + 1,
+                    expected_store_id,
+                    expected_process_epoch,
+                    stamp,
+                ),
+            )
+            self._audit(
+                task_id,
+                "OWNER_DISPATCH_RECOVERED",
+                {
+                    "request_id": request_id,
+                    "prior_dispatch_id": prior_dispatch_id,
+                    "prior_attempt_id": attempt.attempt_id,
+                    "task_state_version": expected_task_version,
+                    "recovered_task_state_version": expected_task_version + 1,
+                },
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_owner_dispatch_recovery(request_id)
+
+    def _interrupt_owner_dispatches_tx(
+        self,
+        prior_tasks: dict[str, TaskRecord],
+        blocked: list[str],
+    ) -> None:
+        """Close startup-fenced owner rows without inventing execution outcomes.
+
+        A dispatch is closed by its own durable identity. A task generation is
+        linked only when its exact source version and (when started) run match.
+        Uncorrelated/legacy evidence still closes the dispatch, but never grants
+        recovery authority over a newer task generation.
+        """
+        dispatches = self.connection.execute(
+            """SELECT * FROM owner_dispatches WHERE authority=?
+               AND status IN ('RESERVED','STARTED') ORDER BY dispatch_id""",
+            (AUTHORITY_OWNER_INITIATED_EXECUTION,),
+        ).fetchall()
+        for row in dispatches:
+            dispatch = self._owner_dispatch_from_row(row)
+            task = prior_tasks[dispatch.task_id]
+            attempt = self.get_worker_attempt_for_dispatch(dispatch.dispatch_id)
+            exact_attempt = (
+                attempt is not None
+                and attempt.spawn_state != "LEGACY_UNKNOWN"
+                and attempt.fenced
+                and attempt.task_id == dispatch.task_id
+                and attempt.dispatch_task_state_version == dispatch.task_state_version
+                and attempt.authority == dispatch.authority
+            )
+            run = None
+            if exact_attempt and attempt.run_id is not None:
+                run = self.connection.execute(
+                    "SELECT * FROM runs WHERE run_id=?", (attempt.run_id,)
+                ).fetchone()
+                if run is not None and (
+                    run["task_id"] != task.task_id or run["pid"] != attempt.pid
+                ):
+                    run = None
+            task_matches = False
+            if dispatch.status is OwnerDispatchStatus.RESERVED:
+                source_version = (
+                    attempt.task_state_version if exact_attempt else dispatch.task_state_version
+                )
+                task_matches = (
+                    task.state in {TaskState.SUBMITTED, TaskState.READY}
+                    and task.state_version == source_version
+                )
+                if not exact_attempt and not task_matches and task.state is TaskState.READY:
+                    # The ordinary SUBMITTED -> READY admission advances the
+                    # reservation version once before any worker attempt. Bind
+                    # it only to a unique reservation and the exact latest host
+                    # transition audit; version +1 by itself is not evidence.
+                    reservations = self.connection.execute(
+                        """SELECT count(*) FROM owner_dispatches
+                           WHERE task_id=? AND task_state_version=?""",
+                        (task.task_id, dispatch.task_state_version),
+                    ).fetchone()[0]
+                    transition = self.connection.execute(
+                        """SELECT audit_id,payload_json FROM audit_events WHERE task_id=?
+                           AND event_type='TASK_STATE_CHANGED' ORDER BY audit_id DESC LIMIT 1""",
+                        (task.task_id,),
+                    ).fetchone()
+                    if reservations == 1 and transition is not None:
+                        try:
+                            payload = json.loads(transition["payload_json"])
+                        except (TypeError, ValueError):
+                            payload = None
+                        reservation_audits = self.connection.execute(
+                            """SELECT payload_json FROM audit_events WHERE task_id=?
+                               AND event_type='OWNER_DISPATCH_RESERVED' AND audit_id<?""",
+                            (task.task_id, transition["audit_id"]),
+                        ).fetchall()
+                        reserved_before_transition = False
+                        for reservation_audit in reservation_audits:
+                            try:
+                                reserved = json.loads(reservation_audit["payload_json"])
+                            except (TypeError, ValueError):
+                                continue
+                            if isinstance(reserved, dict) and (
+                                reserved.get("dispatch_id") == dispatch.dispatch_id
+                                and reserved.get("request_id") == dispatch.request_id
+                                and reserved.get("authority") == dispatch.authority
+                                and reserved.get("execution_target_id")
+                                == dispatch.execution_target_id
+                            ):
+                                reserved_before_transition = True
+                                break
+                        task_matches = (
+                            reserved_before_transition
+                            and isinstance(payload, dict)
+                            and task.state_version == dispatch.task_state_version + 1
+                            and payload.get("from") == TaskState.SUBMITTED.value
+                            and payload.get("to") == TaskState.READY.value
+                            and payload.get("state_version") == task.state_version
+                            and payload.get("reason")
+                            == "owner initiated execution dispatch reserved"
+                        )
+                if task_matches and self.get_task(task.task_id) == task:
+                    # An unchanged reservation generation can be blocked even
+                    # without spawn proof. Such legacy rows remain quarantined.
+                    self._transition_task_tx(
+                        task.task_id,
+                        TaskState.BLOCKED,
+                        expected_version=task.state_version,
+                        reason=_STARTUP_RECOVERY_REASON,
+                    )
+                    blocked.append(task.task_id)
+            elif exact_attempt and run is not None:
+                offset = {
+                    TaskState.RUNNING: 1,
+                    TaskState.WORKER_FINISHED: 2,
+                    TaskState.VERIFYING: 3,
+                }.get(task.state)
+                task_matches = (
+                    offset is not None
+                    and task.state_version == attempt.task_state_version + offset
+                    and run["status"]
+                    == ("INTERRUPTED" if task.state is TaskState.RUNNING else "FINISHED")
+                )
+            current = self.get_task(task.task_id)
+            interrupted_version = (
+                current.state_version
+                if task_matches
+                and current.state is TaskState.BLOCKED
+                and current.state_version == task.state_version + 1
+                else None
+            )
+            stamp = _now()
+            workspace = self.connection.execute(
+                "SELECT worktree_path FROM workspaces WHERE task_id=?", (task.task_id,)
+            ).fetchone()
+            self.connection.execute(
+                """INSERT INTO owner_dispatch_interruptions(
+                    dispatch_id,task_id,attempt_id,run_id,original_task_state,
+                    original_task_state_version,worktree_path,interrupted_task_state_version,created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                (
+                    dispatch.dispatch_id,
+                    task.task_id,
+                    attempt.attempt_id if exact_attempt else None,
+                    run["run_id"] if run is not None else None,
+                    task.state.value,
+                    task.state_version,
+                    workspace["worktree_path"] if workspace is not None else None,
+                    interrupted_version,
+                    stamp,
+                ),
+            )
+            updated = self.connection.execute(
+                """UPDATE owner_dispatches SET status='BLOCKED',finished_at=?,
+                    failure_code=?,failure_reason=? WHERE dispatch_id=? AND status=?""",
+                (
+                    stamp,
+                    STARTUP_RECOVERY_REQUIRED,
+                    _STARTUP_RECOVERY_REASON,
+                    dispatch.dispatch_id,
+                    dispatch.status.value,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("startup reconciliation lost owner dispatch race")
+            self._audit(
+                task.task_id,
+                "OWNER_DISPATCH_INTERRUPTED",
+                {
+                    "dispatch_id": dispatch.dispatch_id,
+                    "request_id": dispatch.request_id,
+                    "attempt_id": attempt.attempt_id if exact_attempt else None,
+                    "run_id": run["run_id"] if run is not None else None,
+                    "interrupted_task_state_version": interrupted_version,
+                    "failure_code": STARTUP_RECOVERY_REQUIRED,
+                    "failure_reason": _STARTUP_RECOVERY_REASON,
+                },
+            )
+
     def reconcile_startup(self) -> tuple[str, ...]:
-        """Atomically block uncertain in-flight task state and interrupt active runs."""
+        """Fence prior execution and atomically close task/run/owner dispatch state.
+
+        This is host startup only, never a retry or a workspace-unquarantine
+        operation. Ordinary store connections do not invoke it.
+        """
 
         blocked: list[str] = []
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             self._fence_previous_worker_attempts_tx()
+            prior_tasks = {
+                row["task_id"]: self.get_task(row["task_id"])
+                for row in self.connection.execute("SELECT task_id FROM tasks").fetchall()
+            }
             rows = self.connection.execute(
                 "SELECT task_id,state,state_version FROM tasks WHERE state IN (?,?,?) ORDER BY task_id",
                 (
@@ -3548,6 +4004,7 @@ class SafetyKernelStore:
                     "RUN_FINISHED",
                     {"run_id": run["run_id"], "status": "INTERRUPTED"},
                 )
+            self._interrupt_owner_dispatches_tx(prior_tasks, blocked)
             self.connection.execute("COMMIT")
         except Exception:
             self.connection.execute("ROLLBACK")
@@ -3574,9 +4031,12 @@ __all__ = [
     "DelegatedTaskLineageError",
     "DelegatedTaskLineageRule",
     "OwnerDispatchRecord",
+    "OwnerDispatchRecoveryError",
+    "OwnerDispatchRecoveryRecord",
     "OwnerDispatchStatus",
     "ProjectAvailability",
     "ProjectRecord",
+    "STARTUP_RECOVERY_REQUIRED",
     "SafetyKernelStore",
     "TaskRecord",
     "TaskState",
