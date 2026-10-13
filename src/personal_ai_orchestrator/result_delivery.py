@@ -228,11 +228,24 @@ def result_delivery(
     transition = _verification_transition(connection, task_id)
     if state in {"BLOCKED", "FAILED", "CANCELLED"}:
         report["completeness"] = "FAILED"
-        report["verification"]["status"] = (
-            "FAILED_VERIFICATION"
-            if transition and transition["to_state"] == "BLOCKED"
-            else "NOT_OBSERVED"
+        started = _audit(connection, task_id, "RUN_STARTED")
+        attested_failure = bool(
+            transition
+            and transition["to_state"] == "BLOCKED"
+            and isinstance(transition["evidence_sha256"], str)
+            and re.fullmatch(r"[a-f0-9]{64}", transition["evidence_sha256"])
+            and run_id
+            and started
+            and started["run_id"] == run_id
+            and started["audit_id"] < transition["audit_id"]
+            # The composed host safety outcome may block a passing verifier.
+            # Its known main-repo guard does not establish failed tests.
+            and transition["reason"] != "main repository mutated during owner dispatch"
         )
+        if attested_failure:
+            report["verification"]["status"] = "FAILED_VERIFICATION"
+        elif transition and transition["to_state"] == "BLOCKED":
+            report["limitations"].append("VERIFICATION_OUTCOME_NOT_ESTABLISHED")
         report["limitations"].append("TASK_REQUIRES_OWNER_REVIEW")
     elif state == "VERIFYING":
         report["verification"]["status"] = "IN_PROGRESS"

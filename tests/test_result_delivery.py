@@ -57,7 +57,9 @@ def worker_finished(service, *, intent="Implement the requested fixture", exit_c
     )
 
 
-def verified(service, *, intent="Implement the requested fixture", **fields):
+def verified(
+    service, *, intent="Implement the requested fixture", main_repo_unchanged=True, **fields
+):
     worker_finished(service, intent=intent)
     begin_verification(service.store, task_id="task-1")
     evidence = VerificationResult(
@@ -87,6 +89,7 @@ def verified(service, *, intent="Implement the requested fixture", **fields):
         task_id="task-1",
         result=evidence,
         evidence_journal=service.verification_journal,
+        shadow_main_repo_unchanged=main_repo_unchanged,
     )
     return evidence
 
@@ -175,6 +178,32 @@ def test_failed_verification_keeps_legacy_truth_without_raw_failure_reason(servi
     assert result["answer_completeness"] == "FAILED"
     assert "DO_NOT_EXPORT" not in json.dumps(result)
     assert service.verification_report("task-1").status == "FAILED_VERIFICATION"
+
+
+def test_interrupted_verification_is_not_a_failed_verifier_claim(service):
+    worker_finished(service)
+    begin_verification(service.store, task_id="task-1")
+    transition(service, TaskState.BLOCKED)
+    result = detail(service)
+    assert result["answer_completeness"] == "FAILED"
+    assert result["verification"]["status"] == "NOT_OBSERVED"
+    assert "VERIFICATION_OUTCOME_NOT_ESTABLISHED" in result["result"]["limitations"]
+    assert continuation(service)["continuation"]["completed"] == []
+
+
+def test_main_repository_safety_block_is_not_a_failed_verifier_claim(service):
+    verified(service, main_repo_unchanged=False)
+    result = detail(service)
+    assert result["answer_completeness"] == "FAILED"
+    assert result["verification"]["status"] == "NOT_OBSERVED"
+    assert "VERIFICATION_OUTCOME_NOT_ESTABLISHED" in result["result"]["limitations"]
+
+
+def test_failed_verification_from_earlier_run_is_not_attached_to_later_run(service):
+    verified(service, passed=False, failure_reason="test failed")
+    assert detail(service)["verification"]["status"] == "FAILED_VERIFICATION"
+    service.store.start_run(run_id="later-run", task_id="task-1", worker_id="fixture")
+    assert detail(service)["verification"]["status"] == "NOT_OBSERVED"
 
 
 @pytest.mark.parametrize("missing", ["journal", "file", "audit", "run_started", "run_finished"])

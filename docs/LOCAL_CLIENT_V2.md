@@ -278,6 +278,10 @@ Completeness values, also returned as `DETAIL.payload.answer_completeness`:
   evidence conflicts with a passing transition. Failed verification has no
   deliverable artifact reference unless it is explicitly bound by the source
   record; the existing legacy failure transition does not record such a reference.
+  Task-level failure is distinct from `FAILED_VERIFICATION`: the latter requires
+  a digest-attested verifier outcome for the current run. An interruption while
+  VERIFYING or a known main-repository safety block leaves verification
+  NOT_OBSERVED, with `VERIFICATION_OUTCOME_NOT_ESTABLISHED` in limitations.
 - `COMPLETE`: all bounded fields of a consistent, passing host-verification report
   were delivered. This says nothing about unconfigured tests, native acceptance,
   signing, provider acceptance, merging, publication or fulfillment of arbitrary
