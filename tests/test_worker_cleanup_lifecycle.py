@@ -378,7 +378,7 @@ async def test_truncated_output_never_authorizes_verified(
 
 @pytest.mark.parametrize("stream", ["stdout", "stderr"])
 async def test_term_handler_full_pipe_drains_and_timeout_zero_exit_stays_failed(
-    lifecycle, stream: str
+    lifecycle, monkeypatch: pytest.MonkeyPatch, stream: str
 ):
     completed = lifecycle.ready.with_name("term-output-completed")
     lifecycle.write_waiting_worker(
@@ -386,6 +386,15 @@ async def test_term_handler_full_pipe_drains_and_timeout_zero_exit_stays_failed(
         f"    Path({str(completed)!r}).touch()\n"
         "    sys.exit(0)\n"
     )
+    original_collect = lifecycle.executor._supervisor.collect
+
+    async def collect_after_handler_ready(supervised, **kwargs):
+        # Measure the timeout after the fixture has installed its TERM handler.
+        # Interpreter startup under load is not part of this pipe-drain contract.
+        await lifecycle.await_ready()
+        return await original_collect(supervised, **kwargs)
+
+    monkeypatch.setattr(lifecycle.executor._supervisor, "collect", collect_after_handler_ready)
     lifecycle.executor.config = replace(lifecycle.executor.config, worker_timeout_seconds=0.2)
     await _bounded(lifecycle.start())
     assert completed.exists(), "drainers must stay alive while TERM writes more than pipe capacity"
