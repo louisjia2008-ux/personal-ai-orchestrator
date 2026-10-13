@@ -1,7 +1,8 @@
 # Reliability implementation: offline validation, 2026-10-13
 
 Base: `919e2196aa21b60bad6614aae3d92447dd342d6f` (merged #69).
-This is an unpublished local patch, not a release or a claim of native acceptance.
+This records local offline validation before draft-PR publication, not a release
+or a claim of native acceptance. The associated draft PR records remote CI.
 
 ## Implemented scope
 
@@ -64,8 +65,9 @@ The supported-suite result is not an unrestricted full-suite or CI pass.
 - No Swift toolchain/macOS runtime is available here. No native UI button,
   target-Mac behavior, app signing, packaging or Swift acceptance is claimed.
   New recovery/result surfaces are backend API/CLI contracts.
-- No live provider, paid call, external session transfer, push, PR, merge,
-  deployment or external issue was performed.
+- Offline validation used no live provider, paid call or external session
+  transfer. Subsequent authorized publication adds tracking issues and a draft
+  PR; it does not authorize merge or deployment.
 - COMPLETE describes delivery of the configured host-verification report. It
   does not attest all natural-language goals, unconfigured tests or release
   work. `result_commit` remains null because PAO does not record one.
@@ -79,6 +81,7 @@ The supported-suite result is not an unrestricted full-suite or CI pass.
   same database transaction; the existing fail-closed abort/backstop remains.
 - Static independent code review found no remaining blocking issue in the
   reviewed recovery/settings surfaces after fixes. It is not maintainer approval.
-  Issue #70 tracks recovery; issue-first scope and human maintainer review for
-  new result-attestation/settings safety changes remain required before opening
-  or publishing the affected changes.
+  Issue #70 tracks recovery; #74 tracks result attestation/delivery, #75 tracks
+  atomic settings updates, and #76 tracks failure classification. These issues
+  were opened before draft-PR publication. Human maintainer review remains
+  pending; neither the issues nor the draft PR imply approval to merge.
