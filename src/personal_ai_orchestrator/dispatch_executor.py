@@ -96,7 +96,11 @@ from personal_ai_orchestrator.verifier import (
     DeterministicVerifier,
     VerifierProfile,
 )
-from personal_ai_orchestrator.worker_outcome_classifier import WorkerFailureClass
+from personal_ai_orchestrator.worker_outcome_classifier import (
+    WorkerFailureClass,
+    classify_worker_failure,
+    worker_failure_diagnostics,
+)
 from personal_ai_orchestrator.worktree_manager import ManagedWorktree, WorktreeManager
 
 MAX_WORKER_STDOUT_BYTES = 256 * 1024
@@ -724,16 +728,8 @@ class OwnerDispatchExecutor:
                 worker_result=result,
             )
             real_invocation_succeeded = exit_code == 0 and next_state is TaskState.WORKER_FINISHED
-            # M1 WP4: classify the worker outcome and write the
-            # ``QUOTA_BLOCKED`` evidence + ``observe_*`` journal
-            # row when the classifier flags a rate-limit / quota
-            # hit. The classification runs **before** the dispatch
-            # writes its own evidence so the journal row points
-            # at the same instant as the worker exit. ``A2`` is
-            # explicitly off-limits: the helper never bumps
-            # ``consecutive_failures`` (the journal write below
-            # uses ``observe_exhaustion`` for windowed targets
-            # and ``observe_rate_limited`` for unmetered ones).
+            # This only records bounded diagnostics/cooldown evidence. It does
+            # not change task authority or increment collection failure streaks.
             self._classify_and_record_worker_outcome(
                 store,
                 dispatch=dispatch,
@@ -1803,60 +1799,35 @@ class OwnerDispatchExecutor:
         exit_code: int,
         worker_result: dict[str, object],
     ) -> None:
-        """Inspect the worker's stderr and persist a quota-or-rate-limit cooldown.
+        """Record explicit quota exhaustion separately from transient throttling.
 
-        M1 WP4 closes the gap where ``owner-dispatch`` had no
-        worker-side quota signal: every dispatch exited either
-        ``VERIFIED`` (zero exit) or ``UNKNOWN`` (any non-zero exit),
-        with no classifier to tell apart a rate-limit cooldown from
-        an unrelated failure. The classifier replaces the legacy
-        shadow text-match (which used the bare ``"quota"`` token
-        and matched this project's own source code) with the
-        conservative marker list in ``worker_outcome_classifier``.
-
-        Windowed targets: ``observe_exhaustion`` flips the journal
-        to COOLDOWN with a 1-hour window (the existing windowed
-        behaviour). The execution-evidence journal also records a
-        ``QUOTA_BLOCKED`` row so ``latest_verified_for_target``
-        falls back to the most recent VERIFIED row (the
-        post-WP3 §3.4 contract).
-        Unmetered targets: ``observe_rate_limited`` with the
-        15-minute default; the cooldown expires back to
-        ``AVAILABLE_UNMETERED`` directly (the unmetered baseline
-        tells ``state_at`` to skip the probe round-trip).
-
-        V4 refactor: the body is split into three helpers
-        (``_classify_worker_failure``,
-        ``_apply_pool_kind_cooldown``,
-        ``_record_quota_blocked_evidence``); this method is now a
-        thin orchestrator.
+        Rate limits get a short cooldown without exhaustion evidence. Overload,
+        context, auth, and unknown failures do not change quota observations.
+        Classification never retries a worker or authorizes another provider.
         """
 
         verdict = self._classify_worker_failure(
             exit_code=exit_code,
             worker_result=worker_result,
         )
-        if verdict is WorkerFailureClass.NONE:
-            return
-        if verdict is not WorkerFailureClass.QUOTA_OR_RATE_LIMIT:
-            # Auth / unclassified failures do not advance the
-            # quota journal. A future commit will add an
-            # auth-evidence row; for now we keep the contract
-            # tight so a regression cannot silently disable it.
+        if verdict not in {
+            WorkerFailureClass.QUOTA_EXHAUSTED,
+            WorkerFailureClass.RATE_LIMITED,
+        }:
             return
 
         provider_id = self._provider_id(dispatch)
         observed_at = datetime.now(UTC)
         try:
-            reason_code = self._apply_pool_kind_cooldown(
-                dispatch=dispatch,
+            reason_code = self._apply_failure_cooldown(
                 execution_target_id=execution_target_id,
                 provider_id=provider_id,
                 observed_at=observed_at,
+                verdict=verdict,
             )
         except Exception:
             return
-        if reason_code is None:
+        if reason_code is None or verdict is not WorkerFailureClass.QUOTA_EXHAUSTED:
             return
         self._record_quota_blocked_evidence(
             dispatch=dispatch,
@@ -1872,55 +1843,35 @@ class OwnerDispatchExecutor:
         exit_code: int,
         worker_result: dict[str, object],
     ) -> WorkerFailureClass:
-        """Run the worker's stderr through ``classify_worker_failure``.
-
-        Pulled out of ``_classify_and_record_worker_outcome`` (V4
-        refactor — zero behaviour change). Returning a frozen enum
-        keeps the orchestrator free of imports.
-        """
-
-        from personal_ai_orchestrator.worker_outcome_classifier import (
-            classify_worker_failure as _classify,
+        """Read host-produced diagnostics, with fallback for older envelopes."""
+        if exit_code == 0:
+            return WorkerFailureClass.NONE
+        recorded = worker_result.get("worker_failure_class")
+        if isinstance(recorded, str):
+            try:
+                return WorkerFailureClass(recorded)
+            except ValueError:
+                # A legacy merged verdict cannot establish quota exhaustion.
+                return WorkerFailureClass.UNCLASSIFIED
+        stderr = worker_result.get("stderr_tail")
+        return classify_worker_failure(
+            exit_code=exit_code, stderr_tail=stderr if isinstance(stderr, str) else ""
         )
 
-        stderr_tail_obj = worker_result.get("stderr_tail")
-        stderr_tail = stderr_tail_obj if isinstance(stderr_tail_obj, str) else ""
-        return _classify(exit_code=exit_code, stderr_tail=stderr_tail)
-
-    def _apply_pool_kind_cooldown(
+    def _apply_failure_cooldown(
         self,
         *,
-        dispatch: OwnerDispatchRecord,
         execution_target_id: str,
         provider_id: str,
         observed_at: datetime,
+        verdict: WorkerFailureClass,
     ) -> str | None:
-        """Apply the windowed-vs-unmetered cooldown to the quota journal.
-
-        Windowed targets hit ``observe_exhaustion`` (1-hour
-        cooldown, ``USAGE_LIMIT`` reason). Unmetered targets hit
-        ``observe_rate_limited`` (15-minute default, the unmetered
-        baseline tells ``state_at`` to skip the probe round-trip).
-        Returns the reason code for the execution-evidence row, or
-        ``None`` when the provider is not in the family registry
-        (a defensive no-op — pre-WP4 dispatch has no signal).
-        """
-
-        from personal_ai_orchestrator.provider_discovery import (
-            PROVIDER_FAMILIES as _PF,
-        )
+        """Select cooldown by observed cause, never infer exhaustion from pool kind."""
         from personal_ai_orchestrator.quota_availability import (
-            observe_exhaustion as _observe_exhaustion,
-        )
-        from personal_ai_orchestrator.quota_availability import (
-            observe_rate_limited as _observe_rate_limited,
+            observe_exhaustion,
+            observe_rate_limited,
         )
 
-        family = next(
-            (spec for spec in _PF if spec.provider_id == provider_id),
-            None,
-        )
-        is_unmetered = bool(family and family.pool_kind == "unmetered")
         previous = self._quota_availability_journal.load(execution_target_id)
         quota_pool_id = quota_pool_id_for_target(
             self._registry_provider(),
@@ -1929,9 +1880,9 @@ class OwnerDispatchExecutor:
         )
         if quota_pool_id is None:
             return None
-        if is_unmetered:
+        if verdict is WorkerFailureClass.RATE_LIMITED:
             self._quota_availability_journal.save(
-                _observe_rate_limited(
+                observe_rate_limited(
                     previous,
                     execution_target_id=execution_target_id,
                     provider_id=provider_id,
@@ -1941,7 +1892,7 @@ class OwnerDispatchExecutor:
             )
             return "WORKER_RATE_LIMIT"
         self._quota_availability_journal.save(
-            _observe_exhaustion(
+            observe_exhaustion(
                 previous,
                 execution_target_id=execution_target_id,
                 provider_id=provider_id,
@@ -2279,9 +2230,10 @@ class OwnerDispatchExecutor:
     ) -> dict[str, Any]:
         """Host-derived metadata only. Worker text has zero task authority.
 
-        The transcript tails are sanitized display evidence: the owner can
-        finally see what the worker did (opencode narrates progress on
-        stderr) without the raw bytes ever feeding a gate or a decision.
+        Successful transcript tails remain bounded display evidence. Failed
+        provider payloads may include credentials or private request text, so
+        failures expose allowlisted diagnostics and hashes/counts only. Host
+        verification artifacts are recorded separately and remain unchanged.
         """
 
         return {
@@ -2292,8 +2244,13 @@ class OwnerDispatchExecutor:
             "stderr_bytes": len(stderr),
             "output_truncated": truncated,
             "timed_out": timeout,
-            "stdout_tail": cls._sanitize_transcript(stdout),
-            "stderr_tail": cls._sanitize_transcript(stderr),
+            "stdout_tail": cls._sanitize_transcript(stdout) if exit_code == 0 else "",
+            "stderr_tail": cls._sanitize_transcript(stderr) if exit_code == 0 else "",
+            **worker_failure_diagnostics(
+                classify_worker_failure(
+                    exit_code=exit_code, stderr_tail=cls._sanitize_transcript(stderr)
+                )
+            ),
         }
 
     def _fail_pre_worker(

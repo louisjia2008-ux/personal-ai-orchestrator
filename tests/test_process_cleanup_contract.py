@@ -191,7 +191,11 @@ async def test_leader_first_descendant_is_killed_while_leader_pins_group(
         "import os,signal,time,pathlib\n"
         "pid=os.fork()\n"
         "if pid:\n"
-        f" pathlib.Path({str(pidfile)!r}).write_text(str(pid))\n"
+        # Existence is the parent's readiness signal; publish only a complete
+        # PID, so a read cannot race the create-before-write window.
+        f" published=pathlib.Path({str(pidfile) + '.tmp'!r})\n"
+        " published.write_text(str(pid))\n"
+        f" published.replace({str(pidfile)!r})\n"
         " os._exit(0)\n"
         "signal.signal(signal.SIGTERM,signal.SIG_IGN)\n"
         f"os.close({3 - held_fd})\n"
@@ -375,7 +379,9 @@ async def test_waitpid_fallback_reaped_leader_never_authorizes_descendant_signal
             sys.executable,
             "-c",
             "import os,time,pathlib\npid=os.fork()\nif pid:\n"
-            f" pathlib.Path({str(pidfile)!r}).write_text(str(pid))\n os._exit(0)\n"
+            f" published=pathlib.Path({str(pidfile) + '.tmp'!r})\n"
+            " published.write_text(str(pid))\n"
+            f" published.replace({str(pidfile)!r})\n os._exit(0)\n"
             "time.sleep(30)\n",
         ),
         cwd=tmp_path,
@@ -456,7 +462,9 @@ async def test_closed_pipes_do_not_prove_created_group_empty(
             sys.executable,
             "-c",
             "import os,time,pathlib\npid=os.fork()\nif pid:\n"
-            f" pathlib.Path({str(pidfile)!r}).write_text(str(pid))\n os._exit(0)\n"
+            f" published=pathlib.Path({str(pidfile) + '.tmp'!r})\n"
+            " published.write_text(str(pid))\n"
+            f" published.replace({str(pidfile)!r})\n os._exit(0)\n"
             "os.close(1);os.close(2);time.sleep(30)\n",
         ),
         cwd=tmp_path,
@@ -493,7 +501,9 @@ async def test_scope_explicitly_excludes_descendants_that_escape_the_group(
             "-c",
             "import os,time,pathlib\npid=os.fork()\nif pid:\n"
             " os._exit(0)\nos.setsid();os.close(1);os.close(2)\n"
-            f"pathlib.Path({str(pidfile)!r}).write_text(str(os.getpid()))\ntime.sleep(30)\n",
+            f"published=pathlib.Path({str(pidfile) + '.tmp'!r})\n"
+            "published.write_text(str(os.getpid()))\n"
+            f"published.replace({str(pidfile)!r})\ntime.sleep(30)\n",
         ),
         cwd=tmp_path,
     )

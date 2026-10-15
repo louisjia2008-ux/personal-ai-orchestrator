@@ -349,3 +349,106 @@ def test_invalid_utf8_settings_fail_closed(tmp_path: Path) -> None:
 
     assert settings.default_policy == "BALANCED"
     assert settings.mode == "MANUAL"
+
+
+@pytest.mark.parametrize("existing_file", [False, True])
+@pytest.mark.parametrize(
+    ("policy", "mode", "status", "code"),
+    [
+        ("SPEED_FIRST", "ACTIVE", 409, "production_active_not_authorized"),
+        ("SPEED_FIRST", "AUTOPILOT", 400, "unsupported_scheduling_mode"),
+        ("UNKNOWN", "MANUAL", 400, "unsupported_global_scheduling_policy"),
+    ],
+)
+def test_rejected_combined_update_changes_neither_memory_nor_disk(
+    tmp_path: Path,
+    existing_file: bool,
+    policy: str,
+    mode: str,
+    status: int,
+    code: str,
+) -> None:
+    service, store = _make_service(tmp_path)
+    path = tmp_path / "scheduling.json"
+    try:
+        if existing_file:
+            service.scheduling_settings.update(
+                default_policy="QUALITY_FIRST", mode="SUPERVISED_AUTO"
+            )
+        previous = service.scheduling_settings.snapshot()
+        previous_bytes = path.read_bytes() if path.exists() else None
+        with pytest.raises(ControlPlaneError) as error:
+            service.update_scheduling_settings({"default_scheduling_policy": policy, "mode": mode})
+        assert (error.value.status, error.value.code) == (status, code)
+        assert service.scheduling_settings.snapshot() == previous
+        assert (path.read_bytes() if path.exists() else None) == previous_bytes
+        assert SchedulingSettings(path).snapshot() == previous
+    finally:
+        store.close()
+
+
+def test_combined_update_persists_once_and_returns_previous_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, store = _make_service(tmp_path)
+    settings = service.scheduling_settings
+    persist = settings._persist
+    writes = []
+
+    def capture_persist(*, policy: str, mode: str) -> None:
+        writes.append((policy, mode))
+        persist(policy=policy, mode=mode)
+
+    monkeypatch.setattr(settings, "_persist", capture_persist)
+    try:
+        result = service.update_scheduling_settings(
+            {"default_scheduling_policy": "SPEED_FIRST", "mode": "SUPERVISED_AUTO"}
+        )
+        assert writes == [("SPEED_FIRST", "SUPERVISED_AUTO")]
+        assert (result.default_scheduling_policy, result.mode) == writes[0]
+        assert SchedulingSettings(tmp_path / "scheduling.json").snapshot() == writes[0]
+        assert settings.update(default_policy="QUALITY_FIRST", mode="MANUAL") == writes[0]
+    finally:
+        store.close()
+
+
+def test_combined_persistence_failure_preserves_both_fields_and_no_abort(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, store = _make_service(tmp_path)
+    settings = service.scheduling_settings
+    path = tmp_path / "scheduling.json"
+    settings.update(default_policy="QUALITY_FIRST", mode="SUPERVISED_AUTO")
+    previous_bytes = path.read_bytes()
+    aborts = []
+
+    def fail_replace(*_args) -> None:
+        raise OSError("simulated storage failure")
+
+    monkeypatch.setattr("personal_ai_orchestrator.scheduling_settings.os.replace", fail_replace)
+    monkeypatch.setattr(service, "_abort_auto_tasks", lambda **kwargs: aborts.append(kwargs))
+    try:
+        with pytest.raises(OSError, match="simulated storage failure"):
+            service.update_scheduling_settings(
+                {"default_scheduling_policy": "SPEED_FIRST", "mode": "MANUAL"}
+            )
+        assert settings.snapshot() == ("QUALITY_FIRST", "SUPERVISED_AUTO")
+        assert path.read_bytes() == previous_bytes
+        assert aborts == []
+        assert not list(tmp_path.glob(".scheduling.json.*"))
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    ("policy", "mode"), [("SPEED_FIRST", "INVALID"), ("INVALID", "SUPERVISED_AUTO")]
+)
+def test_settings_store_validates_all_before_writing(
+    tmp_path: Path, policy: str, mode: str
+) -> None:
+    path = tmp_path / "scheduling.json"
+    settings = SchedulingSettings(path)
+    with pytest.raises(ValueError):
+        settings.update(default_policy=policy, mode=mode)
+    assert settings.snapshot() == ("BALANCED", "MANUAL")
+    assert not path.exists()

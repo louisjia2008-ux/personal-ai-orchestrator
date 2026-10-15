@@ -458,3 +458,45 @@ def test_real_campaign_script_defines_twenty_codex_only_variants() -> None:
     }
     assert len({case.case_id for case in cases}) == 20
     assert "claude" not in prompt_text
+
+
+def test_campaign_rate_limit_defers_without_observing_exhaustion(tmp_path: Path) -> None:
+    launches = 0
+
+    def launch(repo: Path, _case: DeclarativeShadowCase, _profile: CampaignWorkerProfile):
+        nonlocal launches
+        launches += 1
+        return FixtureWorkerHandle(repo, exit_code=1, stderr_tail="HTTP 429: too many requests")
+
+    campaign = run_shadow_campaign(
+        campaign_root=tmp_path / "campaign",
+        campaign_id="rate-fixture",
+        cases=tuple(passing_case(f"case-{index}") for index in range(3)),
+        worker_profile=worker_profile(),
+        worker_launcher=launch,
+        repo_head="abc123",
+        now=NOW,
+    )
+    assert launches == 1
+    assert campaign.availability is not None
+    assert campaign.availability.exhaustion_observed_at is None
+    assert campaign.availability.sanitized_reason_code == "WORKER_RATE_LIMIT"
+    assert campaign.results[0].failure_class is ShadowFailureClass.RATE_LIMITED
+    assert campaign.results[0].quality_outcome is ShadowQualityOutcome.OPERATIONAL_FAILED
+    assert campaign.deferred_case_ids
+
+
+def test_shadow_overload_is_operational_failure_not_quota_block(tmp_path: Path) -> None:
+    result = run_shadow_case(
+        campaign_root=tmp_path / "campaign",
+        campaign_id="overload-fixture",
+        case=passing_case(),
+        worker_profile=worker_profile(),
+        worker_launcher=lambda repo, _case, _profile: FixtureWorkerHandle(
+            repo, exit_code=1, stderr_tail="HTTP 503: server overloaded"
+        ),
+        repo_head="abc123",
+    )
+    assert result.failure_class is ShadowFailureClass.SERVER_OVERLOADED
+    assert result.quality_outcome is ShadowQualityOutcome.OPERATIONAL_FAILED
+    assert QuotaAvailabilityJournal(tmp_path / "campaign").load("fixture-worker-target") is None

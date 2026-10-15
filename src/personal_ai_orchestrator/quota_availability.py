@@ -250,7 +250,12 @@ def observe_exhaustion(
         # when the cooldown expires (windowed targets return to
         # ``RECOVERY_PROBE_DUE``; the ``baseline`` field makes the
         # asymmetry explicit rather than implicit).
-        previous_state_baseline=(previous.state if previous is not None else None),
+        previous_state_baseline=(
+            previous.state
+            if previous is not None
+            and previous.state is not QuotaAvailabilityState.AVAILABLE_UNMETERED
+            else None
+        ),
     )
 
 
@@ -263,32 +268,31 @@ def observe_rate_limited(
     observed_at: datetime,
     cooldown_seconds: float = 900.0,
 ) -> QuotaAvailabilityEvidence:
-    """M1 WP4: record a worker-side rate-limit hit on a target.
+    """Record transient throttling without creating exhaustion evidence.
 
-    Differs from :func:`observe_exhaustion` in three ways:
-
-    - It is the *worker outcome*'s hook, not the quota collector's. The
-      worker outcome classifier (:mod:`worker_outcome_classifier`,
-      commit 3) calls this when the helper returns
-      ``QUOTA_OR_RATE_LIMIT`` on a non-zero worker exit.
-    - The default cooldown is 15 minutes, not 1 hour — a rate-limit
-      reset is much shorter than a quota reset for OpenCode Zen's
-      free tier.
-    - The ``previous_state_baseline`` is recorded so ``state_at`` can
-      pick the right expiry path (AVAILABLE_UNMETERED for unmetered
-      targets, RECOVERY_PROBE_DUE for windowed targets). Without the
-      baseline, both paths would converge on ``RECOVERY_PROBE_DUE``
-      which is wrong for unmetered targets — there is no quota window
-      to probe.
-
-    The function does **not** bump ``consecutive_failures``: rate-limit
-    is a transient server-side throttle, not a quota-collection
-    failure, and A2's ``UNCERTAIN_LOCKED`` lock must not fire for
-    worker-classified throttling (that path is closed off in commit
-    3).
+    Preserve an active, stronger exhaustion cooldown and collection failure
+    streaks. Repeated throttles retain the original baseline; expiry remains
+    a probe-due/unknown signal for windowed targets, never assumed success.
     """
-
+    if (
+        previous is not None
+        and previous.blocks_quota_billable_launch(now=observed_at)
+        and (
+            previous.state is QuotaAvailabilityState.EXHAUSTED_OBSERVED
+            or (
+                previous.exhaustion_observed_at is not None
+                and previous.sanitized_reason_code != "WORKER_RATE_LIMIT"
+                and (
+                    previous.recovery_observed_at is None
+                    or previous.recovery_observed_at < previous.exhaustion_observed_at
+                )
+            )
+        )
+    ):
+        return previous
     baseline = previous.state if previous is not None else None
+    if previous is not None and previous.state is QuotaAvailabilityState.COOLDOWN:
+        baseline = previous.previous_state_baseline
     return QuotaAvailabilityEvidence(
         execution_target_id=execution_target_id,
         provider_id=provider_id,
@@ -299,6 +303,14 @@ def observe_rate_limited(
         sanitized_reason_code="WORKER_RATE_LIMIT",
         consecutive_failures=previous.consecutive_failures if previous is not None else 0,
         previous_state_baseline=baseline,
+        exhaustion_observed_at=previous.exhaustion_observed_at if previous else None,
+        recovery_observed_at=previous.recovery_observed_at if previous else None,
+        last_success_before_exhaustion=previous.last_success_before_exhaustion
+        if previous
+        else None,
+        first_success_after_exhaustion=previous.first_success_after_exhaustion
+        if previous
+        else None,
     )
 
 

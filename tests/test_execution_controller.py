@@ -733,7 +733,7 @@ def test_missing_worktree_blocks_and_clears_stale_writer_lock(tmp_path: Path) ->
     assert store.get_workspace("t1").writer_token is None
 
 
-def test_unexpected_exit_keeps_only_sanitized_transcript_tails(tmp_path: Path) -> None:
+def test_unexpected_exit_keeps_allowlisted_diagnostics_without_raw_tails(tmp_path: Path) -> None:
     store = _running_store(tmp_path)
     record_worker_exit(
         store,
@@ -759,12 +759,14 @@ def test_unexpected_exit_keeps_only_sanitized_transcript_tails(tmp_path: Path) -
     import json as _json
 
     result = _json.loads(row["result_json"])
-    # Fail-closed: host-derived metadata is gone; the worker's narration
-    # is the only thing that survives so the owner can see WHY.
     assert result == {
         "exit_code": 2,
-        "stderr_tail": "Usage limit reached for 5 hour",
-        "stdout_tail": "stdout narrative",
+        "worker_failure_class": "QUOTA_EXHAUSTED",
+        "worker_failure_message": "Provider reported quota exhaustion.",
+        "stdout_bytes": 1024,
+        "stderr_bytes": 512,
+        "output_truncated": False,
+        "timed_out": False,
     }
 
 
@@ -775,7 +777,7 @@ def test_failure_result_payload_signal_only_omits_exit_code() -> None:
     assert payload == {"signal": 9}
 
 
-def test_failure_result_payload_preserves_only_tails_from_worker_result() -> None:
+def test_failure_result_payload_keeps_allowlisted_metadata_without_raw_tails() -> None:
     from personal_ai_orchestrator.execution_controller import _failure_result_payload
 
     payload = _failure_result_payload(
@@ -793,8 +795,10 @@ def test_failure_result_payload_preserves_only_tails_from_worker_result() -> Non
     )
     assert payload == {
         "exit_code": 2,
-        "stderr_tail": "Usage limit reached for 5 hour",
-        "stdout_tail": "stdout narrative",
+        "worker_failure_class": "QUOTA_EXHAUSTED",
+        "worker_failure_message": "Provider reported quota exhaustion.",
+        "stdout_bytes": 1024,
+        "stderr_bytes": 512,
     }
 
 
