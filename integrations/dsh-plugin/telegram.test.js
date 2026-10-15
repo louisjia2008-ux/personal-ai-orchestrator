@@ -728,3 +728,33 @@ test("failed submissions release cancel ownership before sending an error", asyn
   agent.status = "idle";
   await controller.stop();
 });
+
+test("stop fences a pending owned create before it can launch or persist", async () => {
+  const { agents, api, controller, stateStore, events } = harness({ creationHeld: true });
+  let lateAgent;
+  const create = agents.create.bind(agents);
+  agents.create = async (options) => {
+    const handle = await create(options);
+    lateAgent = handle.agent;
+    return handle;
+  };
+  const run = await controller.handleUpdate(update("/dsh run do not start after stop"));
+  try {
+    assert.equal(agents.created.length, 1);
+    await controller.stop();
+    agents.creationGate.resolve();
+    await run.completion;
+    assert.deepEqual(lateAgent.followups, []);
+    assert.deepEqual(agents.disposed, [lateAgent.id]);
+    assert.equal(controller.handles.size, 0);
+    assert.equal(controller.active.size, 0);
+    assert.equal(controller.submitted.size, 0);
+    assert.deepEqual(stateStore.value.chats, {});
+    assert.equal(api.sent.length, 0);
+    assert.ok([...events.listeners.values()].every((listeners) => listeners.size === 0));
+  } finally {
+    agents.creationGate.resolve();
+    await run.completion;
+    await controller.stop();
+  }
+});
