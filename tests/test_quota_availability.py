@@ -500,3 +500,85 @@ def test_rate_limit_after_recovered_exhaustion_retains_history_and_extends_throt
     assert (
         second.state_at(now=NOW + timedelta(hours=4)) is QuotaAvailabilityState.RECOVERY_PROBE_DUE
     )
+
+
+@pytest.mark.parametrize("intermediate", ["success", "rate_limit", "repeated_rate_limit"])
+def test_later_success_preserves_completed_recovery_history(intermediate: str) -> None:
+    identity = {
+        "execution_target_id": "target",
+        "provider_id": "provider",
+        "quota_pool_id": "pool",
+    }
+    available = observe_success(None, **identity, observed_at=NOW - timedelta(hours=1))
+    exhausted = observe_exhaustion(
+        available, **identity, observed_at=NOW, sanitized_reason_code="USAGE_LIMIT"
+    )
+    recovered = observe_success(exhausted, **identity, observed_at=NOW + timedelta(hours=2))
+    previous = recovered
+    if intermediate != "success":
+        previous = observe_rate_limited(previous, **identity, observed_at=NOW + timedelta(hours=3))
+        if intermediate == "repeated_rate_limit":
+            previous = observe_rate_limited(
+                previous, **identity, observed_at=NOW + timedelta(hours=3, seconds=1)
+            )
+        previous = mark_recovery_probe_due(previous, observed_at=NOW + timedelta(hours=4))
+    later = observe_success(previous, **identity, observed_at=NOW + timedelta(hours=4))
+
+    assert later.state is QuotaAvailabilityState.RECOVERED_OBSERVED
+    assert later.observed_at == NOW + timedelta(hours=4)
+    assert later.exhaustion_observed_at == NOW
+    assert later.recovery_observed_at == recovered.recovery_observed_at
+    assert later.first_success_after_exhaustion == recovered.first_success_after_exhaustion
+    assert later.last_success_before_exhaustion == NOW - timedelta(hours=1)
+    assert later.exhaustion_to_recovery_seconds == 7200
+    assert later.cooldown_until is None
+    assert later.consecutive_failures == 0
+    assert recovered.observed_at == NOW + timedelta(hours=2)
+
+
+def test_new_exhaustion_starts_a_new_recovery_interval_after_completed_history() -> None:
+    identity = {
+        "execution_target_id": "target",
+        "provider_id": "provider",
+        "quota_pool_id": "pool",
+    }
+    first = observe_exhaustion(
+        None, **identity, observed_at=NOW, sanitized_reason_code="USAGE_LIMIT"
+    )
+    recovered = observe_success(first, **identity, observed_at=NOW + timedelta(hours=2))
+    throttled = observe_rate_limited(recovered, **identity, observed_at=NOW + timedelta(hours=3))
+    later_success = observe_success(throttled, **identity, observed_at=NOW + timedelta(hours=4))
+    second = observe_exhaustion(
+        later_success,
+        **identity,
+        observed_at=NOW + timedelta(hours=5),
+        sanitized_reason_code="USAGE_LIMIT",
+    )
+    assert second.recovery_observed_at is None
+    assert second.first_success_after_exhaustion is None
+    assert second.last_success_before_exhaustion == NOW + timedelta(hours=4)
+
+    recovered_again = observe_success(second, **identity, observed_at=NOW + timedelta(hours=6))
+    assert recovered_again.exhaustion_observed_at == NOW + timedelta(hours=5)
+    assert recovered_again.recovery_observed_at == NOW + timedelta(hours=6)
+    assert recovered_again.first_success_after_exhaustion == NOW + timedelta(hours=6)
+    assert recovered_again.exhaustion_to_recovery_seconds == 3600
+
+
+def test_rate_limit_does_not_complete_an_outstanding_exhaustion_interval() -> None:
+    identity = {
+        "execution_target_id": "target",
+        "provider_id": "provider",
+        "quota_pool_id": "pool",
+    }
+    exhausted = observe_exhaustion(
+        None, **identity, observed_at=NOW, sanitized_reason_code="USAGE_LIMIT"
+    )
+    throttled = observe_rate_limited(exhausted, **identity, observed_at=NOW + timedelta(hours=2))
+    assert throttled.exhaustion_observed_at == NOW
+    assert throttled.recovery_observed_at is None
+    assert throttled.first_success_after_exhaustion is None
+    recovered = observe_success(throttled, **identity, observed_at=NOW + timedelta(hours=3))
+    assert recovered.recovery_observed_at == NOW + timedelta(hours=3)
+    assert recovered.first_success_after_exhaustion == NOW + timedelta(hours=3)
+    assert recovered.exhaustion_to_recovery_seconds == 10800
