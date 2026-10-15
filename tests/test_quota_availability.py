@@ -516,9 +516,7 @@ def test_later_success_preserves_completed_recovery_history(intermediate: str) -
     recovered = observe_success(exhausted, **identity, observed_at=NOW + timedelta(hours=2))
     previous = recovered
     if intermediate != "success":
-        previous = observe_rate_limited(
-            previous, **identity, observed_at=NOW + timedelta(hours=3)
-        )
+        previous = observe_rate_limited(previous, **identity, observed_at=NOW + timedelta(hours=3))
         if intermediate == "repeated_rate_limit":
             previous = observe_rate_limited(
                 previous, **identity, observed_at=NOW + timedelta(hours=3, seconds=1)
@@ -548,12 +546,8 @@ def test_new_exhaustion_starts_a_new_recovery_interval_after_completed_history()
         None, **identity, observed_at=NOW, sanitized_reason_code="USAGE_LIMIT"
     )
     recovered = observe_success(first, **identity, observed_at=NOW + timedelta(hours=2))
-    throttled = observe_rate_limited(
-        recovered, **identity, observed_at=NOW + timedelta(hours=3)
-    )
-    later_success = observe_success(
-        throttled, **identity, observed_at=NOW + timedelta(hours=4)
-    )
+    throttled = observe_rate_limited(recovered, **identity, observed_at=NOW + timedelta(hours=3))
+    later_success = observe_success(throttled, **identity, observed_at=NOW + timedelta(hours=4))
     second = observe_exhaustion(
         later_success,
         **identity,
@@ -564,9 +558,7 @@ def test_new_exhaustion_starts_a_new_recovery_interval_after_completed_history()
     assert second.first_success_after_exhaustion is None
     assert second.last_success_before_exhaustion == NOW + timedelta(hours=4)
 
-    recovered_again = observe_success(
-        second, **identity, observed_at=NOW + timedelta(hours=6)
-    )
+    recovered_again = observe_success(second, **identity, observed_at=NOW + timedelta(hours=6))
     assert recovered_again.exhaustion_observed_at == NOW + timedelta(hours=5)
     assert recovered_again.recovery_observed_at == NOW + timedelta(hours=6)
     assert recovered_again.first_success_after_exhaustion == NOW + timedelta(hours=6)
@@ -582,9 +574,7 @@ def test_rate_limit_does_not_complete_an_outstanding_exhaustion_interval() -> No
     exhausted = observe_exhaustion(
         None, **identity, observed_at=NOW, sanitized_reason_code="USAGE_LIMIT"
     )
-    throttled = observe_rate_limited(
-        exhausted, **identity, observed_at=NOW + timedelta(hours=2)
-    )
+    throttled = observe_rate_limited(exhausted, **identity, observed_at=NOW + timedelta(hours=2))
     assert throttled.exhaustion_observed_at == NOW
     assert throttled.recovery_observed_at is None
     assert throttled.first_success_after_exhaustion is None
