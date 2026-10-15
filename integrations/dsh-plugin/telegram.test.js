@@ -521,7 +521,16 @@ test("the installed Harness durable session event works without assistant stream
 
 test("cancel stops only the Telegram-owned active turn with a typed user cause", async () => {
   const { agents, api, controller } = harness({ held: true });
+  const submitted = deferred();
+  const sendText = api.sendText.bind(api);
+  api.sendText = async (chatId, text) => {
+    if (text.includes("任务已提交")) submitted.resolve();
+    return sendText(chatId, text);
+  };
   const run = await controller.handleUpdate(update("/dsh run long task"));
+  // Test cancellation after actual submission, independently of promise depth.
+  // The separate held-create case covers cancellation before submission.
+  await submitted.promise;
   const cancelled = await controller.handleUpdate(update("/dsh cancel", { updateId: 2 }));
   assert.equal(cancelled.accepted, true);
   await run.completion;
