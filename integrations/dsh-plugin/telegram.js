@@ -609,30 +609,28 @@ export class DeepSeekTelegramController {
   async #acquireOwned(acquire, signal) {
     if (signal.aborted) return null;
     let onAbort;
-    const stopped = new Promise((resolve) => {
-      onAbort = () => resolve(null);
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
     try {
-      // Do not hold stop() open for an unbounded provider-side create/resume.
-      // The continuation still owns any late handle and must dispose it.
-      const pending = Promise.resolve(acquire()).then(async (handle) => {
-        if (signal.aborted) {
-          try {
-            await handle.dispose();
-          } catch (error) {
-            this.logger.warn?.(`pao-telegram-controller late session cleanup failed: ${errorText(error, [this.config.token])}`);
+      // Resolve ownership and stop through one promise. Racing an async
+      // acquisition continuation could discard an already-created handle
+      // while that continuation's returned promise is still being adopted.
+      return await new Promise((resolve, reject) => {
+        onAbort = () => resolve(null);
+        signal.addEventListener("abort", onAbort, { once: true });
+        Promise.resolve(acquire()).then((handle) => {
+          if (signal.aborted) {
+            // Do not hold stop() open for unbounded create/resume or cleanup.
+            // This continuation still owns any handle arriving after stop.
+            void Promise.resolve().then(() => handle.dispose()).catch((error) => {
+              this.logger.warn?.(`pao-telegram-controller late session cleanup failed: ${errorText(error, [this.config.token])}`);
+            });
+            resolve(null);
+            return;
           }
-          return null;
-        }
-        return { handle, owned: true };
+          // Once this resolves, the caller owns the handle and rechecks its
+          // captured lifecycle signal before publishing it to the maps.
+          resolve({ handle, owned: true });
+        }, reject);
       });
-      const entry = await Promise.race([pending, stopped]);
-      if (entry && signal.aborted) {
-        await entry.handle.dispose();
-        return null;
-      }
-      return entry;
     } finally {
       signal.removeEventListener("abort", onAbort);
     }

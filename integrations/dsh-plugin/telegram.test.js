@@ -935,3 +935,35 @@ test("stop does not cancel a borrowed busy agent rejected before submission", as
   await agent.whenIdle();
   assert.ok(api.sent.every((message) => !message.text.includes("visible result")));
 });
+
+test("stop cannot orphan an owned handle resolved in the preceding microtask", async (t) => {
+  for (const acquisition of ["create", "resume"]) {
+    await t.test(acquisition, async () => {
+      const { agents, api, controller, stateStore } = harness(
+        acquisition === "resume" ? {
+          initialState: { version: 1, offset: 42, chats: {
+            "84": { sessionId: "saved-session", cwd: "/fixed/workspace" },
+          } },
+        } : {},
+      );
+      // Do not await the command receipt: stop must interleave with the
+      // already-resolved provider promise, before acquisition is published.
+      const runPromise = controller.handleUpdate(update("/dsh run no leaked handle"));
+      const agent = [...agents.live.values()][0];
+      const stopping = Promise.resolve().then(() => controller.stop());
+      const run = await runPromise;
+      await stopping;
+      await run.completion;
+      await setImmediate();
+      assert.ok(agent);
+      assert.deepEqual(agent.followups, []);
+      assert.deepEqual(agents.disposed, [agent.id]);
+      assert.equal(agents.live.size, 0);
+      assert.equal(controller.handles.size, 0);
+      assert.equal(controller.active.size, 0);
+      assert.equal(controller.submitted.size, 0);
+      assert.equal(stateStore.saves, 0);
+      assert.equal(api.sent.length, 0);
+    });
+  }
+});
