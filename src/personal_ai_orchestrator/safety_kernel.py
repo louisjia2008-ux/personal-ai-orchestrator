@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -249,6 +252,13 @@ class ProjectRecord(FrozenModel):
     grace_seconds: int = 120
 
 
+# A presentation closeout is not cleanup proof or renewed launch authority.
+STARTUP_RECOVERY_REQUIRED = "STARTUP_RECOVERY_REQUIRED"
+_STARTUP_RECOVERY_REASON = (
+    "host restart interrupted owner dispatch; explicit recovery requires confirmed cleanup"
+)
+
+
 class OwnerDispatchStatus(StrEnum):
     RESERVED = "RESERVED"
     STARTED = "STARTED"
@@ -270,6 +280,28 @@ class OwnerDispatchRecord(FrozenModel):
     finished_at: datetime | None = None
     failure_code: str | None = None
     failure_reason: str | None = None
+
+
+class OwnerDispatchRecoveryRecord(FrozenModel):
+    """Historical recovery receipt; current task state must be read separately."""
+
+    request_id: str
+    task_id: str
+    prior_dispatch_id: str
+    prior_attempt_id: str
+    task_state_version: int
+    recovered_task_state_version: int
+    store_id: str
+    process_epoch: str
+    created_at: datetime
+
+
+class OwnerDispatchRecoveryError(ValueError):
+    """Stable owner-facing recovery denial without private evidence or paths."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
 
 
 def owner_dispatch_matches_expected(
@@ -302,6 +334,27 @@ def owner_dispatch_matches_expected(
         and record.execution_target_id == execution_target_id
         and record.authority == authority
     )
+
+
+class WorkerAttemptRecord(FrozenModel):
+    """Durable, single-use spawn authority and cleanup projection for one dispatch."""
+
+    attempt_id: str
+    dispatch_id: str | None
+    task_id: str
+    task_state_version: int
+    dispatch_task_state_version: int | None = None
+    authority: str
+    executor_id: str
+    writer_token: str | None
+    worktree_path: str | None
+    spawn_state: str
+    spawn_creation_claimed: bool = False
+    fenced: bool
+    cleanup_state: str
+    spawn_ticket: str | None
+    pid: int | None
+    run_id: str | None
 
 
 class WorkspaceRecord(FrozenModel):
@@ -436,14 +489,36 @@ _VALID_TIER_VALUES = frozenset({"T0", "T1", "T2", "T3"})
 class SafetyKernelStore:
     """SQLite/WAL source of truth for P0 task, run, workspace, audit and routing state."""
 
-    def __init__(self, path: str | Path = ":memory:") -> None:
+    def __init__(self, path: str | Path = ":memory:", *, timeout_seconds: float = 5.0) -> None:
         self.path = str(path)
-        self.connection = sqlite3.connect(self.path, isolation_level=None)
+        self.connection = sqlite3.connect(
+            self.path, isolation_level=None, timeout=max(0.0, timeout_seconds)
+        )
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
         if self.path != ":memory:":
             self.connection.execute("PRAGMA journal_mode = WAL")
         self._create_schema()
+        # Identity is additive metadata, not execution authority. A single
+        # INSERT OR IGNORE atomically initializes old/new stores across hosts.
+        self.connection.execute(
+            "INSERT OR IGNORE INTO store_metadata(key,value) VALUES ('store_id',?)",
+            (uuid4().hex,),
+        )
+
+    @property
+    def store_id(self) -> str:
+        row = self.connection.execute(
+            "SELECT value FROM store_metadata WHERE key='store_id'"
+        ).fetchone()
+        value = row["value"] if row is not None else None
+        if (
+            not isinstance(value, str)
+            or len(value) != 32
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise RuntimeError("store identity unavailable")
+        return value
 
     def close(self) -> None:
         self.connection.close()
@@ -451,6 +526,10 @@ class SafetyKernelStore:
     def _create_schema(self) -> None:
         self.connection.executescript(
             """
+            CREATE TABLE IF NOT EXISTS store_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS tasks (
                 task_id TEXT PRIMARY KEY,
                 request_id TEXT NOT NULL UNIQUE,
@@ -537,6 +616,124 @@ class SafetyKernelStore:
                 failure_code TEXT,
                 failure_reason TEXT
             );
+            CREATE TABLE IF NOT EXISTS worker_attempts (
+                attempt_id TEXT PRIMARY KEY,
+                dispatch_id TEXT UNIQUE REFERENCES owner_dispatches(dispatch_id),
+                task_id TEXT NOT NULL REFERENCES tasks(task_id),
+                task_state_version INTEGER NOT NULL,
+                dispatch_task_state_version INTEGER,
+                authority TEXT NOT NULL,
+                executor_id TEXT NOT NULL,
+                writer_token TEXT,
+                worktree_path TEXT,
+                spawn_state TEXT NOT NULL DEFAULT 'CLAIMED',
+                spawn_creation_claimed INTEGER NOT NULL DEFAULT 0,
+                fenced INTEGER NOT NULL DEFAULT 0,
+                cleanup_state TEXT NOT NULL DEFAULT 'UNRESOLVED',
+                spawn_ticket TEXT UNIQUE,
+                pid INTEGER,
+                run_id TEXT UNIQUE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS owner_dispatch_interruptions (
+                dispatch_id TEXT PRIMARY KEY REFERENCES owner_dispatches(dispatch_id),
+                task_id TEXT NOT NULL REFERENCES tasks(task_id),
+                attempt_id TEXT REFERENCES worker_attempts(attempt_id),
+                run_id TEXT REFERENCES runs(run_id),
+                original_task_state TEXT NOT NULL,
+                original_task_state_version INTEGER NOT NULL,
+                worktree_path TEXT,
+                interrupted_task_state_version INTEGER,
+                created_at TEXT NOT NULL
+            );
+            CREATE TRIGGER IF NOT EXISTS immutable_owner_dispatch_interruption_update
+                BEFORE UPDATE ON owner_dispatch_interruptions BEGIN
+                SELECT RAISE(ABORT, 'owner dispatch interruptions are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS immutable_owner_dispatch_interruption_delete
+                BEFORE DELETE ON owner_dispatch_interruptions BEGIN
+                SELECT RAISE(ABORT, 'owner dispatch interruptions are immutable'); END;
+            CREATE TABLE IF NOT EXISTS owner_dispatch_recoveries (
+                request_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL REFERENCES tasks(task_id),
+                prior_dispatch_id TEXT NOT NULL UNIQUE
+                    REFERENCES owner_dispatch_interruptions(dispatch_id),
+                prior_attempt_id TEXT NOT NULL REFERENCES worker_attempts(attempt_id),
+                task_state_version INTEGER NOT NULL,
+                recovered_task_state_version INTEGER NOT NULL,
+                store_id TEXT NOT NULL,
+                process_epoch TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TRIGGER IF NOT EXISTS immutable_owner_dispatch_recovery_update
+                BEFORE UPDATE ON owner_dispatch_recoveries BEGIN
+                SELECT RAISE(ABORT, 'owner dispatch recoveries are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS immutable_owner_dispatch_recovery_delete
+                BEFORE DELETE ON owner_dispatch_recoveries BEGIN
+                SELECT RAISE(ABORT, 'owner dispatch recoveries are immutable'); END;
+            CREATE INDEX IF NOT EXISTS worker_attempt_quarantine
+                ON worker_attempts(task_id) WHERE cleanup_state != 'CONFIRMED';
+            CREATE TABLE IF NOT EXISTS worker_cleanup_receipts (
+                attempt_id TEXT NOT NULL REFERENCES worker_attempts(attempt_id),
+                cleanup_state TEXT NOT NULL CHECK(cleanup_state IN ('UNKNOWN', 'CONFIRMED')),
+                executor_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(attempt_id, cleanup_state)
+            );
+            CREATE TRIGGER IF NOT EXISTS immutable_worker_cleanup_receipt_update
+                BEFORE UPDATE ON worker_cleanup_receipts BEGIN
+                SELECT RAISE(ABORT, 'worker cleanup receipts are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS immutable_worker_cleanup_receipt_delete
+                BEFORE DELETE ON worker_cleanup_receipts BEGIN
+                SELECT RAISE(ABORT, 'worker cleanup receipts are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS immutable_worker_attempt_identity
+                BEFORE UPDATE ON worker_attempts
+                WHEN NEW.attempt_id IS NOT OLD.attempt_id
+                  OR NEW.dispatch_id IS NOT OLD.dispatch_id
+                  OR NEW.task_id IS NOT OLD.task_id
+                  OR NEW.task_state_version IS NOT OLD.task_state_version
+                  OR NEW.dispatch_task_state_version IS NOT OLD.dispatch_task_state_version
+                  OR NEW.authority IS NOT OLD.authority
+                  OR NEW.executor_id IS NOT OLD.executor_id
+                  OR NEW.writer_token IS NOT OLD.writer_token
+                  OR NEW.worktree_path IS NOT OLD.worktree_path
+                  OR (OLD.fenced = 1 AND NEW.fenced != 1)
+                  OR (OLD.spawn_creation_claimed = 1 AND NEW.spawn_creation_claimed != 1)
+                BEGIN SELECT RAISE(ABORT, 'worker attempt identity and fence are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS immutable_worker_attempt_delete
+                BEFORE DELETE ON worker_attempts
+                BEGIN SELECT RAISE(ABORT, 'worker attempts are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS confirmed_cleanup_requires_receipt
+                BEFORE UPDATE OF cleanup_state ON worker_attempts
+                WHEN NEW.cleanup_state = 'CONFIRMED' AND NOT EXISTS (
+                    SELECT 1 FROM worker_cleanup_receipts r WHERE r.attempt_id=NEW.attempt_id
+                    AND r.executor_id=NEW.executor_id AND r.cleanup_state='CONFIRMED')
+                BEGIN SELECT RAISE(ABORT, 'confirmed cleanup requires immutable receipt'); END;
+            CREATE TRIGGER IF NOT EXISTS quarantined_workspace_update
+                BEFORE UPDATE ON workspaces
+                WHEN (NEW.writer_token IS NOT OLD.writer_token
+                      OR NEW.writer_acquired_at IS NOT OLD.writer_acquired_at
+                      OR NEW.task_id IS NOT OLD.task_id
+                      OR NEW.worktree_path IS NOT OLD.worktree_path)
+                 AND EXISTS (SELECT 1 FROM worker_attempts a
+                     WHERE a.cleanup_state != 'CONFIRMED'
+                     AND (a.task_id = OLD.task_id OR a.task_id = NEW.task_id
+                          OR a.worktree_path = OLD.worktree_path
+                          OR a.worktree_path = NEW.worktree_path))
+                BEGIN SELECT RAISE(ABORT, 'worker cleanup quarantine'); END;
+            CREATE TRIGGER IF NOT EXISTS quarantined_workspace_delete
+                BEFORE DELETE ON workspaces
+                WHEN EXISTS (SELECT 1 FROM worker_attempts a
+                     WHERE a.cleanup_state != 'CONFIRMED'
+                     AND (a.task_id = OLD.task_id OR a.worktree_path = OLD.worktree_path))
+                BEGIN SELECT RAISE(ABORT, 'worker cleanup quarantine'); END;
+            CREATE TRIGGER IF NOT EXISTS quarantined_workspace_insert
+                BEFORE INSERT ON workspaces
+                WHEN EXISTS (SELECT 1 FROM worker_attempts a
+                     WHERE a.cleanup_state != 'CONFIRMED'
+                     AND (a.task_id = NEW.task_id OR a.worktree_path = NEW.worktree_path))
+                BEGIN SELECT RAISE(ABORT, 'worker cleanup quarantine'); END;
             CREATE TABLE IF NOT EXISTS quota_observation_history (
                 observation_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 provider_id TEXT NOT NULL,
@@ -639,6 +836,637 @@ class SafetyKernelStore:
         )
         self._ensure_column("workspaces", "project_id", "TEXT")
         self._ensure_column("workspaces", "working_subpath", "TEXT")
+        self._ensure_column("worker_attempts", "dispatch_task_state_version", "INTEGER")
+        self._ensure_column(
+            "worker_attempts", "spawn_creation_claimed", "INTEGER NOT NULL DEFAULT 0"
+        )
+
+    def _fence_previous_worker_attempts_tx(self) -> None:
+        """Startup never turns absence of a run into proof that no child exists.
+
+        Opening the host store fences old executors. A matching late receipt can
+        add cleanup facts, but cannot authorize a start or release any writer.
+        Legacy reservations and live runs receive permanent UNKNOWN tombstones.
+        """
+        stamp = _now()
+        previous = self.connection.execute(
+            "SELECT attempt_id,task_id FROM worker_attempts WHERE fenced=0"
+        ).fetchall()
+        self.connection.execute(
+            "UPDATE worker_attempts SET fenced=1,updated_at=? WHERE fenced=0", (stamp,)
+        )
+        for row in previous:
+            self._audit(
+                row["task_id"],
+                "WORKER_ATTEMPT_FENCED",
+                {"attempt_id": row["attempt_id"], "reason": "host startup"},
+            )
+        legacy = self.connection.execute(
+            """
+            SELECT d.*, w.writer_token, w.worktree_path FROM owner_dispatches d
+            LEFT JOIN workspaces w ON w.task_id=d.task_id
+            WHERE d.status IN ('RESERVED','STARTED')
+              AND NOT EXISTS (SELECT 1 FROM worker_attempts a
+                              WHERE a.dispatch_id=d.dispatch_id)
+            """
+        ).fetchall()
+        for row in legacy:
+            self.connection.execute(
+                """INSERT INTO worker_attempts(
+                    attempt_id,dispatch_id,task_id,task_state_version,authority,
+                    executor_id,writer_token,worktree_path,spawn_state,fenced,
+                    cleanup_state,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?, 'LEGACY_UNKNOWN',1,'UNKNOWN',?,?)""",
+                (
+                    f"legacy-dispatch:{row['dispatch_id']}",
+                    row["dispatch_id"],
+                    row["task_id"],
+                    row["task_state_version"],
+                    row["authority"],
+                    "legacy-unknown",
+                    row["writer_token"],
+                    row["worktree_path"],
+                    stamp,
+                    stamp,
+                ),
+            )
+            self._audit(
+                row["task_id"],
+                "WORKER_CLEANUP_QUARANTINED",
+                {"dispatch_id": row["dispatch_id"], "reason": "legacy attempt not observed"},
+            )
+        runs = self.connection.execute(
+            """SELECT r.*, t.state_version, w.writer_token, w.worktree_path
+            FROM runs r JOIN tasks t ON t.task_id=r.task_id
+            LEFT JOIN workspaces w ON w.task_id=r.task_id
+            WHERE r.status='RUNNING'
+              AND NOT EXISTS (SELECT 1 FROM worker_attempts a WHERE a.run_id=r.run_id)
+              AND NOT EXISTS (SELECT 1 FROM worker_attempts a
+                   WHERE a.task_id=r.task_id AND a.spawn_state='LEGACY_UNKNOWN')"""
+        ).fetchall()
+        for row in runs:
+            self.connection.execute(
+                """INSERT INTO worker_attempts(
+                    attempt_id,task_id,task_state_version,authority,executor_id,
+                    writer_token,worktree_path,spawn_state,fenced,cleanup_state,
+                    pid,run_id,created_at,updated_at
+                ) VALUES(?,?,?,'LEGACY_UNKNOWN','legacy-unknown',?,?,
+                         'LEGACY_UNKNOWN',1,'UNKNOWN',?,?,?,?)""",
+                (
+                    f"legacy-run:{row['run_id']}",
+                    row["task_id"],
+                    row["state_version"],
+                    row["writer_token"],
+                    row["worktree_path"],
+                    row["pid"],
+                    row["run_id"],
+                    stamp,
+                    stamp,
+                ),
+            )
+            self._audit(
+                row["task_id"],
+                "WORKER_CLEANUP_QUARANTINED",
+                {"run_id": row["run_id"], "reason": "legacy active run without cleanup evidence"},
+            )
+
+        uncertain_tasks = self.connection.execute(
+            """SELECT t.*,w.writer_token,w.worktree_path FROM tasks t
+            LEFT JOIN workspaces w ON w.task_id=t.task_id
+            WHERE (t.state IN ('RUNNING','WORKER_FINISHED','VERIFYING')
+                   OR w.writer_token IS NOT NULL)
+              AND NOT EXISTS (SELECT 1 FROM worker_attempts a WHERE a.task_id=t.task_id
+                  AND (w.writer_token IS NULL OR a.writer_token IS w.writer_token))"""
+        ).fetchall()
+        for row in uncertain_tasks:
+            self.connection.execute(
+                """INSERT INTO worker_attempts(
+                    attempt_id,task_id,task_state_version,authority,executor_id,writer_token,
+                    worktree_path,spawn_state,fenced,cleanup_state,created_at,updated_at
+                ) VALUES(?,?,?,'LEGACY_UNKNOWN','legacy-unknown',?,?,
+                         'LEGACY_UNKNOWN',1,'UNKNOWN',?,?)""",
+                (
+                    f"legacy-task:{row['task_id']}",
+                    row["task_id"],
+                    row["state_version"],
+                    row["writer_token"],
+                    row["worktree_path"],
+                    stamp,
+                    stamp,
+                ),
+            )
+            self._audit(
+                row["task_id"],
+                "WORKER_CLEANUP_QUARANTINED",
+                {"reason": "legacy task or retained writer without cleanup evidence"},
+            )
+
+    def has_cleanup_quarantine(self, task_id: str) -> bool:
+        return (
+            self.connection.execute(
+                """SELECT 1 FROM worker_attempts a WHERE a.cleanup_state!='CONFIRMED'
+                AND (a.task_id=? OR a.worktree_path=(
+                    SELECT worktree_path FROM workspaces WHERE task_id=?)) LIMIT 1""",
+                (task_id, task_id),
+            ).fetchone()
+            is not None
+        )
+
+    def assert_cleanup_clear(self, task_id: str) -> None:
+        if self.has_cleanup_quarantine(task_id):
+            raise RuntimeError("task worktree has unresolved worker cleanup quarantine")
+
+    def get_worker_attempt(self, attempt_id: str) -> WorkerAttemptRecord:
+        row = self.connection.execute(
+            "SELECT * FROM worker_attempts WHERE attempt_id=?", (attempt_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(attempt_id)
+        return WorkerAttemptRecord(**{name: row[name] for name in WorkerAttemptRecord.model_fields})
+
+    def get_worker_attempt_for_dispatch(self, dispatch_id: str) -> WorkerAttemptRecord | None:
+        row = self.connection.execute(
+            "SELECT attempt_id FROM worker_attempts WHERE dispatch_id=?", (dispatch_id,)
+        ).fetchone()
+        return self.get_worker_attempt(row["attempt_id"]) if row else None
+
+    def fence_worker_attempt(self, *, attempt_id: str, executor_id: str) -> WorkerAttemptRecord:
+        """Revoke unused spawn/start authority without asserting cleanup."""
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            attempt = self._check_attempt_executor(attempt_id, executor_id)
+            if not attempt.fenced:
+                self.connection.execute(
+                    "UPDATE worker_attempts SET fenced=1,updated_at=? WHERE attempt_id=?",
+                    (_now(), attempt_id),
+                )
+                self._audit(attempt.task_id, "WORKER_ATTEMPT_FENCED", {"attempt_id": attempt_id})
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_worker_attempt(attempt_id)
+
+    def _check_attempt_executor(self, attempt_id: str, executor_id: str) -> WorkerAttemptRecord:
+        attempt = self.get_worker_attempt(attempt_id)
+        if attempt.executor_id != executor_id or attempt.spawn_state == "LEGACY_UNKNOWN":
+            raise RuntimeError("worker attempt executor identity mismatch")
+        return attempt
+
+    @staticmethod
+    def _check_manual_target_binding(task: TaskRecord, execution_target_id: str) -> None:
+        # Vetoed AUTO tasks intentionally retain targetless MANUAL semantics.
+        # Only an explicit binding constrains legacy owner dispatch paths.
+        if (
+            task.manual_execution_target_id
+            and task.manual_execution_target_id != execution_target_id
+        ):
+            raise RuntimeError("manual execution target mismatch")
+
+    def _check_attempt_launch_authority(self, attempt: WorkerAttemptRecord) -> None:
+        if attempt.fenced or attempt.cleanup_state != "UNRESOLVED":
+            raise RuntimeError("worker attempt executor is fenced or already completed")
+        dispatch = self.connection.execute(
+            "SELECT * FROM owner_dispatches WHERE dispatch_id=?", (attempt.dispatch_id,)
+        ).fetchone()
+        if (
+            dispatch is None
+            or dispatch["task_id"] != attempt.task_id
+            or dispatch["status"] != OwnerDispatchStatus.RESERVED.value
+            or dispatch["task_state_version"] != attempt.dispatch_task_state_version
+            or dispatch["authority"] != attempt.authority
+        ):
+            raise RuntimeError("worker attempt lost dispatch authority")
+        task = self.get_task(attempt.task_id)
+        self._check_manual_target_binding(task, dispatch["execution_target_id"])
+        expected = expected_source_state_for_dispatch_authority(attempt.authority)
+        if task.state is not expected or task.state_version != attempt.task_state_version:
+            raise RuntimeError("worker attempt lost task state authority")
+        workspace = self.get_workspace(attempt.task_id)
+        if (
+            workspace.writer_token != attempt.writer_token
+            or workspace.worktree_path != attempt.worktree_path
+        ):
+            raise RuntimeError("worker attempt lost exact writer ownership")
+        if (
+            self.connection.execute(
+                "SELECT 1 FROM runs WHERE task_id=? AND status='RUNNING' LIMIT 1",
+                (attempt.task_id,),
+            ).fetchone()
+            is not None
+        ):
+            raise RuntimeError("task already has an active worker run")
+        other = self.connection.execute(
+            """SELECT 1 FROM worker_attempts WHERE task_id=? AND attempt_id!=?
+               AND cleanup_state!='CONFIRMED' LIMIT 1""",
+            (attempt.task_id, attempt.attempt_id),
+        ).fetchone()
+        if other is not None:
+            raise RuntimeError("task worktree has unresolved worker cleanup quarantine")
+
+    def begin_worker_attempt(
+        self,
+        *,
+        dispatch_id: str,
+        task_id: str,
+        attempt_id: str,
+        executor_id: str,
+        writer_token: str,
+        expected_task_version: int | None = None,
+    ) -> WorkerAttemptRecord:
+        """Claim a dispatch once, before the adapter may enter process creation."""
+        if not all((dispatch_id, task_id, attempt_id, executor_id, writer_token)):
+            raise ValueError("worker attempt requires complete identity")
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            dispatch = self.connection.execute(
+                "SELECT * FROM owner_dispatches WHERE dispatch_id=?", (dispatch_id,)
+            ).fetchone()
+            if dispatch is None or dispatch["task_id"] != task_id:
+                raise ValueError("dispatch_id does not belong to task_id")
+            self.assert_cleanup_clear(task_id)
+            task = self.get_task(task_id)
+            if expected_task_version is not None and task.state_version != expected_task_version:
+                raise RuntimeError("stale task state_version")
+            workspace = self.get_workspace(task_id)
+            if workspace.writer_token != writer_token:
+                raise RuntimeError("worker attempt requires the active writer lock")
+            stamp = _now()
+            self.connection.execute(
+                """INSERT INTO worker_attempts(
+                    attempt_id,dispatch_id,task_id,task_state_version,dispatch_task_state_version,
+                    authority,executor_id,writer_token,worktree_path,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    attempt_id,
+                    dispatch_id,
+                    task_id,
+                    task.state_version,
+                    dispatch["task_state_version"],
+                    dispatch["authority"],
+                    executor_id,
+                    writer_token,
+                    workspace.worktree_path,
+                    stamp,
+                    stamp,
+                ),
+            )
+            self._check_attempt_launch_authority(self.get_worker_attempt(attempt_id))
+            self._audit(
+                task_id,
+                "WORKER_ATTEMPT_CLAIMED",
+                {"attempt_id": attempt_id, "dispatch_id": dispatch_id, "executor_id": executor_id},
+            )
+            self.connection.execute("COMMIT")
+        except sqlite3.IntegrityError as error:
+            self.connection.execute("ROLLBACK")
+            raise RuntimeError("dispatch already has an immutable worker attempt") from error
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_worker_attempt(attempt_id)
+
+    def permit_worker_spawn(self, *, attempt_id: str, executor_id: str) -> WorkerAttemptRecord:
+        """Consume the one-shot permit immediately before crossing the OS boundary."""
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            attempt = self._check_attempt_executor(attempt_id, executor_id)
+            self._check_attempt_launch_authority(attempt)
+            if attempt.spawn_state != "CLAIMED":
+                raise RuntimeError("worker spawn permit was already consumed")
+            self.connection.execute(
+                "UPDATE worker_attempts SET spawn_state='SPAWN_ENTERED',updated_at=? "
+                "WHERE attempt_id=?",
+                (_now(), attempt_id),
+            )
+            self._audit(attempt.task_id, "WORKER_SPAWN_ENTERED", {"attempt_id": attempt_id})
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_worker_attempt(attempt_id)
+
+    @contextmanager
+    def worker_spawn_guard(
+        self,
+        *,
+        attempt_id: str,
+        executor_id: str,
+        spawn_ticket: str,
+    ) -> Iterator[Callable[[int], None]]:
+        """Hold the fence lock across synchronous OS creation and PID capture.
+
+        The adapter must not await inside this guard. The earlier durable spawn
+        permit and a one-shot creation claim survive a rollback after OS entry,
+        so a receipt failure cannot authorize a second creation or NOT_STARTED.
+        Startup fencing cannot interleave between validation and child creation.
+        """
+        if not spawn_ticket:
+            raise ValueError("spawn_ticket is required")
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            attempt = self._check_attempt_executor(attempt_id, executor_id)
+            self._check_attempt_launch_authority(attempt)
+            if attempt.spawn_state != "SPAWN_ENTERED" or attempt.spawn_creation_claimed:
+                raise RuntimeError("worker OS creation requires an unused spawn permit")
+            self.connection.execute(
+                "UPDATE worker_attempts SET spawn_creation_claimed=1,updated_at=? "
+                "WHERE attempt_id=?",
+                (_now(), attempt_id),
+            )
+            self._audit(attempt.task_id, "WORKER_CREATION_CLAIMED", {"attempt_id": attempt_id})
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            attempt = self._check_attempt_executor(attempt_id, executor_id)
+            self._check_attempt_launch_authority(attempt)
+            if attempt.spawn_state != "SPAWN_ENTERED" or attempt.spawn_ticket is not None:
+                raise RuntimeError("worker OS creation already observed")
+            recorded = False
+
+            def report_created(pid: int) -> None:
+                nonlocal recorded
+                if recorded or not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+                    raise RuntimeError("worker creation requires one exact positive child PID")
+                recorded = True
+                self.connection.execute(
+                    "UPDATE worker_attempts SET spawn_state='SPAWN_OBSERVED',spawn_ticket=?, "
+                    "pid=?,updated_at=? WHERE attempt_id=?",
+                    (spawn_ticket, pid, _now(), attempt_id),
+                )
+                self._audit(
+                    attempt.task_id,
+                    "WORKER_SPAWN_OBSERVED",
+                    {
+                        "attempt_id": attempt_id,
+                        "spawn_ticket": spawn_ticket,
+                        "pid": pid,
+                    },
+                )
+
+            yield report_created
+            if not recorded:
+                raise RuntimeError("worker creation guard exited without child observation")
+            self.connection.execute("COMMIT")
+        except BaseException:
+            self.connection.execute("ROLLBACK")
+            raise
+
+    def record_worker_spawn(
+        self,
+        *,
+        attempt_id: str,
+        executor_id: str,
+        spawn_ticket: str,
+        pid: int | None = None,
+        run_id: str | None = None,
+    ) -> WorkerAttemptRecord:
+        """Persist exact child facts; late observations never restore launch authority."""
+        if not spawn_ticket:
+            raise ValueError("spawn_ticket is required")
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            attempt = self._check_attempt_executor(attempt_id, executor_id)
+            if attempt.spawn_state not in {"SPAWN_ENTERED", "SPAWN_OBSERVED"}:
+                raise RuntimeError("worker spawn was not permitted")
+            if attempt.spawn_ticket is not None:
+                if (attempt.spawn_ticket, attempt.pid, attempt.run_id) != (
+                    spawn_ticket,
+                    pid,
+                    run_id,
+                ):
+                    raise RuntimeError("worker spawn identity is immutable")
+            else:
+                if attempt.cleanup_state == "CONFIRMED":
+                    raise RuntimeError("completed no-child attempt cannot observe a new spawn")
+                self.connection.execute(
+                    "UPDATE worker_attempts SET spawn_state='SPAWN_OBSERVED',spawn_ticket=?, "
+                    "pid=?,run_id=?,updated_at=? WHERE attempt_id=?",
+                    (spawn_ticket, pid, run_id, _now(), attempt_id),
+                )
+                self._audit(
+                    attempt.task_id,
+                    "WORKER_SPAWN_OBSERVED",
+                    {
+                        "attempt_id": attempt_id,
+                        "spawn_ticket": spawn_ticket,
+                        "pid": pid,
+                        "run_id": run_id,
+                    },
+                )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_worker_attempt(attempt_id)
+
+    @staticmethod
+    def _check_worker_cleanup_facts(attempt: WorkerAttemptRecord, cleanup: dict[str, Any]) -> None:
+        """The same exact evidence rules govern persistence and later recovery."""
+        for key in ("attempt_id", "executor_id", "dispatch_id", "task_id", "writer_token"):
+            if key in cleanup and cleanup[key] != getattr(attempt, key):
+                raise RuntimeError("cleanup receipt does not match exact worker attempt")
+        if cleanup.get("run_id") is not None and cleanup["run_id"] != attempt.run_id:
+            raise RuntimeError("cleanup receipt does not match exact worker run")
+        if (
+            attempt.spawn_ticket is not None
+            and "spawn_ticket" in cleanup
+            and cleanup["spawn_ticket"] != attempt.spawn_ticket
+        ):
+            raise RuntimeError("cleanup receipt does not match exact spawn ticket")
+        if cleanup.get("state") == "CONFIRMED":
+            spawn_state = cleanup.get("spawn_state")
+            if spawn_state == "NOT_STARTED":
+                if attempt.spawn_state != "CLAIMED" or not attempt.fenced:
+                    raise RuntimeError("NOT_STARTED requires fenced, never-entered spawn")
+            elif spawn_state == "SPAWN_FAILED_NO_CHILD":
+                if (
+                    attempt.spawn_state != "SPAWN_ENTERED"
+                    or not attempt.fenced
+                    or attempt.spawn_ticket is not None
+                    or attempt.pid is not None
+                    or cleanup.get("child_created") is not False
+                    or cleanup.get("process_create_failed") is not True
+                ):
+                    raise RuntimeError("spawn failure lacks positive no-child evidence")
+            else:
+                if spawn_state != "PROCESS_OBSERVED":
+                    raise RuntimeError("confirmed cleanup requires explicit observed spawn state")
+                if cleanup.get("scope") != "CREATED_PROCESS_GROUP" or cleanup.get(
+                    "capability"
+                ) not in {"WAITID_WNOWAIT", "WAITPID_REAP_ON_OBSERVE"}:
+                    raise RuntimeError("confirmed cleanup lacks supported ownership scope")
+                if attempt.pid is None or attempt.pid <= 0:
+                    raise RuntimeError("confirmed cleanup requires an observed exact child PID")
+                if not isinstance(cleanup.get("exit_code"), int) or isinstance(
+                    cleanup["exit_code"], bool
+                ):
+                    raise RuntimeError("confirmed cleanup requires an observed exit code")
+                for name in ("stdout", "stderr"):
+                    pipe = cleanup.get(name)
+                    if not isinstance(pipe, dict) or not (
+                        pipe.get("eof") is True
+                        and pipe.get("collector_done") is True
+                        and pipe.get("forced_closed") is False
+                        and "error" in pipe
+                        and pipe["error"] is None
+                    ):
+                        raise RuntimeError("confirmed cleanup lacks complete pipe evidence")
+                if not attempt.spawn_ticket or cleanup.get("spawn_ticket") != attempt.spawn_ticket:
+                    raise RuntimeError("confirmed cleanup requires the exact observed spawn ticket")
+                if not all(
+                    cleanup.get(key) is True
+                    for key in ("leader_exit_observed", "child_reaped", "scope_empty")
+                ):
+                    raise RuntimeError("confirmed cleanup lacks exit, reap or scope evidence")
+
+    def complete_worker_attempt(
+        self,
+        *,
+        attempt_id: str,
+        executor_id: str,
+        cleanup: dict[str, Any],
+    ) -> WorkerAttemptRecord:
+        """Append immutable same-attempt cleanup facts without releasing a writer.
+
+        UNKNOWN may later receive a matching CONFIRMED receipt. Neither missing
+        run rows nor a legacy PID can establish cleanup or NOT_STARTED.
+        """
+        state = cleanup.get("state")
+        if state not in {"CONFIRMED", "UNKNOWN"}:
+            raise ValueError("cleanup state must be CONFIRMED or UNKNOWN")
+        if "status" in cleanup and cleanup["status"] != state:
+            raise ValueError("cleanup state conflicts with supervisor status")
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            attempt = self._check_attempt_executor(attempt_id, executor_id)
+            self._check_worker_cleanup_facts(attempt, cleanup)
+            payload = _json(cleanup)
+            existing = self.connection.execute(
+                "SELECT payload_json,executor_id FROM worker_cleanup_receipts "
+                "WHERE attempt_id=? AND cleanup_state=?",
+                (attempt_id, state),
+            ).fetchone()
+            if existing is not None:
+                if existing["payload_json"] != payload or existing["executor_id"] != executor_id:
+                    raise RuntimeError("worker cleanup receipt is immutable")
+            else:
+                self.connection.execute(
+                    "INSERT INTO worker_cleanup_receipts VALUES(?,?,?,?,?)",
+                    (attempt_id, state, executor_id, payload, _now()),
+                )
+                if attempt.cleanup_state != "CONFIRMED":
+                    self.connection.execute(
+                        "UPDATE worker_attempts SET cleanup_state=?,fenced=1,updated_at=? "
+                        "WHERE attempt_id=?",
+                        (state, _now(), attempt_id),
+                    )
+                self._audit(
+                    attempt.task_id,
+                    "WORKER_CLEANUP_RECORDED",
+                    {
+                        "attempt_id": attempt_id,
+                        "executor_id": executor_id,
+                        "cleanup": cleanup,
+                    },
+                )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_worker_attempt(attempt_id)
+
+    def fail_worker_attempt(
+        self,
+        *,
+        task_id: str,
+        run_id: str,
+        writer_token: str,
+        pid: int,
+        result: Any,
+        reason: str,
+    ) -> bool:
+        """Atomically repair only the still-active exact run/attempt generation.
+
+        An old callback cannot block a newer run or release its writer. Missing
+        cleanup remains quarantined even when emergency repair closes task/run
+        presentation. The caller must separately request any writer release.
+        """
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            run = self.connection.execute(
+                "SELECT * FROM runs WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            workspace = self.connection.execute(
+                "SELECT writer_token FROM workspaces WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+            attempt = self.connection.execute(
+                "SELECT * FROM worker_attempts WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            matches = (
+                run is not None
+                and run["task_id"] == task_id
+                and run["status"] == "RUNNING"
+                and run["pid"] == pid
+                and workspace is not None
+                and bool(writer_token)
+                and workspace["writer_token"] == writer_token
+                and (
+                    attempt is None
+                    or (
+                        attempt["task_id"] == task_id
+                        and attempt["writer_token"] == writer_token
+                        and attempt["pid"] == pid
+                    )
+                )
+            )
+            if not matches:
+                self.connection.execute("COMMIT")
+                return False
+            task = self.get_task(task_id)
+            if task.state is not TaskState.RUNNING:
+                self.connection.execute("COMMIT")
+                return False
+            run_status = "CLEANUP_UNKNOWN" if self.has_cleanup_quarantine(task_id) else "FAILED"
+            stamp = _now()
+            updated = self.connection.execute(
+                "UPDATE runs SET status=?,finished_at=?,result_json=? "
+                "WHERE run_id=? AND task_id=? AND status='RUNNING' AND pid IS ?",
+                (run_status, stamp, _json(result), run_id, task_id, pid),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("worker emergency repair lost exact run ownership")
+            next_version = task.state_version + 1
+            updated = self.connection.execute(
+                "UPDATE tasks SET state='BLOCKED',state_version=?,updated_at=? "
+                "WHERE task_id=? AND state='RUNNING' AND state_version=?",
+                (next_version, stamp, task_id, task.state_version),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("worker emergency repair lost task state ownership")
+            self._audit(task_id, "RUN_FINISHED", {"run_id": run_id, "status": run_status})
+            self._audit(
+                task_id,
+                "TASK_STATE_CHANGED",
+                {
+                    "from": TaskState.RUNNING.value,
+                    "to": TaskState.BLOCKED.value,
+                    "state_version": next_version,
+                    "reason": reason,
+                },
+            )
+            self.connection.execute("COMMIT")
+            return True
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
 
     def _column_names(self, table: str) -> set[str]:
         rows = self.connection.execute(f"PRAGMA table_info({table})").fetchall()
@@ -1391,6 +2219,7 @@ class SafetyKernelStore:
         auto_grace_deadline_at: str | None = None,
         auto_acked_at: str | None = None,
         auto_reason: str | None = None,
+        verification_evidence_sha256: str | None = None,
     ) -> None:
         """Transition internals for an ALREADY-OPEN transaction."""
 
@@ -1399,6 +2228,14 @@ class SafetyKernelStore:
             raise RuntimeError("stale task state_version")
         if new_state not in _ALLOWED_TRANSITIONS[current.state]:
             raise ValueError(f"invalid task transition {current.state} -> {new_state}")
+        if new_state in {
+            TaskState.RUNNING,
+            TaskState.WORKER_FINISHED,
+            TaskState.VERIFYING,
+            TaskState.VERIFIED,
+            TaskState.COMPLETED,
+        }:
+            self.assert_cleanup_clear(task_id)
         stamp = _now()
         next_version = current.state_version + 1
         # Build the UPDATE column list dynamically so a pre-WP5a-1
@@ -1438,6 +2275,8 @@ class SafetyKernelStore:
             "state_version": next_version,
             "reason": reason,
         }
+        if verification_evidence_sha256 is not None:
+            audit_payload["verification_evidence_sha256"] = verification_evidence_sha256
         if auto_decision_id is not None:
             audit_payload["auto_decision_id"] = auto_decision_id
         if auto_grace_deadline_at is not None:
@@ -1460,6 +2299,7 @@ class SafetyKernelStore:
         target: TaskState,
         reason: str,
         finalize: ShadowFinalizationIntent | None = None,
+        verification_evidence_sha256: str | None = None,
     ) -> TaskState:
         """OPTION A (round 3): terminal truth + shadow-intent in ONE tx.
 
@@ -1473,6 +2313,11 @@ class SafetyKernelStore:
 
         if target not in (TaskState.VERIFIED, TaskState.BLOCKED):
             raise ValueError("verification outcome target must be VERIFIED or BLOCKED")
+        if verification_evidence_sha256 is not None and (
+            len(verification_evidence_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in verification_evidence_sha256)
+        ):
+            raise ValueError("invalid verification evidence digest")
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             current = self.get_task(task_id)
@@ -1483,6 +2328,7 @@ class SafetyKernelStore:
                 target,
                 expected_version=expected_version,
                 reason=reason,
+                verification_evidence_sha256=verification_evidence_sha256,
             )
             if finalize is not None:
                 self._insert_shadow_finalize_locked(finalize)
@@ -1706,6 +2552,7 @@ class SafetyKernelStore:
         reason: str,
         event_type: str = "AUTO_ABORTED",
         request_id: str | None = None,
+        request_id_explicit: bool | None = None,
         target: str | None = None,
         force_manual: bool = False,
         allow_blocked: bool = False,
@@ -1782,6 +2629,10 @@ class SafetyKernelStore:
                 "request_id": request_id,
                 "force_manual": force_manual,
             }
+            if request_id_explicit is not None:
+                # Issue #72: distinguish a stable caller key from older
+                # generated cancel IDs in the same atomic veto evidence.
+                payload["request_id_explicit"] = request_id_explicit
             self._audit(task_id, event_type, payload)
             if previous_decision_id is not None:
                 self._enqueue_cleanup_intent_locked(previous_decision_id, task_id, reason, stamp)
@@ -2088,6 +2939,13 @@ class SafetyKernelStore:
                     raise ValueError("task already has a different workspace")
                 self.connection.execute("COMMIT")
                 return record
+            quarantined = self.connection.execute(
+                """SELECT 1 FROM worker_attempts WHERE cleanup_state!='CONFIRMED'
+                AND (task_id=? OR worktree_path=?) LIMIT 1""",
+                (task_id, worktree_path),
+            ).fetchone()
+            if quarantined is not None:
+                raise RuntimeError("worktree has unresolved worker cleanup quarantine")
             self.connection.execute(
                 """
                 INSERT INTO workspaces(
@@ -2147,6 +3005,7 @@ class SafetyKernelStore:
             raise ValueError("writer_token is required")
         self.connection.execute("BEGIN IMMEDIATE")
         try:
+            self.assert_cleanup_clear(task_id)
             workspace = self.get_workspace(task_id)
             if workspace.writer_token not in (None, writer_token):
                 raise RuntimeError("task worktree already has an active writer")
@@ -2165,6 +3024,7 @@ class SafetyKernelStore:
     def release_writer(self, task_id: str, writer_token: str) -> WorkspaceRecord:
         self.connection.execute("BEGIN IMMEDIATE")
         try:
+            self.assert_cleanup_clear(task_id)
             workspace = self.get_workspace(task_id)
             if workspace.writer_token != writer_token:
                 raise RuntimeError("writer token does not own the task worktree")
@@ -2190,6 +3050,7 @@ class SafetyKernelStore:
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             self.get_task(task_id)
+            self.assert_cleanup_clear(task_id)
             active = self.connection.execute(
                 "SELECT run_id FROM runs WHERE task_id=? AND status='RUNNING' LIMIT 1",
                 (task_id,),
@@ -2453,6 +3314,8 @@ class SafetyKernelStore:
         writer_token: str,
         pid: int | None = None,
         expected_state: TaskState | None = None,
+        attempt_id: str | None = None,
+        executor_id: str | None = None,
     ) -> TaskRecord:
         """Atomically pair the run row, the state transition and dispatch START.
 
@@ -2495,10 +3358,32 @@ class SafetyKernelStore:
                 )
             expected_state = authority_state
             task = self.get_task(task_id)
+            self._check_manual_target_binding(task, dispatch["execution_target_id"])
             if task.state is not expected_state:
                 raise ValueError(f"dispatched worker can only start from {expected_state.value}")
             if task.state_version != expected_task_version:
                 raise RuntimeError("stale task state_version")
+            claimed = self.connection.execute(
+                "SELECT attempt_id FROM worker_attempts WHERE dispatch_id=?", (dispatch_id,)
+            ).fetchone()
+            if claimed is not None:
+                if claimed["attempt_id"] != attempt_id or executor_id is None:
+                    raise RuntimeError("dispatched worker requires exact attempt and executor")
+                attempt = self._check_attempt_executor(attempt_id, executor_id)
+                self._check_attempt_launch_authority(attempt)
+                if attempt.spawn_state != "SPAWN_OBSERVED":
+                    raise RuntimeError("dispatched worker requires an observed spawn ticket")
+                if attempt.pid != pid or attempt.run_id not in (None, run_id):
+                    raise RuntimeError("dispatched worker run does not match spawned attempt")
+                if attempt.run_id is None:
+                    self.connection.execute(
+                        "UPDATE worker_attempts SET run_id=?,updated_at=? WHERE attempt_id=?",
+                        (run_id, _now(), attempt_id),
+                    )
+            else:
+                if attempt_id is not None or executor_id is not None:
+                    raise RuntimeError("worker attempt is not claimed")
+                self.assert_cleanup_clear(task_id)
             workspace = self.get_workspace(task_id)
             if workspace.writer_token != writer_token:
                 raise RuntimeError("dispatched worker requires the active writer lock")
@@ -2663,12 +3548,407 @@ class SafetyKernelStore:
             self.connection.execute("ROLLBACK")
             raise
 
+    def get_owner_dispatch_recovery(self, request_id: str) -> OwnerDispatchRecoveryRecord:
+        row = self.connection.execute(
+            "SELECT * FROM owner_dispatch_recoveries WHERE request_id=?", (request_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(request_id)
+        return OwnerDispatchRecoveryRecord(**dict(row))
+
+    def recover_owner_dispatch(
+        self,
+        *,
+        request_id: str,
+        task_id: str,
+        expected_task_version: int,
+        prior_dispatch_id: str,
+        expected_store_id: str,
+        expected_process_epoch: str,
+    ) -> OwnerDispatchRecoveryRecord:
+        """Explicitly prepare one interrupted MANUAL task for a *new* START.
+
+        The caller must authenticate current owner authority and current host
+        epoch. This method grants no launch/cleanup/writer authority; all cleanup
+        and writer release must already be proven through their existing paths.
+        Replays return a historical receipt, never reset a later task generation.
+        """
+        if not all((request_id, task_id, prior_dispatch_id, expected_process_epoch)):
+            raise OwnerDispatchRecoveryError("invalid_recovery_request")
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            if expected_store_id != self.store_id:
+                raise OwnerDispatchRecoveryError("store_identity_mismatch")
+            existing = self.connection.execute(
+                "SELECT * FROM owner_dispatch_recoveries WHERE request_id=?", (request_id,)
+            ).fetchone()
+            if existing is not None:
+                expected = {
+                    "task_id": task_id,
+                    "prior_dispatch_id": prior_dispatch_id,
+                    "task_state_version": expected_task_version,
+                    "store_id": expected_store_id,
+                    "process_epoch": expected_process_epoch,
+                }
+                if any(existing[key] != value for key, value in expected.items()):
+                    raise OwnerDispatchRecoveryError("conflicting_recovery_request_id")
+                self.connection.execute("COMMIT")
+                return OwnerDispatchRecoveryRecord(**dict(existing))
+            if self.connection.execute(
+                "SELECT 1 FROM owner_dispatch_recoveries WHERE prior_dispatch_id=?",
+                (prior_dispatch_id,),
+            ).fetchone():
+                raise OwnerDispatchRecoveryError("prior_dispatch_already_recovered")
+            try:
+                task = self.get_task(task_id)
+            except KeyError:
+                raise OwnerDispatchRecoveryError("task_not_found") from None
+            dispatch = self.connection.execute(
+                "SELECT * FROM owner_dispatches WHERE dispatch_id=?", (prior_dispatch_id,)
+            ).fetchone()
+            interruption = self.connection.execute(
+                "SELECT * FROM owner_dispatch_interruptions WHERE dispatch_id=?",
+                (prior_dispatch_id,),
+            ).fetchone()
+            if (
+                dispatch is None
+                or interruption is None
+                or dispatch["task_id"] != task_id
+                or interruption["task_id"] != task_id
+                or dispatch["authority"] != AUTHORITY_OWNER_INITIATED_EXECUTION
+                or dispatch["status"] != OwnerDispatchStatus.BLOCKED.value
+                or dispatch["failure_code"] != STARTUP_RECOVERY_REQUIRED
+            ):
+                raise OwnerDispatchRecoveryError("recovery_not_available")
+            if task.scheduling_policy != "MANUAL":
+                raise OwnerDispatchRecoveryError("recovery_requires_manual_task")
+            if task.manual_execution_target_id != dispatch["execution_target_id"]:
+                raise OwnerDispatchRecoveryError("manual_execution_target_mismatch")
+            if (
+                task.state is not TaskState.BLOCKED
+                or task.state_version != expected_task_version
+                or interruption["interrupted_task_state_version"] != expected_task_version
+            ):
+                raise OwnerDispatchRecoveryError("recovery_generation_mismatch")
+            if interruption["attempt_id"] is None:
+                raise OwnerDispatchRecoveryError("recovery_cleanup_unconfirmed")
+            attempt = self.get_worker_attempt(interruption["attempt_id"])
+            if (
+                attempt.task_id != task_id
+                or attempt.dispatch_id != prior_dispatch_id
+                or attempt.dispatch_task_state_version != dispatch["task_state_version"]
+                or attempt.authority != AUTHORITY_OWNER_INITIATED_EXECUTION
+                or not attempt.fenced
+                or attempt.spawn_state == "LEGACY_UNKNOWN"
+                or (interruption["run_id"] is not None and interruption["run_id"] != attempt.run_id)
+            ):
+                raise OwnerDispatchRecoveryError("recovery_attempt_identity_mismatch")
+            if interruption["run_id"] is not None:
+                prior_run = self.connection.execute(
+                    "SELECT task_id,pid FROM runs WHERE run_id=?", (interruption["run_id"],)
+                ).fetchone()
+                if (
+                    prior_run is None
+                    or prior_run["task_id"] != task_id
+                    or prior_run["pid"] != attempt.pid
+                ):
+                    raise OwnerDispatchRecoveryError("recovery_attempt_identity_mismatch")
+            try:
+                workspace = self.get_workspace(task_id)
+            except KeyError:
+                raise OwnerDispatchRecoveryError("recovery_workspace_changed") from None
+            if (
+                workspace.worktree_path != interruption["worktree_path"]
+                or workspace.worktree_path != attempt.worktree_path
+            ):
+                raise OwnerDispatchRecoveryError("recovery_workspace_changed")
+            if workspace.writer_token is not None:
+                raise OwnerDispatchRecoveryError("recovery_writer_held")
+            if (
+                self.connection.execute(
+                    "SELECT 1 FROM runs WHERE task_id=? AND status='RUNNING'", (task_id,)
+                ).fetchone()
+                or self.connection.execute(
+                    """SELECT 1 FROM owner_dispatches WHERE task_id=?
+                   AND status IN ('RESERVED','STARTED')""",
+                    (task_id,),
+                ).fetchone()
+            ):
+                raise OwnerDispatchRecoveryError("recovery_active_execution")
+            if (
+                self.connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='switch_leases'"
+                ).fetchone()
+                and self.connection.execute(
+                    """SELECT 1 FROM switch_leases WHERE task_id=? AND status='AUTHORIZED'
+                   AND expires_at_epoch>CAST(strftime('%s','now') AS INTEGER)""",
+                    (task_id,),
+                ).fetchone()
+            ):
+                raise OwnerDispatchRecoveryError("recovery_active_switch_lease")
+            # Check every task/path claim, not just the old dispatch. A receipt
+            # from one attempt cannot cover another writer or an older legacy
+            # tombstone. Reuse the exact #71 receipt validation, not an inference
+            # from missing run rows, terminal status or cached cleanup_state.
+            claims = self.connection.execute(
+                """SELECT attempt_id FROM worker_attempts
+                   WHERE task_id=? OR worktree_path=?""",
+                (task_id, workspace.worktree_path),
+            ).fetchall()
+            for claim in claims:
+                claimed = self.get_worker_attempt(claim["attempt_id"])
+                receipt = self.connection.execute(
+                    """SELECT * FROM worker_cleanup_receipts WHERE attempt_id=?
+                       AND cleanup_state='CONFIRMED' AND executor_id=?""",
+                    (claimed.attempt_id, claimed.executor_id),
+                ).fetchone()
+                if (
+                    not claimed.fenced
+                    or claimed.spawn_state == "LEGACY_UNKNOWN"
+                    or claimed.cleanup_state != "CONFIRMED"
+                    or receipt is None
+                ):
+                    raise OwnerDispatchRecoveryError("recovery_cleanup_unconfirmed")
+                try:
+                    cleanup = json.loads(receipt["payload_json"])
+                    if not isinstance(cleanup, dict) or cleanup.get("state") != "CONFIRMED":
+                        raise ValueError("invalid cleanup receipt")
+                    if "status" in cleanup and cleanup["status"] != "CONFIRMED":
+                        raise ValueError("conflicting cleanup receipt")
+                    self._check_worker_cleanup_facts(claimed, cleanup)
+                except (ValueError, RuntimeError, TypeError):
+                    raise OwnerDispatchRecoveryError("recovery_cleanup_unconfirmed") from None
+            self._transition_task_tx(
+                task_id,
+                TaskState.READY,
+                expected_version=expected_task_version,
+                reason="owner explicitly recovered interrupted manual dispatch; new START required",
+            )
+            stamp = _now()
+            self.connection.execute(
+                """INSERT INTO owner_dispatch_recoveries(
+                    request_id,task_id,prior_dispatch_id,prior_attempt_id,task_state_version,
+                    recovered_task_state_version,store_id,process_epoch,created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                (
+                    request_id,
+                    task_id,
+                    prior_dispatch_id,
+                    attempt.attempt_id,
+                    expected_task_version,
+                    expected_task_version + 1,
+                    expected_store_id,
+                    expected_process_epoch,
+                    stamp,
+                ),
+            )
+            self._audit(
+                task_id,
+                "OWNER_DISPATCH_RECOVERED",
+                {
+                    "request_id": request_id,
+                    "prior_dispatch_id": prior_dispatch_id,
+                    "prior_attempt_id": attempt.attempt_id,
+                    "task_state_version": expected_task_version,
+                    "recovered_task_state_version": expected_task_version + 1,
+                },
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        return self.get_owner_dispatch_recovery(request_id)
+
+    def _interrupt_owner_dispatches_tx(
+        self,
+        prior_tasks: dict[str, TaskRecord],
+        blocked: list[str],
+    ) -> None:
+        """Close startup-fenced owner rows without inventing execution outcomes.
+
+        A dispatch is closed by its own durable identity. A task generation is
+        linked only when its exact source version and (when started) run match.
+        Uncorrelated/legacy evidence still closes the dispatch, but never grants
+        recovery authority over a newer task generation.
+        """
+        dispatches = self.connection.execute(
+            """SELECT * FROM owner_dispatches WHERE authority=?
+               AND status IN ('RESERVED','STARTED') ORDER BY dispatch_id""",
+            (AUTHORITY_OWNER_INITIATED_EXECUTION,),
+        ).fetchall()
+        for row in dispatches:
+            dispatch = self._owner_dispatch_from_row(row)
+            task = prior_tasks[dispatch.task_id]
+            attempt = self.get_worker_attempt_for_dispatch(dispatch.dispatch_id)
+            exact_attempt = (
+                attempt is not None
+                and attempt.spawn_state != "LEGACY_UNKNOWN"
+                and attempt.fenced
+                and attempt.task_id == dispatch.task_id
+                and attempt.dispatch_task_state_version == dispatch.task_state_version
+                and attempt.authority == dispatch.authority
+            )
+            run = None
+            if exact_attempt and attempt.run_id is not None:
+                run = self.connection.execute(
+                    "SELECT * FROM runs WHERE run_id=?", (attempt.run_id,)
+                ).fetchone()
+                if run is not None and (
+                    run["task_id"] != task.task_id or run["pid"] != attempt.pid
+                ):
+                    run = None
+            task_matches = False
+            if dispatch.status is OwnerDispatchStatus.RESERVED:
+                source_version = (
+                    attempt.task_state_version if exact_attempt else dispatch.task_state_version
+                )
+                task_matches = (
+                    task.state in {TaskState.SUBMITTED, TaskState.READY}
+                    and task.state_version == source_version
+                )
+                if not exact_attempt and not task_matches and task.state is TaskState.READY:
+                    # The ordinary SUBMITTED -> READY admission advances the
+                    # reservation version once before any worker attempt. Bind
+                    # it only to a unique reservation and the exact latest host
+                    # transition audit; version +1 by itself is not evidence.
+                    reservations = self.connection.execute(
+                        """SELECT count(*) FROM owner_dispatches
+                           WHERE task_id=? AND task_state_version=?""",
+                        (task.task_id, dispatch.task_state_version),
+                    ).fetchone()[0]
+                    transition = self.connection.execute(
+                        """SELECT audit_id,payload_json FROM audit_events WHERE task_id=?
+                           AND event_type='TASK_STATE_CHANGED' ORDER BY audit_id DESC LIMIT 1""",
+                        (task.task_id,),
+                    ).fetchone()
+                    if reservations == 1 and transition is not None:
+                        try:
+                            payload = json.loads(transition["payload_json"])
+                        except (TypeError, ValueError):
+                            payload = None
+                        reservation_audits = self.connection.execute(
+                            """SELECT payload_json FROM audit_events WHERE task_id=?
+                               AND event_type='OWNER_DISPATCH_RESERVED' AND audit_id<?""",
+                            (task.task_id, transition["audit_id"]),
+                        ).fetchall()
+                        reserved_before_transition = False
+                        for reservation_audit in reservation_audits:
+                            try:
+                                reserved = json.loads(reservation_audit["payload_json"])
+                            except (TypeError, ValueError):
+                                continue
+                            if isinstance(reserved, dict) and (
+                                reserved.get("dispatch_id") == dispatch.dispatch_id
+                                and reserved.get("request_id") == dispatch.request_id
+                                and reserved.get("authority") == dispatch.authority
+                                and reserved.get("execution_target_id")
+                                == dispatch.execution_target_id
+                            ):
+                                reserved_before_transition = True
+                                break
+                        task_matches = (
+                            reserved_before_transition
+                            and isinstance(payload, dict)
+                            and task.state_version == dispatch.task_state_version + 1
+                            and payload.get("from") == TaskState.SUBMITTED.value
+                            and payload.get("to") == TaskState.READY.value
+                            and payload.get("state_version") == task.state_version
+                            and payload.get("reason")
+                            == "owner initiated execution dispatch reserved"
+                        )
+                if task_matches and self.get_task(task.task_id) == task:
+                    # An unchanged reservation generation can be blocked even
+                    # without spawn proof. Such legacy rows remain quarantined.
+                    self._transition_task_tx(
+                        task.task_id,
+                        TaskState.BLOCKED,
+                        expected_version=task.state_version,
+                        reason=_STARTUP_RECOVERY_REASON,
+                    )
+                    blocked.append(task.task_id)
+            elif exact_attempt and run is not None:
+                offset = {
+                    TaskState.RUNNING: 1,
+                    TaskState.WORKER_FINISHED: 2,
+                    TaskState.VERIFYING: 3,
+                }.get(task.state)
+                task_matches = (
+                    offset is not None
+                    and task.state_version == attempt.task_state_version + offset
+                    and run["status"]
+                    == ("INTERRUPTED" if task.state is TaskState.RUNNING else "FINISHED")
+                )
+            current = self.get_task(task.task_id)
+            interrupted_version = (
+                current.state_version
+                if task_matches
+                and current.state is TaskState.BLOCKED
+                and current.state_version == task.state_version + 1
+                else None
+            )
+            stamp = _now()
+            workspace = self.connection.execute(
+                "SELECT worktree_path FROM workspaces WHERE task_id=?", (task.task_id,)
+            ).fetchone()
+            self.connection.execute(
+                """INSERT INTO owner_dispatch_interruptions(
+                    dispatch_id,task_id,attempt_id,run_id,original_task_state,
+                    original_task_state_version,worktree_path,interrupted_task_state_version,created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                (
+                    dispatch.dispatch_id,
+                    task.task_id,
+                    attempt.attempt_id if exact_attempt else None,
+                    run["run_id"] if run is not None else None,
+                    task.state.value,
+                    task.state_version,
+                    workspace["worktree_path"] if workspace is not None else None,
+                    interrupted_version,
+                    stamp,
+                ),
+            )
+            updated = self.connection.execute(
+                """UPDATE owner_dispatches SET status='BLOCKED',finished_at=?,
+                    failure_code=?,failure_reason=? WHERE dispatch_id=? AND status=?""",
+                (
+                    stamp,
+                    STARTUP_RECOVERY_REQUIRED,
+                    _STARTUP_RECOVERY_REASON,
+                    dispatch.dispatch_id,
+                    dispatch.status.value,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("startup reconciliation lost owner dispatch race")
+            self._audit(
+                task.task_id,
+                "OWNER_DISPATCH_INTERRUPTED",
+                {
+                    "dispatch_id": dispatch.dispatch_id,
+                    "request_id": dispatch.request_id,
+                    "attempt_id": attempt.attempt_id if exact_attempt else None,
+                    "run_id": run["run_id"] if run is not None else None,
+                    "interrupted_task_state_version": interrupted_version,
+                    "failure_code": STARTUP_RECOVERY_REQUIRED,
+                    "failure_reason": _STARTUP_RECOVERY_REASON,
+                },
+            )
+
     def reconcile_startup(self) -> tuple[str, ...]:
-        """Atomically block uncertain in-flight task state and interrupt active runs."""
+        """Fence prior execution and atomically close task/run/owner dispatch state.
+
+        This is host startup only, never a retry or a workspace-unquarantine
+        operation. Ordinary store connections do not invoke it.
+        """
 
         blocked: list[str] = []
         self.connection.execute("BEGIN IMMEDIATE")
         try:
+            self._fence_previous_worker_attempts_tx()
+            prior_tasks = {
+                row["task_id"]: self.get_task(row["task_id"])
+                for row in self.connection.execute("SELECT task_id FROM tasks").fetchall()
+            }
             rows = self.connection.execute(
                 "SELECT task_id,state,state_version FROM tasks WHERE state IN (?,?,?) ORDER BY task_id",
                 (
@@ -2724,6 +4004,7 @@ class SafetyKernelStore:
                     "RUN_FINISHED",
                     {"run_id": run["run_id"], "status": "INTERRUPTED"},
                 )
+            self._interrupt_owner_dispatches_tx(prior_tasks, blocked)
             self.connection.execute("COMMIT")
         except Exception:
             self.connection.execute("ROLLBACK")
@@ -2750,11 +4031,15 @@ __all__ = [
     "DelegatedTaskLineageError",
     "DelegatedTaskLineageRule",
     "OwnerDispatchRecord",
+    "OwnerDispatchRecoveryError",
+    "OwnerDispatchRecoveryRecord",
     "OwnerDispatchStatus",
     "ProjectAvailability",
     "ProjectRecord",
+    "STARTUP_RECOVERY_REQUIRED",
     "SafetyKernelStore",
     "TaskRecord",
     "TaskState",
     "WorkspaceRecord",
+    "WorkerAttemptRecord",
 ]

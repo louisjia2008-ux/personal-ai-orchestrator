@@ -20,7 +20,11 @@ import json
 import sys
 from pathlib import Path
 
-from personal_ai_orchestrator.dispatch_executor import build_worker_env
+from personal_ai_orchestrator.dispatch_executor import (
+    MAX_WORKER_STDERR_BYTES,
+    MAX_WORKER_STDOUT_BYTES,
+    build_worker_env,
+)
 from personal_ai_orchestrator.execution_evidence import (
     ExecutionEvidenceJournal,
     ExecutionVerificationOutcome,
@@ -51,13 +55,18 @@ async def _probe(
     supervisor = ProcessSupervisor()
     supervised = await supervisor.start(argv, cwd=cwd, env=build_worker_env())
     try:
-        stdout, _stderr = await asyncio.wait_for(
-            supervised.process.communicate(), timeout=timeout_seconds
+        result = await supervisor.collect(
+            supervised,
+            timeout_seconds=timeout_seconds,
+            stdout_cap=MAX_WORKER_STDOUT_BYTES,
+            stderr_cap=MAX_WORKER_STDERR_BYTES,
+            grace_seconds=5.0,
+            cleanup_budget_seconds=10.0,
+            eof_grace_seconds=2.0,
         )
     except TimeoutError:
-        code = await supervisor.cancel(supervised, grace_seconds=5.0)
-        return code, b""
-    return supervised.process.returncode or 0, stdout
+        return 124, b""
+    return (125 if result.truncated and result.exit_code == 0 else result.exit_code), result.stdout
 
 
 def run_execution_probe(

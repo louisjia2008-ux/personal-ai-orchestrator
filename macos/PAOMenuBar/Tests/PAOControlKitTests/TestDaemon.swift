@@ -12,17 +12,34 @@ final class TestDaemon {
         let path: String
         let status: Int
         let body: String
+        let beforeResponse: (() -> Void)?
     }
 
     private var routes: [Route] = []
     private var thread: Thread?
     private var serverFD: Int32 = -1
     private let lock = NSLock()
-    private(set) var receivedRequests: [(method: String, path: String, body: String)] = []
+    private var requests: [(method: String, path: String, body: String)] = []
+    var receivedRequests: [(method: String, path: String, body: String)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return requests
+    }
     private var running = false
 
-    func route(_ method: String, _ path: String, status: Int = 200, body: String) {
-        routes.append(Route(method: method, path: path, status: status, body: body))
+    func route(
+        _ method: String, _ path: String, status: Int = 200, body: String,
+        replaceExisting: Bool = false, beforeResponse: (() -> Void)? = nil
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        if replaceExisting {
+            routes.removeAll { $0.method == method && $0.path == path }
+        }
+        routes.append(Route(
+            method: method, path: path, status: status, body: body,
+            beforeResponse: beforeResponse
+        ))
     }
 
     func start(socketPath: String) throws {
@@ -102,9 +119,12 @@ final class TestDaemon {
             body = String(data: data[headerEnd.upperBound...], encoding: .utf8) ?? ""
         }
         lock.lock()
-        receivedRequests.append((method, path, body))
+        requests.append((method, path, body))
         let route = routes.first { $0.method == method && $0.path == path }
         lock.unlock()
+        // Tests can hold one response while a newer request completes. Run this
+        // outside the lock so simultaneous requests and route updates proceed.
+        route?.beforeResponse?()
         let status = route?.status ?? 404
         let payload = route?.body ?? "{\"error\":\"not_found\"}"
         let response = "HTTP/1.0 \(status) X\r\nContent-Type: application/json\r\n"

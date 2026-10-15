@@ -8,13 +8,11 @@ and final task authority remain owned by ``OwnerDispatchExecutor``.
 
 from __future__ import annotations
 
-import asyncio
 import shutil
 import tempfile
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
 
 from personal_ai_orchestrator.dispatch_executor import (
     MAX_WORKER_STDERR_BYTES,
@@ -50,7 +48,10 @@ from personal_ai_orchestrator.safety_kernel import (
     OwnerDispatchRecord,
     SafetyKernelStore,
 )
-from personal_ai_orchestrator.worker_outcome_classifier import WorkerFailureClass
+from personal_ai_orchestrator.worker_outcome_classifier import (
+    classify_worker_failure,
+    worker_failure_diagnostics,
+)
 from personal_ai_orchestrator.worktree_manager import ManagedWorktree
 
 
@@ -235,7 +236,7 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
         argv = build_pi_json_argv(
             config=replace(self.pi_runtime, delegation_enabled=enabled),
             model_ref=self._pi_model_ref(dispatch),
-            intent=task.intent,
+            intent=self._worker_intent(task),
             guard_path=self._guard_path(),
             delegation_tool_path=tool_path,
         )
@@ -287,44 +288,17 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
     ) -> tuple[int, bytes, bytes, bool]:
         """Drain one Pi JSON stream with a larger but still bounded cap."""
 
-        chunks: dict[str, list[bytes]] = {"out": [], "err": []}
-        truncated = False
-
-        async def _drain(stream: Any, cap: int, key: str) -> None:
-            nonlocal truncated
-            total = 0
-            while True:
-                chunk = await stream.read(8192)
-                if not chunk:
-                    break
-                remaining = max(0, cap - total)
-                if remaining:
-                    chunks[key].append(chunk[:remaining])
-                total += len(chunk)
-                if total > cap:
-                    truncated = True
-
-        stdout_task = asyncio.create_task(
-            _drain(supervised.process.stdout, PI_MAX_STDOUT_BYTES, "out")
+        result = await self._supervisor.collect(
+            supervised,
+            timeout_seconds=self.config.worker_timeout_seconds,
+            stdout_cap=PI_MAX_STDOUT_BYTES,
+            stderr_cap=MAX_WORKER_STDERR_BYTES,
+            grace_seconds=self.config.worker_grace_seconds,
+            cleanup_budget_seconds=self.config.worker_cleanup_budget_seconds,
+            eof_grace_seconds=self.config.worker_eof_grace_seconds,
         )
-        stderr_task = asyncio.create_task(
-            _drain(supervised.process.stderr, MAX_WORKER_STDERR_BYTES, "err")
-        )
-        try:
-            await asyncio.wait_for(
-                supervised.process.wait(), timeout=self.config.worker_timeout_seconds
-            )
-        except TimeoutError:
-            stdout_task.cancel()
-            stderr_task.cancel()
-            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
-            raise
-        await asyncio.gather(stdout_task, stderr_task)
-
-        stdout = b"".join(chunks["out"])
-        stderr = b"".join(chunks["err"])
-        returncode = supervised.process.returncode or 0
-        self._supervisor._children.pop(supervised.pid, None)
+        stdout, stderr, truncated = result.stdout, result.stderr, result.truncated
+        returncode = result.exit_code
 
         if returncode == 0:
             summary = summarize_pi_json_stream(stdout)
@@ -358,6 +332,29 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
             timeout=timeout,
         )
         summary = summarize_pi_json_stream(stdout)
+        # Only the protocol error channel may supplement stderr. Assistant
+        # content and malformed/incomplete protocol output are not diagnostics.
+        error_message = (
+            summary.final_error_message
+            if (
+                summary.protocol_valid
+                and summary.session_seen
+                and summary.agent_start_seen
+                and summary.agent_end_seen
+                and not truncated
+                and summary.final_stop_reason == "error"
+            )
+            else None
+        )
+        diagnostics = worker_failure_diagnostics(
+            classify_worker_failure(
+                exit_code=exit_code,
+                stderr_tail="\n".join(
+                    value for value in (cls._sanitize_transcript(stderr), error_message) if value
+                ),
+            )
+        )
+        result.update(diagnostics)
         result.update(
             {
                 "runtime": "pi-json",
@@ -369,33 +366,13 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
                 "pi_provider": summary.final_provider,
                 "pi_model": summary.final_model,
                 "pi_stop_reason": summary.final_stop_reason,
-                "pi_error_message": summary.final_error_message,
+                "pi_error_message": (
+                    diagnostics["worker_failure_message"] if error_message else None
+                ),
                 "pi_parse_error": summary.parse_error,
             }
         )
         return result
-
-    def _classify_worker_failure(
-        self,
-        *,
-        exit_code: int,
-        worker_result: dict[str, object],
-    ) -> WorkerFailureClass:
-        """Classify Pi provider errors without persisting raw provider bodies."""
-
-        from personal_ai_orchestrator.worker_outcome_classifier import (
-            classify_worker_failure,
-        )
-
-        stderr = worker_result.get("stderr_tail")
-        error_message = worker_result.get("pi_error_message")
-        diagnostic_parts = [
-            value for value in (stderr, error_message) if isinstance(value, str) and value
-        ]
-        return classify_worker_failure(
-            exit_code=exit_code,
-            stderr_tail="\n".join(diagnostic_parts),
-        )
 
 
 __all__ = ["PiOwnerDispatchExecutor"]

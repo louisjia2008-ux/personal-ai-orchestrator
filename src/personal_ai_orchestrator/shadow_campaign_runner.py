@@ -49,6 +49,7 @@ from personal_ai_orchestrator.quota_availability import (
     QuotaAvailabilityJournal,
     QuotaAvailabilityState,
     observe_exhaustion,
+    observe_rate_limited,
     observe_success,
 )
 from personal_ai_orchestrator.routing_service import RoutingService
@@ -249,16 +250,8 @@ def _model_task_failure_classification() -> FailureClassification:
 
 
 def _worker_failure_classification(worker: WorkerExecutionResult) -> FailureClassification:
-    # M1 WP4: reuse the canonical worker-outcome classifier instead of
-    # the legacy shadow list. The legacy list matched the bare
-    # ``"quota"`` substring which overlaps with this project's own
-    # source code and would have caused every shadow run to land in
-    # ``POLICY_BLOCK`` the moment a worker happened to log a quota
-    # message that was not actually a policy block. The new helper
-    # inspects ``stderr_tail`` only and uses phrased markers
-    # (``"usage limit"``, ``"rate limit"``, ``"too many requests"``,
-    # ``"quota exceeded"``, ``"insufficient quota"``, ``"429"``).
-    # ``stdout_tail`` is ignored by design.
+    # Share the owner classifier. Only explicit exhaustion is a policy block;
+    # a transient rate limit or overload cannot establish exhausted quota.
     failure_class = ShadowFailureClass.WORKER_PROCESS_FAILURE
     failure_stage = ShadowFailureStage.EXECUTION
     quality_outcome = ShadowQualityOutcome.OPERATIONAL_FAILED
@@ -276,10 +269,12 @@ def _worker_failure_classification(worker: WorkerExecutionResult) -> FailureClas
             exit_code=1,
             stderr_tail=worker.stderr_tail,
         )
-        if verdict is _WFC.QUOTA_OR_RATE_LIMIT:
+        if verdict is _WFC.QUOTA_EXHAUSTED:
             failure_class = ShadowFailureClass.POLICY_BLOCK
             failure_stage = ShadowFailureStage.INVOCATION
             quality_outcome = ShadowQualityOutcome.POLICY_BLOCKED
+        elif verdict in {_WFC.RATE_LIMITED, _WFC.SERVER_OVERLOADED, _WFC.CONTEXT_RESTRICTED}:
+            failure_class = ShadowFailureClass(verdict.value)
         elif verdict is _WFC.AUTH:
             failure_class = ShadowFailureClass.AUTH_FAILURE
             failure_stage = ShadowFailureStage.AUTH
@@ -765,6 +760,21 @@ def run_shadow_campaign(
         )
 
         previous_availability = availability_journal.load(worker_profile.execution_target_id)
+        if result.failure_class is ShadowFailureClass.RATE_LIMITED:
+            availability = observe_rate_limited(
+                previous_availability,
+                execution_target_id=worker_profile.execution_target_id,
+                provider_id=worker_profile.provider_id,
+                quota_pool_id=worker_profile.quota_pool_id,
+                observed_at=result.worker.finished_at,
+            )
+            availability_journal.save(availability)
+            queue = queue_journal.defer_unfinished_due_to_quota(
+                reason_code="WORKER_RATE_LIMIT",
+                now=datetime.now(UTC),
+            )
+            deferred_case_ids = queue.deferred_case_ids
+            break
         if result.failure_class is ShadowFailureClass.POLICY_BLOCK:
             availability = observe_exhaustion(
                 previous_availability,

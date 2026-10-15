@@ -18,12 +18,16 @@ from personal_ai_orchestrator.client_gateway import (
     TelegramUpdate,
 )
 from personal_ai_orchestrator.control_api import (
+    DEFAULT_LIST_LIMIT,
+    MAX_LIST_LIMIT,
     ApprovalView,
     CancelView,
+    ControlPlaneError,
     TaskListView,
     TaskView,
     VerificationReportView,
 )
+from personal_ai_orchestrator.control_client import ControlPlaneUnavailable
 
 NOW = datetime(2026, 9, 29, tzinfo=UTC).isoformat()
 
@@ -272,3 +276,217 @@ def test_notifier_emits_only_new_or_changed_durable_task_states() -> None:
     assert [(item.task_id, item.previous_state, item.current_state) for item in added] == [
         ("task-2", "UNSEEN", "SUBMITTED")
     ]
+
+
+class CappedControlClient(FakeControlClient):
+    """Use the real API's newest-first default/cap, without a socket or provider."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.limits: list[int | None] = []
+        self.lookups: list[str] = []
+        self.lookup_errors: dict[str, Exception] = {}
+        self.list_error: Exception | None = None
+
+    def list_tasks(self, *, limit: int | None = None) -> TaskListView:
+        self.limits.append(limit)
+        if self.list_error is not None:
+            raise self.list_error
+        bounded = min(MAX_LIST_LIMIT, DEFAULT_LIST_LIMIT if limit is None else limit)
+        tasks = tuple(reversed(self.tasks.values()))[:bounded]
+        return TaskListView(tasks=tasks, total=len(self.tasks))
+
+    def get_task(self, task_id: str) -> TaskView:
+        self.lookups.append(task_id)
+        if task_id in self.lookup_errors:
+            raise self.lookup_errors[task_id]
+        if task_id not in self.tasks:
+            raise ControlPlaneError(404, "task_not_found")
+        return self.tasks[task_id]
+
+    def add_tasks(self, start: int, stop: int, *, state: str = "SUBMITTED") -> None:
+        for index in range(start, stop):
+            task_id = f"task-{index}"
+            self.tasks[task_id] = _task(task_id, f"request-{index}", state=state)
+
+    def change_state(self, task_id: str, state: str) -> None:
+        task = self.tasks[task_id]
+        self.tasks[task_id] = task.model_copy(
+            update={"state": state, "state_version": task.state_version + 1}
+        )
+
+
+def test_notifier_discovers_beyond_default_fifty_row_page() -> None:
+    client = CappedControlClient()
+    client.add_tasks(0, 75)
+    notifier = TaskStateNotifier(client)
+    assert notifier.poll() == ()
+
+    client.change_state("task-0", "RUNNING")
+    changed = notifier.poll()
+
+    assert [(item.task_id, item.previous_state, item.current_state) for item in changed] == [
+        ("task-0", "SUBMITTED", "RUNNING")
+    ]
+    assert client.limits == [MAX_LIST_LIMIT, MAX_LIST_LIMIT]
+    assert client.lookups == []
+    assert notifier.poll() == ()
+
+
+@pytest.mark.parametrize("terminal_state", ["FAILED", "CANCELLED", "COMPLETED"])
+def test_notifier_tracks_old_task_after_more_than_two_hundred_new_tasks(
+    terminal_state: str,
+) -> None:
+    client = CappedControlClient()
+    client.add_tasks(0, 1, state="RUNNING")
+    notifier = TaskStateNotifier(client)
+    assert notifier.poll() == ()
+
+    client.add_tasks(1, 251, state="COMPLETED")
+    notifier.poll()
+    assert client.lookups == ["task-0"]
+    client.change_state("task-0", terminal_state)
+    changed = notifier.poll()
+
+    assert [(item.task_id, item.previous_state, item.current_state) for item in changed] == [
+        ("task-0", "RUNNING", terminal_state)
+    ]
+    assert changed[0].state_version == 1
+    assert notifier.poll() == ()
+    # Off-page terminal history is retired, so it is never polled repeatedly.
+    assert client.lookups == ["task-0", "task-0"]
+    assert len(notifier._states) == MAX_LIST_LIMIT
+
+
+def test_notifier_bounds_and_rotates_lookups_for_over_two_hundred_unfinished_tasks() -> None:
+    client = CappedControlClient()
+    client.add_tasks(0, 200, state="RUNNING")
+    notifier = TaskStateNotifier(client)
+    assert notifier.poll() == ()
+    client.add_tasks(200, 400, state="RUNNING")
+    notifier.poll()
+    assert len(notifier._states) == 400
+
+    client.add_tasks(400, 600, state="COMPLETED")
+    for index in range(400):
+        client.change_state(f"task-{index}", "COMPLETED")
+
+    completed = []
+    for _ in range(2):
+        client.lookups.clear()
+        completed.extend(item for item in notifier.poll() if item.previous_state == "RUNNING")
+        assert len(client.lookups) == MAX_LIST_LIMIT
+        assert len(set(client.lookups)) == MAX_LIST_LIMIT
+
+    assert len(completed) == 400
+    assert {item.task_id for item in completed} == {f"task-{index}" for index in range(400)}
+    assert {item.current_state for item in completed} == {"COMPLETED"}
+    assert len(notifier._states) == MAX_LIST_LIMIT
+    client.lookups.clear()
+    assert notifier.poll() == ()
+    assert client.lookups == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ControlPlaneUnavailable("fixture unavailable"),
+        ControlPlaneError(503, "temporarily_unavailable"),
+        ControlPlaneError(404, "unknown_endpoint"),
+    ],
+)
+def test_notifier_retries_transient_lookup_without_losing_previous_state(error: Exception) -> None:
+    client = CappedControlClient()
+    client.add_tasks(0, 1, state="RUNNING")
+    notifier = TaskStateNotifier(client)
+    assert notifier.poll() == ()
+    client.add_tasks(1, 251, state="COMPLETED")
+    notifier.poll()
+    client.change_state("task-0", "COMPLETED")
+    client.lookup_errors["task-0"] = error
+
+    assert notifier.poll() == ()
+    assert notifier._states["task-0"] == ("RUNNING", 0)
+
+    client.lookup_errors.clear()
+    changed = notifier.poll()
+    assert [(item.task_id, item.previous_state, item.current_state) for item in changed] == [
+        ("task-0", "RUNNING", "COMPLETED")
+    ]
+    assert notifier.poll() == ()
+
+
+def test_notifier_missing_record_is_retired_without_inventing_terminal_state() -> None:
+    client = CappedControlClient()
+    client.add_tasks(0, 2, state="RUNNING")
+    notifier = TaskStateNotifier(client)
+    assert notifier.poll() == ()
+    client.add_tasks(2, 252, state="COMPLETED")
+    notifier.poll()
+    del client.tasks["task-0"]
+    client.change_state("task-1", "BLOCKED")
+    client.lookups.clear()
+
+    changed = notifier.poll()
+
+    assert [(item.task_id, item.previous_state, item.current_state) for item in changed] == [
+        ("task-1", "RUNNING", "BLOCKED")
+    ]
+    assert set(client.lookups) == {"task-0", "task-1"}
+    assert "task-0" not in notifier._states
+    client.lookups.clear()
+    assert notifier.poll() == ()
+    assert client.lookups == ["task-1"]  # BLOCKED is resumable, not terminal.
+
+
+def test_notifier_failed_listing_keeps_baseline_for_recovery() -> None:
+    client = CappedControlClient()
+    client.add_tasks(0, 1)
+    notifier = TaskStateNotifier(client)
+    client.list_error = ControlPlaneUnavailable("fixture unavailable")
+    with pytest.raises(ControlPlaneUnavailable):
+        notifier.poll()
+    assert not notifier._primed
+    client.list_error = None
+    assert notifier.poll() == ()
+
+    client.change_state("task-0", "RUNNING")
+    client.list_error = ControlPlaneUnavailable("fixture unavailable")
+    with pytest.raises(ControlPlaneUnavailable):
+        notifier.poll()
+    client.list_error = None
+    changed = notifier.poll()
+    assert [(item.previous_state, item.current_state) for item in changed] == [
+        ("SUBMITTED", "RUNNING")
+    ]
+    assert notifier.poll() == ()
+
+
+def test_notifier_version_only_changes_do_not_duplicate_state_notifications() -> None:
+    client = CappedControlClient()
+    client.add_tasks(0, 1)
+    notifier = TaskStateNotifier(client)
+    assert notifier.poll() == ()
+
+    client.change_state("task-0", "SUBMITTED")
+    assert notifier.poll() == ()
+    client.change_state("task-0", "RUNNING")
+    changed = notifier.poll()
+    assert len(changed) == 1
+    assert changed[0].state_version == 2
+    assert notifier.poll() == ()
+
+
+def test_notifier_does_not_recheck_terminal_tasks_after_leaving_discovery_page() -> None:
+    client = CappedControlClient()
+    client.add_tasks(0, 200, state="COMPLETED")
+    notifier = TaskStateNotifier(client)
+    assert notifier.poll() == ()
+
+    for start in (200, 400, 600):
+        client.add_tasks(start, start + 200, state="COMPLETED")
+        assert len(notifier.poll()) == 200
+        assert len(notifier._states) == MAX_LIST_LIMIT
+        assert notifier.poll() == ()
+
+    assert client.lookups == []

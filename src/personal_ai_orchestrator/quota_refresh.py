@@ -394,6 +394,17 @@ class QuotaRefreshService:
             return snapshot
         return None
 
+    def _projection_for_pool(self, quota_pool_id: str) -> PlanQuotaProjection | None:
+        """Read display evidence without allowing a damaged cache to hide providers."""
+        try:
+            projection = self._projection_cache.load(quota_pool_id)
+        except (OSError, ValueError):
+            return None
+        # Apply the same identity check as the normalized snapshot read path.
+        if projection is not None and projection.pool.pool_id == quota_pool_id:
+            return projection
+        return None
+
     def observations(self) -> tuple[QuotaProviderObservation, ...]:
         """Latest quota truth for every currently connected provider.
 
@@ -410,7 +421,7 @@ class QuotaRefreshService:
         spec = QUOTA_SOURCE_BY_PROVIDER.get(provider_id)
         pool_id = self._pool_id_for(provider_id)
         snapshot = self.snapshot_for_pool(pool_id) if pool_id else None
-        projection = self._projection_cache.load(pool_id) if pool_id else None
+        projection = self._projection_for_pool(pool_id) if pool_id else None
         if snapshot is None:
             with self._lock:
                 fallback = self._observed_pool_id.get(provider_id)
@@ -418,7 +429,7 @@ class QuotaRefreshService:
                 snapshot = self.snapshot_for_pool(fallback)
                 if snapshot is not None:
                     pool_id = fallback
-                    projection = self._projection_cache.load(fallback)
+                    projection = self._projection_for_pool(fallback)
         with self._lock:
             attempt = self._last_attempt.get(provider_id)
             credential_source = self._credential_source.get(

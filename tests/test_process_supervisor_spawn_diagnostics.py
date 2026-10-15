@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import errno
 import os
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -121,10 +121,10 @@ async def test_invalid_cwd_has_precise_precreate_failure(tmp_path: Path) -> None
 async def test_stdio_setup_failure_is_structured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def fail_create(*args: object, **kwargs: object) -> None:
+    def fail_create(*args: object, **kwargs: object) -> None:
         raise OSError(errno.EMFILE, "too many files")
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fail_create)
+    monkeypatch.setattr(subprocess, "Popen", fail_create)
     supervisor = ProcessSupervisor()
     with pytest.raises(ProcessSpawnError) as caught:
         await supervisor.start(("/usr/bin/true",), cwd=tmp_path, env={})
@@ -148,18 +148,28 @@ async def test_immediate_exit_is_created_owned_and_reaped(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_abort_unowned_reaps_already_exited_process_without_signalling(
+async def test_abort_unowned_keeps_leader_pinned_until_last_group_signal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     supervisor = ProcessSupervisor()
     process = await supervisor.start(("/usr/bin/true",), cwd=tmp_path, env={})
     assert await process.process.wait() == 0
 
-    def forbidden_killpg(pid: int, requested_signal: int) -> None:
-        raise AssertionError((pid, requested_signal))
+    real_killpg = os.killpg
+    signals: list[int] = []
 
-    monkeypatch.setattr(os, "killpg", forbidden_killpg)
+    def checked_killpg(pid: int, requested_signal: int) -> None:
+        assert pid == process.pid
+        if requested_signal:
+            assert process._pinned and not process._reaped
+        else:
+            assert process._reaped
+        signals.append(requested_signal)
+        real_killpg(pid, requested_signal)
+
+    monkeypatch.setattr(os, "killpg", checked_killpg)
     assert await supervisor.abort_unowned(process) == 0
+    assert signals[-1] == 0
     assert supervisor.owned_pids() == ()
 
 
@@ -209,7 +219,22 @@ async def test_local_ownership_index_failure_still_exposes_exact_child(
         observed = supervisor.observed_process()
         assert observed is not None
         pid = observed.pid
-        assert await supervisor.abort_unowned(observed) == -9
+        # start() must finish its retained cleanup before propagating the
+        # post-create error. A later adapter abort consumes that same evidence.
+        receipt = observed.cleanup_result
+        assert receipt is not None and receipt.confirmed
+        assert receipt.child_reaped and receipt.group_empty
+        assert receipt.exit_code is not None
+        assert observed._reaped and not observed._pinned
+        operation, deadline = observed._operation, observed._cleanup_deadline
+        signals = tuple(observed._signals)
+        assert operation is not None and operation.done()
+        assert receipt.deadline_monotonic == deadline
+        assert supervisor.owned_pids() == ()
+        assert await supervisor.abort_unowned(observed) == receipt.exit_code
+        assert observed.cleanup_result is receipt
+        assert observed._operation is operation and observed._cleanup_deadline == deadline
+        assert tuple(observed._signals) == signals == receipt.signals
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
     finally:

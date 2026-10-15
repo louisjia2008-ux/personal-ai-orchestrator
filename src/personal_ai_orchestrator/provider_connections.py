@@ -146,7 +146,7 @@ def load_connections(runtime_state_root: Path) -> ProviderConnectionRegistry:
         return ProviderConnectionRegistry()
     try:
         payload = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return ProviderConnectionRegistry()
     if not isinstance(payload, dict):
         return ProviderConnectionRegistry()

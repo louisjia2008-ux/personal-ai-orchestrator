@@ -208,6 +208,14 @@ def initiate_owner_dispatch(
         or request_id.startswith("pi5-child-dispatch-")
     ):
         raise _control_plane_error(400, "reserved_dispatch_request_id_namespace")
+    # Re-read the authoritative binding at admission. Spawn boundaries repeat
+    # this check transactionally, including the legacy no-attempt path.
+    current_task = store.get_task(task.task_id)
+    if (
+        current_task.manual_execution_target_id
+        and current_task.manual_execution_target_id != execution_target_id
+    ):
+        raise _control_plane_error(409, "manual_execution_target_mismatch")
     dispatch, created = store.reserve_owner_dispatch(
         dispatch_id=dispatch_id,
         request_id=request_id,

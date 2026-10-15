@@ -392,13 +392,17 @@ export class DeepSeekTelegramController {
     this.cancelled = new Set();
     this.abortController = null;
     this.pollPromise = null;
+    this.lifecycle = new AbortController();
+    this.detachments = new Set();
   }
 
   start() {
     if (this.pollPromise) return;
+    if (this.lifecycle.signal.aborted) this.lifecycle = new AbortController();
     this.abortController = new AbortController();
-    this.pollPromise = this.#poll(this.abortController.signal).catch((error) => {
-      if (!this.abortController?.signal.aborted) {
+    const signal = this.abortController.signal;
+    this.pollPromise = this.#poll(signal).catch((error) => {
+      if (!signal.aborted) {
         this.logger.error?.(
           `pao-telegram-controller stopped: ${errorText(error, [this.config.token])}`,
         );
@@ -407,7 +411,18 @@ export class DeepSeekTelegramController {
   }
 
   async stop() {
+    // Fence every admitted command synchronously, before awaiting the poller.
+    // A later start gets a new signal; old create/resume work stays fenced.
+    this.lifecycle.abort();
     this.abortController?.abort();
+    for (const agent of this.submitted.values()) {
+      try {
+        agent.cancel({ kind: "user" });
+      } catch (error) {
+        this.logger.warn?.(`pao-telegram-controller cancellation failed: ${errorText(error, [this.config.token])}`);
+      }
+    }
+    for (const detach of [...this.detachments]) detach();
     await this.pollPromise;
     this.pollPromise = null;
     const handles = [...this.handles.values()].filter((entry) => entry.owned).map((entry) => entry.handle);
@@ -484,6 +499,7 @@ export class DeepSeekTelegramController {
   }
 
   async handleUpdate(update) {
+    if (this.lifecycle.signal.aborted) return { accepted: false, reason: "stopped" };
     const message = update?.message;
     const parsed = parseTelegramCommand(message?.text);
     if (!parsed) return { accepted: false, reason: "not_a_dsh_command" };
@@ -539,7 +555,7 @@ export class DeepSeekTelegramController {
     return { accepted: true, command: "cancel" };
   }
 
-  async #newSession(chatId, argument) {
+  async #newSession(chatId, argument, signal = this.lifecycle.signal) {
     if (argument) {
       await this.api.sendText(chatId, "/dsh new 不接受路径或其他参数；工作目录由本机插件配置固定。");
       return { accepted: false, reason: "new_rejects_arguments" };
@@ -550,8 +566,10 @@ export class DeepSeekTelegramController {
     }
     const previous = this.handles.get(chatId);
     if (previous?.owned) await previous.handle.dispose();
+    if (signal.aborted) return { accepted: false, reason: "stopped" };
     this.handles.delete(chatId);
-    const entry = await this.#create(chatId);
+    const entry = await this.#create(chatId, signal);
+    if (!entry || signal.aborted) return { accepted: false, reason: "stopped" };
     await this.api.sendText(chatId, `已创建新的 DeepSeek Harness 会话：${entry.handle.agent.id}`);
     return { accepted: true, command: "new", sessionId: entry.handle.agent.id };
   }
@@ -575,7 +593,7 @@ export class DeepSeekTelegramController {
       return { accepted: false, reason: "running" };
     }
 
-    const completion = this.#execute(chatId, prompt);
+    const completion = this.#execute(chatId, prompt, this.lifecycle.signal);
     this.active.set(chatId, completion);
     const release = () => {
       if (this.active.get(chatId) === completion) this.active.delete(chatId);
@@ -588,14 +606,50 @@ export class DeepSeekTelegramController {
     return { accepted: true, command: "run", completion };
   }
 
-  async #create(chatId) {
+  async #acquireOwned(acquire, signal) {
+    if (signal.aborted) return null;
+    let onAbort;
+    const stopped = new Promise((resolve) => {
+      onAbort = () => resolve(null);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      // Do not hold stop() open for an unbounded provider-side create/resume.
+      // The continuation still owns any late handle and must dispose it.
+      const pending = Promise.resolve(acquire()).then(async (handle) => {
+        if (signal.aborted) {
+          try {
+            await handle.dispose();
+          } catch (error) {
+            this.logger.warn?.(`pao-telegram-controller late session cleanup failed: ${errorText(error, [this.config.token])}`);
+          }
+          return null;
+        }
+        return { handle, owned: true };
+      });
+      const entry = await Promise.race([pending, stopped]);
+      if (entry && signal.aborted) {
+        await entry.handle.dispose();
+        return null;
+      }
+      return entry;
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  async #create(chatId, signal) {
     const sessionId = `telegram-${randomUUID()}`;
-    const handle = await this.ctx.agents.create({
+    const entry = await this.#acquireOwned(() => this.ctx.agents.create({
       sessionId,
       meta: sessionMeta(this.config),
       agentOptions: agentOptions(this.config),
-    });
-    const entry = { handle, owned: true };
+    }), signal);
+    if (!entry) return null;
+    if (signal.aborted) {
+      await entry.handle.dispose();
+      return null;
+    }
     this.handles.set(chatId, entry);
     this.state.chats[chatId] = {
       sessionId,
@@ -606,11 +660,12 @@ export class DeepSeekTelegramController {
     return entry;
   }
 
-  async #ensureHandle(chatId) {
+  async #ensureHandle(chatId, signal) {
+    if (signal.aborted) return null;
     const attached = this.handles.get(chatId);
     if (attached) return attached;
     const saved = this.state.chats[chatId];
-    if (!saved) return this.#create(chatId);
+    if (!saved) return this.#create(chatId, signal);
 
     const live = this.ctx.agents.get?.(saved.sessionId);
     if (live) {
@@ -619,16 +674,20 @@ export class DeepSeekTelegramController {
       return entry;
     }
 
-    const handle = await this.ctx.agents.resume({
+    const entry = await this.#acquireOwned(() => this.ctx.agents.resume({
       resumeSessionId: saved.sessionId,
       agentOptions: agentOptions(this.config),
-    });
-    const entry = { handle, owned: true };
+    }), signal);
+    if (!entry) return null;
+    if (signal.aborted) {
+      await entry.handle.dispose();
+      return null;
+    }
     this.handles.set(chatId, entry);
     return entry;
   }
 
-  async #execute(chatId, prompt) {
+  async #execute(chatId, prompt, signal) {
     let disposeStream = () => {};
     let disposeSession = () => {};
     let disposeError = () => {};
@@ -638,11 +697,13 @@ export class DeepSeekTelegramController {
       disposeStream();
       disposeError = disposeSession = disposeStream = () => {};
       this.submitted.delete(chatId);
+      this.detachments.delete(detach);
     };
+    this.detachments.add(detach);
     try {
-      const entry = await this.#ensureHandle(chatId);
+      const entry = await this.#ensureHandle(chatId, signal);
+      if (!entry || signal.aborted || this.cancelled.has(chatId)) return;
       const agent = entry.handle.agent;
-      if (this.cancelled.has(chatId)) return;
       // A recovered/live session may be doing work started outside Telegram.
       // Never subscribe to that turn or queue a followup behind it, since the
       // session-wide events would otherwise leak unrelated output into our reply.
@@ -701,6 +762,7 @@ export class DeepSeekTelegramController {
         if (subject === agent) errors.push(error);
       });
 
+      if (signal.aborted) return;
       this.submitted.set(chatId, agent);
       agent.followup({
         content: [{ type: "text", text: prompt }],
@@ -722,7 +784,7 @@ export class DeepSeekTelegramController {
       detach();
       await acknowledgement;
 
-      if (this.cancelled.has(chatId)) return;
+      if (signal.aborted || this.cancelled.has(chatId)) return;
       if (errors.length) throw errors.at(-1);
       const visible = durableVisible.length ? durableVisible : streamedVisible;
       const result = visible.join("\n\n").trim() || "任务已经结束，但 Harness 没有产生可见文本输出。";
@@ -732,7 +794,7 @@ export class DeepSeekTelegramController {
       );
     } catch (error) {
       detach();
-      if (!this.cancelled.has(chatId)) {
+      if (!signal.aborted && !this.cancelled.has(chatId)) {
         this.logger.warn?.(
           `pao-telegram-controller Harness task failed: ${errorText(error, [this.config.token])}`,
         );

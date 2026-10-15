@@ -74,6 +74,7 @@ public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var taskCompletionNotice: TaskCompletionNotice?
     @Published public private(set) var daemonBuild: BuildView?
     @Published public private(set) var lastError: PAOClientError?
+    /// Success presentation for the latest submit attempt, never an operation result.
     @Published public private(set) var lastSubmittedTaskId: String?
     @Published public private(set) var submitNotice: SubmitNotice?
     @Published public private(set) var projectNotice: ProjectNotice?
@@ -81,7 +82,18 @@ public final class OrchestratorStore: ObservableObject {
     @Published public var menuVisible: Bool = false
     @Published public var dashboardVisible: Bool = false
     @Published public private(set) var isRefreshing: Bool = false
-    @Published public var selectedTaskId: String?
+    @Published public var selectedTaskId: String? {
+        didSet {
+            guard selectedTaskId != oldValue else { return }
+            // Selection belongs to the store, including deep links and keyboard
+            // navigation. Clear the inspector immediately, before a view's
+            // onChange or the next request has a chance to run.
+            taskDetailRequestId = nil
+            selectedTaskDetail = nil
+            clearCancellationNotice()
+            clearDispatchRecommendation()
+        }
+    }
     @Published public var selectedProjectId: String?
     @Published public var selectedSchedulingPolicy: String = "BALANCED"
     @Published public var selectedManualExecutionTargetId: String?
@@ -107,6 +119,8 @@ public final class OrchestratorStore: ObservableObject {
     private var backoffSeconds: Double = 2.0
     private var previousTaskStates: [String: String] = [:]
     private var lastSubmit: (intent: String, at: Date)?
+    private var submitRequestId: UUID?
+    private var taskDetailRequestId: UUID?
     private let idFactory: () -> String
 
     /// How many tasks the dashboard asks for.
@@ -135,10 +149,13 @@ public final class OrchestratorStore: ObservableObject {
     /// 10-second default every other call shares.
     private static let quotaRefreshTimeoutSeconds: Double = 30
 
+    /// Set `autoRefresh` to false for explicitly driven clients (including
+    /// deterministic tests); manual refresh and operation methods still work.
     public init(socketPath: String,
                 daemonConfiguration: DaemonLaunchConfiguration? = nil,
                 widgetSnapshotBridge: WidgetSnapshotBridge? = nil,
                 autoStartDaemon: Bool = true,
+                autoRefresh: Bool = true,
                 idFactory: @escaping () -> String = { UUID().uuidString.prefix(12).lowercased() }) {
         self.socketPath = socketPath
         let client = PAOControlClient(socketPath: socketPath)
@@ -157,8 +174,10 @@ public final class OrchestratorStore: ObservableObject {
         if autoStartDaemon {
             daemonLifecycle.ensureStarted()
         }
-        startRefreshing()
-        startQuotaAutoRefresh()
+        if autoRefresh {
+            startRefreshing()
+            startQuotaAutoRefresh()
+        }
     }
 
     deinit {
@@ -167,7 +186,12 @@ public final class OrchestratorStore: ObservableObject {
     }
 
     public var statusSummary: StatusSummary {
-        StatusSummary.derive(connection: connection, tasks: tasks?.tasks ?? [], providers: providers)
+        StatusSummary.derive(
+            connection: connection,
+            tasks: tasks?.tasks ?? [],
+            providers: providers,
+            dashboardCounts: dashboard?.counts
+        )
     }
 
     /// True when the daemon holds more tasks than this client fetched.
@@ -181,6 +205,10 @@ public final class OrchestratorStore: ObservableObject {
     }
 
     public func taskCounts() -> (running: Int, ready: Int, blocked: Int, verified: Int) {
+        // Global menu-bar counters must include tasks beyond the list limit.
+        if let counts = dashboard?.counts {
+            return (counts.running, counts.ready, counts.blocked, counts.verified + counts.completed)
+        }
         let states = (tasks?.tasks ?? []).map(\.state)
         return (
             running: states.filter { $0 == "RUNNING" }.count,
@@ -385,6 +413,7 @@ public final class OrchestratorStore: ObservableObject {
             dashboard = nil
             projects = nil
             pendingProjectPreview = nil
+            taskDetailRequestId = nil
             selectedTaskDetail = nil
             providers = nil
             providerConnections = nil
@@ -394,6 +423,7 @@ public final class OrchestratorStore: ObservableObject {
             lastDispatch = nil
             // Ephemeral operation success state claims daemon authority; once the
             // connection is gone it must not linger as if still authoritative.
+            submitRequestId = nil
             lastSubmittedTaskId = nil
             submitNotice = nil
             projectNotice = nil
@@ -551,28 +581,38 @@ public final class OrchestratorStore: ObservableObject {
         }
     }
 
-    public func quickSubmit(projectId: String?, intent: String) async {
+    /// Return this invocation's outcome, including validation/duplicate failures.
+    /// Blank input has no notice and returns nil. Callers must use this result for
+    /// side effects: another invocation or the post-submit refresh may replace
+    /// the shared presentation before this method resumes.
+    @discardableResult
+    public func quickSubmit(projectId: String?, intent: String) async -> SubmitNotice? {
+        let requestId = UUID()
+        submitRequestId = requestId
+        lastSubmittedTaskId = nil
+        submitNotice = nil
         let trimmed = intent.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else { return nil }
         guard let projectId, !projectId.isEmpty else {
             submitNotice = .projectRequired
-            return
+            return .projectRequired
         }
         if let last = lastSubmit,
            last.intent == trimmed,
            Date().timeIntervalSince(last.at) < Self.duplicateSubmitWindow {
-            submitNotice = .duplicateBlocked(windowSeconds: Int(Self.duplicateSubmitWindow))
-            return
+            let notice = SubmitNotice.duplicateBlocked(windowSeconds: Int(Self.duplicateSubmitWindow))
+            submitNotice = notice
+            return notice
         }
-        let suffix = idFactory()
         // The picked policy must reach the daemon: an App-local selection that never
         // leaves SwiftUI state is indistinguishable from not choosing at all.
         let policy = selectedSchedulingPolicy
         let manualTarget = policy == "MANUAL" ? selectedManualExecutionTargetId : nil
         if policy == "MANUAL", manualTarget == nil {
             submitNotice = .manualTargetRequired
-            return
+            return .manualTargetRequired
         }
+        let suffix = idFactory()
         let request = SubmitRequest(
             taskId: "menubar-\(suffix)",
             requestId: "menubar-req-\(suffix)",
@@ -584,17 +624,28 @@ public final class OrchestratorStore: ObservableObject {
         )
         do {
             let task = try await client.submit(request)
+            let notice = SubmitNotice.submitted(taskId: task.taskId, state: task.state)
             lastSubmit = (trimmed, Date())
-            lastSubmittedTaskId = task.taskId
-            submitNotice = .submitted(taskId: task.taskId, state: task.state)
+            if submitRequestId == requestId {
+                lastSubmittedTaskId = task.taskId
+                submitNotice = notice
+            }
             ClientLog.operation("submit", outcome: "ok")
             await refreshOnce()
+            return notice
         } catch let error as PAOClientError {
-            submitNotice = .failed(detail: error.displayDetail)
+            let notice = SubmitNotice.failed(detail: error.displayDetail)
+            if submitRequestId == requestId {
+                submitNotice = notice
+            }
             ClientLog.operation("submit", outcome: error.logCode)
+            return notice
         } catch {
-            submitNotice = .malformedResponse
+            if submitRequestId == requestId {
+                submitNotice = .malformedResponse
+            }
             ClientLog.operation("submit", outcome: "malformed")
+            return .malformedResponse
         }
     }
 
@@ -629,14 +680,25 @@ public final class OrchestratorStore: ObservableObject {
         cancellationNotice = nil
     }
 
+    /// Refresh the current selection. Callers selecting a task must set
+    /// `selectedTaskId` first; obsolete selection requests are ignored.
     public func loadTaskDetail(taskId: String) async {
+        // A request queued by the previous selection must not replace the
+        // current task, nor may an older same-task refresh overwrite a newer one.
+        guard selectedTaskId == taskId else { return }
+        let requestId = UUID()
+        taskDetailRequestId = requestId
         do {
-            selectedTaskDetail = try await client.taskDetail(taskId)
+            let detail = try await client.taskDetail(taskId)
+            guard taskDetailRequestId == requestId, selectedTaskId == taskId else { return }
+            selectedTaskDetail = detail
             lastError = nil
         } catch let error as PAOClientError {
+            guard taskDetailRequestId == requestId, selectedTaskId == taskId else { return }
             lastError = error
             ClientLog.operation("task-detail", outcome: error.logCode)
         } catch {
+            guard taskDetailRequestId == requestId, selectedTaskId == taskId else { return }
             lastError = .malformedResponse
             ClientLog.operation("task-detail", outcome: "malformed")
         }
@@ -720,7 +782,9 @@ public final class OrchestratorStore: ObservableObject {
             self.lastQuotaRefreshError = error.logCode
             // A failed refresh must not blank the page: keep the last
             // projection and let the card report the failure.
-            self.quota = try? await client.quota()
+            if let quota = try? await client.quota() {
+                self.quota = quota
+            }
             ClientLog.operation("refresh_quota", outcome: error.logCode)
         } catch {
             self.lastQuotaRefreshError = "malformed"

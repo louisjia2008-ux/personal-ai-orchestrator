@@ -395,3 +395,108 @@ def test_windowed_observe_exhaustion_baseline_remains_windowed() -> None:
         exhausted.state_at(now=NOW + timedelta(seconds=7200))
         is QuotaAvailabilityState.RECOVERY_PROBE_DUE
     )
+
+
+def test_rate_limit_preserves_active_exhaustion_evidence() -> None:
+    exhausted = observe_exhaustion(
+        None,
+        execution_target_id="target",
+        provider_id="provider",
+        quota_pool_id="pool",
+        observed_at=NOW,
+        sanitized_reason_code="USAGE_LIMIT",
+    )
+    throttled = observe_rate_limited(
+        exhausted,
+        execution_target_id="target",
+        provider_id="provider",
+        quota_pool_id="pool",
+        observed_at=NOW + timedelta(seconds=1),
+    )
+    assert throttled == exhausted
+
+
+def test_repeated_rate_limit_preserves_unmetered_baseline_and_has_no_exhaustion() -> None:
+    previous = QuotaAvailabilityEvidence(
+        execution_target_id="target",
+        provider_id="provider",
+        quota_pool_id="pool",
+        observed_at=NOW,
+        state=QuotaAvailabilityState.AVAILABLE_UNMETERED,
+    )
+    for offset in (1, 2):
+        previous = observe_rate_limited(
+            previous,
+            execution_target_id="target",
+            provider_id="provider",
+            quota_pool_id="pool",
+            observed_at=NOW + timedelta(seconds=offset),
+        )
+    assert previous.exhaustion_observed_at is None
+    assert (
+        previous.state_at(now=NOW + timedelta(hours=1))
+        is QuotaAvailabilityState.AVAILABLE_UNMETERED
+    )
+
+
+def test_explicit_unmetered_exhaustion_does_not_assume_recovery() -> None:
+    previous = QuotaAvailabilityEvidence(
+        execution_target_id="target",
+        provider_id="provider",
+        quota_pool_id="pool",
+        observed_at=NOW,
+        state=QuotaAvailabilityState.AVAILABLE_UNMETERED,
+    )
+    exhausted = observe_exhaustion(
+        previous,
+        execution_target_id="target",
+        provider_id="provider",
+        quota_pool_id="pool",
+        observed_at=NOW,
+        sanitized_reason_code="USAGE_LIMIT",
+    )
+    assert exhausted.exhaustion_observed_at == NOW
+    assert (
+        exhausted.state_at(now=NOW + timedelta(hours=2))
+        is QuotaAvailabilityState.RECOVERY_PROBE_DUE
+    )
+
+
+def test_rate_limit_after_recovered_exhaustion_retains_history_and_extends_throttle() -> None:
+    exhausted = observe_exhaustion(
+        None,
+        execution_target_id="target",
+        provider_id="provider",
+        quota_pool_id="pool",
+        observed_at=NOW,
+        sanitized_reason_code="USAGE_LIMIT",
+    )
+    recovered = observe_success(
+        exhausted,
+        execution_target_id="target",
+        provider_id="provider",
+        quota_pool_id="pool",
+        observed_at=NOW + timedelta(hours=2),
+    )
+    first = observe_rate_limited(
+        recovered,
+        execution_target_id="target",
+        provider_id="provider",
+        quota_pool_id="pool",
+        observed_at=NOW + timedelta(hours=3),
+    )
+    second = observe_rate_limited(
+        first,
+        execution_target_id="target",
+        provider_id="provider",
+        quota_pool_id="pool",
+        observed_at=NOW + timedelta(hours=3, seconds=1),
+    )
+    assert second.cooldown_until > first.cooldown_until
+    assert second.exhaustion_observed_at == NOW
+    assert second.recovery_observed_at == recovered.observed_at
+    assert second.previous_state_baseline is QuotaAvailabilityState.RECOVERED_OBSERVED
+    assert second.sanitized_reason_code == "WORKER_RATE_LIMIT"
+    assert (
+        second.state_at(now=NOW + timedelta(hours=4)) is QuotaAvailabilityState.RECOVERY_PROBE_DUE
+    )

@@ -732,10 +732,12 @@ test("failed submissions release cancel ownership before sending an error", asyn
 test("stop fences a pending owned create before it can launch or persist", async () => {
   const { agents, api, controller, stateStore, events } = harness({ creationHeld: true });
   let lateAgent;
+  const acquired = deferred();
   const create = agents.create.bind(agents);
   agents.create = async (options) => {
     const handle = await create(options);
     lateAgent = handle.agent;
+    acquired.resolve();
     return handle;
   };
   const run = await controller.handleUpdate(update("/dsh run do not start after stop"));
@@ -743,7 +745,9 @@ test("stop fences a pending owned create before it can launch or persist", async
     assert.equal(agents.created.length, 1);
     await controller.stop();
     agents.creationGate.resolve();
+    await acquired.promise;
     await run.completion;
+    await setImmediate();
     assert.deepEqual(lateAgent.followups, []);
     assert.deepEqual(agents.disposed, [lateAgent.id]);
     assert.equal(controller.handles.size, 0);
@@ -757,4 +761,168 @@ test("stop fences a pending owned create before it can launch or persist", async
     await run.completion;
     await controller.stop();
   }
+});
+
+test("stop fences a pending resume and disposes only its late owned handle", async () => {
+  const { agents, api, controller, stateStore } = harness({
+    initialState: { version: 1, offset: 42, chats: {
+      "84": { sessionId: "saved-session", cwd: "/fixed/workspace" },
+    } },
+  });
+  const gate = deferred();
+  const entered = deferred();
+  const acquired = deferred();
+  let lateAgent;
+  const resume = agents.resume.bind(agents);
+  agents.resume = async (options) => {
+    const handle = await resume(options);
+    lateAgent = handle.agent;
+    entered.resolve();
+    await gate.promise;
+    acquired.resolve();
+    return handle;
+  };
+  const run = await controller.handleUpdate(update("/dsh run do not resume after stop"));
+  await entered.promise;
+  try {
+    await controller.stop();
+    gate.resolve();
+    await acquired.promise;
+    await run.completion;
+    await setImmediate();
+    assert.deepEqual(lateAgent.followups, []);
+    assert.deepEqual(agents.disposed, [lateAgent.id]);
+    assert.equal(controller.handles.size, 0);
+    assert.equal(controller.active.size, 0);
+    assert.equal(stateStore.saves, 0);
+    assert.equal(api.sent.length, 0);
+  } finally {
+    gate.resolve();
+    await run.completion;
+    await controller.stop();
+  }
+});
+
+test("stop releases a poller waiting for new-session creation without launching", async () => {
+  const { agents, api, controller, stateStore } = harness({
+    creationHeld: true, controllerConfig: { ignorePendingOnFirstStart: false },
+  });
+  const entered = deferred();
+  const acquired = deferred();
+  let lateAgent;
+  const create = agents.create.bind(agents);
+  agents.create = async (options) => {
+    entered.resolve();
+    const handle = await create(options);
+    lateAgent = handle.agent;
+    acquired.resolve();
+    return handle;
+  };
+  api.getUpdates = async () => [update("/dsh new")];
+  controller.start();
+  await entered.promise;
+  try {
+    await controller.stop();
+    assert.equal(controller.pollPromise, null);
+    assert.deepEqual(stateStore.value.chats, {});
+    agents.creationGate.resolve();
+    await acquired.promise;
+    await setImmediate();
+    assert.deepEqual(lateAgent.followups, []);
+    assert.deepEqual(agents.disposed, [lateAgent.id]);
+    assert.equal(controller.handles.size, 0);
+    assert.equal(api.sent.length, 0);
+  } finally {
+    agents.creationGate.resolve();
+    await controller.stop();
+  }
+});
+
+test("stopped commands stay rejected and restart cannot revive a late acquisition", async () => {
+  const { agents, api, controller, stateStore } = harness({ creationHeld: true });
+  const oldGate = agents.creationGate;
+  const oldAcquired = deferred();
+  let oldAgent;
+  const create = agents.create.bind(agents);
+  let calls = 0;
+  agents.create = async (options) => {
+    const call = ++calls;
+    const handle = await create(options);
+    if (call === 1) {
+      oldAgent = handle.agent;
+      oldAcquired.resolve();
+    }
+    return handle;
+  };
+  const oldRun = await controller.handleUpdate(update("/dsh run old task"));
+  await controller.stop();
+  for (const command of ["run blocked", "new", "cancel", "status", "help"]) {
+    assert.deepEqual(await controller.handleUpdate(update("/dsh " + command)),
+      { accepted: false, reason: "stopped" });
+  }
+  agents.creationGate = null;
+  api.getUpdates = ({ signal }) => new Promise((resolve) => {
+    if (signal.aborted) resolve([]);
+    else signal.addEventListener("abort", () => resolve([]), { once: true });
+  });
+  controller.start();
+  try {
+    const fresh = await controller.handleUpdate(update("/dsh run fresh task"));
+    await fresh.completion;
+    const freshId = agents.created[1].sessionId;
+    oldGate.resolve();
+    await oldAcquired.promise;
+    await oldRun.completion;
+    await setImmediate();
+    assert.deepEqual(oldAgent.followups, []);
+    assert.deepEqual(agents.disposed, [oldAgent.id]);
+    assert.equal(stateStore.value.chats["84"].sessionId, freshId);
+    assert.equal(controller.handles.get("84").handle.agent.id, freshId);
+    assert.equal(agents.live.get(freshId).followups.length, 1);
+    assert.equal(api.sent.filter((message) => message.text.includes("任务已提交")).length, 1);
+  } finally {
+    oldGate.resolve();
+    await controller.stop();
+  }
+});
+
+test("stop cancels only submitted Telegram work and detaches listeners immediately", async () => {
+  const { agents, api, controller, events } = harness({ held: true });
+  const submitted = deferred();
+  const sendText = api.sendText.bind(api);
+  api.sendText = async (chatId, text) => {
+    if (text.includes("任务已提交")) submitted.resolve();
+    return sendText(chatId, text);
+  };
+  const run = await controller.handleUpdate(update("/dsh run held task"));
+  await submitted.promise;
+  const agent = agents.live.get(agents.created[0].sessionId);
+  await controller.stop();
+  await run.completion;
+  assert.deepEqual(agent.cancelCauses, [{ kind: "user" }]);
+  assert.ok([...events.listeners.values()].every((listeners) => listeners.size === 0));
+  assert.equal(controller.submitted.size, 0);
+  assert.ok(api.sent.every((message) => !message.text.includes("DeepSeek Harness 已完成")));
+});
+
+test("stop does not cancel a borrowed busy agent rejected before submission", async () => {
+  const { agents, api, controller, events } = harness({
+    initialState: { version: 1, offset: 42, chats: {
+      "84": { sessionId: "external-session", cwd: "/fixed/workspace" },
+    } },
+  });
+  const agent = new FakeAgent("external-session", { held: true });
+  agent.ctx = events;
+  agents.live.set(agent.id, agent);
+  agent.followup({ content: [{ type: "text", text: "external task" }] });
+  const run = await controller.handleUpdate(update("/dsh run rejected task"));
+  await run.completion;
+  await controller.stop();
+  assert.deepEqual(agent.cancelCauses, []);
+  assert.deepEqual(agents.disposed, []);
+  assert.equal(agent.followups.length, 1);
+  assert.equal(agent.status, "running");
+  agent.gate.resolve();
+  await agent.whenIdle();
+  assert.ok(api.sent.every((message) => !message.text.includes("visible result")));
 });

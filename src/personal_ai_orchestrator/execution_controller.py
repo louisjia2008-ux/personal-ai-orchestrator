@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+from hashlib import sha256
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,6 +28,11 @@ from personal_ai_orchestrator.shadow_evidence import (
 from personal_ai_orchestrator.switch_lease import SwitchLeaseAuthority
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
 from personal_ai_orchestrator.verifier import VerificationResult
+from personal_ai_orchestrator.worker_outcome_classifier import (
+    WorkerFailureClass,
+    classify_worker_failure,
+    worker_failure_diagnostics,
+)
 
 
 _TERMINAL_STATES = {TaskState.FAILED, TaskState.CANCELLED, TaskState.COMPLETED}
@@ -151,28 +158,45 @@ def _failure_result_payload(
     signal: int | None,
     worker_result: Any,
 ) -> dict[str, Any]:
-    """Build a fail-closed run-result payload from the worker's sanitized narration.
+    """Persist allowlisted diagnostics, never a failed provider's raw payload.
 
-    Used by both the normal failure path (non-zero exit code) and the
-    emergency-repair path (process died, no envelope, possibly killed by a
-    signal). The returned dict carries only what the owner needs to make
-    sense of the death: exit code (or signal name), and the worker's own
-    ``stdout_tail`` / ``stderr_tail`` if it had a chance to write them.
-    Host-derived metadata (hashes, byte counts, ``timed_out``) is dropped
-    here on purpose — it carries zero authority and would only obscure the
-    real cause.
+    Worker result fields are diagnostic only. Reconstruct display messages
+    from known classes and validate bounded metadata instead of copying text.
+    Emergency repair with no collected result remains exit/signal evidence.
     """
-
     payload: dict[str, Any] = {}
     if exit_code is not None:
         payload["exit_code"] = exit_code
     if signal is not None:
         payload["signal"] = signal
     if isinstance(worker_result, dict):
-        if isinstance(worker_result.get("stderr_tail"), str):
-            payload["stderr_tail"] = worker_result["stderr_tail"]
-        if isinstance(worker_result.get("stdout_tail"), str):
-            payload["stdout_tail"] = worker_result["stdout_tail"]
+        recorded = worker_result.get("worker_failure_class")
+        verdict = WorkerFailureClass.UNCLASSIFIED
+        if isinstance(recorded, str):
+            try:
+                verdict = WorkerFailureClass(recorded)
+            except ValueError:
+                pass
+        elif recorded is None:
+            stderr = worker_result.get("stderr_tail")
+            verdict = classify_worker_failure(
+                exit_code=exit_code, stderr_tail=stderr if isinstance(stderr, str) else ""
+            )
+        if verdict is WorkerFailureClass.NONE:
+            verdict = WorkerFailureClass.UNCLASSIFIED
+        payload.update(worker_failure_diagnostics(verdict))
+        for name in ("stdout_sha256", "stderr_sha256"):
+            digest = worker_result.get(name)
+            if isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest):
+                payload[name] = digest
+        for name in ("stdout_bytes", "stderr_bytes"):
+            count = worker_result.get(name)
+            if type(count) is int and 0 <= count <= 2**63 - 1:
+                payload[name] = count
+        for name in ("timed_out", "output_truncated"):
+            flag = worker_result.get(name)
+            if type(flag) is bool:
+                payload[name] = flag
     return payload
 
 
@@ -237,6 +261,7 @@ def start_worker_run(
         task = store.get_task(task_id)
         if task.state is not TaskState.RUNNING:
             raise ValueError("worker run can only start for a RUNNING task")
+        store.assert_cleanup_clear(task_id)
         workspace = store.get_workspace(task_id)
         if workspace.writer_token != writer_token:
             raise RuntimeError("worker run requires ownership of the task worktree writer lock")
@@ -295,14 +320,15 @@ def record_worker_exit(
         if run["status"] != "RUNNING":
             raise RuntimeError("worker run is not active")
 
-        if exit_code != 0:
+        if store.has_cleanup_quarantine(task_id):
+            run_status = "CLEANUP_UNKNOWN"
+            persisted_result = {"exit_code": exit_code, "cleanup_state": "UNKNOWN"}
+            next_state = TaskState.BLOCKED
+            reason = "worker cleanup is unresolved; worktree remains quarantined"
+        elif exit_code != 0:
             run_status = "FAILED"
-            # Keep the worker's own sanitized narration on failure so the
-            # owner can see WHY the worker died ("Usage limit reached for
-            # 5 hour" and similar). Drop everything else: a failed worker's
-            # host-derived metadata (hashes, byte counts) has no authority
-            # and no value, so the failure record stays fail-closed apart
-            # from the narration itself.
+            # Persist static diagnostics and bounded host metadata. Failure
+            # text may contain private request data and grants no authority.
             persisted_result = _failure_result_payload(
                 exit_code=exit_code, signal=None, worker_result=worker_result
             )
@@ -423,11 +449,14 @@ async def cancel_worker_run(
         if workspace.writer_token != writer_token:
             raise RuntimeError("writer ownership changed while cancellation was in progress")
 
+        quarantined = store.has_cleanup_quarantine(task_id)
+        next_state = TaskState.BLOCKED if quarantined else TaskState.CANCELLED
+        run_status = "CLEANUP_UNKNOWN" if quarantined else "CANCELLED"
         stamp = datetime.now(UTC).isoformat()
         updated_run = store.connection.execute(
-            "UPDATE runs SET status='CANCELLED',finished_at=?,result_json=? "
+            "UPDATE runs SET status=?,finished_at=?,result_json=? "
             "WHERE run_id=? AND status='RUNNING'",
-            (stamp, _render_result({"exit_code": exit_code}), run_id),
+            (run_status, stamp, _render_result({"exit_code": exit_code}), run_id),
         )
         if updated_run.rowcount != 1:
             raise RuntimeError("worker cancellation lost run-state concurrency race")
@@ -437,7 +466,7 @@ async def cancel_worker_run(
             "UPDATE tasks SET state=?,state_version=?,updated_at=? "
             "WHERE task_id=? AND state_version=? AND state=?",
             (
-                TaskState.CANCELLED.value,
+                next_state.value,
                 next_version,
                 stamp,
                 task_id,
@@ -448,28 +477,34 @@ async def cancel_worker_run(
         if updated_task.rowcount != 1:
             raise RuntimeError("worker cancellation lost task-state concurrency race")
 
-        released = store.connection.execute(
-            "UPDATE workspaces SET writer_token=NULL,writer_acquired_at=NULL "
-            "WHERE task_id=? AND writer_token=?",
-            (task_id, writer_token),
-        )
-        if released.rowcount != 1:
-            raise RuntimeError("worker cancellation lost writer ownership race")
+        if not quarantined:
+            released = store.connection.execute(
+                "UPDATE workspaces SET writer_token=NULL,writer_acquired_at=NULL "
+                "WHERE task_id=? AND writer_token=?",
+                (task_id, writer_token),
+            )
+            if released.rowcount != 1:
+                raise RuntimeError("worker cancellation lost writer ownership race")
 
-        store._audit(task_id, "RUN_FINISHED", {"run_id": run_id, "status": "CANCELLED"})
+        store._audit(task_id, "RUN_FINISHED", {"run_id": run_id, "status": run_status})
         store._audit(
             task_id,
             "TASK_STATE_CHANGED",
             {
                 "from": TaskState.RUNNING.value,
-                "to": TaskState.CANCELLED.value,
+                "to": next_state.value,
                 "state_version": next_version,
-                "reason": "host cancelled the exact supervised worker process",
+                "reason": (
+                    "worker cleanup is unresolved; worktree remains quarantined"
+                    if quarantined
+                    else "host cancelled the exact supervised worker process"
+                ),
             },
         )
-        store._audit(task_id, "WRITER_RELEASED", {"writer_token": writer_token})
+        if not quarantined:
+            store._audit(task_id, "WRITER_RELEASED", {"writer_token": writer_token})
         store.connection.execute("COMMIT")
-        return TaskState.CANCELLED
+        return next_state
     except Exception:
         store.connection.execute("ROLLBACK")
         raise
@@ -628,6 +663,13 @@ def apply_verification_result(
         target=target,
         reason=reason,
         finalize=finalize_intent,
+        # The identifier alone cannot detect a later edit retaining the same ID.
+        # Bind the exact canonical bytes accepted by the host to this transition.
+        verification_evidence_sha256=(
+            sha256((result.model_dump_json(indent=2) + "\n").encode("utf-8")).hexdigest()
+            if evidence_matches
+            else None
+        ),
     )
     if finalize_intent is not None:
         # Best-effort inline drain: replays the durable intent so the
@@ -644,8 +686,9 @@ def apply_verification_result(
 def reconcile_workspace_truth(store: SafetyKernelStore) -> tuple[str, ...]:
     """Fail closed tasks whose registered worktree has disappeared.
 
-    Stale writer locks on already-blocked/terminal tasks are released by the host using the exact
-    stored token. No worker is trusted to repair its own isolation boundary.
+    Stale writer locks on already-blocked/terminal tasks are released only
+    after durable cleanup quarantine is clear. A task's state, missing worktree
+    or absent run cannot prove the process tree has stopped writing.
     """
 
     blocked: list[str] = []
@@ -665,8 +708,18 @@ def reconcile_workspace_truth(store: SafetyKernelStore) -> tuple[str, ...]:
             blocked.append(task.task_id)
             task = store.get_task(task.task_id)
         writer_token = row["writer_token"]
-        if writer_token and task.state in _TERMINAL_STATES | {TaskState.BLOCKED}:
-            store.release_writer(task.task_id, writer_token)
+        if (
+            writer_token
+            and task.state in _TERMINAL_STATES | {TaskState.BLOCKED}
+            and not store.has_cleanup_quarantine(task.task_id)
+        ):
+            try:
+                store.release_writer(task.task_id, writer_token)
+            except RuntimeError:
+                # Startup can insert a legacy quarantine between this scan and
+                # the release transaction. Its stricter durable gate wins.
+                if not store.has_cleanup_quarantine(task.task_id):
+                    raise
     return tuple(blocked)
 
 
