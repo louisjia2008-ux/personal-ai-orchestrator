@@ -1,0 +1,40 @@
+{
+  "name": "pao-dsh-dispatch",
+  "version": "0.2.0",
+  "description": "Personal AI Orchestrator plugins for DeepSeek Harness: Jev dispatch and an opt-in Telegram controller.",
+  "type": "module",
+  "main": "./integrations/dsh-plugin/index.js",
+  "exports": {
+    ".": "./integrations/dsh-plugin/index.js",
+    "./telegram": "./integrations/dsh-plugin/telegram-plugin.js",
+    "./telegram-core": "./integrations/dsh-plugin/telegram.js"
+  },
+  "scripts": {
+    "test": "npm --prefix integrations/dsh-plugin test"
+  },
+  "files": [
+    "integrations/dsh-plugin/index.js",
+    "integrations/dsh-plugin/dispatch.js",
+    "integrations/dsh-plugin/telegram.js",
+    "integrations/dsh-plugin/telegram-plugin.js",
+    "integrations/dsh-plugin/cordis.patch.yml",
+    "integrations/dsh-plugin/README.md",
+    "integrations/dsh-plugin/README.zh.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "telegram",
+    "ai-orchestration"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./integrations/dsh-plugin/cordis.patch.yml"
+    }
+  }
+}

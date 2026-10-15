@@ -20,6 +20,14 @@ socket; neither client owns worker processes or can execute a shell command.
 
 ## Telegram bridge
 
+This `/pao` bridge controls the PAO Safety Kernel. It is distinct from the
+optional DeepSeek Harness `/dsh` Telegram controller documented in
+[`integrations/dsh-plugin/README.md`](../integrations/dsh-plugin/README.md).
+The `/pao` bridge deliberately has no Bot API transport or token; the `/dsh`
+plugin owns its own default-off long poller and one Harness Agent boundary.
+Do not run both pollers against the same Bot Token because Telegram exposes one
+shared update queue per bot.
+
 The provider-native bot host sends one normalized update on standard input:
 
 ```json
