@@ -190,6 +190,13 @@ def observe_success(
     observed_at: datetime,
 ) -> QuotaAvailabilityEvidence:
     if previous is not None and previous.exhaustion_observed_at is not None:
+        recovery_observed_at = previous.recovery_observed_at
+        first_success_after_exhaustion = previous.first_success_after_exhaustion
+        if recovery_observed_at is None or recovery_observed_at < previous.exhaustion_observed_at:
+            recovery_observed_at = observed_at
+            first_success_after_exhaustion = observed_at
+        # Later successes refresh availability, not the first recovery evidence
+        # of an already-completed interval (including after transient throttling).
         return QuotaAvailabilityEvidence(
             execution_target_id=execution_target_id,
             provider_id=provider_id,
@@ -197,9 +204,9 @@ def observe_success(
             state=QuotaAvailabilityState.RECOVERED_OBSERVED,
             observed_at=observed_at,
             exhaustion_observed_at=previous.exhaustion_observed_at,
-            recovery_observed_at=observed_at,
+            recovery_observed_at=recovery_observed_at,
             last_success_before_exhaustion=previous.last_success_before_exhaustion,
-            first_success_after_exhaustion=observed_at,
+            first_success_after_exhaustion=first_success_after_exhaustion,
             sanitized_reason_code="RECOVERY_SUCCESS",
             # A successful observation clears the streak; the
             # UNCERTAIN_LOCKED projection is derived from it, so the lock
