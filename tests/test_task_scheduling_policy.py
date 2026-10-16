@@ -26,6 +26,7 @@ from personal_ai_orchestrator.scheduler import (
     SchedulingPolicyLevel,
 )
 from personal_ai_orchestrator.scheduling_settings import SchedulingSettings
+from tests.policy_helpers import update_project
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -266,9 +267,7 @@ def test_corrupt_settings_fail_closed_to_balanced(tmp_path: Path) -> None:
 
 
 def test_project_policy_persists(service, project_id, tmp_path) -> None:
-    updated = service.set_project_scheduling_policy(
-        project_id, {"scheduling_policy": "SPEED_FIRST"}
-    )
+    updated = update_project(service, project_id, {"scheduling_policy": "SPEED_FIRST"})
     assert updated.scheduling_policy == "SPEED_FIRST"
 
     reopened = SafetyKernelStore(tmp_path / "state.db")
@@ -279,9 +278,9 @@ def test_project_policy_persists(service, project_id, tmp_path) -> None:
 
 
 def test_project_policy_can_be_cleared_back_to_global_default(service, project_id) -> None:
-    service.set_project_scheduling_policy(project_id, {"scheduling_policy": "SPEED_FIRST"})
+    update_project(service, project_id, {"scheduling_policy": "SPEED_FIRST"})
 
-    cleared = service.set_project_scheduling_policy(project_id, {"scheduling_policy": None})
+    cleared = update_project(service, project_id, {"scheduling_policy": None})
 
     assert cleared.scheduling_policy is None
 
@@ -325,7 +324,7 @@ def test_global_default_applies_when_nothing_overrides(service, project_id, tmp_
 def test_project_override_beats_global(service, project_id, tmp_path) -> None:
     _submit(service, project_id)
     service.scheduling_settings.set_default_policy("QUALITY_FIRST")
-    service.set_project_scheduling_policy(project_id, {"scheduling_policy": "QUOTA_SAVER"})
+    update_project(service, project_id, {"scheduling_policy": "QUOTA_SAVER"})
     routing = _routing_service(service, tmp_path)
 
     resolution = routing._resolved_policy(_routing_request())
@@ -337,7 +336,7 @@ def test_project_override_beats_global(service, project_id, tmp_path) -> None:
 def test_task_override_beats_project_and_global(service, project_id, tmp_path) -> None:
     _submit(service, project_id, scheduling_policy="SPEED_FIRST")
     service.scheduling_settings.set_default_policy("QUALITY_FIRST")
-    service.set_project_scheduling_policy(project_id, {"scheduling_policy": "QUOTA_SAVER"})
+    update_project(service, project_id, {"scheduling_policy": "QUOTA_SAVER"})
     routing = _routing_service(service, tmp_path)
 
     resolution = routing._resolved_policy(_routing_request())
@@ -366,7 +365,7 @@ def test_resolution_records_every_level_for_history(service, project_id, tmp_pat
 
     _submit(service, project_id, scheduling_policy="SPEED_FIRST")
     service.scheduling_settings.set_default_policy("QUALITY_FIRST")
-    service.set_project_scheduling_policy(project_id, {"scheduling_policy": "QUOTA_SAVER"})
+    update_project(service, project_id, {"scheduling_policy": "QUOTA_SAVER"})
     routing = _routing_service(service, tmp_path)
     request = _routing_request()
 

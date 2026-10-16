@@ -32,6 +32,7 @@ from personal_ai_orchestrator.scheduling_settings import (
     SELECTABLE_MODES,
     SchedulingSettings,
 )
+from tests.policy_helpers import update_settings
 
 
 def _free_socket_path() -> Path:
@@ -146,11 +147,12 @@ def test_update_scheduling_settings_supervised_auto_round_trip(
 
     service, store = _make_service(tmp_path)
     try:
-        result = service.update_scheduling_settings(
+        result = update_settings(
+            service,
             {
                 "default_scheduling_policy": "BALANCED",
                 "mode": "SUPERVISED_AUTO",
-            }
+            },
         )
         assert result.mode == "SUPERVISED_AUTO"
 
@@ -173,11 +175,12 @@ def test_update_scheduling_settings_active_without_authority_409(
     service, store = _make_service(tmp_path, activation_authorised=False)
     try:
         with pytest.raises(ControlPlaneError) as error:
-            service.update_scheduling_settings(
+            update_settings(
+                service,
                 {
                     "default_scheduling_policy": "BALANCED",
                     "mode": "ACTIVE",
-                }
+                },
             )
         assert error.value.status == 409
         assert error.value.code == "production_active_not_authorized"
@@ -199,11 +202,12 @@ def test_update_scheduling_settings_active_with_authority_persists(
 
     service, store = _make_service(tmp_path, activation_authorised=True)
     try:
-        result = service.update_scheduling_settings(
+        result = update_settings(
+            service,
             {
                 "default_scheduling_policy": "BALANCED",
                 "mode": "ACTIVE",
-            }
+            },
         )
         assert result.mode == "ACTIVE"
 
@@ -222,11 +226,12 @@ def test_update_scheduling_settings_unknown_mode_400(tmp_path: Path) -> None:
     service, store = _make_service(tmp_path)
     try:
         with pytest.raises(ControlPlaneError) as error:
-            service.update_scheduling_settings(
+            update_settings(
+                service,
                 {
                     "default_scheduling_policy": "BALANCED",
                     "mode": "AUTOPILOT",
-                }
+                },
             )
         assert error.value.status == 400
         assert error.value.code == "unsupported_scheduling_mode"
@@ -249,15 +254,16 @@ def test_update_scheduling_settings_legacy_payload_without_mode(
     try:
         # First flip to SUPERVISED_AUTO so we can prove the legacy
         # payload does not reset it back to MANUAL.
-        service.update_scheduling_settings(
+        update_settings(
+            service,
             {
                 "default_scheduling_policy": "BALANCED",
                 "mode": "SUPERVISED_AUTO",
-            }
+            },
         )
 
         # Legacy caller: only sends the policy field.
-        result = service.update_scheduling_settings({"default_scheduling_policy": "QUALITY_FIRST"})
+        result = update_settings(service, {"default_scheduling_policy": "QUALITY_FIRST"})
         assert result.mode == "SUPERVISED_AUTO"  # unchanged
         assert result.default_scheduling_policy == "QUALITY_FIRST"
     finally:
@@ -299,6 +305,7 @@ def test_persisted_payload_round_trip_via_http(tmp_path: Path) -> None:
         server, client = _http_pair(service)
         try:
             client.update_scheduling_settings(
+                observed=client.scheduling_settings(),
                 default_scheduling_policy="BALANCED",
                 mode="SUPERVISED_AUTO",
             )
@@ -378,7 +385,7 @@ def test_rejected_combined_update_changes_neither_memory_nor_disk(
         previous = service.scheduling_settings.snapshot()
         previous_bytes = path.read_bytes() if path.exists() else None
         with pytest.raises(ControlPlaneError) as error:
-            service.update_scheduling_settings({"default_scheduling_policy": policy, "mode": mode})
+            update_settings(service, {"default_scheduling_policy": policy, "mode": mode})
         assert (error.value.status, error.value.code) == (status, code)
         assert service.scheduling_settings.snapshot() == previous
         assert (path.read_bytes() if path.exists() else None) == previous_bytes
@@ -395,14 +402,14 @@ def test_combined_update_persists_once_and_returns_previous_generation(
     persist = settings._persist
     writes = []
 
-    def capture_persist(*, policy: str, mode: str) -> None:
+    def capture_persist(*, policy: str, mode: str, revision: str) -> None:
         writes.append((policy, mode))
-        persist(policy=policy, mode=mode)
+        persist(policy=policy, mode=mode, revision=revision)
 
     monkeypatch.setattr(settings, "_persist", capture_persist)
     try:
-        result = service.update_scheduling_settings(
-            {"default_scheduling_policy": "SPEED_FIRST", "mode": "SUPERVISED_AUTO"}
+        result = update_settings(
+            service, {"default_scheduling_policy": "SPEED_FIRST", "mode": "SUPERVISED_AUTO"}
         )
         assert writes == [("SPEED_FIRST", "SUPERVISED_AUTO")]
         assert (result.default_scheduling_policy, result.mode) == writes[0]
@@ -429,9 +436,7 @@ def test_combined_persistence_failure_preserves_both_fields_and_no_abort(
     monkeypatch.setattr(service, "_abort_auto_tasks", lambda **kwargs: aborts.append(kwargs))
     try:
         with pytest.raises(OSError, match="simulated storage failure"):
-            service.update_scheduling_settings(
-                {"default_scheduling_policy": "SPEED_FIRST", "mode": "MANUAL"}
-            )
+            update_settings(service, {"default_scheduling_policy": "SPEED_FIRST", "mode": "MANUAL"})
         assert settings.snapshot() == ("QUALITY_FIRST", "SUPERVISED_AUTO")
         assert path.read_bytes() == previous_bytes
         assert aborts == []

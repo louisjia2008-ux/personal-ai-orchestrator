@@ -1,0 +1,10 @@
+{
+  "expected_process_epoch": "87bdbc34f723444580cc87830adf35f7",
+  "expected_store_id": "78a61a71c3dd476ba2e09460ffaf78f1",
+  "operation": "RECOVER",
+  "prior_dispatch_id": "dispatch",
+  "protocol_version": 2,
+  "request_id": "recover-1",
+  "task_id": "task",
+  "task_state_version": 3
+}

@@ -1,0 +1,19 @@
+{
+  "default_scheduling_policy": "BALANCED",
+  "mode": "MANUAL",
+  "process_epoch": "87bdbc34f723444580cc87830adf35f7",
+  "revision": "ce4a0126afaa778d434ee5ccc157d4ae",
+  "selectable_modes": [
+    "MANUAL",
+    "SUPERVISED_AUTO",
+    "ACTIVE"
+  ],
+  "selectable_policies": [
+    "BALANCED",
+    "QUALITY_FIRST",
+    "QUOTA_SAVER",
+    "SPEED_FIRST",
+    "BURN_DOWN"
+  ],
+  "store_id": "a73239dac0ad484b97f61fe3f5fca84f"
+}

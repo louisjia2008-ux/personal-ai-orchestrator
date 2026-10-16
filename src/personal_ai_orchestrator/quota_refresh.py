@@ -417,7 +417,25 @@ class QuotaRefreshService:
             for provider_id in sorted(self._connected_provider_ids())
         )
 
-    def _observation_for(self, provider_id: str) -> QuotaProviderObservation:
+    def cached_observations(self) -> tuple[QuotaProviderObservation, ...]:
+        """Project stored quota evidence without resolving credentials/collectors.
+
+        Safe local-client observations must never prompt Keychain, read auth
+        stores, construct credential-bearing collectors or contact providers.
+        Collector availability is deliberately unasserted in this path; clients
+        needing that diagnostic use the existing native observations operation.
+        """
+        return tuple(
+            self._observation_for(provider_id, resolve_collector=False)
+            for provider_id in sorted(self._connected_provider_ids())
+        )
+
+    def _observation_for(
+        self,
+        provider_id: str,
+        *,
+        resolve_collector: bool = True,
+    ) -> QuotaProviderObservation:
         spec = QUOTA_SOURCE_BY_PROVIDER.get(provider_id)
         pool_id = self._pool_id_for(provider_id)
         snapshot = self.snapshot_for_pool(pool_id) if pool_id else None
@@ -437,7 +455,9 @@ class QuotaRefreshService:
             )
         status, attempted_at, attempt_reason = attempt if attempt else (None, None, None)
 
-        collector, availability_reason = self._collector_for(provider_id)
+        collector, availability_reason = (
+            self._collector_for(provider_id) if resolve_collector else (None, None)
+        )
         collector_available = collector is not None
 
         if snapshot is not None and snapshot.confidence is not EvidenceConfidence.UNKNOWN:

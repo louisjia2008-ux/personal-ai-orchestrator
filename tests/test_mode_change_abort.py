@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from personal_ai_orchestrator.safety_kernel import TaskState
+from tests.policy_helpers import update_settings
 from tests.test_supervised_auto_step import NOW, _env, _plan
 
 
@@ -27,9 +28,7 @@ def test_auto_planned_aborts_when_mode_flips_to_manual(tmp_path) -> None:
         expected_version=task.state_version,
         auto_decision_id="auto-task-1-manual-flip",
     )
-    env.service.update_scheduling_settings(
-        {"default_scheduling_policy": "BALANCED", "mode": "MANUAL"}
-    )
+    update_settings(env.service, {"default_scheduling_policy": "BALANCED", "mode": "MANUAL"})
     after = env.store.get_task("task-1")
     assert after.state is TaskState.READY
     assert after.auto_decision_id is None
@@ -38,9 +37,7 @@ def test_auto_planned_aborts_when_mode_flips_to_manual(tmp_path) -> None:
 def test_auto_grace_mode_flip_to_manual_never_dispatches(tmp_path) -> None:
     env = _env(tmp_path, unattended=True, grace_seconds=300)
     _plan(env)
-    env.service.update_scheduling_settings(
-        {"default_scheduling_policy": "BALANCED", "mode": "MANUAL"}
-    )
+    update_settings(env.service, {"default_scheduling_policy": "BALANCED", "mode": "MANUAL"})
     # A late tick well past the original deadline must not dispatch.
     env.tick(NOW + timedelta(hours=1))
     assert env.executor is not None and env.executor.unique_calls == []
@@ -55,9 +52,7 @@ def test_mode_flip_after_deadline_before_dispatch_blocks_dispatch(tmp_path) -> N
     _plan(env)
     # Deadline is NOW+300s. Flip the mode *after* the deadline elapsed
     # but *before* any tick observed it.
-    env.service.update_scheduling_settings(
-        {"default_scheduling_policy": "BALANCED", "mode": "MANUAL"}
-    )
+    update_settings(env.service, {"default_scheduling_policy": "BALANCED", "mode": "MANUAL"})
     env.tick(NOW + timedelta(seconds=301))
     assert env.executor is not None and env.executor.unique_calls == []
     assert env.store.get_task("task-1").state is TaskState.READY
@@ -73,9 +68,7 @@ def test_mode_flip_to_active_keeps_api_rejection_and_aborts_auto(tmp_path) -> No
     env = _env(tmp_path, unattended=True, grace_seconds=300)
     _plan(env)
     try:
-        env.service.update_scheduling_settings(
-            {"default_scheduling_policy": "BALANCED", "mode": "ACTIVE"}
-        )
+        update_settings(env.service, {"default_scheduling_policy": "BALANCED", "mode": "ACTIVE"})
         raise AssertionError("ACTIVE must be rejected without authority")
     except ControlPlaneError as error:
         assert error.status == 409
@@ -96,9 +89,7 @@ def test_running_task_survives_mode_flip_to_manual(tmp_path) -> None:
     running = env.store.transition_task(
         "task-1", TaskState.RUNNING, expected_version=task.state_version
     )
-    env.service.update_scheduling_settings(
-        {"default_scheduling_policy": "BALANCED", "mode": "MANUAL"}
-    )
+    update_settings(env.service, {"default_scheduling_policy": "BALANCED", "mode": "MANUAL"})
     after = env.store.get_task("task-1")
     assert after.state is TaskState.RUNNING
     assert after.state_version == running.state_version

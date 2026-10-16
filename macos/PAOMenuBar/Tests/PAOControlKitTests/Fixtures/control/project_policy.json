@@ -1,0 +1,12 @@
+{
+  "effective_manual_execution_target_id": null,
+  "effective_scheduling_policy": "BALANCED",
+  "global_revision": "ce4a0126afaa778d434ee5ccc157d4ae",
+  "manual_execution_target_id": null,
+  "policy_source": "GLOBAL",
+  "process_epoch": "87bdbc34f723444580cc87830adf35f7",
+  "project_id": "project-fixture",
+  "revision": "2e560dc7249e530100a8dc1ab3105f63",
+  "scheduling_policy": null,
+  "store_id": "a73239dac0ad484b97f61fe3f5fca84f"
+}

@@ -61,6 +61,8 @@ struct TaskDetailSurface: View {
                     )
                     cancellationNotice(detail)
                     TaskAttentionBanner(reasons: TaskAttention.reasons(for: detail))
+                    TaskResultSection(taskId: detail.task.taskId)
+                        .id(detail.task.taskId)
                     TaskExecutionSection(detail: detail)
                     TaskLifecycleSection(detail: detail)
                     TaskRoutingSection(summary: detail.routingSummary)

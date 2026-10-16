@@ -275,6 +275,7 @@ public struct ProjectView: Decodable, Equatable, Identifiable, Sendable {
     public let storageAvailability: String
     public let recentTaskCount: Int
     public let currentBranch: String?
+    public let schedulingRevision: String?
 
     /// M1 WP5a-1: project-level supervised-auto toggle. When ``true``
     /// the host-owned ``SUPERVISED_AUTO`` tick path is allowed to
@@ -308,6 +309,7 @@ public struct ProjectView: Decodable, Equatable, Identifiable, Sendable {
         case storageAvailability = "storage_availability"
         case recentTaskCount = "recent_task_count"
         case currentBranch = "current_branch"
+        case schedulingRevision = "scheduling_revision"
         case supervisedAutoAllowed = "supervised_auto_allowed"
         case unattendedAllowed = "unattended_allowed"
         case graceSeconds = "grace_seconds"
@@ -329,6 +331,7 @@ public struct ProjectView: Decodable, Equatable, Identifiable, Sendable {
         storageAvailability = try container.decode(String.self, forKey: .storageAvailability)
         recentTaskCount = try container.decode(Int.self, forKey: .recentTaskCount)
         currentBranch = try container.decodeIfPresent(String.self, forKey: .currentBranch)
+        schedulingRevision = try container.decodeIfPresent(String.self, forKey: .schedulingRevision)
         // Lenient decode: a pre-WP5a-1 daemon omits these three
         // fields; default to the dataclass defaults so the picker
         // renders the same opt-out chip.
@@ -352,6 +355,7 @@ public struct ProjectView: Decodable, Equatable, Identifiable, Sendable {
         storageAvailability: String,
         recentTaskCount: Int = 0,
         currentBranch: String? = nil,
+        schedulingRevision: String? = nil,
         supervisedAutoAllowed: Bool = false,
         unattendedAllowed: Bool = false,
         graceSeconds: Int = 120
@@ -370,6 +374,7 @@ public struct ProjectView: Decodable, Equatable, Identifiable, Sendable {
         self.storageAvailability = storageAvailability
         self.recentTaskCount = recentTaskCount
         self.currentBranch = currentBranch
+        self.schedulingRevision = schedulingRevision
         self.supervisedAutoAllowed = supervisedAutoAllowed
         self.unattendedAllowed = unattendedAllowed
         self.graceSeconds = graceSeconds
@@ -1688,6 +1693,15 @@ public struct ImportConnectionsView: Codable, Equatable, Sendable {
 public struct SchedulingSettingsView: Codable, Equatable, Sendable {
     public let defaultSchedulingPolicy: String
     public let selectablePolicies: [String]
+    public let revision: String?
+    public let storeId: String?
+    public let processEpoch: String?
+
+    public var revisionBinding: PolicyRevisionBinding? {
+        guard let revision, let storeId, let processEpoch else { return nil }
+        let binding = PolicyRevisionBinding(revision: revision, storeId: storeId, processEpoch: processEpoch)
+        return binding.isValid ? binding : nil
+    }
 
     /// M1 WP5a-1: orchestrator scheduling mode. ``"MANUAL"`` is the
     /// pre-WP5a-1 default — the owner explicitly dispatches each
@@ -1704,6 +1718,7 @@ public struct SchedulingSettingsView: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case defaultSchedulingPolicy = "default_scheduling_policy"
         case selectablePolicies = "selectable_policies"
+        case revision, storeId = "store_id", processEpoch = "process_epoch"
         case mode
         case selectableModes = "selectable_modes"
     }
@@ -1716,6 +1731,9 @@ public struct SchedulingSettingsView: Codable, Equatable, Sendable {
         selectablePolicies = try container.decode(
             [String].self, forKey: .selectablePolicies
         )
+        revision = try container.decodeIfPresent(String.self, forKey: .revision)
+        storeId = try container.decodeIfPresent(String.self, forKey: .storeId)
+        processEpoch = try container.decodeIfPresent(String.self, forKey: .processEpoch)
         // Lenient defaults: a pre-WP5a-1 daemon omits these fields;
         // the picker renders the MANUAL option as the default.
         mode = (try container.decodeIfPresent(String.self, forKey: .mode)) ?? "MANUAL"
@@ -1727,11 +1745,15 @@ public struct SchedulingSettingsView: Codable, Equatable, Sendable {
     public init(
         defaultSchedulingPolicy: String,
         selectablePolicies: [String],
+        revision: String? = nil, storeId: String? = nil, processEpoch: String? = nil,
         mode: String = "MANUAL",
         selectableModes: [String] = ["MANUAL", "SUPERVISED_AUTO", "ACTIVE"]
     ) {
         self.defaultSchedulingPolicy = defaultSchedulingPolicy
         self.selectablePolicies = selectablePolicies
+        self.revision = revision
+        self.storeId = storeId
+        self.processEpoch = processEpoch
         self.mode = mode
         self.selectableModes = selectableModes
     }

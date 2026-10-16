@@ -49,6 +49,7 @@ from personal_ai_orchestrator.supervised_auto_step import (
     supervised_auto_routing_request_id,
 )
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
+from tests.policy_helpers import update_settings
 from tests.quota_identity_fixtures import bind
 from tests.test_dispatch_initiator import _make_repo
 from tests.test_dispatch_initiator import _registry as _base_registry
@@ -685,9 +686,7 @@ def test_mode_change_to_manual_aborts_auto_grace(tmp_path) -> None:
     env = _env(tmp_path, unattended=True, grace_seconds=300)
     _plan(env)
     # Owner flips the mode via the settings handler (same-transaction abort).
-    env.service.update_scheduling_settings(
-        {"default_scheduling_policy": "BALANCED", "mode": "MANUAL"}
-    )
+    update_settings(env.service, {"default_scheduling_policy": "BALANCED", "mode": "MANUAL"})
     task = env.store.get_task("task-1")
     assert task.state is TaskState.READY
     assert task.auto_decision_id is None
@@ -708,9 +707,7 @@ def test_mode_change_aborts_before_dispatch_even_after_deadline(tmp_path) -> Non
 
     env = _env(tmp_path, unattended=True, grace_seconds=300)
     _plan(env)
-    env.service.update_scheduling_settings(
-        {"default_scheduling_policy": "BALANCED", "mode": "MANUAL"}
-    )
+    update_settings(env.service, {"default_scheduling_policy": "BALANCED", "mode": "MANUAL"})
     env.tick(NOW + timedelta(seconds=301))
     assert env.executor is not None and env.executor.unique_calls == []
     assert env.store.get_task("task-1").state is TaskState.READY

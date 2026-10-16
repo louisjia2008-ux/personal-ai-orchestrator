@@ -1,0 +1,87 @@
+{
+  "operation": "DETAIL",
+  "payload": {
+    "answer_completeness": "COMPLETE",
+    "approvals": [],
+    "recovery_candidate": null,
+    "result": {
+      "artifacts": [
+        {
+          "kind": "VERIFICATION_EVIDENCE",
+          "reference": "pao:verification:verify-aaaaaaaaaaaaaaaaaaaaaaaa",
+          "sha256": "b38c16c180768d632a08a8357bb12077b094a89b9f810e3ea4166686188b5d60"
+        }
+      ],
+      "binding": {
+        "base_commit": "78a1e103dc5e99421d46d6414e4b9451b70cebba",
+        "result_commit": null,
+        "run_id": "run-1",
+        "store_id": "a73239dac0ad484b97f61fe3f5fca84f",
+        "submission_event_id": 3,
+        "task_id": "task-1",
+        "verification_event_id": 10,
+        "verification_evidence_sha256": "b38c16c180768d632a08a8357bb12077b094a89b9f810e3ea4166686188b5d60"
+      },
+      "changed_files": [
+        "src/fixture.py"
+      ],
+      "completeness": "COMPLETE",
+      "goal": "Implement the requested fixture",
+      "goal_redacted": false,
+      "kind": "HOST_VERIFICATION_REPORT",
+      "limitations": [
+        "RESULT_COMMIT_NOT_RECORDED",
+        "HOST_REPORT_ONLY"
+      ],
+      "result_id": "result-982ff4605bac2eeb543528462a48ee78d9152b937f06f5d0801ae3790ccc3fbb",
+      "schema_version": 1,
+      "task_state": "VERIFIED",
+      "tests": [
+        {
+          "name": "unit tests",
+          "status": "PASSED"
+        }
+      ],
+      "truncated": {
+        "changed_files": false,
+        "goal": false,
+        "tests": false
+      },
+      "verification": {
+        "evidence_id": "verify-aaaaaaaaaaaaaaaaaaaaaaaa",
+        "status": "VERIFIED"
+      }
+    },
+    "runs": [
+      {
+        "finished_at": "2026-10-16T00:33:10.218432+00:00",
+        "run_id": "run-1",
+        "started_at": "2026-10-16T00:33:10.218339+00:00",
+        "status": "FINISHED"
+      }
+    ],
+    "task": {
+      "created_at": "2026-10-16T00:33:10.217111+00:00",
+      "manual_execution_target_id": "m3-sub",
+      "project_id": "project-fixture",
+      "request_id": "submit-1",
+      "scheduling_policy": "MANUAL",
+      "state": "VERIFIED",
+      "state_version": 5,
+      "task_id": "task-1",
+      "updated_at": "2026-10-16T00:33:10.240725+00:00"
+    },
+    "truncated": {
+      "approvals": false,
+      "runs": false
+    },
+    "verification": {
+      "evidence_id": "verify-aaaaaaaaaaaaaaaaaaaaaaaa",
+      "status": "VERIFIED"
+    }
+  },
+  "process_epoch": "87bdbc34f723444580cc87830adf35f7",
+  "protocol_version": 2,
+  "request_id": "read-1",
+  "store_id": "a73239dac0ad484b97f61fe3f5fca84f"
+}

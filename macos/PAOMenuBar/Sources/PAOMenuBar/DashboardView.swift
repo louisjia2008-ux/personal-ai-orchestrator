@@ -661,6 +661,11 @@ private struct OverviewDashboard: View {
 
     var body: some View {
         DashboardPageContainer {
+            OverviewActionQueue(onNavigate: onNavigate, onOpenAllTasks: { onOpenTasks("") })
+            OverviewPolicyResources(onNavigate: onNavigate)
+            overviewRisks
+            Text(L10n.controlText("overview.statistics"))
+                .font(.title3.weight(.semibold))
             let counts = store.dashboard?.counts
             // Equal-width flexible columns plus a shared tile height: the verification
             // tile aggregates two states and previously wrapped its title, which grew
@@ -748,7 +753,14 @@ private struct OverviewDashboard: View {
             }
             .fixedSize(horizontal: false, vertical: true)
 
-            OverviewGroup(L10n.overviewRisks, symbol: "exclamationmark.triangle") {
+            OverviewGroup(L10n.overviewRecentActivity, symbol: "clock") {
+                EventList(events: store.dashboard?.recentEvents ?? [])
+            }
+        }
+    }
+
+    private var overviewRisks: some View {
+        OverviewGroup(L10n.overviewRisks, symbol: "exclamationmark.triangle") {
                 if let risks = store.dashboard?.risks, !risks.isEmpty {
                     VStack(alignment: .leading, spacing: Spacing.inner) {
                         ForEach(risks) { risk in
@@ -770,11 +782,6 @@ private struct OverviewDashboard: View {
                         .foregroundStyle(.secondary)
                 }
             }
-
-            OverviewGroup(L10n.overviewRecentActivity, symbol: "clock") {
-                EventList(events: store.dashboard?.recentEvents ?? [])
-            }
-        }
     }
 
     /// Navigation only: opens the tasks list narrowed to what the counter
@@ -895,37 +902,7 @@ private struct ClientSettingsSection: View {
             }
             // Global default lives daemon-side; AppStorage would make it a per-client
             // preference that routing could not honour.
-            DashboardCard(title: L10n.settingsDefaultSchedulingPolicy, symbol: "slider.horizontal.3") {
-                let selectable = store.schedulingSettings?.selectablePolicies
-                    ?? SelectablePolicyFallback.policies
-                Picker(
-                    L10n.settingsDefaultSchedulingPolicy,
-                    selection: Binding(
-                        get: { store.schedulingSettings?.defaultSchedulingPolicy ?? "BALANCED" },
-                        set: { newValue in
-                            Task { await store.setDefaultSchedulingPolicy(newValue) }
-                        }
-                    )
-                ) {
-                    ForEach(selectable, id: \.self) { policy in
-                        Text(L10n.schedulingPolicyName(policy)).tag(policy)
-                    }
-                }
-                .pickerStyle(.menu)
-                .disabled(store.schedulingSettings == nil)
-                Text(
-                    L10n.schedulingPolicyDetail(
-                        store.schedulingSettings?.defaultSchedulingPolicy ?? "BALANCED"
-                    )
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                Text(L10n.settingsDefaultSchedulingPolicyFooter)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            SchedulingPolicyEditor()
             QuotaCredentialSettingsCard()
                         DashboardCard(title: L10n.ownerExecutionSetting, symbol: "person.badge.key") {
                 let enabled = store.ownerExecutionSettings?.ownerInitiatedExecutionEnabled ?? false
@@ -1024,7 +1001,7 @@ private struct ActiveSchedulingPolicyCard: View {
                 Button {
                     expanded.toggle()
                 } label: {
-                    Label(L10n.policyChange, systemImage: "pencil")
+                    Label(L10n.routingModes, systemImage: "info.circle")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -1039,10 +1016,8 @@ private struct ActiveSchedulingPolicyCard: View {
                         mode: mode,
                         isActive: mode == activePolicy,
                         // MANUAL names a per-task target, so it is not a global default.
-                        isSelectable: mode != "MANUAL",
-                        onSelect: {
-                            Task { await store.setDefaultSchedulingPolicy(mode) }
-                        }
+                        isSelectable: false,
+                        onSelect: {}
                     )
                 }
             }

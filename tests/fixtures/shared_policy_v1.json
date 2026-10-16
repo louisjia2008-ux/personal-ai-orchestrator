@@ -1,0 +1,434 @@
+{
+  "exchanges": [
+    {
+      "http_status": 200,
+      "name": "capabilities",
+      "request": {
+        "operation": "CAPABILITIES",
+        "protocol_version": 2,
+        "request_id": "fixture-capabilities"
+      },
+      "response": {
+        "operation": "CAPABILITIES",
+        "payload": {
+          "capabilities": [
+            "manual-submit-v2",
+            "owner-start-v2",
+            "safe-detail-v2",
+            "dispatch-status-v2",
+            "manual-cancel-v2",
+            "host-identity-v2",
+            "result-delivery-v1",
+            "manual-continuation-v1",
+            "manual-recovery-v1",
+            "recovery-status-v1",
+            "recovery-candidate-v1",
+            "scheduling-policy-read-v1",
+            "scheduling-policy-write-v1",
+            "resource-snapshot-v1"
+          ],
+          "execution_targets": [
+            {
+              "execution_target_id": "m3-sub",
+              "launch_verified": true,
+              "runtime_available": true
+            }
+          ],
+          "owner_start": {
+            "available": true,
+            "blocking_reasons": [],
+            "executor_available": true,
+            "owner_enabled": true
+          },
+          "projects": [
+            {
+              "project_id": "project-fixture",
+              "storage_availability": "ONLINE"
+            }
+          ],
+          "truncated": {
+            "execution_targets": false,
+            "projects": false
+          }
+        },
+        "process_epoch": "22222222222222222222222222222222",
+        "protocol_version": 2,
+        "request_id": "fixture-capabilities",
+        "store_id": "11111111111111111111111111111111"
+      }
+    },
+    {
+      "http_status": 200,
+      "name": "policy_get",
+      "request": {
+        "operation": "POLICY_GET",
+        "protocol_version": 2,
+        "request_id": "fixture-policy_get"
+      },
+      "response": {
+        "operation": "POLICY_GET",
+        "payload": {
+          "global": {
+            "default_scheduling_policy": "BALANCED",
+            "mode": "MANUAL",
+            "process_epoch": "22222222222222222222222222222222",
+            "revision": "00000000000000000000000000000003",
+            "selectable_modes": [
+              "MANUAL",
+              "SUPERVISED_AUTO",
+              "ACTIVE"
+            ],
+            "selectable_policies": [
+              "BALANCED",
+              "QUALITY_FIRST",
+              "QUOTA_SAVER",
+              "SPEED_FIRST",
+              "BURN_DOWN"
+            ],
+            "store_id": "11111111111111111111111111111111"
+          },
+          "projects": [
+            {
+              "effective_manual_execution_target_id": null,
+              "effective_scheduling_policy": "BALANCED",
+              "global_revision": "00000000000000000000000000000003",
+              "manual_execution_target_id": null,
+              "policy_source": "GLOBAL",
+              "process_epoch": "22222222222222222222222222222222",
+              "project_id": "project-fixture",
+              "revision": "00000000000000000000000000000004",
+              "scheduling_policy": null,
+              "store_id": "11111111111111111111111111111111"
+            }
+          ],
+          "schema_version": 1,
+          "truncated": {
+            "projects": false
+          }
+        },
+        "process_epoch": "22222222222222222222222222222222",
+        "protocol_version": 2,
+        "request_id": "fixture-policy_get",
+        "store_id": "11111111111111111111111111111111"
+      }
+    },
+    {
+      "http_status": 200,
+      "name": "resources",
+      "request": {
+        "operation": "RESOURCES",
+        "protocol_version": 2,
+        "request_id": "fixture-resources"
+      },
+      "response": {
+        "operation": "RESOURCES",
+        "payload": {
+          "observed_at": "2026-10-16T00:00:00+00:00",
+          "providers": [
+            {
+              "auth_state": null,
+              "connection_state": null,
+              "execution_targets": [
+                {
+                  "enabled": true,
+                  "execution_target_id": "m3-sub",
+                  "execution_verified_stale": false,
+                  "launch_authorized": true,
+                  "runtime_available": true
+                }
+              ],
+              "last_checked": null,
+              "pool_kind": "windowed",
+              "provider_id": "minimax",
+              "quota": {
+                "collection_failure_streak": 0,
+                "confidence": "UNKNOWN",
+                "observed_at": null,
+                "pools": [],
+                "quota_state": "UNKNOWN"
+              },
+              "runtime_state": null
+            }
+          ],
+          "schema_version": 1,
+          "truncated": {
+            "execution_targets": false,
+            "providers": false,
+            "quota_pools": false,
+            "quota_windows": false
+          }
+        },
+        "process_epoch": "22222222222222222222222222222222",
+        "protocol_version": 2,
+        "request_id": "fixture-resources",
+        "store_id": "11111111111111111111111111111111"
+      }
+    },
+    {
+      "http_status": 200,
+      "name": "resources_observed",
+      "request": {
+        "operation": "RESOURCES",
+        "protocol_version": 2,
+        "request_id": "fixture-resources-observed"
+      },
+      "response": {
+        "operation": "RESOURCES",
+        "payload": {
+          "observed_at": "2026-10-16T00:00:00+00:00",
+          "providers": [
+            {
+              "auth_state": "AUTHENTICATED",
+              "connection_state": "CONNECTED",
+              "execution_targets": [
+                {
+                  "enabled": true,
+                  "execution_target_id": "target-0-0",
+                  "execution_verified_stale": true,
+                  "launch_authorized": false,
+                  "runtime_available": true
+                }
+              ],
+              "last_checked": "2026-10-16T00:00:00+00:00",
+              "pool_kind": "windowed",
+              "provider_id": "provider-000",
+              "quota": {
+                "collection_failure_streak": 0,
+                "confidence": "EXACT",
+                "observed_at": "2026-10-16T00:00:00+00:00",
+                "pools": [
+                  {
+                    "confidence": "EXACT",
+                    "quota_pool_id": "pool-0-0",
+                    "state": "AVAILABLE",
+                    "windows": [
+                      {
+                        "confidence": "EXACT",
+                        "remaining_fraction": 0.42,
+                        "reset_at": "2026-10-16T01:00:00+00:00",
+                        "state": "AVAILABLE",
+                        "window_id": "window-0-0-0",
+                        "window_kind": "FIVE_HOUR"
+                      }
+                    ]
+                  }
+                ],
+                "quota_state": "OBSERVED"
+              },
+              "runtime_state": "AVAILABLE"
+            }
+          ],
+          "schema_version": 1,
+          "truncated": {
+            "execution_targets": false,
+            "providers": false,
+            "quota_pools": false,
+            "quota_windows": false
+          }
+        },
+        "process_epoch": "22222222222222222222222222222222",
+        "protocol_version": 2,
+        "request_id": "fixture-resources-observed",
+        "store_id": "11111111111111111111111111111111"
+      }
+    },
+    {
+      "http_status": 200,
+      "name": "set_global",
+      "request": {
+        "default_scheduling_policy": "QUOTA_SAVER",
+        "expected_process_epoch": "22222222222222222222222222222222",
+        "expected_revision": "00000000000000000000000000000003",
+        "expected_store_id": "11111111111111111111111111111111",
+        "operation": "GLOBAL_POLICY_SET",
+        "protocol_version": 2,
+        "request_id": "fixture-global"
+      },
+      "response": {
+        "operation": "GLOBAL_POLICY_SET",
+        "payload": {
+          "global": {
+            "default_scheduling_policy": "QUOTA_SAVER",
+            "mode": "MANUAL",
+            "process_epoch": "22222222222222222222222222222222",
+            "revision": "00000000000000000000000000000005",
+            "selectable_modes": [
+              "MANUAL",
+              "SUPERVISED_AUTO",
+              "ACTIVE"
+            ],
+            "selectable_policies": [
+              "BALANCED",
+              "QUALITY_FIRST",
+              "QUOTA_SAVER",
+              "SPEED_FIRST",
+              "BURN_DOWN"
+            ],
+            "store_id": "11111111111111111111111111111111"
+          },
+          "projects": [
+            {
+              "effective_manual_execution_target_id": null,
+              "effective_scheduling_policy": "QUOTA_SAVER",
+              "global_revision": "00000000000000000000000000000005",
+              "manual_execution_target_id": null,
+              "policy_source": "GLOBAL",
+              "process_epoch": "22222222222222222222222222222222",
+              "project_id": "project-fixture",
+              "revision": "00000000000000000000000000000004",
+              "scheduling_policy": null,
+              "store_id": "11111111111111111111111111111111"
+            }
+          ],
+          "schema_version": 1,
+          "truncated": {
+            "projects": false
+          }
+        },
+        "process_epoch": "22222222222222222222222222222222",
+        "protocol_version": 2,
+        "request_id": "fixture-global",
+        "store_id": "11111111111111111111111111111111"
+      }
+    },
+    {
+      "http_status": 200,
+      "name": "set_project_manual",
+      "request": {
+        "expected_process_epoch": "22222222222222222222222222222222",
+        "expected_revision": "00000000000000000000000000000004",
+        "expected_store_id": "11111111111111111111111111111111",
+        "manual_execution_target_id": "m3-sub",
+        "operation": "PROJECT_POLICY_SET",
+        "project_id": "project-fixture",
+        "protocol_version": 2,
+        "request_id": "fixture-project",
+        "scheduling_policy": "MANUAL"
+      },
+      "response": {
+        "operation": "PROJECT_POLICY_SET",
+        "payload": {
+          "global": {
+            "default_scheduling_policy": "QUOTA_SAVER",
+            "mode": "MANUAL",
+            "process_epoch": "22222222222222222222222222222222",
+            "revision": "00000000000000000000000000000005",
+            "selectable_modes": [
+              "MANUAL",
+              "SUPERVISED_AUTO",
+              "ACTIVE"
+            ],
+            "selectable_policies": [
+              "BALANCED",
+              "QUALITY_FIRST",
+              "QUOTA_SAVER",
+              "SPEED_FIRST",
+              "BURN_DOWN"
+            ],
+            "store_id": "11111111111111111111111111111111"
+          },
+          "projects": [
+            {
+              "effective_manual_execution_target_id": "m3-sub",
+              "effective_scheduling_policy": "MANUAL",
+              "global_revision": "00000000000000000000000000000005",
+              "manual_execution_target_id": "m3-sub",
+              "policy_source": "PROJECT",
+              "process_epoch": "22222222222222222222222222222222",
+              "project_id": "project-fixture",
+              "revision": "00000000000000000000000000000006",
+              "scheduling_policy": "MANUAL",
+              "store_id": "11111111111111111111111111111111"
+            }
+          ],
+          "schema_version": 1,
+          "truncated": {
+            "projects": false
+          }
+        },
+        "process_epoch": "22222222222222222222222222222222",
+        "protocol_version": 2,
+        "request_id": "fixture-project",
+        "store_id": "11111111111111111111111111111111"
+      }
+    },
+    {
+      "http_status": 200,
+      "name": "inherit_global",
+      "request": {
+        "expected_process_epoch": "22222222222222222222222222222222",
+        "expected_revision": "00000000000000000000000000000006",
+        "expected_store_id": "11111111111111111111111111111111",
+        "manual_execution_target_id": null,
+        "operation": "PROJECT_POLICY_SET",
+        "project_id": "project-fixture",
+        "protocol_version": 2,
+        "request_id": "fixture-inherit",
+        "scheduling_policy": null
+      },
+      "response": {
+        "operation": "PROJECT_POLICY_SET",
+        "payload": {
+          "global": {
+            "default_scheduling_policy": "QUOTA_SAVER",
+            "mode": "MANUAL",
+            "process_epoch": "22222222222222222222222222222222",
+            "revision": "00000000000000000000000000000005",
+            "selectable_modes": [
+              "MANUAL",
+              "SUPERVISED_AUTO",
+              "ACTIVE"
+            ],
+            "selectable_policies": [
+              "BALANCED",
+              "QUALITY_FIRST",
+              "QUOTA_SAVER",
+              "SPEED_FIRST",
+              "BURN_DOWN"
+            ],
+            "store_id": "11111111111111111111111111111111"
+          },
+          "projects": [
+            {
+              "effective_manual_execution_target_id": null,
+              "effective_scheduling_policy": "QUOTA_SAVER",
+              "global_revision": "00000000000000000000000000000005",
+              "manual_execution_target_id": null,
+              "policy_source": "GLOBAL",
+              "process_epoch": "22222222222222222222222222222222",
+              "project_id": "project-fixture",
+              "revision": "00000000000000000000000000000007",
+              "scheduling_policy": null,
+              "store_id": "11111111111111111111111111111111"
+            }
+          ],
+          "schema_version": 1,
+          "truncated": {
+            "projects": false
+          }
+        },
+        "process_epoch": "22222222222222222222222222222222",
+        "protocol_version": 2,
+        "request_id": "fixture-inherit",
+        "store_id": "11111111111111111111111111111111"
+      }
+    },
+    {
+      "http_status": 409,
+      "name": "stale_global_conflict",
+      "request": {
+        "default_scheduling_policy": "SPEED_FIRST",
+        "expected_process_epoch": "22222222222222222222222222222222",
+        "expected_revision": "00000000000000000000000000000003",
+        "expected_store_id": "11111111111111111111111111111111",
+        "operation": "GLOBAL_POLICY_SET",
+        "protocol_version": 2,
+        "request_id": "fixture-stale"
+      },
+      "response": {
+        "error": "policy_revision_conflict"
+      }
+    }
+  ],
+  "fixture_version": 1
+}

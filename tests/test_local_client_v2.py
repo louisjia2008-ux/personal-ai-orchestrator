@@ -368,7 +368,7 @@ def test_catalog_bounded_and_omits_sensitive_project_fields(service):
             "INSERT INTO projects SELECT ?, display_name, canonical_repo_root, git_root, "
             "default_branch, last_known_head, created_at, updated_at, working_subpath, "
             "remote_url, last_opened_at, storage_availability, security_bookmark_b64, "
-            "scheduling_policy,manual_execution_target_id,supervised_auto_allowed,"
+            "scheduling_policy,manual_execution_target_id,scheduling_revision,supervised_auto_allowed,"
             "unattended_allowed,grace_seconds FROM projects WHERE project_id='project-fixture'",
             (f"project-{i:03}",),
         )

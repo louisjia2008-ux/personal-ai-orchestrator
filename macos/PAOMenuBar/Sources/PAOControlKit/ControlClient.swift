@@ -214,22 +214,34 @@ public struct PAOControlClient: Sendable {
     }
 
     public func setDefaultSchedulingPolicy(
-        _ policy: String
+        _ policy: String, binding: PolicyRevisionBinding
     ) async throws -> SchedulingSettingsView {
+        guard binding.isValid else { throw PAOClientError.malformedResponse }
         struct PolicyBody: Encodable {
             let defaultSchedulingPolicy: String
+            let expectedRevision: String
+            let expectedStoreId: String
+            let expectedProcessEpoch: String
 
             enum CodingKeys: String, CodingKey {
                 case defaultSchedulingPolicy = "default_scheduling_policy"
+                case expectedRevision = "expected_revision"
+                case expectedStoreId = "expected_store_id"
+                case expectedProcessEpoch = "expected_process_epoch"
             }
         }
         let data = try await rawRequest(
             method: "PUT",
             path: "/v1/settings/scheduling",
-            body: JSONEncoder().encode(PolicyBody(defaultSchedulingPolicy: policy))
+            body: JSONEncoder().encode(PolicyBody(defaultSchedulingPolicy: policy, expectedRevision: binding.revision,
+                                                     expectedStoreId: binding.storeId, expectedProcessEpoch: binding.processEpoch))
         )
         do {
-            return try JSONDecoder().decode(SchedulingSettingsView.self, from: data)
+            let settings = try JSONDecoder().decode(SchedulingSettingsView.self, from: data)
+            guard let next = settings.revisionBinding, next.revision != binding.revision,
+                  next.storeId == binding.storeId, next.processEpoch == binding.processEpoch,
+                  settings.defaultSchedulingPolicy == policy else { throw PAOClientError.malformedResponse }
+            return settings
         } catch {
             throw PAOClientError.malformedResponse
         }
@@ -239,20 +251,40 @@ public struct PAOControlClient: Sendable {
     public func setProjectSchedulingPolicy(
         projectId: String,
         schedulingPolicy: String?,
-        manualExecutionTargetId: String? = nil
+        manualExecutionTargetId: String? = nil,
+        binding: PolicyRevisionBinding
     ) async throws -> ProjectView {
+        guard binding.isValid else { throw PAOClientError.malformedResponse }
         struct ProjectPolicyBody: Encodable {
             let schedulingPolicy: String?
             let manualExecutionTargetId: String?
+            let expectedRevision: String
+            let expectedStoreId: String
+            let expectedProcessEpoch: String
 
             enum CodingKeys: String, CodingKey {
+                case expectedRevision = "expected_revision"
+                case expectedStoreId = "expected_store_id"
+                case expectedProcessEpoch = "expected_process_epoch"
                 case schedulingPolicy = "scheduling_policy"
                 case manualExecutionTargetId = "manual_execution_target_id"
+            }
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                // Explicit null means inherit; do not turn it into an omitted
+                // field that a future PATCH-like endpoint could misread.
+                try c.encode(schedulingPolicy, forKey: .schedulingPolicy)
+                try c.encode(manualExecutionTargetId, forKey: .manualExecutionTargetId)
+                try c.encode(expectedRevision, forKey: .expectedRevision)
+                try c.encode(expectedStoreId, forKey: .expectedStoreId)
+                try c.encode(expectedProcessEpoch, forKey: .expectedProcessEpoch)
             }
         }
         let body = ProjectPolicyBody(
             schedulingPolicy: schedulingPolicy,
-            manualExecutionTargetId: manualExecutionTargetId
+            manualExecutionTargetId: manualExecutionTargetId,
+            expectedRevision: binding.revision, expectedStoreId: binding.storeId,
+            expectedProcessEpoch: binding.processEpoch
         )
         let data = try await rawRequest(
             method: "PUT",
@@ -260,7 +292,13 @@ public struct PAOControlClient: Sendable {
             body: JSONEncoder().encode(body)
         )
         do {
-            return try JSONDecoder().decode(ProjectView.self, from: data)
+            let project = try JSONDecoder().decode(ProjectView.self, from: data)
+            guard project.projectId == projectId, let revision = project.schedulingRevision,
+                  revision != binding.revision,
+                  PolicyRevisionBinding(revision: revision, storeId: binding.storeId,
+                                        processEpoch: binding.processEpoch).isValid
+            else { throw PAOClientError.malformedResponse }
+            return project
         } catch {
             throw PAOClientError.malformedResponse
         }

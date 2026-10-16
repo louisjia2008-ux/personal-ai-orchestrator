@@ -4,8 +4,9 @@ This additive owner-only contract is served at `POST /v2/local-client` on the
 existing permission-restricted Unix socket. The JSON CLI command remains
 `pao-client-bridge deskpet --installation-id <local-id>`; an explicit
 `protocol_version` selects v2 and never falls back to a v1 mutation.
-All legacy v1 endpoints, operations, Telegram approval behavior, and targetless
-MANUAL tasks created by an AUTO veto retain their previous meaning.
+Legacy task operations, Telegram approval behavior, and targetless MANUAL tasks
+created by an AUTO veto retain their previous meaning. Policy PUTs now require
+observed-generation preconditions; see [Shared policy v1](SHARED_POLICY_V1.md).
 
 This slice is an execution capability, not a guarantee of eligibility or success.
 It does not enable Production ACTIVE, change owner settings, tick the scheduler,
@@ -17,7 +18,8 @@ execution remains separate from Production ACTIVE. Existing host gates run.
 
 Every request has `protocol_version: 2`, `operation`, and `request_id`.
 Only the operation-specific fields below are accepted. Extra fields, including
-explicit null placeholders, are rejected. IDs match
+explicit null placeholders, are rejected except the two explicitly nullable
+PROJECT_POLICY_SET fields described in [Shared policy v1](SHARED_POLICY_V1.md). IDs match
 `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`. Identity values are 32 lowercase hexadecimal
 characters. Versions are nonnegative integers; intent is 1–8192 characters.
 
@@ -370,7 +372,14 @@ macOS/Electron runtime, provider runtime, signing and release checks are separat
 acceptance gates and must not be implied by these tests.
 
 The additive result/continuation host contract is covered by HTTP-handler and CLI
-tests without sockets. Native UI integration is not implemented by this host
-slice; the Swift client currently has no local-client-v2 model. Native build,
-Swift tests and target-Mac acceptance remain separate required gates for any
-future native integration of this shared contract.
+tests without sockets. Native UI integration now consumes the same v2 result/continuation/recovery
+contract and versioned policy APIs. Native build, Swift tests and target-Mac
+acceptance remain separate required gates; source or host tests alone do not
+prove the native interface works on a Mac.
+
+## Shared policy and resources
+
+See [Shared policy and resource contract v1](SHARED_POLICY_V1.md) for the additive
+capabilities, exact operation shapes, native HTTP CAS migration, safe snapshots
+and durable recovery candidate. These settings capabilities do not broaden
+manual execution or approval authority.

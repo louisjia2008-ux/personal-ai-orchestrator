@@ -29,6 +29,7 @@ from personal_ai_orchestrator.shadow_evidence import (
     ShadowEvidenceJournal,
 )
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
+from tests.policy_helpers import update_settings
 from tests.test_dispatch_executor import (
     HELLO_CONTENT,
     ExecutorHarness,
@@ -68,9 +69,7 @@ def test_mode_abort_discards_pending(tmp_path) -> None:
     env = _env(tmp_path, unattended=True, grace_seconds=300)
     _plan(env)
     assert len(env.shadow.load_pending_all()) == 1
-    env.service.update_scheduling_settings(
-        {"default_scheduling_policy": "BALANCED", "mode": "MANUAL"}
-    )
+    update_settings(env.service, {"default_scheduling_policy": "BALANCED", "mode": "MANUAL"})
     assert env.shadow.load_pending_all() == ()
 
 
