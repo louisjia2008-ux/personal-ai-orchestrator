@@ -12,11 +12,16 @@ rewritten.
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
 import os
+import re
 import tempfile
 import threading
+from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
 
 SCHEMA = "scheduling-settings-v1"
 DEFAULT_POLICY = "BALANCED"
@@ -46,6 +51,10 @@ SELECTABLE_GLOBAL_POLICIES = (
 )
 
 
+class PolicyRevisionConflict(ValueError):
+    """The owner edited a settings generation that has since changed."""
+
+
 class SchedulingSettings:
     """Thread-safe, atomically persisted global default scheduling policy.
 
@@ -60,6 +69,7 @@ class SchedulingSettings:
         self._lock = threading.Lock()
         self._policy = DEFAULT_POLICY
         self._mode = DEFAULT_MODE
+        self._revision = self._legacy_revision()
         self._load_from_disk()
 
     @property
@@ -68,22 +78,52 @@ class SchedulingSettings:
 
     @property
     def default_policy(self) -> str:
-        with self._lock:
-            return self._policy
+        return self.versioned_snapshot()[0]
 
     @property
     def mode(self) -> str:
-        with self._lock:
-            return self._mode
+        return self.versioned_snapshot()[1]
 
     def snapshot(self) -> tuple[str, str]:
         """Read the policy and mode from one committed settings generation."""
 
+        policy, mode, _ = self.versioned_snapshot()
+        return policy, mode
+
+    @staticmethod
+    def _legacy_revision(raw: bytes = b"") -> str:
+        # Old files have no revision. Derive a stable migration token without
+        # modifying owner configuration on read; the first edit persists a UUID.
+        return hashlib.sha256(b"scheduling-settings-legacy:" + raw).hexdigest()[:32]
+
+    @contextmanager
+    def _committed_generation(self):
         with self._lock:
-            return self._policy, self._mode
+            if self._path is None:
+                yield
+                return
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path = self._path.with_name(self._path.name + ".lock")
+            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                self._load_from_disk()
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+
+    def versioned_snapshot(self) -> tuple[str, str, str]:
+        """Read a committed generation, including other daemon writers."""
+        with self._committed_generation():
+            return self._policy, self._mode, self._revision
 
     def update(
-        self, *, default_policy: str | None = None, mode: str | None = None
+        self,
+        *,
+        default_policy: str | None = None,
+        mode: str | None = None,
+        expected_revision: str | None = None,
     ) -> tuple[str, str]:
         """Validate and commit one settings generation, returning the previous pair.
 
@@ -96,13 +136,16 @@ class SchedulingSettings:
             raise ValueError("unsupported_global_scheduling_policy")
         if mode is not None and mode not in SELECTABLE_MODES:
             raise ValueError("unsupported_scheduling_mode")
-        with self._lock:
+        with self._committed_generation():
+            if expected_revision is not None and expected_revision != self._revision:
+                raise PolicyRevisionConflict("policy_revision_conflict")
             previous = (self._policy, self._mode)
             proposed_policy = self._policy if default_policy is None else default_policy
             proposed_mode = self._mode if mode is None else mode
+            revision = uuid4().hex
             if self._path is not None:
-                self._persist(policy=proposed_policy, mode=proposed_mode)
-            self._policy, self._mode = proposed_policy, proposed_mode
+                self._persist(policy=proposed_policy, mode=proposed_mode, revision=revision)
+            self._policy, self._mode, self._revision = proposed_policy, proposed_mode, revision
             return previous
 
     def set_default_policy(self, value: str) -> str:
@@ -123,10 +166,14 @@ class SchedulingSettings:
         return value
 
     def _load_from_disk(self) -> str | None:
+        self._policy, self._mode = DEFAULT_POLICY, DEFAULT_MODE
+        self._revision = self._legacy_revision()
         if self._path is None or not self._path.exists():
             return None
         try:
-            payload = json.loads(self._path.read_text(encoding="utf-8"))
+            raw = self._path.read_bytes()
+            self._revision = self._legacy_revision(raw)
+            payload = json.loads(raw.decode("utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
             return None
         if not isinstance(payload, dict) or payload.get("schema") != SCHEMA:
@@ -142,9 +189,12 @@ class SchedulingSettings:
         if mode not in SELECTABLE_MODES:
             mode = DEFAULT_MODE
         self._mode = mode
+        revision = payload.get("revision")
+        if isinstance(revision, str) and re.fullmatch(r"[a-f0-9]{32}", revision):
+            self._revision = revision
         return policy
 
-    def _persist(self, *, policy: str, mode: str) -> None:
+    def _persist(self, *, policy: str, mode: str, revision: str) -> None:
         """Persist proposed values before publishing them to in-memory readers."""
 
         from datetime import UTC, datetime
@@ -153,6 +203,7 @@ class SchedulingSettings:
             "schema": SCHEMA,
             "default_scheduling_policy": policy,
             "mode": mode,
+            "revision": revision,
             "updated_at": datetime.now(UTC).isoformat(),
         }
         rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -180,4 +231,5 @@ __all__ = [
     "SELECTABLE_GLOBAL_POLICIES",
     "SELECTABLE_MODES",
     "SchedulingSettings",
+    "PolicyRevisionConflict",
 ]

@@ -7,8 +7,10 @@ retry a dispatch, return raw worker answers, or turn missing evidence into succe
 
 from __future__ import annotations
 
+import math
 import re
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -37,6 +39,10 @@ CAPABILITIES = (
     "manual-continuation-v1",
     "manual-recovery-v1",
     "recovery-status-v1",
+    "recovery-candidate-v1",
+    "scheduling-policy-read-v1",
+    "scheduling-policy-write-v1",
+    "resource-snapshot-v1",
 )
 _IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 _IDENTITY_PATTERN = r"^[a-f0-9]{32}$"
@@ -52,6 +58,10 @@ Operation = Literal[
     "CONTINUATION",
     "RECOVER",
     "RECOVERY_STATUS",
+    "POLICY_GET",
+    "GLOBAL_POLICY_SET",
+    "PROJECT_POLICY_SET",
+    "RESOURCES",
 ]
 
 
@@ -71,6 +81,10 @@ class LocalClientRequestV2(BaseModel):
     expected_store_id: str | None = Field(default=None, pattern=_IDENTITY_PATTERN)
     expected_process_epoch: str | None = Field(default=None, pattern=_IDENTITY_PATTERN)
     prior_dispatch_id: str | None = Field(default=None, pattern=_DISPATCH_ID_PATTERN)
+    expected_revision: str | None = Field(default=None, pattern=_IDENTITY_PATTERN)
+    default_scheduling_policy: str | None = Field(default=None, min_length=1, max_length=64)
+    scheduling_policy: str | None = Field(default=None, min_length=1, max_length=64)
+    manual_execution_target_id: str | None = Field(default=None, pattern=_IDENTIFIER_PATTERN)
 
     @model_validator(mode="after")
     def exact_operation_shape(self) -> LocalClientRequestV2:
@@ -78,6 +92,16 @@ class LocalClientRequestV2(BaseModel):
         shapes = {
             "CAPABILITIES": set(),
             "CONTEXT": set(),
+            "POLICY_GET": set(),
+            "RESOURCES": set(),
+            "GLOBAL_POLICY_SET": {"default_scheduling_policy", "expected_revision"} | identities,
+            "PROJECT_POLICY_SET": {
+                "project_id",
+                "scheduling_policy",
+                "manual_execution_target_id",
+                "expected_revision",
+            }
+            | identities,
             "SUBMIT_V2": {"task_id", "project_id", "intent", "execution_target_id"} | identities,
             "START": {"task_id", "task_state_version", "execution_target_id"} | identities,
             "DETAIL": {"task_id"},
@@ -91,7 +115,12 @@ class LocalClientRequestV2(BaseModel):
         expected = shapes[self.operation]
         optional = set(type(self).model_fields) - {"protocol_version", "operation", "request_id"}
         supplied = self.model_fields_set & optional
-        if supplied != expected or any(getattr(self, name) is None for name in expected):
+        nullable = (
+            {"scheduling_policy", "manual_execution_target_id"}
+            if self.operation == "PROJECT_POLICY_SET"
+            else set()
+        )
+        if supplied != expected or any(getattr(self, name) is None for name in expected - nullable):
             raise ValueError("invalid_v2_operation_shape")
         return self
 
@@ -223,6 +252,175 @@ def _context(service: ControlPlaneService) -> dict[str, Any]:
     }
 
 
+def _policy_snapshot(service: ControlPlaneService) -> dict[str, Any]:
+    # One global generation and one SQLite snapshot for inheritance. Clients
+    # display the returned effective value and never reimplement precedence.
+    global_view = service.scheduling_settings_view()
+    with _read_snapshot(service):
+        rows = service.store.connection.execute(
+            "SELECT project_id FROM projects ORDER BY project_id LIMIT ?",
+            (CATALOG_LIMIT + 1,),
+        ).fetchall()
+        projects = []
+        for row in rows[:CATALOG_LIMIT]:
+            view = service.project_scheduling_policy_view(
+                _safe_id(row["project_id"]),
+                global_view=global_view,
+            ).model_dump(mode="json")
+            # The native model includes no paths, but persisted policy/target
+            # cells still need the bridge's strict export boundary.
+            if view["scheduling_policy"] not in {None, "MANUAL", *global_view.selectable_policies}:
+                raise ControlPlaneError(503, "local_client_view_unavailable")
+            _safe_id(view["manual_execution_target_id"], nullable=True)
+            if re.fullmatch(_IDENTITY_PATTERN, view["revision"]) is None:
+                raise ControlPlaneError(503, "local_client_view_unavailable")
+            projects.append(view)
+    return {
+        "schema_version": 1,
+        "global": global_view.model_dump(mode="json"),
+        "projects": projects,
+        "truncated": {"projects": len(rows) > CATALOG_LIMIT},
+    }
+
+
+def _resource_snapshot(service: ControlPlaneService) -> dict[str, Any]:
+    # Reuse the native authoritative projections. No collection, credential
+    # access, discovery, project filesystem probing or launch occurs in these reads.
+    health = {item.provider_id: item for item in service.providers().providers}
+    quota = {item.provider_id: item for item in service.quota(cached_only=True).providers}
+    provider_ids = sorted(set(health) | set(quota))
+    truncated = {
+        "providers": len(provider_ids) > CATALOG_LIMIT,
+        "execution_targets": False,
+        "quota_pools": False,
+        "quota_windows": False,
+    }
+    budgets = {
+        "execution_targets": CATALOG_LIMIT,
+        "quota_pools": CATALOG_LIMIT,
+        "quota_windows": CATALOG_LIMIT,
+    }
+
+    def bounded(items, category):
+        selected = items[: budgets[category]]
+        truncated[category] |= len(selected) < len(items)
+        budgets[category] -= len(selected)
+        return selected
+
+    providers = []
+    for provider_id in provider_ids[:CATALOG_LIMIT]:
+        provider, card = health.get(provider_id), quota.get(provider_id)
+        pools = []
+        # Missing connected-provider quota data is UNKNOWN, never inferred
+        # from target availability or converted into zero remaining balance.
+        for pool in bounded(card.quota_pools if card else (), "quota_pools"):
+            windows = []
+            for window in bounded(pool.windows, "quota_windows"):
+                fraction = window.remaining_fraction
+                if (
+                    window.confidence not in {"EXACT", "ESTIMATED"}
+                    or window.state == "UNKNOWN"
+                    or card.quota_state != "OBSERVED"
+                    or (
+                        fraction is not None
+                        and (not math.isfinite(fraction) or not 0 <= fraction <= 1)
+                    )
+                ):
+                    fraction = None
+                windows.append(
+                    {
+                        "window_id": _safe_id(window.window_id),
+                        "window_kind": _safe_token(window.window_kind),
+                        "state": _safe_token(window.state),
+                        "confidence": _safe_token(window.confidence),
+                        "remaining_fraction": fraction,
+                        "reset_at": _safe_stamp(window.reset_at),
+                    }
+                )
+            pools.append(
+                {
+                    "quota_pool_id": _safe_id(pool.quota_pool_id),
+                    "state": _safe_token(pool.state),
+                    "confidence": _safe_token(pool.confidence),
+                    "windows": windows,
+                }
+            )
+        targets = [
+            {
+                "execution_target_id": _safe_id(target.execution_target_id),
+                "enabled": target.enabled,
+                "runtime_available": target.runtime_available,
+                "launch_authorized": target.launch_authorized,
+                "execution_verified_stale": target.execution_verified_stale,
+            }
+            for target in bounded(
+                provider.execution_targets if provider else (), "execution_targets"
+            )
+        ]
+        providers.append(
+            {
+                "provider_id": _safe_id(provider_id),
+                "connection_state": _safe_token(
+                    card.connection_state if card else provider.connection_state
+                ),
+                "auth_state": _safe_token(card.auth_state if card else provider.auth_state),
+                "runtime_state": _safe_token(provider.runtime_state) if provider else None,
+                "last_checked": _safe_stamp(provider.last_checked) if provider else None,
+                "pool_kind": "unmetered"
+                if (card or provider).pool_kind == "unmetered"
+                else "windowed",
+                "execution_targets": targets,
+                "quota": {
+                    "quota_state": _safe_token(card.quota_state) if card else "UNKNOWN",
+                    "confidence": _safe_token(card.confidence) if card else "UNKNOWN",
+                    "observed_at": _safe_stamp(card.observed_at) if card else None,
+                    "collection_failure_streak": max(0, card.collection_failure_streak)
+                    if card
+                    else 0,
+                    "pools": pools,
+                },
+            }
+        )
+    return {
+        "schema_version": 1,
+        "observed_at": datetime.now(UTC).isoformat(),
+        "providers": providers,
+        "truncated": truncated,
+    }
+
+
+def _recovery_candidate(
+    service: ControlPlaneService, task: dict[str, Any]
+) -> dict[str, Any] | None:
+    # A durable interruption identifies an operation the owner may REVIEW.
+    # This is not cleanup proof or a promise of recovery. RECOVER revalidates
+    # receipts, writer claims, leases and authority atomically before changing state.
+    if task["state"] != "BLOCKED" or task["scheduling_policy"] != "MANUAL":
+        return None
+    row = service.store.connection.execute(
+        """SELECT substr(d.dispatch_id,1,145) AS dispatch_id
+           FROM owner_dispatches d JOIN owner_dispatch_interruptions i
+             ON i.dispatch_id=d.dispatch_id AND i.task_id=d.task_id
+           WHERE d.task_id=? AND d.authority='OWNER_INITIATED_EXECUTION'
+             AND d.status='BLOCKED' AND d.failure_code='STARTUP_RECOVERY_REQUIRED'
+             AND d.execution_target_id=? AND i.interrupted_task_state_version=?
+             AND NOT EXISTS (SELECT 1 FROM owner_dispatch_recoveries r
+                             WHERE r.prior_dispatch_id=d.dispatch_id)
+           ORDER BY d.rowid DESC LIMIT 1""",
+        (task["task_id"], task["manual_execution_target_id"], task["state_version"]),
+    ).fetchone()
+    if row is None:
+        return None
+    dispatch_id = row["dispatch_id"]
+    if re.fullmatch(_DISPATCH_ID_PATTERN, dispatch_id) is None:
+        raise ControlPlaneError(503, "local_client_view_unavailable")
+    return {
+        "task_id": task["task_id"],
+        "task_state_version": task["state_version"],
+        "prior_dispatch_id": dispatch_id,
+    }
+
+
 def _detail(service: ControlPlaneService, task_id: str) -> dict[str, Any]:
     with _read_snapshot(service):
         task = _safe_task(service, task_id)
@@ -269,6 +467,7 @@ def _detail(service: ControlPlaneService, task_id: str) -> dict[str, Any]:
             "verification": report["verification"],
             "answer_completeness": report["completeness"],
             "result": report,
+            "recovery_candidate": _recovery_candidate(service, task),
             "truncated": {
                 "runs": len(runs) > DETAIL_LIMIT,
                 "approvals": len(approvals) > DETAIL_LIMIT,
@@ -401,12 +600,47 @@ def handle_local_client_v2(service: ControlPlaneService, payload: dict[str, Any]
     if request.expected_store_id is not None and request.expected_store_id != store_id:
         raise ControlPlaneError(409, "store_identity_mismatch")
     if (
-        request.operation in {"SUBMIT_V2", "START", "CANCEL", "RECOVER"}
+        request.operation
+        in {
+            "SUBMIT_V2",
+            "START",
+            "CANCEL",
+            "RECOVER",
+            "GLOBAL_POLICY_SET",
+            "PROJECT_POLICY_SET",
+        }
         and request.expected_process_epoch != epoch
     ):
         raise ControlPlaneError(409, "process_epoch_mismatch")
     if request.operation in {"CAPABILITIES", "CONTEXT"}:
         result = _context(service)
+    elif request.operation == "POLICY_GET":
+        result = _policy_snapshot(service)
+    elif request.operation == "RESOURCES":
+        result = _resource_snapshot(service)
+    elif request.operation in {"GLOBAL_POLICY_SET", "PROJECT_POLICY_SET"}:
+        preconditions = {
+            "expected_revision": request.expected_revision,
+            "expected_store_id": request.expected_store_id,
+            "expected_process_epoch": request.expected_process_epoch,
+        }
+        if request.operation == "GLOBAL_POLICY_SET":
+            service.update_scheduling_settings(
+                {
+                    **preconditions,
+                    "default_scheduling_policy": request.default_scheduling_policy,
+                }
+            )
+        else:
+            service.set_project_scheduling_policy(
+                request.project_id,
+                {
+                    **preconditions,
+                    "scheduling_policy": request.scheduling_policy,
+                    "manual_execution_target_id": request.manual_execution_target_id,
+                },
+            )
+        result = _policy_snapshot(service)
     elif request.operation == "SUBMIT_V2":
         if request.execution_target_id not in service._effective_registry().execution_targets:
             raise ControlPlaneError(400, "execution_target_not_registered")

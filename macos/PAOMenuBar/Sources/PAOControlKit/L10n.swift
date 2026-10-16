@@ -313,7 +313,7 @@ public enum L10n {
         "quota.history.singleObservation", "quota.history.observationCount",
         "quota.resetsIn", "quota.resetPassed", "quota.observedAge",
         "quota.equivalentCapacity.explanation"
-    ]
+    ] + controlKeys
 
     /// English is the guaranteed fallback (`defaultLocalization` in Package.swift).
     public static let fallbackLanguage = "en"
@@ -388,6 +388,69 @@ public enum L10n {
     private static func languageBundle(for language: String) -> Bundle? {
         guard let entry = lprojDirectories[language.lowercased()] else { return nil }
         return Bundle(path: entry.path)
+    }
+
+    public static let controlKeys: [String] = [
+        "control.overview.attention",
+        "control.overview.allTasks",
+        "control.overview.sample",
+        "control.overview.group.approval",
+        "control.overview.group.blocked",
+        "control.overview.group.recovery",
+        "control.overview.group.running",
+        "control.overview.noneInSample",
+        "control.overview.unavailable",
+        "control.overview.partial",
+        "control.overview.observed",
+        "control.overview.moreInSample",
+        "control.overview.policyResources",
+        "control.overview.openResources",
+        "control.overview.statistics",
+        "control.result.title",
+        "control.result.loading",
+        "control.result.unavailable",
+        "control.result.changed",
+        "control.result.delivery.COMPLETE",
+        "control.result.delivery.TRUNCATED",
+        "control.result.delivery.MISSING",
+        "control.result.delivery.FAILED",
+        "control.result.boundary",
+        "control.result.omissions",
+        "control.result.files",
+        "control.result.evidence",
+        "control.result.limit.RESULT_COMMIT_NOT_RECORDED",
+        "control.result.limit.HOST_REPORT_ONLY",
+        "control.result.limit.TASK_REQUIRES_OWNER_REVIEW",
+        "control.result.limit.SAFE_EXPORT_OMISSIONS",
+        "control.next.title",
+        "control.next.review",
+        "control.continuation.copy",
+        "control.continuation.copied",
+        "control.continuation.manual",
+        "control.recovery.title",
+        "control.recovery.action",
+        "control.recovery.explanation",
+        "control.recovery.done",
+        "control.recovery.uncertain",
+        "control.recovery.check",
+        "control.recovery.changed",
+        "control.policy.scope",
+        "control.policy.inherit",
+        "control.policy.current",
+        "control.policy.conflict",
+        "control.policy.unavailable",
+        "control.policy.reload",
+        "control.policy.save",
+        "control.policy.review",
+        "control.policy.saved",
+    ]
+
+    /// New control surfaces share the existing language selection and catalogs.
+    /// Unknown protocol values remain verbatim; they never become a success label.
+    public static func controlText(_ key: String) -> String {
+        let fullKey = "control.\(key)"
+        let value = tr(fullKey)
+        return value == fullKey ? String(key.split(separator: ".").last ?? Substring(key)) : value
     }
 
     private static func tr(_ key: String) -> String {

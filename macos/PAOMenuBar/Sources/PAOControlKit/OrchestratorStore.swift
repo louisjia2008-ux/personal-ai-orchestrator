@@ -61,7 +61,35 @@ public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var lastQuotaRefreshError: String?
     @Published public private(set) var activeStatus: ActiveStatusView?
     @Published public private(set) var ownerExecutionSettings: OwnerExecutionSettingsView?
-    @Published public private(set) var schedulingSettings: SchedulingSettingsView?
+    @Published public private(set) var schedulingSettings: SchedulingSettingsView? {
+        didSet {
+            guard oldValue?.storeId != schedulingSettings?.storeId
+                    || oldValue?.processEpoch != schedulingSettings?.processEpoch else { return }
+            // Replacing a socket can succeed without an intervening disconnect.
+            // Never retain an observation from a different store/process merely
+            // because its task ID and generation happen to match.
+            taskDetailRequestId = nil
+            selectedTaskDetail = nil
+            selectedSafeDetail = nil
+            selectedTaskResult = nil
+            recentActionsRequestId = nil
+            recentSafeDetails = [:]
+            recentActionsObservedAt = nil
+        }
+    }
+    @Published public private(set) var isSavingSchedulingPolicy = false
+    @Published public private(set) var schedulingPolicyError: String?
+    @Published public private(set) var schedulingPolicyNeedsReview = false
+    @Published public private(set) var selectedSafeDetail: LocalClientEnvelope<SafeTaskDetail>?
+    @Published public private(set) var selectedTaskResult: TaskContinuationPayload?
+    @Published public private(set) var taskResultError: String?
+    @Published public private(set) var recentSafeDetails: [String: SafeTaskDetail] = [:]
+    @Published public private(set) var recentActionsObservedAt: Date?
+    @Published public private(set) var isRecoveringTask = false
+    @Published public private(set) var recoveryNotices: [String: String] = [:]
+    @Published public private(set) var pendingRecoveries: [String: RecoveryRequest] = [:]
+    private var recentActionsRequestId: UUID?
+
     @Published public private(set) var lastDispatch: DispatchTaskView?
     @Published public private(set) var dispatchNotice: DispatchNotice?
     /// The latest ranking produced by /v1/tasks/{id}/dispatch/recommendation.
@@ -90,6 +118,9 @@ public final class OrchestratorStore: ObservableObject {
             // onChange or the next request has a chance to run.
             taskDetailRequestId = nil
             selectedTaskDetail = nil
+            selectedSafeDetail = nil
+            selectedTaskResult = nil
+            taskResultError = nil
             clearCancellationNotice()
             clearDispatchRecommendation()
         }
@@ -368,6 +399,7 @@ public final class OrchestratorStore: ObservableObject {
             ClientLog.taskCounts(running: counts.running, ready: counts.ready,
                                  blocked: counts.blocked, verified: counts.verified)
             writeWidgetSnapshot()
+            if dashboardVisible { await refreshRecentActions() }
         } catch let error as PAOClientError {
             self.lastError = error
             transition(.disconnected(reason: Self.disconnectionReason(for: error)))
@@ -415,6 +447,12 @@ public final class OrchestratorStore: ObservableObject {
             pendingProjectPreview = nil
             taskDetailRequestId = nil
             selectedTaskDetail = nil
+            selectedSafeDetail = nil
+            selectedTaskResult = nil
+            taskResultError = nil
+            recentActionsRequestId = nil
+            recentSafeDetails = [:]
+            recentActionsObservedAt = nil
             providers = nil
             providerConnections = nil
             activeStatus = nil
@@ -692,7 +730,12 @@ public final class OrchestratorStore: ObservableObject {
             let detail = try await client.taskDetail(taskId)
             guard taskDetailRequestId == requestId, selectedTaskId == taskId else { return }
             selectedTaskDetail = detail
+            if selectedTaskResult?.task.stateVersion != detail.task.stateVersion
+                || selectedTaskResult?.task.state != detail.task.state {
+                selectedTaskResult = nil
+            }
             lastError = nil
+            await loadTaskOutcome(taskId: taskId, requestId: requestId)
         } catch let error as PAOClientError {
             guard taskDetailRequestId == requestId, selectedTaskId == taskId else { return }
             lastError = error
@@ -862,31 +905,196 @@ public final class OrchestratorStore: ObservableObject {
         schedulingSettings = try? await client.schedulingSettings()
     }
 
-    public func setDefaultSchedulingPolicy(_ policy: String) async {
+    @discardableResult
+    public func setDefaultSchedulingPolicy(
+        _ policy: String, binding: PolicyRevisionBinding? = nil
+    ) async -> Bool {
+        guard !isSavingSchedulingPolicy, !schedulingPolicyNeedsReview, let binding else { return false }
+        isSavingSchedulingPolicy = true
+        schedulingPolicyError = nil
+        defer { isSavingSchedulingPolicy = false }
         do {
-            schedulingSettings = try await client.setDefaultSchedulingPolicy(policy)
-            ClientLog.operation("set_scheduling_policy", outcome: "ok")
-        } catch let error as PAOClientError {
-            self.lastError = error
-            ClientLog.operation("set_scheduling_policy", outcome: error.logCode)
+            schedulingSettings = try await client.setDefaultSchedulingPolicy(policy, binding: binding)
+            schedulingPolicyNeedsReview = false
+            return true
         } catch {
-            ClientLog.operation("set_scheduling_policy", outcome: "malformed")
+            recordSchedulingError(error)
+            return false
         }
     }
 
-    public func setProjectSchedulingPolicy(projectId: String, policy: String?) async {
+    public func projectScheduling(_ projectId: String) async throws -> ProjectSchedulingView {
+        try await client.projectScheduling(projectId)
+    }
+
+    @discardableResult
+    public func setProjectSchedulingPolicy(
+        projectId: String, policy: String?, manualExecutionTargetId: String? = nil,
+        binding: PolicyRevisionBinding? = nil
+    ) async -> Bool {
+        guard !isSavingSchedulingPolicy, !schedulingPolicyNeedsReview, let binding else { return false }
+        isSavingSchedulingPolicy = true
+        schedulingPolicyError = nil
+        defer { isSavingSchedulingPolicy = false }
         do {
             _ = try await client.setProjectSchedulingPolicy(
-                projectId: projectId,
-                schedulingPolicy: policy
+                projectId: projectId, schedulingPolicy: policy,
+                manualExecutionTargetId: manualExecutionTargetId, binding: binding
             )
             projects = try? await client.projects()
-            ClientLog.operation("set_project_scheduling_policy", outcome: "ok")
-        } catch let error as PAOClientError {
-            self.lastError = error
-            ClientLog.operation("set_project_scheduling_policy", outcome: error.logCode)
+            schedulingPolicyNeedsReview = false
+            return true
         } catch {
-            ClientLog.operation("set_project_scheduling_policy", outcome: "malformed")
+            recordSchedulingError(error)
+            return false
+        }
+    }
+
+    private func recordSchedulingError(_ error: Error) {
+        let clientError = error as? PAOClientError ?? .malformedResponse
+        schedulingPolicyError = clientError.displayDetail
+        // An unknown response could mean the write was committed. Never replay
+        // it automatically. A deliberate reload establishes the next revision.
+        schedulingPolicyNeedsReview = true
+    }
+
+    public func clearSchedulingPolicyError() {
+        schedulingPolicyError = nil
+        schedulingPolicyNeedsReview = false
+    }
+
+    private func loadTaskOutcome(taskId: String, requestId: UUID) async {
+        guard let host = schedulingSettings?.revisionBinding else {
+            selectedSafeDetail = nil
+            selectedTaskResult = nil
+            taskResultError = L10n.controlText("result.unavailable")
+            return
+        }
+        let safe = try? await client.safeTaskDetail(taskId)
+        guard taskDetailRequestId == requestId, selectedTaskId == taskId else { return }
+        guard schedulingSettings?.storeId == host.storeId,
+              schedulingSettings?.processEpoch == host.processEpoch,
+              safe?.storeId == host.storeId, safe?.processEpoch == host.processEpoch else {
+            selectedSafeDetail = nil
+            selectedTaskResult = nil
+            taskResultError = L10n.controlText("result.changed")
+            return
+        }
+        selectedSafeDetail = safe
+        do {
+            let result = try await client.taskContinuation(taskId)
+            guard taskDetailRequestId == requestId, selectedTaskId == taskId else { return }
+            guard result.payload.task.stateVersion == selectedTaskDetail?.task.stateVersion,
+                  result.payload.task.state == selectedTaskDetail?.task.state,
+                  result.storeId == host.storeId, result.processEpoch == host.processEpoch,
+                  schedulingSettings?.storeId == host.storeId,
+                  schedulingSettings?.processEpoch == host.processEpoch
+            else {
+                selectedTaskResult = nil
+                taskResultError = L10n.controlText("result.changed")
+                return
+            }
+            selectedTaskResult = result.payload
+            taskResultError = nil
+        } catch {
+            guard taskDetailRequestId == requestId, selectedTaskId == taskId else { return }
+            selectedTaskResult = nil
+            taskResultError = (error as? PAOClientError)?.displayDetail ?? L10n.controlText("result.unavailable")
+        }
+    }
+
+    /// A bounded recent-task sample, never a replacement for global counts.
+    /// No provider probing or state mutation. Old daemons simply leave approval
+    /// and recovery observations unavailable instead of reporting zero.
+    private func refreshRecentActions() async {
+        if let observed = recentActionsObservedAt, Date().timeIntervalSince(observed) < 30 { return }
+        guard recentActionsRequestId == nil, let host = schedulingSettings?.revisionBinding else { return }
+        let requestId = UUID()
+        recentActionsRequestId = requestId
+        let recent = Array((dashboard?.recentTasks ?? []).prefix(10))
+        let client = self.client
+        let observations = await withTaskGroup(of: (String, SafeTaskDetail?).self) { group in
+            for task in recent {
+                group.addTask {
+                    let detail = try? await client.safeTaskDetail(task.taskId)
+                    guard detail?.storeId == host.storeId, detail?.processEpoch == host.processEpoch else {
+                        return (task.taskId, nil)
+                    }
+                    return (task.taskId, detail?.payload)
+                }
+            }
+            var values: [String: SafeTaskDetail] = [:]
+            for await (taskId, detail) in group {
+                if let detail { values[taskId] = detail }
+            }
+            return values
+        }
+        guard recentActionsRequestId == requestId, connection.isConnected,
+              schedulingSettings?.storeId == host.storeId,
+              schedulingSettings?.processEpoch == host.processEpoch else { return }
+        recentActionsRequestId = nil
+        recentSafeDetails = observations
+        recentActionsObservedAt = Date()
+    }
+
+    /// Reset only the interrupted host bookkeeping. This method never invokes
+    /// dispatch/START. On uncertain delivery retain the exact request for a
+    /// read-only RECOVERY_STATUS reconciliation, including after navigation.
+    public func prepareRecovery() -> RecoveryRequest? {
+        guard !isRecoveringTask, let envelope = selectedSafeDetail,
+              envelope.storeId == schedulingSettings?.storeId,
+              envelope.processEpoch == schedulingSettings?.processEpoch,
+              let candidate = envelope.payload.recoveryCandidate,
+              selectedTaskId == candidate.taskId,
+              selectedTaskDetail?.task.stateVersion == candidate.taskStateVersion,
+              selectedTaskDetail?.task.state == envelope.payload.task.state,
+              pendingRecoveries[candidate.taskId] == nil else { return nil }
+        return RecoveryRequest(requestId: "recover-\(idFactory())", candidate: candidate,
+                               storeId: envelope.storeId, processEpoch: envelope.processEpoch)
+    }
+
+    public func recoverTask(_ request: RecoveryRequest) async {
+        let taskId = request.candidate.taskId
+        guard !isRecoveringTask, pendingRecoveries[taskId] == nil,
+              request.operation == "RECOVER" else { return }
+        guard selectedTaskId == taskId, let envelope = selectedSafeDetail,
+              let task = selectedTaskDetail?.task, request.matches(envelope, task: task),
+              schedulingSettings?.storeId == request.storeId,
+              schedulingSettings?.processEpoch == request.processEpoch else {
+            recoveryNotices[taskId] = L10n.controlText("recovery.changed")
+            return
+        }
+        pendingRecoveries[taskId] = request
+        await performRecovery(request)
+    }
+
+    public func reconcileRecovery(taskId: String) async {
+        guard !isRecoveringTask, let request = pendingRecoveries[taskId] else { return }
+        await performRecovery(request.statusRequest)
+    }
+
+    private func performRecovery(_ request: RecoveryRequest) async {
+        let taskId = request.candidate.taskId
+        isRecoveringTask = true
+        defer { isRecoveringTask = false }
+        do {
+            _ = try await client.recoverTask(request)
+            pendingRecoveries[taskId] = nil
+            recoveryNotices[taskId] = L10n.controlText("recovery.done")
+            if selectedTaskId == taskId { await loadTaskDetail(taskId: taskId) }
+            recentActionsObservedAt = nil
+            await refreshRecentActions()
+        } catch let error as PAOClientError {
+            if case .httpError(let status, _) = error, (400..<500).contains(status) {
+                // A definitive RECOVER refusal performed no recovery. A status
+                // lookup failure does not prove an earlier write was absent.
+                if request.operation == "RECOVER" { pendingRecoveries[taskId] = nil }
+                recoveryNotices[taskId] = error.displayDetail
+            } else {
+                recoveryNotices[taskId] = L10n.controlText("recovery.uncertain")
+            }
+        } catch {
+            recoveryNotices[taskId] = L10n.controlText("recovery.uncertain")
         }
     }
 

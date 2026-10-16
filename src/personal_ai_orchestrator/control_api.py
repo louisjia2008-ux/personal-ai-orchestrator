@@ -91,6 +91,7 @@ from personal_ai_orchestrator.scheduler import RoutingObjective
 from personal_ai_orchestrator.scheduling_settings import (
     SELECTABLE_GLOBAL_POLICIES,
     SELECTABLE_MODES,
+    PolicyRevisionConflict,
     SchedulingSettings,
 )
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
@@ -1040,7 +1041,29 @@ class ImportConnectionsView(_ViewModel):
     imported: tuple[ProviderConnectionView, ...]
 
 
+class PolicyWritePreconditions(_ViewModel):
+    expected_revision: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+    expected_store_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+    expected_process_epoch: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+
+
+class ProjectSchedulingPolicyView(_ViewModel):
+    project_id: str
+    revision: str
+    scheduling_policy: str | None
+    manual_execution_target_id: str | None
+    effective_scheduling_policy: str
+    effective_manual_execution_target_id: str | None
+    policy_source: str
+    global_revision: str
+    store_id: str
+    process_epoch: str
+
+
 class SchedulingSettingsView(_ViewModel):
+    revision: str = ""
+    store_id: str = ""
+    process_epoch: str = ""
     default_scheduling_policy: str
     selectable_policies: tuple[str, ...]
     #: M1 WP5a-1: orchestrator scheduling mode. ``"MANUAL"`` is the
@@ -1058,7 +1081,7 @@ class SchedulingSettingsView(_ViewModel):
     )
 
 
-class SchedulingSettingsUpdateRequest(_ViewModel):
+class SchedulingSettingsUpdateRequest(PolicyWritePreconditions):
     default_scheduling_policy: str = Field(min_length=1, max_length=64)
     #: M1 WP5a-1: optional mode field on the update request. ``None``
     #: (legacy callers) leaves the mode unchanged.
@@ -1080,7 +1103,7 @@ class SchedulingMode(StrEnum):
     ACTIVE = "ACTIVE"
 
 
-class ProjectSchedulingPolicyRequest(_ViewModel):
+class ProjectSchedulingPolicyRequest(PolicyWritePreconditions):
     """``scheduling_policy=None`` restores the global default for this project."""
 
     scheduling_policy: str | None = Field(default=None, min_length=1, max_length=64)
@@ -1233,6 +1256,7 @@ class ProjectView(_ViewModel):
     current_branch: str | None = None
     scheduling_policy: str | None = None
     manual_execution_target_id: str | None = None
+    scheduling_revision: str = ""
     #: M1 WP5a-1: project-level supervised-auto settings. See
     #: ``SafetyKernelStore.set_project_settings`` and
     #: ``ProjectRecord`` for the contract.
@@ -1565,6 +1589,7 @@ class ControlPlaneService:
             current_branch=current_branch,
             scheduling_policy=project.scheduling_policy,
             manual_execution_target_id=project.manual_execution_target_id,
+            scheduling_revision=project.scheduling_revision,
             supervised_auto_allowed=project.supervised_auto_allowed,
             unattended_allowed=project.unattended_allowed,
             grace_seconds=project.grace_seconds,
@@ -1675,16 +1700,68 @@ class ControlPlaneService:
         return scheduling_policy, None
 
     def scheduling_settings_view(self) -> SchedulingSettingsView:
-        policy, mode = self.scheduling_settings.snapshot()
+        policy, mode, revision = self.scheduling_settings.versioned_snapshot()
         return SchedulingSettingsView(
+            revision=revision,
+            store_id=self.store.store_id,
+            process_epoch=self.process_epoch,
             default_scheduling_policy=policy,
             selectable_policies=SELECTABLE_GLOBAL_POLICIES,
             mode=mode,
             selectable_modes=SELECTABLE_MODES,
         )
 
+    def _require_policy_preconditions(self, request: PolicyWritePreconditions) -> None:
+        if any(
+            value is None
+            for value in (
+                request.expected_revision,
+                request.expected_store_id,
+                request.expected_process_epoch,
+            )
+        ):
+            # Read/manual task compatibility is preserved, but old settings clients
+            # must upgrade rather than silently overwrite another editor's work.
+            raise ControlPlaneError(428, "policy_revision_required")
+        if request.expected_store_id != self.store.store_id:
+            raise ControlPlaneError(409, "store_identity_mismatch")
+        if request.expected_process_epoch != self.process_epoch:
+            raise ControlPlaneError(409, "process_epoch_mismatch")
+
+    def project_scheduling_policy_view(
+        self,
+        project_id: str,
+        *,
+        global_view: SchedulingSettingsView | None = None,
+    ) -> ProjectSchedulingPolicyView:
+        self._validate_identifier("project_id", project_id)
+        try:
+            project = self.store.get_project(project_id)
+        except KeyError:
+            raise ControlPlaneError(404, "project_not_found") from None
+        current = global_view or self.scheduling_settings_view()
+        return ProjectSchedulingPolicyView(
+            project_id=project_id,
+            revision=project.scheduling_revision,
+            scheduling_policy=project.scheduling_policy,
+            manual_execution_target_id=project.manual_execution_target_id,
+            effective_scheduling_policy=(
+                project.scheduling_policy or current.default_scheduling_policy
+            ),
+            effective_manual_execution_target_id=(
+                project.manual_execution_target_id
+                if project.scheduling_policy == "MANUAL"
+                else None
+            ),
+            policy_source="PROJECT" if project.scheduling_policy is not None else "GLOBAL",
+            global_revision=current.revision,
+            store_id=self.store.store_id,
+            process_epoch=self.process_epoch,
+        )
+
     def update_scheduling_settings(self, payload: dict[str, Any]) -> SchedulingSettingsView:
         request = SchedulingSettingsUpdateRequest.model_validate(payload)
+        self._require_policy_preconditions(request)
         # Validate the entire request (including authority) before changing either
         # setting. Rejected ACTIVE/unknown-mode requests must not change policy.
         if request.default_scheduling_policy not in SELECTABLE_GLOBAL_POLICIES:
@@ -1704,10 +1781,14 @@ class ControlPlaneService:
                     409,
                     "production_active_not_authorized",
                 )
-        _, previous_mode = self.scheduling_settings.update(
-            default_policy=request.default_scheduling_policy,
-            mode=request.mode,
-        )
+        try:
+            _, previous_mode = self.scheduling_settings.update(
+                default_policy=request.default_scheduling_policy,
+                mode=request.mode,
+                expected_revision=request.expected_revision,
+            )
+        except PolicyRevisionConflict:
+            raise ControlPlaneError(409, "policy_revision_conflict") from None
         if request.mode is not None:
             # M1 WP5a-2 (§3.1): leaving SUPERVISED_AUTO aborts every
             # AUTO_PLANNED / AUTO_GRACE task in the same handler — the
@@ -1757,6 +1838,7 @@ class ControlPlaneService:
     ) -> ProjectView:
         self._validate_identifier("project_id", project_id)
         request = ProjectSchedulingPolicyRequest.model_validate(payload)
+        self._require_policy_preconditions(request)
         policy, manual_target = self._validated_task_policy(
             request.scheduling_policy,
             request.manual_execution_target_id,
@@ -1766,7 +1848,12 @@ class ControlPlaneService:
                 project_id,
                 scheduling_policy=policy,
                 manual_execution_target_id=manual_target,
+                expected_revision=request.expected_revision,
             )
+        except ValueError as error:
+            if str(error) == "policy_revision_conflict":
+                raise ControlPlaneError(409, "policy_revision_conflict") from None
+            raise
         except KeyError:
             raise ControlPlaneError(404, "project_not_found") from None
         return self._project_view(project)
@@ -3769,7 +3856,7 @@ class ControlPlaneService:
             unmetered=self._build_unmetered_observation(connection),
         )
 
-    def quota(self) -> QuotaOverviewView:
+    def quota(self, *, cached_only: bool = False) -> QuotaOverviewView:
         """Connection-based quota projection.
 
         The top-level list is built from *connected providers*, never from the
@@ -3782,7 +3869,11 @@ class ControlPlaneService:
         observations = {
             item.provider_id: item
             for item in (
-                self.quota_refresh_service.observations()
+                (
+                    self.quota_refresh_service.cached_observations()
+                    if cached_only
+                    else self.quota_refresh_service.observations()
+                )
                 if self.quota_refresh_service is not None
                 else ()
             )
@@ -4258,6 +4349,9 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                     if payload is None:
                         return
                     self._view(200, request_service.mark_project_opened(project_id))
+                    return
+                if count == 3 and sub == "scheduling" and method == "GET":
+                    self._view(200, request_service.project_scheduling_policy_view(project_id))
                     return
                 if count == 3 and sub == "scheduling" and method == "PUT":
                     payload = self._read_json()

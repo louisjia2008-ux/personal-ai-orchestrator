@@ -234,6 +234,7 @@ class ProjectRecord(FrozenModel):
     security_bookmark_b64: str | None = None
     scheduling_policy: str | None = None
     manual_execution_target_id: str | None = None
+    scheduling_revision: str = ""
     #: M1 WP5a-1: project-level supervised-auto toggle. When ``True``,
     #: tasks in this project are eligible for ``SUPERVISED_AUTO``
     #: planning (host-owned tick path). Owned by the project so the
@@ -815,6 +816,11 @@ class SafetyKernelStore:
         )
         self._ensure_column("projects", "scheduling_policy", "TEXT")
         self._ensure_column("projects", "manual_execution_target_id", "TEXT")
+        self._ensure_column("projects", "scheduling_revision", "TEXT NOT NULL DEFAULT ''")
+        self.connection.execute(
+            "UPDATE projects SET scheduling_revision=lower(hex(randomblob(16))) "
+            "WHERE scheduling_revision=''"
+        )
         # M1 WP5a-1: project-level supervised-auto settings. The
         # defaults mirror the dataclass defaults (False / False / 120)
         # so an existing project keeps the pre-WP5a-1 manual-only
@@ -1587,6 +1593,11 @@ class SafetyKernelStore:
                     security_bookmark_b64,
                 ),
             )
+            self.connection.execute(
+                "UPDATE projects SET scheduling_revision=lower(hex(randomblob(16))) "
+                "WHERE project_id=? AND scheduling_revision=''",
+                (project_id,),
+            )
             self._audit(
                 None,
                 "PROJECT_REGISTERED",
@@ -1622,6 +1633,7 @@ class SafetyKernelStore:
         *,
         scheduling_policy: str | None,
         manual_execution_target_id: str | None = None,
+        expected_revision: str | None = None,
     ) -> ProjectRecord:
         """Persist an owner-chosen project scheduling override.
 
@@ -1631,12 +1643,15 @@ class SafetyKernelStore:
 
         self.connection.execute("BEGIN IMMEDIATE")
         try:
-            self.get_project(project_id)
+            project = self.get_project(project_id)
+            if expected_revision is not None and project.scheduling_revision != expected_revision:
+                raise ValueError("policy_revision_conflict")
             stamp = _now()
             self.connection.execute(
                 """
                 UPDATE projects
-                SET scheduling_policy=?, manual_execution_target_id=?, updated_at=?
+                SET scheduling_policy=?, manual_execution_target_id=?, updated_at=?,
+                    scheduling_revision=lower(hex(randomblob(16)))
                 WHERE project_id=?
                 """,
                 (scheduling_policy, manual_execution_target_id, stamp, project_id),
@@ -1805,6 +1820,7 @@ class SafetyKernelStore:
             security_bookmark_b64=row["security_bookmark_b64"],
             scheduling_policy=row["scheduling_policy"],
             manual_execution_target_id=row["manual_execution_target_id"],
+            scheduling_revision=row["scheduling_revision"],
             # SQLite stores booleans as integers; ``bool(int)`` round-trips.
             supervised_auto_allowed=bool(row["supervised_auto_allowed"]),
             unattended_allowed=bool(row["unattended_allowed"]),

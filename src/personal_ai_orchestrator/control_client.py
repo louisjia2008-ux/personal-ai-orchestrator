@@ -29,6 +29,7 @@ from personal_ai_orchestrator.control_api import (
     OwnerExecutionSettingsView,
     ProjectListView,
     ProjectRemoveView,
+    ProjectSchedulingPolicyView,
     ProjectView,
     ProviderHealthListView,
     QuotaOverviewView,
@@ -113,7 +114,7 @@ class ControlPlaneClient:
 
         request = LocalClientRequestV2.model_validate(payload)
         return self._request(
-            "POST", "/v2/local-client", payload=request.model_dump(exclude_none=True)
+            "POST", "/v2/local-client", payload=request.model_dump(exclude_unset=True)
         )
 
     def health(self) -> HealthView:
@@ -240,11 +241,30 @@ class ControlPlaneClient:
             SchedulingSettingsView,
         )
 
-    def set_default_scheduling_policy(self, policy: str) -> SchedulingSettingsView:
+    @staticmethod
+    def _policy_preconditions(observed: SchedulingSettingsView | ProjectSchedulingPolicyView):
+        return {
+            "expected_revision": observed.revision,
+            "expected_store_id": observed.store_id,
+            "expected_process_epoch": observed.process_epoch,
+        }
+
+    def project_scheduling_policy(self, project_id: str) -> ProjectSchedulingPolicyView:
+        return self._get(  # type: ignore[return-value]
+            f"/v1/projects/{project_id}/scheduling",
+            ProjectSchedulingPolicyView,
+        )
+
+    def set_default_scheduling_policy(
+        self,
+        policy: str,
+        *,
+        observed: SchedulingSettingsView,
+    ) -> SchedulingSettingsView:
         rendered = self._request(
             "PUT",
             "/v1/settings/scheduling",
-            payload={"default_scheduling_policy": policy},
+            payload={"default_scheduling_policy": policy, **self._policy_preconditions(observed)},
         )
         return SchedulingSettingsView.model_validate(rendered)
 
@@ -253,6 +273,7 @@ class ControlPlaneClient:
         *,
         default_scheduling_policy: str,
         mode: str,
+        observed: SchedulingSettingsView,
     ) -> SchedulingSettingsView:
         """M1 WP5a-1: PUT ``mode`` and ``default_scheduling_policy``
         together so the wire payload always carries the full state."""
@@ -263,6 +284,7 @@ class ControlPlaneClient:
             payload={
                 "default_scheduling_policy": default_scheduling_policy,
                 "mode": mode,
+                **self._policy_preconditions(observed),
             },
         )
         return SchedulingSettingsView.model_validate(rendered)
@@ -272,6 +294,7 @@ class ControlPlaneClient:
         project_id: str,
         *,
         scheduling_policy: str | None,
+        observed: ProjectSchedulingPolicyView,
         manual_execution_target_id: str | None = None,
     ) -> ProjectView:
         rendered = self._request(
@@ -280,6 +303,7 @@ class ControlPlaneClient:
             payload={
                 "scheduling_policy": scheduling_policy,
                 "manual_execution_target_id": manual_execution_target_id,
+                **self._policy_preconditions(observed),
             },
         )
         return ProjectView.model_validate(rendered)

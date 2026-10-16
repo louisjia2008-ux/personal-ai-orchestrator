@@ -173,6 +173,38 @@ final class PAODashboardUITests: XCTestCase {
         )
     }
 
+    /// The first screen is a decision queue; statistics remain reachable below.
+    func testOverviewPlacesActionsAndPolicyBeforeStatistics() {
+        let app = XCUIApplication()
+        app.launch()
+        DashboardWindow.open(in: app)
+        sidebarRow("overview", in: app).click()
+        let actions = app.descendants(matching: .any)
+            .matching(identifier: "overview.actionQueue").firstMatch
+        let policy = app.descendants(matching: .any)
+            .matching(identifier: "overview.policyResources").firstMatch
+        let statistics = app.buttons.matching(identifier: "overview.kpiTile").firstMatch
+        XCTAssertTrue(actions.waitForExistence(timeout: 10))
+        XCTAssertTrue(policy.waitForExistence(timeout: 10))
+        XCTAssertTrue(statistics.waitForExistence(timeout: 10))
+        XCTAssertLessThan(actions.frame.minY, policy.frame.minY)
+        XCTAssertLessThan(policy.frame.minY, statistics.frame.minY)
+    }
+
+    private func revealOverviewStatistics(in app: XCUIApplication) {
+        sidebarRow("overview", in: app).click()
+        let tile = app.buttons.matching(identifier: "overview.kpiTile").firstMatch
+        let page = app.descendants(matching: .any).matching(identifier: "page.content").firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 10))
+        let scrollView = page.elementType == .scrollView ? page : page.scrollViews.firstMatch
+        XCTAssertTrue(scrollView.waitForExistence(timeout: 5))
+        guard scrollView.exists else { return }
+        for _ in 0..<8 {
+            if tile.isHittable { return }
+            scrollView.scroll(byDeltaX: 0, deltaY: -350)
+        }
+    }
+
     /// Clicking the Running tile opens Tasks narrowed to running tasks.
     ///
     /// The tile is addressed by its shared KPI identifier: the tile's visible
@@ -183,6 +215,7 @@ final class PAODashboardUITests: XCTestCase {
         app.launch()
         DashboardWindow.open(in: app)
 
+        revealOverviewStatistics(in: app)
         let runningTile = app.buttons.matching(identifier: "overview.kpiTile").firstMatch
         XCTAssertTrue(runningTile.waitForExistence(timeout: 10), "KPI tiles missing")
         runningTile.click()
@@ -454,6 +487,7 @@ final class PAODashboardUITests: XCTestCase {
         app.launch()
         DashboardWindow.open(in: app)
 
+        revealOverviewStatistics(in: app)
         let tiles = app.buttons.matching(identifier: "overview.kpiTile")
         XCTAssertTrue(
             tiles.firstMatch.waitForExistence(timeout: 10),

@@ -295,7 +295,7 @@ open "dist/Personal AI Orchestrator.app"
 The bundle contains `Contents/Helpers/pao-daemon`; the app starts that helper without manual
 Terminal daemon bootstrap when its typed control socket is unavailable.
 
-The dashboard is still a client. It reads typed `/v1` daemon views and never reads
+The dashboard is still a client. It reads typed daemon views and never reads
 Safety Kernel SQLite, credentials, provider auth files, or browser/session stores directly.
 
 DeskPet is an optional client, not a dependency of the project.
@@ -312,6 +312,15 @@ idempotent. Telegram bot credentials remain in a provider-native secret store,
 outside PAO state and command arguments.
 
 See [`docs/TELEGRAM_DESKPET_CLIENTS.md`](docs/TELEGRAM_DESKPET_CLIENTS.md).
+
+The owner-only [local-client v2](docs/LOCAL_CLIENT_V2.md) bridge additionally supports
+explicit manual execution, bounded result/continuation reports, and guarded recovery.
+[Shared policy v1](docs/SHARED_POLICY_V1.md) adds safe policy/resource observations and
+version-checked global/project policy edits for native PAO and DeskPet. Older policy
+writers must upgrade; missing or stale revisions are rejected rather than silently
+replacing another client's changes. Settings do not start tasks or change owner
+permissions. PAO remains the independent authoritative service; DeskPet does not
+embed or copy its scheduler.
 
 ## Safety principles
 
