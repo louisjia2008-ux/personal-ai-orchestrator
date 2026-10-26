@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +30,7 @@ from personal_ai_orchestrator.legacy_migration import migrate_legacy_state
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.model_tiers import DEFAULT_TIER_TABLE_JSON
 from personal_ai_orchestrator.pi_provider_registry_manager import PiProviderRegistryManager
+from personal_ai_orchestrator.pi_runtime import PiRuntimeConfig
 from personal_ai_orchestrator.provider_registry_manager import ProviderRegistryManager
 from personal_ai_orchestrator.provider_registry_store import (
     EMPTY_BOOTSTRAP_SNAPSHOT_ID,
@@ -97,6 +99,13 @@ def resolve_dynamic_registry(
     return manager
 
 
+def _pi_executable(value: str) -> str:
+    path = Path(value)
+    if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
+        raise argparse.ArgumentTypeError("Pi executable must be an executable absolute file")
+    return str(path)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Personal AI Orchestrator bundled daemon")
     parser.add_argument(
@@ -107,6 +116,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--host", default="127.0.0.1", choices=("127.0.0.1", "::1", "localhost"))
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument(
+        "--pi-bin",
+        type=_pi_executable,
+        default=None,
+        help="host-owned Pi executable override for this daemon process only",
+    )
     parser.add_argument(
         "--quota-credential-check",
         choices=tuple(sorted(QUOTA_CREDENTIAL_SPECS)),
@@ -158,9 +173,8 @@ def build_daemon_argv(
     return argv
 
 
-#: The deterministic, no-arbitrary-commands verifier every bundled daemon
-#: ships with. The owner may replace the JSON on disk; the daemon only
-#: seeds it when missing.
+#: The owner must configure trusted project commands before dispatch; an empty
+#: profile blocks before worker start. Existing policy files are preserved.
 DEFAULT_VERIFIER_PROFILE: dict[str, object] = {
     "name": "product-default",
     "commands": [],
@@ -168,11 +182,9 @@ DEFAULT_VERIFIER_PROFILE: dict[str, object] = {
     "require_diff_check": True,
 }
 
-#: The host-owned OpenCode worker sandbox policy seeded into every task
-#: worktree: edits inside the assigned worktree are allowed; shell and
-#: web access are denied outright. Non-interactive ``opencode run``
-#: auto-rejects permission prompts, so without this file every worker
-#: edit dies as "permission requested: edit; auto-rejecting".
+#: Host permission inputs, read from a verified descriptor at worker launch.
+#: The executor adds mandatory deny rules and injects them through the runtime
+#: environment; task-worktree configuration files never grant authority.
 DEFAULT_WORKER_PERMISSION_CONFIG: dict[str, object] = {
     "$schema": "https://opencode.ai/config.json",
     "permission": {"edit": "allow", "bash": "deny", "webfetch": "deny"},
@@ -274,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
             model_tiers_path=policies[3] if policies else None,
         ),
         provider_registry_manager=manager,
+        **({"pi_runtime": PiRuntimeConfig(pi_bin=args.pi_bin)} if args.pi_bin else {}),
     )
 
 

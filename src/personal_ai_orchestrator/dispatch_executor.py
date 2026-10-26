@@ -20,8 +20,8 @@ Safety properties (tested in tests/test_dispatch_executor.py):
   run row, the READY→RUNNING transition and dispatch START).
 - Worker text (COMPLETE/DONE/SUCCESS) has zero authority; only the
   deterministic verifier may produce VERIFIED.
-- The main repository must remain bit-identical (HEAD + clean status)
-  across the run or the task fails closed with ``MAIN_REPO_MUTATED``.
+- The main repository's Git-visible contents (HEAD, index, tracked files and
+  nonignored untracked files) must stay unchanged or the task fails closed.
 - Preparation failure leaves no RUNNING task, no orphan active run, no
   orphan writer lock, an unchanged main repo and sanitized durable
   failure evidence.
@@ -38,6 +38,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import threading
 import time
@@ -150,6 +151,13 @@ def build_worker_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def build_opencode_worker_env(permission_rules: str) -> dict[str, str]:
+    env = build_worker_env()
+    env["OPENCODE_DISABLE_PROJECT_CONFIG"] = "1"
+    env["OPENCODE_PERMISSION"] = permission_rules
+    return env
+
+
 def _git(repo: Path, *args: str) -> str:
     completed = subprocess.run(
         ["git", "-C", str(repo), *args],
@@ -162,14 +170,94 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def main_repo_fingerprint(repo: Path) -> dict[str, str]:
-    """HEAD SHA + porcelain status digest for main-repo immutability proof."""
+    """Bind HEAD, logical index, tracked bytes and nonignored untracked bytes.
 
-    head = _git(repo, "rev-parse", "HEAD")
-    status = _git(repo, "status", "--porcelain")
+    Ignored files and submodule contents are outside this Git checkout contract.
+    Symlinks contribute their link text, never the contents of their targets.
+    """
+
+    def git_bytes(*args: str) -> bytes:
+        return subprocess.run(
+            ["git", "-C", str(repo), *args],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        ).stdout
+
+    digest = hashlib.sha256()
+
+    def add(value: bytes) -> None:
+        digest.update(len(value).to_bytes(8, "big"))
+        digest.update(value)
+
+    index = git_bytes("ls-files", "--stage", "-z")
+    add(index)
+    tracked = {row.split(b"\t", 1)[1] for row in index.split(b"\0") if row}
+    untracked = git_bytes("ls-files", "--others", "--exclude-standard", "-z")
+    paths = tracked | {path for path in untracked.split(b"\0") if path}
+    root_fd = os.open(repo, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for path in sorted(paths):
+            add(path)
+            parts = os.fsdecode(path).split("/")
+            directory = os.dup(root_fd)
+            try:
+                try:
+                    for part in parts[:-1]:
+                        next_fd = os.open(
+                            part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory
+                        )
+                        os.close(directory)
+                        directory = next_fd
+                except FileNotFoundError:
+                    add(b"missing")
+                    continue
+                try:
+                    info = os.stat(parts[-1], dir_fd=directory, follow_symlinks=False)
+                except FileNotFoundError:
+                    add(b"missing")
+                    continue
+                add(str(stat.S_IFMT(info.st_mode)).encode())
+                add(str(info.st_mode & 0o111).encode())
+                if stat.S_ISLNK(info.st_mode):
+                    add(os.fsencode(os.readlink(parts[-1], dir_fd=directory)))
+                elif stat.S_ISREG(info.st_mode):
+                    fd = os.open(
+                        parts[-1],
+                        os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                        dir_fd=directory,
+                    )
+                    with os.fdopen(fd, "rb") as stream:
+                        before = os.fstat(stream.fileno())
+                        content = hashlib.sha256()
+                        while chunk := stream.read(1024 * 1024):
+                            content.update(chunk)
+                        after = os.fstat(stream.fileno())
+
+                        def identity(value: os.stat_result) -> tuple[int, ...]:
+                            return (
+                                value.st_dev,
+                                value.st_ino,
+                                value.st_mode,
+                                value.st_size,
+                                value.st_mtime_ns,
+                                value.st_ctime_ns,
+                                value.st_nlink,
+                            )
+
+                        if identity(before) != identity(after) or before.st_ino != info.st_ino:
+                            raise RuntimeError("repository changed during fingerprint")
+                        add(content.digest())
+            finally:
+                os.close(directory)
+    finally:
+        os.close(root_fd)
+    status = git_bytes("status", "--porcelain", "-z")
     return {
-        "head": head,
-        "status_sha256": hashlib.sha256(status.encode("utf-8")).hexdigest(),
-        "status_lines": str(len([line for line in status.splitlines() if line])),
+        "head": _git(repo, "rev-parse", "HEAD"),
+        "status_sha256": hashlib.sha256(status).hexdigest(),
+        "status_lines": str(len([row for row in status.split(b"\0") if row])),
+        "content_sha256": digest.hexdigest(),
     }
 
 
@@ -390,6 +478,26 @@ class OwnerDispatchExecutor:
             return
         ready_version = task.state_version
 
+        # Capture the host-owned project profile once. Edits made while this
+        # worker runs affect its next attempt, never this attempt's acceptance.
+        from personal_ai_orchestrator.project_workflow import load_project_verifier
+
+        try:
+            profile = load_project_verifier(store, task.project_id)
+            if profile is None:
+                profile = self.config.verifier_profile
+        except Exception:
+            profile = None
+        if profile is None or not profile.commands:
+            self._fail_pre_worker(
+                store,
+                request_id,
+                failure_code="VERIFIER_NOT_CONFIGURED",
+                failure_reason="project verifier commands are not configured",
+            )
+            store.close()
+            return
+
         project_root = self._project_root_or_blocked(store, dispatch, request_id)
         if project_root is None:
             store.close()
@@ -458,6 +566,46 @@ class OwnerDispatchExecutor:
             )
             store.close()
             return
+
+        # -- host-owned dependency preparation --------------------------
+        # The captured profile is also the preparation authority. Model text
+        # cannot append commands, and preparation failure consumes no model run.
+        from personal_ai_orchestrator.project_preparation import run_task_preparation
+
+        prepared, preparation_clean = await run_task_preparation(
+            store,
+            dispatch_id=dispatch.dispatch_id,
+            task_id=dispatch.task_id,
+            worktree=worktree.worktree_path,
+            profile=profile,
+            writer_token=writer_token,
+            expected_task_version=ready_version,
+            env=build_worker_env,
+        )
+        if not prepared:
+            self._fail_pre_worker(
+                store,
+                request_id,
+                writer_token=writer_token if preparation_clean else None,
+                failure_code="DEPENDENCY_PREPARATION_FAILED"
+                if preparation_clean
+                else "DEPENDENCY_PREPARATION_CLEANUP_UNKNOWN",
+                failure_reason="host dependency preparation failed; see preparation report",
+            )
+            store.close()
+            return
+        if profile.preparation_commands:
+            after_preparation = self._fingerprint_or_blocked(store, request_id, project_root)
+            if after_preparation != main_before:
+                self._fail_pre_worker(
+                    store,
+                    request_id,
+                    writer_token=writer_token,
+                    failure_code="MAIN_REPO_CHANGED_DURING_PREPARATION",
+                    failure_reason="main repository changed during dependency preparation",
+                )
+                store.close()
+                return
 
         # -- quota admission --------------------------------------------
         try:
@@ -719,7 +867,9 @@ class OwnerDispatchExecutor:
                     store.close()
                     return
                 raise RuntimeError("owner cancellation did not reach a durable terminal state")
-            result = self._host_result_envelope(exit_code, stdout, stderr, truncated=truncated)
+            result = self._worker_result_envelope(
+                supervised, exit_code, stdout, stderr, truncated=truncated
+            )
             next_state = record_worker_exit(
                 store,
                 task_id=dispatch.task_id,
@@ -892,7 +1042,6 @@ class OwnerDispatchExecutor:
         if next_state is TaskState.WORKER_FINISHED:
             try:
                 begin_verification(store, task_id=dispatch.task_id)
-                profile = self.config.verifier_profile
                 if profile is None:
                     from personal_ai_orchestrator.verifier import VerificationResult
 
@@ -911,6 +1060,8 @@ class OwnerDispatchExecutor:
                         worktree.worktree_path,
                         base_sha=worktree.base_sha,
                         profile=profile,
+                        task_id=dispatch.task_id,
+                        run_id=run_id,
                     )
                     self._verification_journal.append(raw)
                     verdict = raw
@@ -1770,24 +1921,57 @@ class OwnerDispatchExecutor:
         except Exception:
             return None, "WORKTREE_ALLOCATION_FAILED"
 
+    def _worker_permissions(self) -> str:
+        """Read host policy from one verified descriptor, never from the worktree."""
+        permissions: dict[str, Any] = {
+            "read": "allow",
+            "edit": "allow",
+            "glob": "allow",
+            "grep": "allow",
+            "list": "allow",
+        }
+        source = self.config.worker_permission_config
+        if source is not None:
+            fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as stream:
+                before = os.fstat(stream.fileno())
+                if (
+                    not stat.S_ISREG(before.st_mode)
+                    or before.st_uid != os.getuid()
+                    or before.st_mode & 0o022
+                    or before.st_size > 65536
+                ):
+                    raise ValueError("unsafe host permission policy")
+                raw = stream.read(65537)
+                after = os.fstat(stream.fileno())
+                if (
+                    len(raw) > 65536
+                    or before.st_ino != after.st_ino
+                    or before.st_size != after.st_size
+                    or before.st_mtime_ns != after.st_mtime_ns
+                    or before.st_ctime_ns != after.st_ctime_ns
+                ):
+                    raise ValueError("host permission policy changed")
+            document = json.loads(raw)
+            supplied = document.get("permission") if isinstance(document, dict) else None
+            if not isinstance(supplied, dict):
+                raise ValueError("host permission policy must contain permission rules")
+            permissions.update(supplied)
+        # These floors also cover unknown custom tools and external MCP tools.
+        permissions.update(
+            {
+                "*": "deny",
+                "bash": "deny",
+                "webfetch": "deny",
+                "external_directory": "deny",
+            }
+        )
+        return json.dumps(permissions, sort_keys=True, separators=(",", ":"))
+
     def _seed_worker_policy(self, managed: ManagedWorktree) -> None:
-        """Seed the host-owned OpenCode worker sandbox into the worktree.
-
-        Non-interactive ``opencode run`` auto-rejects permission prompts,
-        which would make every edit fail. The host therefore provisions a
-        project config that allows edits inside the assigned worktree and
-        denies bash / webfetch outright. This is host policy, written
-        before the worker exists; the worker can neither create nor
-        change it afterwards through the denied surfaces.
-        """
-
-        seed = self.config.worker_permission_config
-        if seed is None:
-            return
-        target = managed.worktree_path / "opencode.json"
-        if target.exists():
-            return
-        target.write_bytes(seed.read_bytes())
+        # Preflight on both allocation and adoption. Project files are untrusted
+        # and remain untouched, including dangling opencode.json symlinks.
+        self._worker_permissions()
 
     # -- M1 WP4: worker-outcome classification + journal write ------
     def _classify_and_record_worker_outcome(
@@ -2132,6 +2316,7 @@ class OwnerDispatchExecutor:
         argv: list[str] = [
             self.config.opencode_bin,
             "run",
+            "--pure",
             "--model",
             self._model_sku_id(dispatch),
             *self.config.extra_worker_args,
@@ -2175,7 +2360,7 @@ class OwnerDispatchExecutor:
                 "cwd": str(worktree.worktree_path),
             },
         )
-        env = build_worker_env()
+        env = build_opencode_worker_env(self._worker_permissions())
         self._audit_spawn(
             store,
             dispatch.task_id,
@@ -2252,6 +2437,17 @@ class OwnerDispatchExecutor:
                 )
             ),
         }
+
+    def _worker_result_envelope(
+        self,
+        supervised: SupervisedProcess,
+        exit_code: int,
+        stdout: bytes,
+        stderr: bytes,
+        *,
+        truncated: bool,
+    ) -> dict[str, Any]:
+        return self._host_result_envelope(exit_code, stdout, stderr, truncated=truncated)
 
     def _fail_pre_worker(
         self,

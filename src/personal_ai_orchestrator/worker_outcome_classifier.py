@@ -22,6 +22,7 @@ class WorkerFailureClass(StrEnum):
     SERVER_OVERLOADED = "SERVER_OVERLOADED"
     CONTEXT_RESTRICTED = "CONTEXT_RESTRICTED"
     AUTH = "AUTH"
+    PROTOCOL_ERROR = "PROTOCOL_ERROR"
     UNCLASSIFIED = "UNCLASSIFIED"
 
 
@@ -92,6 +93,9 @@ _MESSAGES = {
     WorkerFailureClass.SERVER_OVERLOADED: "Provider service is temporarily overloaded.",
     WorkerFailureClass.CONTEXT_RESTRICTED: "Request exceeds the model context limit.",
     WorkerFailureClass.AUTH: "Provider authentication or access failed.",
+    WorkerFailureClass.PROTOCOL_ERROR: (
+        "Pi protocol validation failed; host verification did not start."
+    ),
     WorkerFailureClass.UNCLASSIFIED: "Worker failed; the cause is not established.",
 }
 
@@ -136,12 +140,37 @@ def _structured_class(error: Mapping[str, object]) -> WorkerFailureClass | None:
 
 def _structured_stderr_verdict(text: str) -> WorkerFailureClass | None:
     verdicts: set[WorkerFailureClass] = set()
+
+    def _reject_constant(name: str) -> object:
+        # NaN/Infinity/-Infinity are not valid JSON; a diagnostic line that
+        # relies on them cannot establish any specific failure cause.
+        raise ValueError(name)
+
+    def _strict_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        seen: set[str] = set()
+        for key, _ in pairs:
+            if key in seen:
+                # Duplicate keys (including escape-encoded or nested ones,
+                # since decoding happens before this hook) make the envelope
+                # ambiguous, so it must never drive a specific verdict.
+                raise ValueError(key)
+            seen.add(key)
+        return dict(pairs)
+
     for line in text.splitlines():
         if not line.lstrip().startswith("{"):
             continue
         try:
-            record = json.loads(line)
+            record = json.loads(
+                line,
+                parse_constant=_reject_constant,
+                object_pairs_hook=_strict_object,
+            )
         except (ValueError, RecursionError):
+            # Ambiguous or non-standard error JSON on a candidate line is a
+            # decisive UNCLASSIFIED signal; it must not silently fall back to
+            # substring guessing, and a later valid envelope cannot mask it.
+            verdicts.add(WorkerFailureClass.UNCLASSIFIED)
             continue
         if not isinstance(record, dict) or not isinstance(record.get("error"), dict):
             continue

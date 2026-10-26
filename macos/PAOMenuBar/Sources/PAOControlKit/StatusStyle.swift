@@ -210,8 +210,10 @@ public enum StatusStyle {
         // Verified work whose proof cannot be produced. Not a pass — the
         // evidence is the point — and not a rejection of the work either, so it
         // gets the tone reserved for "truth not established".
-        case "VERIFIED_EVIDENCE_MISSING", "VERIFIED_EVIDENCE_UNAVAILABLE":
+        case "VERIFIED_EVIDENCE_MISSING", "VERIFIED_EVIDENCE_UNAVAILABLE", "WORKSPACE_UNAVAILABLE":
             return StatusPresentation(tone: .unknown, symbol: "seal.badge.questionmark")
+        case "VERIFICATION_STALE":
+            return StatusPresentation(tone: .caution, symbol: "exclamationmark.triangle")
         case "IN_PROGRESS":
             return StatusPresentation(tone: .neutral, symbol: "gearshape.2")
         case "NOT_VERIFIED":

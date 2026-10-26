@@ -35,6 +35,22 @@ final class TaskDetailSurfaceTests: XCTestCase {
 
     // MARK: - Lifecycle
 
+    func testManualSelectionIsRecordedWithoutInventingAnAutomaticRoutingPlan() throws {
+        var payload = try fixtureJSON("plan_primary_reviewer")
+        payload.removeValue(forKey: "routing_plan")
+        payload.removeValue(forKey: "routing")
+        var task = try XCTUnwrap(payload["task"] as? [String: Any])
+        task["scheduling_policy"] = "MANUAL"
+        task["manual_execution_target_id"] = "pi-zai-coding-plan-glm-5.3"
+        payload["task"] = task
+        let detail = try decode(payload)
+        let selection = try XCTUnwrap(TaskLifecycle.steps(for: detail).first { $0.stage == .routing })
+        XCTAssertEqual(selection.status, .reached)
+        XCTAssertEqual(selection.detail, "pi-zai-coding-plan-glm-5.3")
+        XCTAssertEqual(selection.at, detail.task.createdAt)
+        XCTAssertNil(detail.routingSummary)
+    }
+
     func testLifecycleReportsEveryStageExactlyOnceInOrder() {
         XCTAssertEqual(
             TaskLifecycleStage.allCases,
@@ -67,6 +83,36 @@ final class TaskDetailSurfaceTests: XCTestCase {
         XCTAssertEqual(try step("plan_completed_failure_outcome", .verification).status, .failed)
         // The task is BLOCKED: completion did not happen and did not simply stall.
         XCTAssertEqual(try step("plan_completed_failure_outcome", .completion).status, .failed)
+    }
+
+    func testManualRecoveryShowsTheLatestAttemptWithoutHidingMultiRoleFailures() throws {
+        for (policy, latestExit, expected) in [
+            ("MANUAL", 0, TaskLifecycleStatus.reached),
+            ("MANUAL", 70, TaskLifecycleStatus.failed),
+            ("QUOTA_FIRST", 0, TaskLifecycleStatus.failed),
+        ] {
+            var payload = try fixtureJSON("plan_primary_reviewer")
+            var task = try XCTUnwrap(payload["task"] as? [String: Any])
+            task["scheduling_policy"] = policy
+            payload["task"] = task
+            func run(_ id: String, _ start: String, _ exit: Int) -> [String: Any] {
+                ["run_id": id, "task_id": "PT-0042", "worker_id": "pi-glm",
+                 "status": exit == 0 ? "FINISHED" : "FAILED", "started_at": start,
+                 "finished_at": start, "result": ["exit_code": exit]]
+            }
+            // Wire order is deliberately reversed; timestamps identify the retry.
+            payload["runs"] = [
+                run("retry", "2026-10-21T06:55:00Z", latestExit),
+                run("prior", "2026-10-21T06:40:00Z", 70),
+            ]
+            let detail = try decode(payload)
+            let execution = try XCTUnwrap(
+                TaskLifecycle.steps(for: detail).first { $0.stage == .execution }
+            )
+            XCTAssertEqual(execution.status, expected, policy)
+            XCTAssertEqual(execution.at, "2026-10-21T06:55:00Z")
+            XCTAssertEqual(detail.runs.count, 2)
+        }
     }
 
     func testAnUnrecognizedTaskStateNeverReportsProgress() throws {

@@ -30,6 +30,8 @@ from personal_ai_orchestrator.pi5_contract import DelegationRequest
 from personal_ai_orchestrator.pi5_runtime import PI5_TOOL_NAME
 from personal_ai_orchestrator.pi5_tool import pi5_socket_tool_source, seed_pi5_socket_tool
 from personal_ai_orchestrator.pi5b3g_scope_validator import PI5B3GScopeValidationResult
+from personal_ai_orchestrator.pi_diagnostics import PI_STOP_REASONS, pi_diagnostic_code
+from personal_ai_orchestrator.pi_provider_diagnostics import provider_error_diagnostics
 from personal_ai_orchestrator.pi_runtime import (
     PI_ALLOWED_TOOLS,
     PI_MAX_STDOUT_BYTES,
@@ -41,6 +43,7 @@ from personal_ai_orchestrator.pi_runtime import (
     seed_pi_worktree_guard,
     summarize_pi_json_stream,
 )
+from personal_ai_orchestrator.pi_stream_capture import PiStreamCapture
 from personal_ai_orchestrator.process_supervisor import SpawnStage, SupervisedProcess
 from personal_ai_orchestrator.safety_kernel import (
     AUTHORITY_OWNER_INITIATED_EXECUTION,
@@ -49,6 +52,7 @@ from personal_ai_orchestrator.safety_kernel import (
     SafetyKernelStore,
 )
 from personal_ai_orchestrator.worker_outcome_classifier import (
+    WorkerFailureClass,
     classify_worker_failure,
     worker_failure_diagnostics,
 )
@@ -286,8 +290,8 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
     async def _wait_for_worker(
         self, supervised: SupervisedProcess
     ) -> tuple[int, bytes, bytes, bool]:
-        """Drain one Pi JSON stream with a larger but still bounded cap."""
-
+        """Validate all bounded protocol bytes independently of transcript retention."""
+        capture = PiStreamCapture()
         result = await self._supervisor.collect(
             supervised,
             timeout_seconds=self.config.worker_timeout_seconds,
@@ -296,15 +300,18 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
             grace_seconds=self.config.worker_grace_seconds,
             cleanup_budget_seconds=self.config.worker_cleanup_budget_seconds,
             eof_grace_seconds=self.config.worker_eof_grace_seconds,
+            stdout_observer=capture,
         )
         stdout, stderr, truncated = result.stdout, result.stderr, result.truncated
         returncode = result.exit_code
 
-        if returncode == 0:
-            summary = summarize_pi_json_stream(stdout)
+        summary = capture.finish(eof=result.cleanup.stdout.eof)
+        if capture.limit_reason is not None:
+            returncode = PI_PROTOCOL_ERROR_EXIT
+        elif returncode == 0:
             expected_model_ref = self._expected_model_ref(supervised)
             if (
-                truncated
+                supervised.stderr_truncated
                 or expected_model_ref is None
                 or not summary.matches_model_ref(expected_model_ref)
             ):
@@ -323,6 +330,11 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
         *,
         truncated: bool,
         timeout: bool = False,
+        expected_model_ref: str | None = None,
+        process_exit_code: int | None = None,
+        stream_capture: PiStreamCapture | None = None,
+        stdout_capture_truncated: bool = False,
+        stderr_capture_truncated: bool = False,
     ) -> dict[str, object]:
         result = super()._host_result_envelope(
             exit_code,
@@ -331,7 +343,20 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
             truncated=truncated,
             timeout=timeout,
         )
-        summary = summarize_pi_json_stream(stdout)
+        # Only this exact child's finished observer may supplement a retained
+        # prefix. Direct callers without full-stream evidence remain fail closed.
+        observed = stream_capture is not None and stream_capture.summary is not None
+        summary = stream_capture.summary if observed else summarize_pi_json_stream(stdout)
+        protocol_truncated = stderr_capture_truncated if observed else truncated
+        code = pi_diagnostic_code(
+            summary,
+            expected_model_ref=expected_model_ref,
+            process_exit_code=(
+                0 if observed and stream_capture.limit_reason else process_exit_code
+            ),
+            truncated=protocol_truncated,
+            timeout=timeout,
+        )
         # Only the protocol error channel may supplement stderr. Assistant
         # content and malformed/incomplete protocol output are not diagnostics.
         error_message = (
@@ -341,38 +366,107 @@ class PiOwnerDispatchExecutor(OwnerDispatchExecutor):
                 and summary.session_seen
                 and summary.agent_start_seen
                 and summary.agent_end_seen
-                and not truncated
+                and not protocol_truncated
                 and summary.final_stop_reason == "error"
             )
             else None
         )
-        diagnostics = worker_failure_diagnostics(
-            classify_worker_failure(
-                exit_code=exit_code,
-                stderr_tail="\n".join(
-                    value for value in (cls._sanitize_transcript(stderr), error_message) if value
-                ),
-            )
+        verdict = classify_worker_failure(
+            exit_code=exit_code,
+            stderr_tail="\n".join(
+                value for value in (cls._sanitize_transcript(stderr), error_message) if value
+            ),
         )
+        provider_details = (
+            provider_error_diagnostics(error_message)
+            if code == "PI_PROVIDER_ERROR" and summary.protocol_valid
+            else {}
+        )
+        if provider_details.get("pi_provider_error_reason") == "CONFLICTING_ERROR":
+            verdict = WorkerFailureClass.UNCLASSIFIED
+        if (
+            exit_code == PI_PROTOCOL_ERROR_EXIT
+            and verdict is WorkerFailureClass.UNCLASSIFIED
+            and code
+            not in {
+                "PI_PROVIDER_ERROR",
+                "PI_PROCESS_EXIT",
+                "PI_TIMEOUT",
+                "PI_EXPECTED_MODEL_UNAVAILABLE",
+                "PI_DIAGNOSTICS_UNAVAILABLE",
+            }
+        ):
+            verdict = WorkerFailureClass.PROTOCOL_ERROR
+        diagnostics = worker_failure_diagnostics(verdict)
         result.update(diagnostics)
         result.update(
             {
                 "runtime": "pi-json",
-                "pi_protocol_valid": summary.completed and not truncated,
+                "pi_diagnostic_code": code,
+                "pi_protocol_valid": code == "PI_COMPLETE",
+                "pi_stream_valid": summary.protocol_valid,
+                "pi_session_seen": summary.session_seen,
+                "pi_agent_start_seen": summary.agent_start_seen,
+                "pi_agent_end_seen": summary.agent_end_seen,
+                "pi_model_matches": (
+                    f"{summary.final_provider}/{summary.final_model}" == expected_model_ref
+                    if expected_model_ref is not None
+                    else None
+                ),
                 "pi_event_count": summary.event_count,
                 "pi_tool_start_count": summary.tool_start_count,
                 "pi_tool_end_count": summary.tool_end_count,
                 "pi_extension_error_count": summary.extension_error_count,
-                "pi_provider": summary.final_provider,
-                "pi_model": summary.final_model,
-                "pi_stop_reason": summary.final_stop_reason,
+                "pi_provider": summary.final_provider if exit_code == 0 else None,
+                "pi_model": summary.final_model if exit_code == 0 else None,
+                "pi_stop_reason": (
+                    summary.final_stop_reason
+                    if summary.final_stop_reason in PI_STOP_REASONS
+                    else None
+                ),
                 "pi_error_message": (
                     diagnostics["worker_failure_message"] if error_message else None
                 ),
                 "pi_parse_error": summary.parse_error,
             }
         )
+        if process_exit_code is not None:
+            result["worker_process_exit_code"] = process_exit_code
+        result.update(provider_details)
+        # Raw Pi events can contain credentials in tool arguments or results.
+        # Keep only hashes/counts and bounded allowlisted diagnostics in the DB.
+        result["stdout_tail"] = ""
+        result["stderr_tail"] = ""
+        if observed:
+            result.update(stream_capture.metadata())
+            result["pi_stdout_capture_truncated"] = stdout_capture_truncated
+            result["pi_stderr_capture_truncated"] = stderr_capture_truncated
         return result
+
+    def _worker_result_envelope(
+        self,
+        supervised: SupervisedProcess,
+        exit_code: int,
+        stdout: bytes,
+        stderr: bytes,
+        *,
+        truncated: bool,
+    ) -> dict[str, object]:
+        return self._host_result_envelope(
+            exit_code,
+            stdout,
+            stderr,
+            truncated=truncated,
+            expected_model_ref=self._expected_model_ref(supervised),
+            process_exit_code=supervised.process.returncode,
+            stream_capture=(
+                supervised.stdout_observer
+                if isinstance(supervised.stdout_observer, PiStreamCapture)
+                else None
+            ),
+            stdout_capture_truncated=supervised.stdout_truncated,
+            stderr_capture_truncated=supervised.stderr_truncated,
+        )
 
 
 __all__ = ["PiOwnerDispatchExecutor"]

@@ -12,6 +12,7 @@ Those remain host-owned.
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,12 +34,12 @@ PI_MAX_STDOUT_BYTES = 4 * 1024 * 1024
 PI_MAX_ERROR_MESSAGE_CHARS = 2048
 PI_GUARD_RELATIVE_PATH = Path(".pao") / "pi-worktree-guard.ts"
 PI_ALLOWED_TOOLS: tuple[str, ...] = (
-    "read",
-    "edit",
-    "write",
-    "grep",
-    "find",
-    "ls",
+    "pao_read",
+    "pao_edit",
+    "pao_write",
+    "pao_grep",
+    "pao_find",
+    "pao_ls",
 )
 
 # PAO provider surfaces and Pi provider IDs are not always the same identity.
@@ -54,120 +55,111 @@ PI_PROVIDER_ALIASES: dict[str, str] = {
     "opencode": "opencode",
 }
 
-# Host-owned Pi extension. Pi itself has no built-in sandbox, so PI-1 does
-# not rely on prompt instructions for workspace confinement. The extension
-# blocks every enabled path-bearing file tool when its path escapes the task
-# worktree lexically OR through an existing symlink. Bash is not enabled at
-# all, and project/global extensions are disabled by argv policy.
-#
-# The source intentionally has no dependency on pi's package types. CLI
-# ``-e`` loads this trusted TypeScript file directly, while all imports are
-# Node built-ins. This avoids relying on global npm module resolution merely
-# to enforce the guard.
-PI_WORKTREE_GUARD_SOURCE = r"""import { existsSync, realpathSync } from "node:fs";
+# Every file tool is a host implementation. Distinct names ensure an extension
+# load error cannot reactivate a built-in pathname tool with the same name.
+PI_WORKTREE_GUARD_SOURCE = r"""import { AsyncLocalStorage } from "node:async_hooks";
+import { spawn } from "node:child_process";
+import { realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
-  dirname,
-  isAbsolute,
-  relative,
-  resolve,
-  sep,
-} from "node:path";
+  createReadToolDefinition, createEditToolDefinition, createWriteToolDefinition,
+  createFindToolDefinition, createLsToolDefinition, createGrepToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 
-const PATH_TOOLS = new Set([
-  "read",
-  "edit",
-  "write",
-  "grep",
-  "find",
-  "ls",
-]);
-const OPTIONAL_PATH_TOOLS = new Set(["grep", "find", "ls"]);
-const MUTATING_TOOLS = new Set(["edit", "write"]);
-
-function isWithin(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return (
-    rel === "" ||
-    (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
-  );
-}
-
-function existingAncestor(path: string): string {
-  let current = path;
-  while (!existsSync(current)) {
-    const parent = dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  return current;
+const HELPER: string[] = __PAO_FILE_HELPER__;
+const ROOT = realpathSync(process.cwd());
+const identity = statSync(ROOT, { bigint: true });
+const ROOT_ID = `${identity.dev}:${identity.ino}`;
+function toolPath(raw: string): string {
+  let value = raw.replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ");
+  if (value.startsWith("@")) value = value.slice(1);
+  if (value.startsWith("file:")) value = fileURLToPath(value);
+  if (value === "~") value = homedir();
+  else if (value.startsWith("~/")) value = resolve(homedir(), value.slice(2));
+  return resolve(ROOT, value);
 }
 
 export default function (pi: any) {
-  pi.on("tool_call", async (event: any, ctx: any) => {
-    if (!PATH_TOOLS.has(event.toolName)) return;
-
-    const input = event.input as Record<string, unknown>;
-    let raw = input?.path;
-    if (
-      (raw === undefined || raw === "") &&
-      OPTIONAL_PATH_TOOLS.has(event.toolName)
-    ) {
-      raw = ".";
-    }
-    if (typeof raw !== "string" || raw.length === 0) {
-      return {
-        block: true,
-        reason: "PAO worktree guard: missing path",
-        terminate: true,
-      };
-    }
-
-    try {
-      const logicalRoot = resolve(ctx.cwd);
-      const realRoot = realpathSync(logicalRoot);
-      const normalized = raw.startsWith("@") ? raw.slice(1) : raw;
-      const logicalTarget = resolve(logicalRoot, normalized);
-
-      if (!isWithin(logicalRoot, logicalTarget)) {
-        return {
-          block: true,
-          reason: "PAO worktree guard: path escapes assigned worktree",
-          terminate: true,
-        };
-      }
-
-      const ancestor = existingAncestor(logicalTarget);
-      const realAncestor = realpathSync(ancestor);
-      if (!isWithin(realRoot, realAncestor)) {
-        return {
-          block: true,
-          reason: "PAO worktree guard: symlink escapes assigned worktree",
-          terminate: true,
-        };
-      }
-
-      if (MUTATING_TOOLS.has(event.toolName)) {
-        const gitDir = resolve(logicalRoot, ".git");
-        const policyDir = resolve(logicalRoot, ".pao");
-        if (
-          isWithin(gitDir, logicalTarget) ||
-          isWithin(policyDir, logicalTarget)
-        ) {
-          return {
-            block: true,
-            reason: "PAO worktree guard: protected host path",
-            terminate: true,
-          };
-        }
-      }
-    } catch {
-      return {
-        block: true,
-        reason: "PAO worktree guard: path could not be proven safe",
-        terminate: true,
-      };
-    }
+  const signals = new AsyncLocalStorage<AbortSignal | undefined>();
+  const call = (operation: string, path: string, extra: any = {}) =>
+    new Promise<any>((resolve, reject) => {
+    const child = spawn(HELPER[0], [...HELPER.slice(1), ROOT, ROOT_ID], {
+      cwd: ROOT, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", LANG: "C.UTF-8" },
+      stdio: ["pipe", "pipe", "ignore"], signal: signals.getStore(),
+    });
+    let output = Buffer.alloc(0);
+    let failed = false;
+    const timer = setTimeout(() => { failed = true; child.kill("SIGKILL"); }, 10000);
+    child.on("error", () => { failed = true; });
+    child.stdout.on("data", (chunk) => {
+      if (output.length + chunk.length > 24 * 1024 * 1024) {
+        failed = true; child.kill("SIGKILL");
+      } else output = Buffer.concat([output, chunk]);
+    });
+    child.stdin.on("error", () => { failed = true; });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      try {
+        const result = JSON.parse(output.toString("utf8"));
+        if (failed || code !== 0 || result.ok !== true) throw new Error();
+        resolve(result.result);
+      } catch { reject(new Error("PAO file operation denied or unavailable")); }
+    });
+    child.stdin.end(JSON.stringify({ ...extra, operation, path }));
   });
+  const readFile = async (path: string) => Buffer.from(await call("read", path), "base64");
+  const access = async (path: string) => { await call("stat", path); };
+  const writeFile = async (path: string, content: string) => {
+    await call("write", path, { content });
+  };
+  const exists = async (path: string) => {
+    try { await access(path); return true; } catch { return false; }
+  };
+  const read = createReadToolDefinition(ROOT, { operations: {
+    readFile, access, detectImageMimeType: async (path: string) => {
+      const bytes = await readFile(path);
+      if (bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return "image/png";
+      if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return "image/jpeg";
+      if (bytes.subarray(0, 3).toString() === "GIF") return "image/gif";
+      if (bytes.subarray(0, 4).toString() === "RIFF" &&
+          bytes.subarray(8, 12).toString() === "WEBP") return "image/webp";
+      return null;
+    },
+  }});
+  const edit = createEditToolDefinition(ROOT, { operations: { readFile, writeFile, access } });
+  const write = createWriteToolDefinition(ROOT, { operations: {
+    writeFile, mkdir: async (path: string) => { await call("mkdir", path); },
+  }});
+  const find = createFindToolDefinition(ROOT, { operations: {
+    exists, glob: (pattern: string, path: string, options: any) =>
+      call("find", path, { pattern, limit: options.limit }),
+  }});
+  const ls = createLsToolDefinition(ROOT, { operations: {
+    exists, stat: async (path: string) => {
+      const value = await call("stat", path);
+      return { isDirectory: () => value.directory };
+    },
+    readdir: (path: string) => call("ls", path),
+  }});
+  const grep = { ...createGrepToolDefinition(ROOT),
+    description: "Search confined files with a Python regex or literal string. " +
+      "Skips links and Git metadata. Results are bounded.",
+    execute: async (_id: string, input: any) => ({
+      content: [{ type: "text",
+        text: await call("grep", toolPath(input.path ?? "."), input) }], details: {},
+    }),
+  };
+  // No builtin recursive scanner may resolve a worktree pathname independently.
+  for (const definition of [read, edit, write, find, ls, grep]) {
+    const execute = definition.execute;
+    pi.registerTool({ ...definition, name: `pao_${definition.name}`,
+      execute: async (...args: any[]) => {
+        return await signals.run(args[2], () => execute(...args));
+      },
+    });
+  }
 }
 """
 
@@ -234,7 +226,12 @@ def seed_pi_worktree_guard(policy_root: Path) -> Path:
 
     target = policy_root / PI_GUARD_RELATIVE_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(PI_WORKTREE_GUARD_SOURCE, encoding="utf-8")
+    if getattr(sys, "frozen", False):
+        helper = [sys.executable, "--pao-file-tool"]
+    else:
+        helper = [sys.executable, "-I", str(Path(__file__).with_name("pi_file_tools.py"))]
+    source = PI_WORKTREE_GUARD_SOURCE.replace("__PAO_FILE_HELPER__", json.dumps(helper))
+    target.write_text(source, encoding="utf-8")
     return target
 
 
@@ -258,7 +255,7 @@ def build_pi_json_argv(
 
     if config.delegation_enabled and delegation_tool_path is None:
         raise PiDelegationActivationError("TRUSTED_TOOL_MISSING")
-    if config.delegation_enabled and any(
+    if any(
         arg.split("=", 1)[0]
         in {
             "--tools",
@@ -276,11 +273,19 @@ def build_pi_json_argv(
         raise PiDelegationActivationError("CONFLICTING_TOOL_CONFIGURATION")
     tools = PI_ALLOWED_TOOLS + ((PI5_TOOL_NAME,) if config.delegation_enabled else ())
     extensions = ("-e", str(delegation_tool_path)) if config.delegation_enabled else ()
+    # Bound one-shot jobs independently of Pi's interactive default, while
+    # preserving an explicit host override without duplicate option values.
+    thinking_args = (
+        ()
+        if any(arg.split("=", 1)[0] == "--thinking" for arg in config.extra_args)
+        else ("--thinking", "off")
+    )
     return (
         config.pi_bin,
         "--mode",
         "json",
         "--no-session",
+        "--no-builtin-tools",
         "--no-approve",
         "--no-extensions",
         "-e",
@@ -293,6 +298,7 @@ def build_pi_json_argv(
         ",".join(tools),
         "--model",
         model_ref,
+        *thinking_args,
         *config.extra_args,
         "--",
         intent,
@@ -361,6 +367,11 @@ def summarize_pi_json_stream(data: bytes) -> PiJsonRunSummary:
     session_seen = False
     agent_start_seen = False
     agent_end_seen = False
+    agent_active = False
+    retry_allowed = False
+    retry_ready = False
+    retry_attempt = 0
+    active_retry_attempt: int | None = None
     tool_start_count = 0
     tool_end_count = 0
     extension_error_count = 0
@@ -387,12 +398,27 @@ def summarize_pi_json_stream(data: bytes) -> PiJsonRunSummary:
             parse_error=parse_error,
         )
 
+    def _reject_constant(value: str) -> object:  # NaN / Infinity are not JSON
+        raise ValueError(f"non-standard JSON constant: {value}")
+
+    def _strict_object(pairs: list[tuple[str, object]]) -> dict:
+        obj: dict = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError(f"duplicate object field: {key}")
+            obj[key] = value
+        return obj
+
     for raw_line in text.split("\n"):
         line = raw_line[:-1] if raw_line.endswith("\r") else raw_line
         if not line:
             continue
         try:
-            event = json.loads(line)
+            event = json.loads(
+                line,
+                parse_constant=_reject_constant,
+                object_pairs_hook=_strict_object,
+            )
         except (ValueError, RecursionError):
             # Decoder limits (integer length / nesting) are invalid protocol
             # input too; never let worker bytes escape into lifecycle cleanup.
@@ -408,12 +434,75 @@ def summarize_pi_json_stream(data: bytes) -> PiJsonRunSummary:
         if event_type == "session":
             session_seen = True
         elif event_type == "agent_start":
+            if agent_active or (agent_start_seen and not retry_ready):
+                return invalid("invalid_agent_lifecycle")
+            if retry_ready:
+                active_retry_attempt = retry_attempt
+                retry_ready = False
             agent_start_seen = True
+            agent_active = True
+            # Pi may continue after an explicit retryable provider error. Only
+            # this interval's assistant identity and end can prove completion.
+            agent_end_seen = False
+            final_provider = final_model = final_stop_reason = final_error_message = None
         elif event_type == "agent_end":
-            agent_end_seen = True
+            if not agent_active:
+                return invalid("invalid_agent_lifecycle")
+            will_retry = event.get("willRetry", False)
+            if not isinstance(will_retry, bool):
+                return invalid("invalid_agent_lifecycle")
+            if will_retry and (final_stop_reason != "error" or active_tool_ids):
+                return invalid("invalid_agent_lifecycle")
+            if active_retry_attempt is not None and final_stop_reason != "error":
+                # A successful retry emits auto_retry_end before agent_end.
+                return invalid("invalid_agent_lifecycle")
+            retry_allowed = will_retry
+            agent_end_seen = not will_retry
+            agent_active = False
+        elif event_type == "auto_retry_start":
+            attempt = event.get("attempt")
+            maximum = event.get("maxAttempts")
+            if (
+                agent_active
+                or not agent_start_seen
+                or not retry_allowed
+                or retry_ready
+                or type(attempt) is not int
+                or type(maximum) is not int
+                or not 0 < attempt <= maximum
+                or attempt != retry_attempt + 1
+            ):
+                return invalid("invalid_agent_lifecycle")
+            retry_attempt = attempt
+            retry_ready = True
+            retry_allowed = False
+        elif event_type == "auto_retry_end":
+            attempt = event.get("attempt")
+            success = event.get("success")
+            if (
+                type(attempt) is not int
+                or attempt <= 0
+                or attempt != retry_attempt
+                or not isinstance(success, bool)
+                or (active_retry_attempt != attempt and not retry_ready)
+            ):
+                return invalid("invalid_agent_lifecycle")
+            if success and (
+                not agent_active
+                or active_retry_attempt != attempt
+                or final_stop_reason in (None, "error")
+            ):
+                return invalid("invalid_agent_lifecycle")
+            if not success and (agent_active or final_stop_reason != "error"):
+                return invalid("invalid_agent_lifecycle")
+            retry_ready = retry_allowed = False
+            retry_attempt = 0
+            active_retry_attempt = None
         elif event_type == "message_end":
             message = event.get("message")
             if isinstance(message, dict) and message.get("role") == "assistant":
+                if not agent_active:
+                    return invalid("invalid_agent_lifecycle")
                 provider = message.get("provider")
                 model = message.get("model")
                 stop_reason = message.get("stopReason")
@@ -422,12 +511,16 @@ def summarize_pi_json_stream(data: bytes) -> PiJsonRunSummary:
                 final_stop_reason = stop_reason if isinstance(stop_reason, str) else None
                 final_error_message = _bounded_error_message(message.get("errorMessage"))
         elif event_type == "tool_execution_start":
+            if not agent_active:
+                return invalid("invalid_agent_lifecycle")
             tool_call_id = event.get("toolCallId")
             if not isinstance(tool_call_id, str) or tool_call_id in active_tool_ids:
                 return invalid("invalid_tool_lifecycle")
             active_tool_ids.add(tool_call_id)
             tool_start_count += 1
         elif event_type == "tool_execution_end":
+            if not agent_active:
+                return invalid("invalid_agent_lifecycle")
             tool_call_id = event.get("toolCallId")
             if not isinstance(tool_call_id, str) or tool_call_id not in active_tool_ids:
                 return invalid("invalid_tool_lifecycle")

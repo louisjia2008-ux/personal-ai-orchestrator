@@ -301,13 +301,27 @@ Limits: evidence files at most 1 MiB; 100 changed files, each at most 256
 characters; 50 named checks, each name at most 80 characters; goal at most 1024
 characters. Audit JSON parsing is capped at 65,536 characters per record, with at
 most 200 recent state transitions considered. The reader rejects journal-file
-and journal-directory symlinks and non-regular evidence files. Unsafe, absolute,
-traversing or credential-like names, controls and suspicious goal lines are
-omitted or replaced with fixed redaction text. Missing fields and omissions
-remain explicit. Arbitrary verifier argv, stdout, stderr, failure text, run
+and journal-directory symlinks and non-regular evidence files. Changed-file names
+use a relative-path policy: ordinary code identifiers, long module names, Unicode
+and spaces can be delivered. A source path such as
+`src/personal_ai_orchestrator/result_delivery.py` or `src/auth/session.py` is not
+a credential merely because of its length or terminology. Absolute and traversing
+paths, controls, credential-file names and credential-like values are omitted.
+Goals preserve safe relative code references, including code spans, while
+replacing sensitive fragments with fixed redaction text. Control-bearing or
+over-limit goals may still be withheld. Missing fields and actual omissions
+remain explicit and keep their TRUNCATED status. Arbitrary verifier argv,
+stdout, stderr, failure text, run
 `result_json`, provider payloads and external session data are never exported.
 Scrubbing is conservative, not a general-purpose secret detector; review any
 export before manually sharing it outside PAO.
+
+The macOS task result sheet reads this same `DETAIL.result` projection in its
+cross-client summary tab. It shows the server's delivery completeness separately
+from verification, together with the goal, delivered file paths, checks, evidence
+binding and omission flags. Its code-changes tab and patch export retain the
+separate local worktree diff; displaying a summary does not apply a patch or
+start another execution.
 
 ## Manual continuation
 

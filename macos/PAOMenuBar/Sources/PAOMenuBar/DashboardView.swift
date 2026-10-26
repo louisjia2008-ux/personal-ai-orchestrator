@@ -324,6 +324,8 @@ private struct NewTaskSheet: View {
     @State private var intent: String = ""
     @State private var executionTargetId: String = ""
     @State private var submissionId: UUID?
+    @State private var baseline: TaskBaselineSelection?
+    @State private var baselineRefresh = 0
 
     private var submitting: Bool { submissionId != nil }
     let onSubmitted: (String) -> Void
@@ -335,7 +337,7 @@ private struct NewTaskSheet: View {
     private var verifiedTargets: [ExecutionTargetHealthView] {
         (store.providers?.providers ?? [])
             .flatMap(\.executionTargets)
-            .filter { $0.enabled && $0.isExecutionVerified }
+            .filter { $0.enabled && $0.isLaunchAuthorized }
     }
 
     /// MANUAL may only name a target on a connected provider — scheduling never
@@ -345,8 +347,12 @@ private struct NewTaskSheet: View {
             (store.providerConnections?.connected ?? []).map(\.providerId)
         )
         return (store.providers?.providers ?? [])
-            .filter { connectedIds.contains($0.providerId) }
-            .flatMap(\.executionTargets)
+            .flatMap { provider in
+                provider.executionTargets.filter { target in
+                    connectedIds.contains(provider.providerId)
+                        || (target.runtimeId == "pi" && target.runtimeAvailable == true)
+                }
+            }
     }
 
     private static let selectablePolicies = SelectablePolicyFallback.policies + ["MANUAL"]
@@ -371,13 +377,20 @@ private struct NewTaskSheet: View {
             }
             .pickerStyle(.menu)
 
-            Picker(L10n.newTaskExecution, selection: $executionTargetId) {
-                Text(L10n.newTaskExecutionAuto).tag("")
-                ForEach(verifiedTargets) { target in
-                    Text(target.modelSkuId).tag(target.executionTargetId)
+            TaskBaselinePicker(
+                projectId: store.selectedProjectId,
+                refreshGeneration: baselineRefresh, selection: $baseline
+            ).disabled(submitting)
+
+            if store.selectedSchedulingPolicy != "MANUAL" {
+                Picker(L10n.newTaskExecution, selection: $executionTargetId) {
+                    Text(L10n.newTaskExecutionAuto).tag("")
+                    ForEach(verifiedTargets) { target in
+                        Text(target.modelSkuId).tag(target.executionTargetId)
+                    }
                 }
+                .pickerStyle(.menu)
             }
-            .pickerStyle(.menu)
 
             // This selection is submitted with the task and resolved daemon-side.
             Picker(L10n.newTaskSchedulingPolicy, selection: $store.selectedSchedulingPolicy) {
@@ -408,7 +421,8 @@ private struct NewTaskSheet: View {
                 Picker(L10n.newTaskManualModel, selection: $store.selectedManualExecutionTargetId) {
                     Text(L10n.newTaskChooseModel).tag(String?.none)
                     ForEach(connectedTargets) { target in
-                        Text(target.modelSkuId).tag(String?.some(target.executionTargetId))
+                        Text("\(target.runtimeId == "pi" ? "Pi" : "OpenCode") · \(target.modelSkuId)")
+                            .tag(String?.some(target.executionTargetId))
                     }
                 }
                 .pickerStyle(.menu)
@@ -437,6 +451,8 @@ private struct NewTaskSheet: View {
                     .disabled(
                         submitting
                             || store.selectedProjectId == nil
+                            || baseline?.projectId != store.selectedProjectId
+                            || baseline == nil
                             || intent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             || (store.selectedSchedulingPolicy == "MANUAL"
                                 && store.selectedManualExecutionTargetId == nil)
@@ -454,16 +470,18 @@ private struct NewTaskSheet: View {
 
     private func submit() {
         guard !submitting else { return }
+        guard let baseline, baseline.projectId == store.selectedProjectId else { return }
         let value = intent
         let projectId = store.selectedProjectId
-        let target = executionTargetId
+        let target = store.selectedSchedulingPolicy == "MANUAL" ? "" : executionTargetId
         let requestId = UUID()
         submissionId = requestId
         Task {
             defer {
                 if submissionId == requestId { submissionId = nil }
             }
-            let result = await store.quickSubmit(projectId: projectId, intent: value)
+            let result = await store.quickSubmit(projectId: projectId, intent: value, baseline: baseline)
+            if let result, case .failed = result { baselineRefresh += 1 }
             guard submissionId == requestId,
                   let result, case .submitted(let taskId, _) = result else { return }
             if !target.isEmpty {
@@ -573,6 +591,7 @@ private struct ProjectsSection: View {
 
 private struct ProjectCard: View {
     @EnvironmentObject private var store: OrchestratorStore
+    @State private var configuringVerification = false
     let project: ProjectView
     let onNewTask: (String) -> Void
 
@@ -591,6 +610,8 @@ private struct ProjectCard: View {
             }
             ProjectFacts(project: project)
             HStack(spacing: 8) {
+                Button(L10n.workflow("configure")) { configuringVerification = true }
+                    .accessibilityIdentifier("project.verification.configure")
                 Button {
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: project.gitRoot)])
                     Task { await store.markProjectOpened(projectId: project.projectId) }
@@ -623,6 +644,9 @@ private struct ProjectCard: View {
                 }
                 .controlSize(.small)
             }
+        }
+        .sheet(isPresented: $configuringVerification) {
+            ProjectVerificationSheet(project: project).environmentObject(store)
         }
     }
 }

@@ -47,13 +47,18 @@ async def _probe(
     argv = (
         opencode_bin,
         "run",
+        "--pure",
         "--model",
         model_sku_id,
         "--",
         PROBE_PROMPT,
     )
     supervisor = ProcessSupervisor()
-    supervised = await supervisor.start(argv, cwd=cwd, env=build_worker_env())
+    env = build_worker_env()
+    env["OPENCODE_DISABLE_PROJECT_CONFIG"] = "1"
+    # A runtime liveness probe never needs to invoke a filesystem or MCP tool.
+    env["OPENCODE_PERMISSION"] = json.dumps({"*": "deny"})
+    supervised = await supervisor.start(argv, cwd=cwd, env=env)
     try:
         result = await supervisor.collect(
             supervised,

@@ -567,6 +567,41 @@ class SafetyKernelStore:
                 finished_at TEXT,
                 result_json TEXT
             );
+            CREATE TABLE IF NOT EXISTS project_verifiers (
+                project_id TEXT PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,
+                profile_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS task_preparations (
+                dispatch_id TEXT PRIMARY KEY REFERENCES owner_dispatches(dispatch_id),
+                task_id TEXT NOT NULL REFERENCES tasks(task_id),
+                profile_sha256 TEXT NOT NULL,
+                status TEXT NOT NULL,
+                cleanup_state TEXT NOT NULL,
+                stages_json TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS manual_task_retries (
+                request_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL REFERENCES tasks(task_id),
+                prior_dispatch_id TEXT NOT NULL UNIQUE,
+                task_state_version INTEGER NOT NULL,
+                recovered_task_state_version INTEGER NOT NULL,
+                store_id TEXT NOT NULL,
+                process_epoch TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS manual_task_reopens (
+                request_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL REFERENCES tasks(task_id),
+                prior_dispatch_id TEXT NOT NULL UNIQUE,
+                task_state_version INTEGER NOT NULL,
+                recovered_task_state_version INTEGER NOT NULL,
+                store_id TEXT NOT NULL,
+                process_epoch TEXT NOT NULL,
+                prior_evidence_id TEXT NOT NULL,
+                prior_evidence_sha256 TEXT NOT NULL
+            );
             CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_task
                 ON runs(task_id) WHERE status = 'RUNNING';
             CREATE TABLE IF NOT EXISTS workspaces (
@@ -1914,6 +1949,7 @@ class SafetyKernelStore:
         manual_execution_target_id: str | None = None,
         min_tier: str = "T1",
         delegated_parent: tuple[str, str] | None = None,
+        baseline: dict[str, Any] | None = None,
     ) -> TaskRecord:
         if project_id is not None:
             self.get_project(project_id)
@@ -1953,6 +1989,7 @@ class SafetyKernelStore:
             ).fetchone()
             if existing is not None:
                 record = self._task_from_row(existing)
+                archived_baseline = self.task_baseline(record.task_id)
                 if (
                     record.task_id != task_id
                     or record.intent != intent
@@ -1962,6 +1999,7 @@ class SafetyKernelStore:
                     or record.scheduling_policy != scheduling_policy
                     or record.manual_execution_target_id != manual_execution_target_id
                     or record.min_tier != min_tier
+                    or archived_baseline != baseline
                 ):
                     raise ValueError("request_id already belongs to a different task submission")
                 self.connection.execute("COMMIT")
@@ -2003,6 +2041,7 @@ class SafetyKernelStore:
                     "working_subpath": working_subpath,
                     "scheduling_policy": scheduling_policy,
                     "manual_execution_target_id": manual_execution_target_id,
+                    **({"baseline": baseline} if baseline is not None else {}),
                     **(
                         {
                             "delegated_parent_task_id": delegated_parent[0],
@@ -2018,6 +2057,13 @@ class SafetyKernelStore:
             self.connection.execute("ROLLBACK")
             raise
         return self.get_task(task_id)
+
+    def task_baseline(self, task_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT payload_json FROM audit_events WHERE task_id=? AND event_type='TASK_SUBMITTED'",
+            (task_id,),
+        ).fetchone()
+        return json.loads(row["payload_json"]).get("baseline") if row is not None else None
 
     def get_task(self, task_id: str) -> TaskRecord:
         row = self.connection.execute(
@@ -2220,6 +2266,7 @@ class SafetyKernelStore:
         auto_acked_at: str | None = None,
         auto_reason: str | None = None,
         verification_evidence_sha256: str | None = None,
+        verification_evidence_id: str | None = None,
     ) -> None:
         """Transition internals for an ALREADY-OPEN transaction."""
 
@@ -2277,6 +2324,8 @@ class SafetyKernelStore:
         }
         if verification_evidence_sha256 is not None:
             audit_payload["verification_evidence_sha256"] = verification_evidence_sha256
+        if verification_evidence_id is not None:
+            audit_payload["verification_evidence_id"] = verification_evidence_id
         if auto_decision_id is not None:
             audit_payload["auto_decision_id"] = auto_decision_id
         if auto_grace_deadline_at is not None:
@@ -2300,6 +2349,7 @@ class SafetyKernelStore:
         reason: str,
         finalize: ShadowFinalizationIntent | None = None,
         verification_evidence_sha256: str | None = None,
+        verification_evidence_id: str | None = None,
     ) -> TaskState:
         """OPTION A (round 3): terminal truth + shadow-intent in ONE tx.
 
@@ -2329,6 +2379,7 @@ class SafetyKernelStore:
                 expected_version=expected_version,
                 reason=reason,
                 verification_evidence_sha256=verification_evidence_sha256,
+                verification_evidence_id=verification_evidence_id,
             )
             if finalize is not None:
                 self._insert_shadow_finalize_locked(finalize)

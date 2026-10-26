@@ -13,6 +13,7 @@ final class TestDaemon {
         let status: Int
         let body: String
         let beforeResponse: (() -> Void)?
+        let rawResponse: Data?
     }
 
     private var routes: [Route] = []
@@ -29,7 +30,7 @@ final class TestDaemon {
 
     func route(
         _ method: String, _ path: String, status: Int = 200, body: String,
-        replaceExisting: Bool = false, beforeResponse: (() -> Void)? = nil
+        replaceExisting: Bool = false, rawResponse: Data? = nil, beforeResponse: (() -> Void)? = nil
     ) {
         lock.lock()
         defer { lock.unlock() }
@@ -38,13 +39,21 @@ final class TestDaemon {
         }
         routes.append(Route(
             method: method, path: path, status: status, body: body,
-            beforeResponse: beforeResponse
+            beforeResponse: beforeResponse, rawResponse: rawResponse
         ))
     }
 
     func start(socketPath: String) throws {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw NSError(domain: "socket", code: Int(errno)) }
+        // Accepted sockets inherit this protection, including peers that close
+        // before accept returns and make a later setsockopt fail with EINVAL.
+        var noSigPipe: Int32 = 1
+        guard setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+            let code = errno
+            close(fd)
+            throw NSError(domain: "setsockopt", code: Int(code))
+        }
         unlink(socketPath)
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
@@ -78,6 +87,12 @@ final class TestDaemon {
         while running {
             let clientFD = accept(serverFD, nil, nil)
             if clientFD < 0 { break }
+            // A cancelled client may close before the fixture writes its response.
+            var noSigPipe: Int32 = 1
+            guard setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+                close(clientFD)
+                continue
+            }
             var tv = timeval(tv_sec: 2, tv_usec: 0)
             setsockopt(clientFD, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
             DispatchQueue.global().async { [weak self] in
@@ -129,7 +144,7 @@ final class TestDaemon {
         let payload = route?.body ?? "{\"error\":\"not_found\"}"
         let response = "HTTP/1.0 \(status) X\r\nContent-Type: application/json\r\n"
             + "Content-Length: \(payload.utf8.count)\r\n\r\n\(payload)"
-        let responseData = Data(response.utf8)
+        let responseData = route?.rawResponse ?? Data(response.utf8)
         responseData.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             var sent = 0
             while sent < raw.count {

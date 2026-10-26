@@ -11,8 +11,6 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from personal_ai_orchestrator.control_client import ControlPlaneClient, ControlPlaneUnavailable
 from personal_ai_orchestrator.model_registry import ModelRegistry
 from personal_ai_orchestrator.runtime_config import RuntimeConfig
@@ -85,8 +83,12 @@ def test_control_only_signal_handler_avoids_event_set_and_cleanup(monkeypatch, t
             calls.append("control_server.stop")
 
     previous_term = object()
+    int_dispositions = []
 
     def fake_signal(sig, disposition):
+        if sig == signal.SIGINT:
+            int_dispositions.append(disposition)
+            return
         assert sig == signal.SIGTERM
         if callable(disposition):
             signal_state["handler"] = disposition
@@ -139,6 +141,8 @@ def test_control_only_signal_handler_avoids_event_set_and_cleanup(monkeypatch, t
     )
 
     assert result == 0
+    assert len(int_dispositions) == 3 and int_dispositions[-1] is previous_term
+    assert all(callable(handler) for handler in int_dispositions[:-1])
     assert calls == [
         "control_server.start",
         "signal.install",
@@ -152,11 +156,8 @@ def test_control_only_signal_handler_avoids_event_set_and_cleanup(monkeypatch, t
     ]
 
 
-# A5 (fix/m0-trust): the asyncio event-loop teardown sometimes races the
-# SIGINT round-trip on slow CI, surfacing a spurious traceback on stdout.
-# pytest-rerunfailures lets us retry the flake up to 3 times before the
-# test is reported as a real failure.
-@pytest.mark.flaky(reruns=3, reruns_delay=1)
+# Socket visibility is deliberately the trigger: this covers the startup
+# window before the supervisor and normal serving loop are ready. No retries.
 def test_sigint_shuts_daemon_down_cleanly_without_traceback() -> None:
     # macOS limits AF_UNIX sun_path to 104 bytes; keep the socket directory shallow.
     root = Path(tempfile.mkdtemp(prefix="pao-sigint-"))
@@ -185,6 +186,8 @@ def test_sigint_shuts_daemon_down_cleanly_without_traceback() -> None:
         stderr=subprocess.PIPE,
         text=True,
     )
+    out = ""
+    err = ""
     try:
         deadline = time.monotonic() + 15.0
         while not socket_path.exists():
@@ -200,9 +203,24 @@ def test_sigint_shuts_daemon_down_cleanly_without_traceback() -> None:
     finally:
         if process.poll() is None:  # pragma: no cover - defensive cleanup
             process.kill()
-            process.wait(timeout=5)
+            out, err = process.communicate(timeout=5)
+        # Every invocation has its own folder. Preserve the first exit before
+        # assertions; later test runs cannot overwrite the original evidence.
+        (root / "first-exit.stdout").write_text(out, encoding="utf-8")
+        (root / "first-exit.stderr").write_text(err, encoding="utf-8")
+        (root / "first-exit.json").write_text(
+            json.dumps(
+                {
+                    "returncode": process.returncode,
+                    "socket_remains": socket_path.exists(),
+                    "automatic_retries": 0,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
-    assert process.returncode == 0, f"unexpected exit status: {out}\n{err}"
+    assert process.returncode == 0, f"unexpected exit status; first evidence: {root}\n{out}\n{err}"
     assert "Traceback" not in out
     assert "Traceback" not in err
     # The control socket is cleaned up by the control-plane stop path.

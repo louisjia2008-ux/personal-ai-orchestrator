@@ -18,13 +18,13 @@ final class ControlPlaneClientTests: XCTestCase {
     }
 
     func testResponseParsingExtractsStatusBodyAndErrorCode() throws {
-        let payload = "HTTP/1.0 409 X\r\nContent-Type: application/json\r\nContent-Length: 3\r\n\r\n{}"
+        let payload = "HTTP/1.0 409 X\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
         let parsed = PAOHTTP.parseResponse(Data(payload.utf8))
         XCTAssertNotNil(parsed)
         XCTAssertEqual(parsed?.status, 409)
 
-        let errorPayload = "HTTP/1.0 409 X\r\nContent-Length: 78\r\n\r\n"
-            + "{\"error\":\"running_task_cancellation_requires_execution_supervisor\"}"
+        let errorBody = "{\"error\":\"running_task_cancellation_requires_execution_supervisor\"}"
+        let errorPayload = "HTTP/1.0 409 X\r\nContent-Length: \(errorBody.utf8.count)\r\n\r\n" + errorBody
         let errorParsed = PAOHTTP.parseResponse(Data(errorPayload.utf8))
         XCTAssertEqual(errorParsed?.status, 409)
         XCTAssertEqual(errorParsed?.errorCode, "running_task_cancellation_requires_execution_supervisor")

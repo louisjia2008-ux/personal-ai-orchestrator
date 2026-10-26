@@ -223,7 +223,9 @@ struct TaskCollectionRow: View {
     /// change. See `TaskTiming`.
     var now: Date = Date()
 
-    private var status: StatusPresentation { StatusStyle.task(state: task.state) }
+    private var status: StatusPresentation {
+        task.currentVerificationStatus.map(StatusStyle.verification) ?? StatusStyle.task(state: task.state)
+    }
 
     private var isLive: Bool { !TaskTiming.isTerminal(state: task.state) }
 
@@ -248,7 +250,7 @@ struct TaskCollectionRow: View {
                     Text(projectName ?? task.projectId ?? L10n.tasksNoProject)
                         .lineLimit(1)
                     Text("·")
-                    Text(task.state)
+                    Text(task.displayState)
                         .monospaced()
                     Text("·")
                     Text(timingText)
@@ -261,7 +263,7 @@ struct TaskCollectionRow: View {
         .padding(.vertical, 3)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "\(task.intent), \(task.state), \(projectName ?? L10n.tasksNoProject)"
+            "\(task.intent), \(task.displayState), \(projectName ?? L10n.tasksNoProject)"
         )
     }
 }

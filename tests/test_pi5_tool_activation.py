@@ -191,7 +191,7 @@ def test_installed_pi_0851_sdk_activation_without_inference(tmp_path):
     }
 
 
-def test_disabled_argv_matches_pre_fix_contract_byte_for_byte():
+def test_disabled_argv_keeps_only_host_file_tools_and_no_delegation():
     argv = build_pi_json_argv(
         config=PiRuntimeConfig(pi_bin="/host/pi", extra_args=("--thinking", "low")),
         model_ref="minimax-cn/MiniMax-M3",
@@ -204,6 +204,7 @@ def test_disabled_argv_matches_pre_fix_contract_byte_for_byte():
         "--mode",
         "json",
         "--no-session",
+        "--no-builtin-tools",
         "--no-approve",
         "--no-extensions",
         "-e",
@@ -212,7 +213,7 @@ def test_disabled_argv_matches_pre_fix_contract_byte_for_byte():
         "--no-prompt-templates",
         "--no-context-files",
         "--tools",
-        "read,edit,write,grep,find,ls",
+        ",".join(PI_ALLOWED_TOOLS),
         "--model",
         "minimax-cn/MiniMax-M3",
         "--thinking",

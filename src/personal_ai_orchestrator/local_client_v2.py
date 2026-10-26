@@ -37,6 +37,8 @@ CAPABILITIES = (
     "manual-continuation-v1",
     "manual-recovery-v1",
     "recovery-status-v1",
+    "manual-retry-v1",
+    "manual-reopen-v1",
 )
 _IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 _IDENTITY_PATTERN = r"^[a-f0-9]{32}$"
@@ -52,6 +54,9 @@ Operation = Literal[
     "CONTINUATION",
     "RECOVER",
     "RECOVERY_STATUS",
+    "WORKFLOW",
+    "RETRY",
+    "REOPEN",
 ]
 
 
@@ -87,6 +92,9 @@ class LocalClientRequestV2(BaseModel):
             "CANCEL": {"task_id"} | identities,
             "RECOVER": {"task_id", "task_state_version", "prior_dispatch_id"} | identities,
             "RECOVERY_STATUS": {"task_id", "task_state_version", "prior_dispatch_id"} | identities,
+            "WORKFLOW": {"task_id"},
+            "RETRY": {"task_id", "task_state_version", "prior_dispatch_id"} | identities,
+            "REOPEN": {"task_id", "task_state_version", "prior_dispatch_id"} | identities,
         }
         expected = shapes[self.operation]
         optional = set(type(self).model_fields) - {"protocol_version", "operation", "request_id"}
@@ -401,7 +409,7 @@ def handle_local_client_v2(service: ControlPlaneService, payload: dict[str, Any]
     if request.expected_store_id is not None and request.expected_store_id != store_id:
         raise ControlPlaneError(409, "store_identity_mismatch")
     if (
-        request.operation in {"SUBMIT_V2", "START", "CANCEL", "RECOVER"}
+        request.operation in {"SUBMIT_V2", "START", "CANCEL", "RECOVER", "RETRY", "REOPEN"}
         and request.expected_process_epoch != epoch
     ):
         raise ControlPlaneError(409, "process_epoch_mismatch")
@@ -442,6 +450,18 @@ def handle_local_client_v2(service: ControlPlaneService, payload: dict[str, Any]
         result = _recover(service, request)
     elif request.operation == "RECOVERY_STATUS":
         result = _recovery_status(service, request)
+    elif request.operation == "WORKFLOW":
+        from personal_ai_orchestrator.project_workflow import manual_workflow
+
+        result = manual_workflow(service, request.task_id)
+    elif request.operation == "RETRY":
+        from personal_ai_orchestrator.project_workflow import retry_manual_task
+
+        result = retry_manual_task(service, request)
+    elif request.operation == "REOPEN":
+        from personal_ai_orchestrator.project_workflow import reopen_verified_task
+
+        result = reopen_verified_task(service, request)
     elif request.operation == "DETAIL":
         result = _detail(service, request.task_id)
     elif request.operation == "CONTINUATION":

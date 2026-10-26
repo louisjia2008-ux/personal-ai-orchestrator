@@ -10,7 +10,7 @@
     "./telegram-core": "./telegram.js"
   },
   "scripts": {
-    "test": "node --test dispatch.test.js telegram.test.js"
+    "test": "node --test *.test.js"
   },
   "files": [
     "index.js",
@@ -21,7 +21,11 @@
     "README.md",
     "README.zh.md"
   ],
-  "keywords": ["dsh-plugin", "telegram", "deepseek-harness"],
+  "keywords": [
+    "dsh-plugin",
+    "telegram",
+    "deepseek-harness"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=22"

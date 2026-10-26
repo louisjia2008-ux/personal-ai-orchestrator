@@ -21,6 +21,7 @@ struct TaskDetailSurface: View {
     let inspectorAvailable: Bool
     let onNewTask: () -> Void
     let onOpenProviders: () -> Void
+    @State private var showingResult = false
 
     /// The loaded detail, but only when it is the detail of the task that is
     /// actually selected.
@@ -47,6 +48,11 @@ struct TaskDetailSurface: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
             .accessibilityIdentifier("workspace.detail")
+        .sheet(isPresented: $showingResult) {
+            if let selectedTaskId {
+                TaskResultSheet(taskId: selectedTaskId).environmentObject(store)
+            }
+        }
     }
 
     private var document: some View {
@@ -60,10 +66,21 @@ struct TaskDetailSurface: View {
                         onCancel: cancel
                     )
                     cancellationNotice(detail)
+                    workflow(detail)
+                    preparation(detail)
                     TaskAttentionBanner(reasons: TaskAttention.reasons(for: detail))
                     TaskExecutionSection(detail: detail)
                     TaskLifecycleSection(detail: detail)
-                    TaskRoutingSection(summary: detail.routingSummary)
+                    if detail.routingSummary == nil, detail.task.schedulingPolicy == "MANUAL",
+                       let target = detail.task.manualExecutionTargetId {
+                        TaskDetailSection(L10n.newTaskManualModel, symbol: "hand.point.up.left") {
+                            Text(L10n.workflow("manualSelection")).font(.callout)
+                            Text(target).font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                    } else {
+                        TaskRoutingSection(summary: detail.routingSummary)
+                    }
                     TaskChangesSection(
                         changes: TaskChangeSet.derive(from: detail),
                         workspace: detail.workspace
@@ -187,6 +204,62 @@ struct TaskDetailSurface: View {
         guard let selectedTaskId else { return }
         Task { await store.cancel(taskId: selectedTaskId) }
     }
+
+    @ViewBuilder
+    private func preparation(_ detail: TaskDetailView) -> some View {
+        if let report = store.selectedTaskPreparation,
+           report.taskId == detail.task.taskId, report.status != "NOT_REQUIRED" {
+            TaskDetailSection(L10n.workflow("preparation"), symbol: "shippingbox") {
+                Text("\(report.status) · \(L10n.workflow("cleanup")): \(report.cleanupState ?? "UNKNOWN")")
+                    .font(.callout).textSelection(.enabled)
+                Text(L10n.workflow("preparationHelp")).font(.caption).foregroundStyle(.secondary)
+                ForEach(Array(report.stages.enumerated()), id: \.offset) { _, stage in
+                    DisclosureGroup {
+                        Text(stage.argv.joined(separator: " "))
+                        Text(stage.stdout + stage.stderr)
+                        if let error = stage.error { Text(error).foregroundStyle(.red) }
+                        if stage.truncated { Text(L10n.workflow("outputTruncated")) }
+                    } label: {
+                        Text("\(stage.name) · \(stage.returncode.map { "exit \($0)" } ?? stage.error ?? "…")")
+                    }
+                    .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                }
+            }
+            .accessibilityIdentifier("task.preparation")
+        }
+    }
+
+    @ViewBuilder
+    private func workflow(_ detail: TaskDetailView) -> some View {
+        if ["READY", "RUNNING", "WORKER_FINISHED", "VERIFYING", "BLOCKED", "VERIFIED", "COMPLETED"].contains(detail.task.state) {
+            VStack(alignment: .leading, spacing: 10) {
+                if let workflow = store.selectedTaskWorkflow,
+                   workflow.taskId == detail.task.taskId {
+                    if let code = workflow.failureCode {
+                        Text("\(L10n.workflow("failure")): \(code)")
+                            .font(.callout).textSelection(.enabled)
+                    }
+                    if workflow.retryAvailable {
+                        let reopening = workflow.recoveryOperation == .reopen
+                        Text(L10n.workflow(reopening ? "reopenHelp" : "retryHelp"))
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button(L10n.workflow(reopening ? "reopen" : "retry")) { Task { await store.retryManualTask() } }
+                            .disabled(store.retryInProgress)
+                            .accessibilityIdentifier("task.recovery.prepare")
+                    } else if let reason = workflow.blockingReason, detail.task.state == "BLOCKED" {
+                        Text(reason).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if detail.workspace != nil {
+                    Button(L10n.workflow("result")) { showingResult = true }
+                        .accessibilityIdentifier("task.result.open")
+                }
+            }
+        }
+        if let notice = store.retryNotice, detail.task.state == "READY" {
+            Text(notice).font(.callout).textSelection(.enabled)
+        }
+    }
 }
 
 // MARK: - Header
@@ -202,7 +275,10 @@ struct TaskDetailHeader: View {
     let onReload: () -> Void
     let onCancel: () -> Void
 
-    private var status: StatusPresentation { StatusStyle.task(state: detail.task.state) }
+    private var status: StatusPresentation {
+        detail.task.currentVerificationStatus.map(StatusStyle.verification)
+            ?? StatusStyle.task(state: detail.task.state)
+    }
 
     private var isLive: Bool { !TaskTiming.isTerminal(state: detail.task.state) }
 
@@ -214,7 +290,7 @@ struct TaskDetailHeader: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: Spacing.element) {
-                TaskStatusLabel(presentation: status, text: detail.task.state)
+                TaskStatusLabel(presentation: status, text: detail.task.displayState)
                 Label(
                     projectName ?? detail.task.projectId ?? L10n.tasksNoProject,
                     systemImage: "folder"
@@ -340,6 +416,12 @@ struct TaskAttentionBanner: View {
 struct TaskLifecycleSection: View {
     let detail: TaskDetailView
 
+    private func title(_ step: TaskLifecycleStep) -> String {
+        step.stage == .routing && detail.routingSummary == nil
+            && detail.task.schedulingPolicy == "MANUAL"
+            ? L10n.newTaskManualModel : step.stage.title
+    }
+
     var body: some View {
         TaskDetailSection(
             L10n.taskDetailSectionLifecycle,
@@ -353,7 +435,7 @@ struct TaskLifecycleSection: View {
                         Image(systemName: style.symbol)
                             .foregroundStyle(style.color)
                             .frame(width: 16)
-                        Text(step.stage.title)
+                        Text(title(step))
                             .font(.callout)
                         Spacer(minLength: Spacing.inner)
                         VStack(alignment: .trailing, spacing: 0) {
@@ -369,7 +451,7 @@ struct TaskLifecycleSection: View {
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel(
-                        "\(step.stage.title), \(L10n.taskLifecycleStatus(step.status))"
+                        "\(title(step)), \(L10n.taskLifecycleStatus(step.status))"
                     )
                 }
             }

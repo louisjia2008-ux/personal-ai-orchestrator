@@ -69,6 +69,9 @@ public final class DaemonLifecycleController: ObservableObject {
     private let configuration: DaemonLaunchConfiguration
     private let client: PAOControlClient
     private var ownedProcess: Process?
+    private var ownedStderr: BoundedProcessOutput?
+    private var startupTimeout: TimeInterval = 15
+    private var environmentOverride: [String: String]?
     private var startupTask: Task<Void, Never>?
     /// Exact identity of the reachable daemon whose build was refused.
     /// Never derived from argv/path/process-name matching.
@@ -77,6 +80,15 @@ public final class DaemonLifecycleController: ObservableObject {
     public init(configuration: DaemonLaunchConfiguration, client: PAOControlClient) {
         self.configuration = configuration
         self.client = client
+    }
+
+    // Test seam for a real silent child without touching the owner's auth store.
+    init(configuration: DaemonLaunchConfiguration, client: PAOControlClient,
+         startupTimeout: TimeInterval, environment: [String: String]) {
+        self.configuration = configuration
+        self.client = client
+        self.startupTimeout = startupTimeout
+        self.environmentOverride = environment
     }
 
     public func ensureStarted() {
@@ -188,9 +200,9 @@ public final class DaemonLifecycleController: ObservableObject {
     /// commit, nothing can be concluded, and refusing on that basis would make
     /// an unstamped development build unable to start at all.
     private func buildIsCompatible(health: HealthView) async -> Bool {
-        let daemonCommit: String?
+        let daemonBuild: BuildView
         do {
-            daemonCommit = try await client.build().commitSHA
+            daemonBuild = try await client.build()
         } catch {
             // A daemon that cannot answer /v1/build predates the endpoint;
             // that is indeterminate, not a mismatch. Do not retain an identity
@@ -200,7 +212,8 @@ public final class DaemonLifecycleController: ObservableObject {
         }
         let compatibility = BuildCompatibility.compare(
             app: BuildIdentity.current,
-            daemonCommitSHA: daemonCommit
+            daemonCommitSHA: daemonBuild.commitSHA,
+            daemonBuiltAt: daemonBuild.builtAt
         )
         guard case .mismatched(let app, let daemon) = compatibility else {
             refusedDaemonIdentity = nil
@@ -229,9 +242,9 @@ public final class DaemonLifecycleController: ObservableObject {
         // bundled daemon's quota collectors register against the live
         // provider endpoints instead of returning AUTH_REQUIRED for every
         // token plan the owner is paying for.
-        process.environment = daemonEnvironment()
-        let stderr = Pipe()
-        process.standardError = stderr
+        process.environment = environmentOverride ?? daemonEnvironment()
+        let stderr = BoundedProcessOutput()
+        process.standardError = stderr.pipe
         process.terminationHandler = { [weak self] process in
             Task { @MainActor [weak self] in
                 if self?.ownedProcess === process {
@@ -241,9 +254,10 @@ public final class DaemonLifecycleController: ObservableObject {
         }
         try process.run()
         ownedProcess = process
+        ownedStderr = stderr
         status = .startedByApp(pid: process.processIdentifier)
 
-        let deadline = Date().addingTimeInterval(15.0)
+        let deadline = Date().addingTimeInterval(startupTimeout)
         while Date() < deadline {
             if await healthIsCompatible() {
                 status = .healthyStartedByApp(pid: process.processIdentifier)
@@ -254,7 +268,7 @@ public final class DaemonLifecycleController: ObservableObject {
             }
             try await Task.sleep(for: .milliseconds(150))
         }
-        let stderrData = stderr.fileHandleForReading.availableData
+        let stderrData = stderr.snapshot()
         throw LifecycleError.startupTimeout(stderrData.isEmpty ? nil : stderrData)
     }
 

@@ -478,6 +478,7 @@ def main(
     argv: list[str] | None = None,
     *,
     provider_registry_manager: ProviderRegistryManager | None = None,
+    pi_runtime: PiRuntimeConfig | None = None,
 ) -> int:
     args = parse_args(argv)
     if args.quota_credential_check is not None:
@@ -509,6 +510,7 @@ def main(
     if provider_registry_manager._audit is None:
         provider_registry_manager._audit = service.store
     control_server: DelegationCampaignControlPlaneServer | None = None
+    control_started = False
     control_service: ControlPlaneService | None = None
     tick_interval_seconds = _resolve_tick_interval_seconds(args)
     supervisor = build_default_supervisor(
@@ -516,91 +518,109 @@ def main(
         clock=lambda: datetime.now(UTC),
         audit_store=service.store,
     )
-    if args.control_socket is not None:
-        control_service = build_control_service(
-            config=config,
-            state_db=args.state_db,
-            runtime_state_root=args.runtime_state_root,
-            provider_registry_manager=provider_registry_manager,
-            execution_repo=args.execution_repo,
-            worktree_root=args.worktree_root,
-            verifier_profile=load_verifier_profile(args.verifier_profile),
-            worker_permission_config=args.worker_permission_config,
-            model_tiers_path=args.model_tiers_path,
-            supervisor=supervisor,
-        )
-        campaign = control_service.__dict__["_delegation_campaign_store"]
-        control_server = DelegationCampaignControlPlaneServer(
-            control_service,
-            args.control_socket,
-            campaign=campaign,
-        )
-        control_server.start_background()
-        if not args.control_only:
-            from personal_ai_orchestrator.supervised_auto_step import (
-                SUPERVISED_AUTO_STEP_NAME,
+    supervisor_stop = threading.Event()
+    supervisor_thread: threading.Thread | None = None
+    supervisor_started = False
+    shutdown_requested = False
+    interrupt_requested = False
+    previous_int = signal.getsignal(signal.SIGINT)
+    previous_term = None
+    term_installed = False
+
+    def _request_interrupt(_signum, _frame) -> None:
+        # Socket bind is observable before startup finishes. Defer SIGINT to
+        # ordinary control flow so it cannot interrupt resource publication or
+        # Thread.start() between OS thread creation and Python bookkeeping.
+        nonlocal interrupt_requested
+        interrupt_requested = True
+
+    def _request_shutdown(_signum, _frame) -> None:
+        # Never acquire locks, set Events or perform cleanup in a handler.
+        nonlocal shutdown_requested
+        shutdown_requested = True
+
+    signal.signal(signal.SIGINT, _request_interrupt)
+    try:
+        if args.control_socket is not None:
+            control_service = build_control_service(
+                config=config,
+                state_db=args.state_db,
+                runtime_state_root=args.runtime_state_root,
+                provider_registry_manager=provider_registry_manager,
+                execution_repo=args.execution_repo,
+                worktree_root=args.worktree_root,
+                verifier_profile=load_verifier_profile(args.verifier_profile),
+                worker_permission_config=args.worker_permission_config,
+                model_tiers_path=args.model_tiers_path,
+                supervisor=supervisor,
+                pi_runtime=pi_runtime,
             )
-
-            supervisor.register(
-                SUPERVISED_AUTO_STEP_NAME,
-                control_service.build_supervised_auto_step(),
+            campaign = control_service.__dict__["_delegation_campaign_store"]
+            control_server = DelegationCampaignControlPlaneServer(
+                control_service,
+                args.control_socket,
+                campaign=campaign,
             )
-    if args.control_only:
-        if control_server is None:
-            raise SystemExit("--control-only requires --control-socket")
-        supervisor_stop = threading.Event()
-        shutdown_requested = False
-        previous_term = signal.getsignal(signal.SIGTERM)
+            control_server.start_background()
+            control_started = True
+            if not args.control_only:
+                from personal_ai_orchestrator.supervised_auto_step import (
+                    SUPERVISED_AUTO_STEP_NAME,
+                )
 
-        def _request_shutdown(_signum, _frame) -> None:
-            # Python dispatches this handler on the main thread.  Keep it to a
-            # scalar assignment: Event.set(), logging, server shutdown and
-            # every other lock-backed cleanup operation belong below in the
-            # ordinary control flow.
-            nonlocal shutdown_requested
-            shutdown_requested = True
-
-        signal.signal(signal.SIGTERM, _request_shutdown)
+                supervisor.register(
+                    SUPERVISED_AUTO_STEP_NAME,
+                    control_service.build_supervised_auto_step(),
+                )
+        if args.control_only:
+            if control_server is None:
+                raise SystemExit("--control-only requires --control-socket")
+            previous_term = signal.getsignal(signal.SIGTERM)
+            signal.signal(signal.SIGTERM, _request_shutdown)
+            term_installed = True
         supervisor_thread = threading.Thread(
             target=supervisor.run,
             args=(supervisor_stop,),
             daemon=True,
         )
         supervisor_thread.start()
-        try:
-            while not shutdown_requested:
+        supervisor_started = True
+        if args.control_only:
+            while not shutdown_requested and not interrupt_requested:
                 time.sleep(0.1)
-        except KeyboardInterrupt:
-            return 0
-        finally:
-            signal.signal(signal.SIGTERM, previous_term)
-            supervisor_stop.set()
-            supervisor_thread.join(timeout=2.0)
-            control_server.stop()
-            if control_service is not None:
-                control_service.store.close()
-            service.store.close()
-        return 0
-
-    supervisor_stop = threading.Event()
-    supervisor_thread = threading.Thread(
-        target=supervisor.run,
-        args=(supervisor_stop,),
-        daemon=True,
-    )
-    supervisor_thread.start()
-    try:
-        serve(service, host=args.host, port=args.port)
+        else:
+            # The blocking loopback server uses KeyboardInterrupt. Restore its
+            # prior disposition only after all startup resources are owned by
+            # this try/finally; a deferred interrupt still prevents serving.
+            signal.signal(signal.SIGINT, previous_int)
+            if not interrupt_requested:
+                serve(service, host=args.host, port=args.port)
     except KeyboardInterrupt:
         return 0
     finally:
-        supervisor_stop.set()
-        supervisor_thread.join(timeout=2.0)
-        if control_server is not None:
-            control_server.stop()
-        if control_service is not None:
-            control_service.store.close()
-        service.store.close()
+        # Keep another SIGINT from interrupting resource cleanup halfway through.
+        signal.signal(signal.SIGINT, _request_interrupt)
+        try:
+            if term_installed:
+                signal.signal(signal.SIGTERM, previous_term)
+            supervisor_stop.set()
+            if supervisor_thread is not None and (
+                supervisor_started or getattr(supervisor_thread, "ident", None) is not None
+            ):
+                supervisor_thread.join(timeout=2.0)
+            if control_server is not None:
+                control_thread = getattr(control_server, "_thread", None)
+                if control_started or getattr(control_thread, "ident", None) is not None:
+                    control_server.stop()
+                else:
+                    # shutdown() waits for serve_forever(); it must never be
+                    # called if thread creation failed before serving began.
+                    control_server.httpd.server_close()
+            if control_service is not None:
+                control_service.store.close()
+            service.store.close()
+        finally:
+            signal.signal(signal.SIGINT, previous_int)
     return 0
 
 

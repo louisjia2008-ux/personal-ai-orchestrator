@@ -24,7 +24,11 @@ struct TaskExecutionSection: View {
     private var verifiedTargets: [ExecutionTargetHealthView] {
         (store.providers?.providers ?? [])
             .flatMap(\.executionTargets)
-            .filter { $0.enabled && $0.isExecutionVerified }
+            .filter {
+                $0.enabled && $0.isLaunchAuthorized
+                    && (detail.task.manualExecutionTargetId == nil
+                        || detail.task.manualExecutionTargetId == $0.executionTargetId)
+            }
     }
 
     private var ownerSettingEnabled: Bool {
@@ -37,11 +41,24 @@ struct TaskExecutionSection: View {
 
     private var canDispatch: Bool {
         ownerSettingEnabled && taskDispatchable && !verifiedTargets.isEmpty
-            && !selectedTargetId.isEmpty
+            && verifiedTargets.contains { $0.executionTargetId == selectedTargetId }
+            && (detail.task.manualExecutionTargetId == nil
+                || detail.task.manualExecutionTargetId == selectedTargetId)
     }
 
     var body: some View {
         TaskDetailSection(L10n.taskDetailSectionExecution, symbol: "play.rectangle") {
+            if let baseline = detail.task.baseline {
+                TaskFieldRow(label: L10n.workflow("baselineTitle"), value: baseline.mode.title)
+                TaskFieldRow(
+                    label: L10n.workflow("baselineSourceHead"), value: baseline.sourceHead,
+                    monospaced: true
+                )
+                TaskFieldRow(
+                    label: L10n.workflow("baselineTaskCommit"), value: baseline.baseSha,
+                    monospaced: true
+                )
+            }
             TaskFieldRow(
                 label: L10n.labelCurrentWorker,
                 value: currentWorker,
@@ -52,12 +69,72 @@ struct TaskExecutionSection: View {
                 TaskFieldRow(label: L10n.detailRunStatus, value: run.status)
             }
             dispatch
+            if let feedback = dispatchFeedback {
+                Text(feedback).font(.callout).textSelection(.enabled)
+            }
+            failureDiagnostics
             workerLog
         }
         .onAppear {
             if selectedTargetId.isEmpty {
                 selectedTargetId = preferredTargetId
             }
+        }
+        .onChange(of: verifiedTargets) { _ in selectedTargetId = preferredTargetId }
+    }
+
+    @ViewBuilder
+    private var failureDiagnostics: some View {
+        ForEach(Array(detail.runs.filter { WorkerFailureDiagnostic(run: $0) != nil }.suffix(3))) { run in
+            if let diagnostic = WorkerFailureDiagnostic(run: run) {
+                VStack(alignment: .leading, spacing: Spacing.tight) {
+                    Text(L10n.workflow(
+                        detail.task.state == "BLOCKED" && detail.runs.last?.runId == run.runId
+                            ? "diagnostic.current" : "diagnostic.history"
+                    )).font(.caption.weight(.semibold))
+                    Text("\(diagnostic.code) · \(diagnostic.runId)")
+                        .font(.system(.caption, design: .monospaced))
+                    Text(diagnostic.explanation).font(.callout)
+                    if let reason = diagnostic.providerReason {
+                        Text("\(L10n.workflow("diagnostic.providerReason")): \(reason)")
+                            .font(.system(.caption, design: .monospaced))
+                    }
+                    if let status = diagnostic.providerHTTPStatus {
+                        Text("HTTP: \(status)").font(.caption)
+                    }
+                    if let errorCode = diagnostic.providerErrorCode {
+                        Text("\(L10n.workflow("diagnostic.providerCode")): \(errorCode)")
+                            .font(.system(.caption, design: .monospaced))
+                    }
+                    if let digest = diagnostic.providerSampleSHA256 {
+                        Text("\(L10n.workflow("diagnostic.providerFingerprint")): \(digest)")
+                            .font(.system(.caption, design: .monospaced))
+                    }
+                    if diagnostic.providerSampleAtLimit == true {
+                        Text(L10n.workflow("diagnostic.providerSampleAtLimit"))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text(detail.task.state == "BLOCKED" && detail.runs.last?.runId == run.runId
+                         ? diagnostic.recoveryHint : L10n.workflow("diagnostic.historyHelp"))
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("\(L10n.workflow("diagnostic.processExit")): \(diagnostic.processExitCode.map(String.init) ?? "UNKNOWN") · \(L10n.workflow("diagnostic.hostExit")): \(diagnostic.hostExitCode.map(String.init) ?? "UNKNOWN")")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .textSelection(.enabled)
+                .accessibilityIdentifier("task.execution.failureDiagnostic")
+            }
+        }
+    }
+
+    private var dispatchFeedback: String? {
+        guard let notice = store.dispatchNotice else { return nil }
+        switch notice {
+        case .dispatched(let id, _, _):
+            return id == detail.task.taskId && taskDispatchable ? L10n.workflow("dispatchAccepted") : nil
+        case .blocked(let id, let code):
+            return id == detail.task.taskId ? code : nil
+        case .failed(let detail): return detail
+        case .malformedResponse: return L10n.workflow("unavailable")
         }
     }
 
@@ -82,11 +159,7 @@ struct TaskExecutionSection: View {
     private var workerLog: some View {
         if let run = detail.runs.last, run.status != "RUNNING",
            run.stderrTail != nil || run.stdoutTail != nil {
-            VStack(alignment: .leading, spacing: Spacing.tight) {
-                Divider()
-                Text(L10n.detailRawWorkerOutput)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+            DisclosureGroup {
                 if run.outputTruncated == true {
                     Text(L10n.workerLogTruncated)
                         .font(.caption2)
@@ -110,6 +183,9 @@ struct TaskExecutionSection: View {
                 }
                 .frame(maxHeight: 160)
                 .border(Color(nsColor: .separatorColor), width: 1)
+            } label: {
+                Text(L10n.detailRawWorkerOutput).font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -123,6 +199,9 @@ struct TaskExecutionSection: View {
                 Divider()
                 if !ownerSettingEnabled {
                     TaskSectionNotice(text: L10n.ownerExecutionDisabled, symbol: "lock")
+                    Button(L10n.ownerExecutionToggle) {
+                        Task { await store.setOwnerExecution(enabled: true) }
+                    }
                 }
                 if verifiedTargets.isEmpty {
                     TaskSectionNotice(text: L10n.noVerifiedTargets, symbol: "xmark.shield")
@@ -139,6 +218,22 @@ struct TaskExecutionSection: View {
                     }) {
                         TaskFieldRow(label: L10n.providerModel, value: target.modelSkuId)
                     }
+                }
+                if let manual = detail.task.manualExecutionTargetId,
+                   let target = (store.providers?.providers ?? []).flatMap(\.executionTargets)
+                    .first(where: { $0.executionTargetId == manual }), !target.isLaunchAuthorized {
+                    Text("\(target.runtimeId) · \(target.modelSkuId)").font(.callout)
+                    Text(L10n.workflow("probeHelp")).font(.caption).foregroundStyle(.secondary)
+                    Button(L10n.workflow("probe")) {
+                        Task { await store.probeExecutionTarget(manual) }
+                    }
+                    .disabled(!ownerSettingEnabled || store.probingTargetId != nil)
+                    .accessibilityIdentifier("task.execution.probe")
+                    if store.probingTargetId == manual { ProgressView().controlSize(.small) }
+                }
+                if let notice = store.probeNotice,
+                   store.probeNoticeTargetId == detail.task.manualExecutionTargetId {
+                    Text(notice).font(.caption).textSelection(.enabled)
                 }
                 HStack(spacing: Spacing.inner) {
                     Button {

@@ -33,6 +33,7 @@ from personal_ai_orchestrator.worker_outcome_classifier import (
     classify_worker_failure,
     worker_failure_diagnostics,
 )
+from personal_ai_orchestrator.pi_diagnostics import safe_pi_failure_metadata
 
 
 _TERMINAL_STATES = {TaskState.FAILED, TaskState.CANCELLED, TaskState.COMPLETED}
@@ -197,6 +198,7 @@ def _failure_result_payload(
             flag = worker_result.get(name)
             if type(flag) is bool:
                 payload[name] = flag
+        payload.update(safe_pi_failure_metadata(worker_result))
     return payload
 
 
@@ -239,6 +241,7 @@ def validate_execution_target_launch(
         registry,
         execution_target_id=execution_target_id,
         execution_evidence_journal=execution_evidence_journal,
+        now=now,
     ):
         raise RuntimeError("execution target has not been runtime-verified")
     if not runtime_available:
@@ -670,6 +673,7 @@ def apply_verification_result(
             if evidence_matches
             else None
         ),
+        verification_evidence_id=result.evidence_id if evidence_matches else None,
     )
     if finalize_intent is not None:
         # Best-effort inline drain: replays the durable intent so the

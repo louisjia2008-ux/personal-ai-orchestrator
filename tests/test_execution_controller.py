@@ -261,6 +261,54 @@ def test_launch_projection_keeps_expired_history_but_denies_launch(tmp_path: Pat
         )
 
 
+@pytest.mark.parametrize(
+    "age,allowed",
+    [
+        pytest.param(timedelta(seconds=-1), False, id="future-evidence"),
+        pytest.param(timedelta(0), True, id="fresh-evidence"),
+        pytest.param(timedelta(days=30), True, id="exact-age-limit"),
+        pytest.param(timedelta(days=30, seconds=1), False, id="expired-evidence"),
+    ],
+)
+def test_launch_gate_uses_supplied_clock_for_evidence_freshness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, age: timedelta, allowed: bool
+) -> None:
+    registry = _launch_registry()
+    journal = ExecutionEvidenceJournal(tmp_path)
+    observed = datetime(2000, 1, 1, tzinfo=UTC)
+    _append_execution_evidence(
+        journal,
+        observed_at=observed,
+        result=ExecutionVerificationOutcome.VERIFIED,
+    )
+    # Make the ambient clock give the opposite verdict to the supplied clock.
+    wall_now = observed + timedelta(days=31) if allowed else observed
+
+    class ConflictingClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return wall_now
+
+    monkeypatch.setattr("personal_ai_orchestrator.execution_controller.datetime", ConflictingClock)
+    if allowed:
+        validate_execution_target_launch(
+            registry,
+            execution_target_id="target",
+            runtime_available=True,
+            execution_evidence_journal=journal,
+            now=observed + age,
+        )
+    else:
+        with pytest.raises(RuntimeError, match="not been runtime-verified"):
+            validate_execution_target_launch(
+                registry,
+                execution_target_id="target",
+                runtime_available=True,
+                execution_evidence_journal=journal,
+                now=observed + age,
+            )
+
+
 def test_launch_projection_denies_demoted_history(tmp_path: Path) -> None:
     now = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
     registry = _launch_registry()

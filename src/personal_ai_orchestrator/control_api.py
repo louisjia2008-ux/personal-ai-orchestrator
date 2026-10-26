@@ -59,6 +59,14 @@ from personal_ai_orchestrator.execution_evidence import (
 )
 from personal_ai_orchestrator.model_registry import EvidenceConfidence, ModelRegistry
 from personal_ai_orchestrator.owner_settings import OwnerExecutionSettings
+from personal_ai_orchestrator.project_baseline import (
+    BaselineError,
+    BaselineMode,
+    BaselinePreview,
+    BaselineReceipt,
+    preview_baseline,
+    select_baseline,
+)
 from personal_ai_orchestrator.provider_registry_manager import (
     ProviderRegistryManager,
 )
@@ -174,6 +182,8 @@ class TaskSubmitRequest(_ViewModel):
     # ``max_length`` here — the dispatch handler owns the
     # member-of-enum check and emits the user-friendly error code.
     min_tier: str | None = Field(default=None)
+    baseline_mode: BaselineMode = "COMMITTED_HEAD"
+    expected_baseline_fingerprint: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 class CancelRequest(_ViewModel):
@@ -219,8 +229,10 @@ class TaskView(_ViewModel):
     intent: str
     project_id: str | None = None
     base_sha: str | None = None
+    baseline: BaselineReceipt | None = None
     working_subpath: str | None = None
     state: str
+    current_verification_status: str | None = None
     state_version: int
     created_at: str
     updated_at: str
@@ -1626,6 +1638,15 @@ class ControlPlaneService:
         except KeyError:
             raise ControlPlaneError(404, "project_not_found") from None
 
+    def project_baseline(self, project_id: str) -> BaselinePreview:
+        project = self.get_project(project_id)
+        if project.storage_availability != ProjectAvailability.ONLINE.value:
+            raise ControlPlaneError(409, "project_not_available")
+        try:
+            return preview_baseline(Path(project.git_root))
+        except (BaselineError, OSError):
+            raise ControlPlaneError(409, "baseline_unavailable") from None
+
     def remove_project(self, project_id: str) -> ProjectRemoveView:
         self._validate_identifier("project_id", project_id)
         try:
@@ -1844,24 +1865,6 @@ class ControlPlaneService:
         project_view = self._refresh_project_view(project)
         if project_view.storage_availability != ProjectAvailability.ONLINE.value:
             raise ControlPlaneError(409, "project_not_available")
-        # HEAD is a host-derived submission snapshot, not part of the client's
-        # request. A replay must retain its original snapshot after the owner
-        # commits more work. Storage still validates every semantic request
-        # field; finding a request ID alone never makes a conflict acceptable.
-        existing = self.store.connection.execute(
-            "SELECT base_sha FROM tasks WHERE request_id=?", (request.request_id,)
-        ).fetchone()
-        if existing is not None:
-            base_sha = existing["base_sha"]
-        else:
-            try:
-                base_sha = self._git(Path(project.git_root), "rev-parse", "HEAD")
-            except Exception:
-                self.store.update_project_availability(
-                    project.project_id,
-                    storage_availability=ProjectAvailability.INVALID_REPOSITORY,
-                )
-                raise ControlPlaneError(409, "project_not_available") from None
         scheduling_policy, manual_target = self._validated_task_policy(
             request.scheduling_policy,
             request.manual_execution_target_id,
@@ -1880,6 +1883,28 @@ class ControlPlaneService:
                 400,
                 f"invalid_min_tier: must be one of T0/T1/T2/T3, got {min_tier!r}",
             )
+        existing = self.store.connection.execute(
+            "SELECT task_id,base_sha FROM tasks WHERE request_id=?", (request.request_id,)
+        ).fetchone()
+        if existing is not None:
+            base_sha = existing["base_sha"]
+            baseline = self.store.task_baseline(existing["task_id"])
+            if (baseline or {}).get("mode", "COMMITTED_HEAD") != request.baseline_mode or (
+                baseline or {}
+            ).get("source_fingerprint") != request.expected_baseline_fingerprint:
+                raise ControlPlaneError(400, "conflicting_request_id")
+        else:
+            try:
+                selected = select_baseline(
+                    Path(project.git_root),
+                    mode=request.baseline_mode,
+                    expected_fingerprint=request.expected_baseline_fingerprint,
+                    request_id=request.request_id,
+                )
+            except BaselineError as error:
+                raise ControlPlaneError(409, str(error)) from None
+            base_sha = selected.base_sha
+            baseline = selected.model_dump(mode="json")
         submission = {
             "task_id": request.task_id,
             "request_id": request.request_id,
@@ -1890,6 +1915,7 @@ class ControlPlaneService:
             "scheduling_policy": scheduling_policy,
             "manual_execution_target_id": manual_target,
             "min_tier": min_tier,
+            "baseline": baseline,
         }
         try:
             record = self.store.submit_task(**submission)
@@ -1898,16 +1924,22 @@ class ControlPlaneService:
             # transaction. Retry validation once against its frozen snapshot;
             # never retry with a fresh ID or bypass storage's conflict checks.
             raced = self.store.connection.execute(
-                "SELECT base_sha FROM tasks WHERE request_id=?", (request.request_id,)
+                "SELECT task_id,base_sha FROM tasks WHERE request_id=?", (request.request_id,)
             ).fetchone()
             if existing is not None or raced is None or raced["base_sha"] == base_sha:
                 raise ControlPlaneError(400, "conflicting_request_id") from None
             submission["base_sha"] = raced["base_sha"]
+            raced_baseline = self.store.task_baseline(raced["task_id"])
+            if (raced_baseline or {}).get("mode", "COMMITTED_HEAD") != request.baseline_mode or (
+                raced_baseline or {}
+            ).get("source_fingerprint") != request.expected_baseline_fingerprint:
+                raise ControlPlaneError(400, "conflicting_request_id") from None
+            submission["baseline"] = raced_baseline
             try:
                 record = self.store.submit_task(**submission)
             except ValueError:
                 raise ControlPlaneError(400, "conflicting_request_id") from None
-        return _task_view(record)
+        return self._observed_task_view(record)
 
     def list_tasks(self, *, limit: int = DEFAULT_LIST_LIMIT) -> TaskListView:
         bounded = max(1, min(limit, MAX_LIST_LIMIT))
@@ -1916,15 +1948,26 @@ class ControlPlaneService:
             (bounded,),
         ).fetchall()
         total = self.store.connection.execute("SELECT COUNT(*) AS n FROM tasks").fetchone()["n"]
-        tasks = tuple(_task_view(self.store.get_task(row["task_id"])) for row in rows)
+        tasks = tuple(self._observed_task_view(self.store.get_task(row["task_id"])) for row in rows)
         return TaskListView(tasks=tasks, total=total)
 
     def get_task(self, task_id: str) -> TaskView:
         self._validate_identifier("task_id", task_id)
         try:
-            return _task_view(self.store.get_task(task_id))
+            return self._observed_task_view(self.store.get_task(task_id))
         except KeyError:
             raise ControlPlaneError(404, "task_not_found") from None
+
+    def _observed_task_view(self, record) -> TaskView:
+        view = _task_view(record)
+        baseline = self.store.task_baseline(record.task_id)
+        if baseline is not None:
+            view = view.model_copy(update={"baseline": BaselineReceipt.model_validate(baseline)})
+        if record.state in {TaskState.VERIFIED, TaskState.COMPLETED}:
+            report = self.verification_report(record.task_id)
+            if report.status in {"VERIFICATION_STALE", "WORKSPACE_UNAVAILABLE"}:
+                view = view.model_copy(update={"current_verification_status": report.status})
+        return view
 
     def task_runs(self, task_id: str) -> RunListView:
         self.get_task(task_id)
@@ -2513,37 +2556,101 @@ class ControlPlaneService:
         except KeyError:
             raise ControlPlaneError(404, "task_not_found") from None
         evidence_id: str | None = None
+        digest: str | None = None
         failure_reason: str | None = None
+        outcome: str | None = None
         prefix = "deterministic verification passed: "
         for event in self.store.audit_events(task_id):
+            if event["event_type"] in {
+                "RUN_STARTED",
+                "MANUAL_TASK_RETRY_PREPARED",
+                "MANUAL_TASK_REOPEN_PREPARED",
+            }:
+                # A new attempt can fail before it reaches VERIFYING. Historical
+                # checks remain in the journal but cannot describe this generation.
+                evidence_id = digest = failure_reason = outcome = None
+                continue
             if event["event_type"] != "TASK_STATE_CHANGED":
                 continue
             payload = event["payload"]
+            if payload.get("from") != TaskState.VERIFYING.value:
+                continue
+            if payload.get("to") not in {TaskState.VERIFIED.value, TaskState.BLOCKED.value}:
+                continue
+            # Only the latest verification generation may describe this result.
+            outcome = payload["to"]
             reason = payload.get("reason")
-            if payload.get("to") == TaskState.VERIFIED.value and isinstance(reason, str):
-                if reason.startswith(prefix):
-                    evidence_id = reason[len(prefix) :]
-            if (
-                payload.get("from") == TaskState.VERIFYING.value
-                and payload.get("to") == TaskState.BLOCKED.value
-            ):
-                failure_reason = reason if isinstance(reason, str) else None
+            evidence_id = payload.get("verification_evidence_id")
+            if outcome == TaskState.VERIFIED.value and isinstance(reason, str):
+                evidence_id = evidence_id or (
+                    reason[len(prefix) :] if reason.startswith(prefix) else None
+                )
+            digest = payload.get("verification_evidence_sha256")
+            failure_reason = reason if outcome == TaskState.BLOCKED.value else None
         result: VerificationResult | None = None
-        if evidence_id is not None and self.verification_journal is not None:
-            result = self.verification_journal.load(evidence_id)
-        if record.state is TaskState.VERIFIED or evidence_id is not None:
-            if evidence_id is None:
-                status = "VERIFIED_EVIDENCE_MISSING"
-            elif result is None and self.verification_journal is not None:
-                status = "VERIFIED_EVIDENCE_UNAVAILABLE"
-            else:
-                status = "VERIFIED"
-        elif failure_reason is not None:
-            status = "FAILED_VERIFICATION"
-        elif record.state is TaskState.VERIFYING:
+        if self.verification_journal is not None:
+            from personal_ai_orchestrator.result_delivery import _read_evidence
+
+            if isinstance(evidence_id, str) and re.fullmatch(r"verify-[a-f0-9]{24}", evidence_id):
+                candidate, observed, _ = _read_evidence(self.verification_journal, evidence_id)
+                if candidate is not None and digest == observed:
+                    result = candidate
+            elif outcome == TaskState.BLOCKED.value and isinstance(digest, str):
+                # Bounded compatibility for older failed outcomes, which recorded
+                # the authoritative digest but omitted the journal identifier.
+                for path in sorted(self.verification_journal.directory.glob("verify-*.json"))[
+                    -128:
+                ]:
+                    if re.fullmatch(r"verify-[a-f0-9]{24}", path.stem) is None:
+                        continue
+                    candidate, observed, _ = _read_evidence(self.verification_journal, path.stem)
+                    if candidate is not None and observed == digest:
+                        result, evidence_id = candidate, candidate.evidence_id
+                        break
+        if record.state is TaskState.VERIFYING:
             status = "IN_PROGRESS"
+            result, evidence_id, failure_reason = None, None, None
+        elif record.state in {
+            TaskState.SUBMITTED,
+            TaskState.READY,
+            TaskState.RUNNING,
+            TaskState.WORKER_FINISHED,
+        }:
+            status = "NOT_VERIFIED"
+            result, evidence_id, failure_reason = None, None, None
+        elif outcome == TaskState.BLOCKED.value:
+            status = "FAILED_VERIFICATION"
+        elif record.state in {TaskState.VERIFIED, TaskState.COMPLETED}:
+            status = (
+                "VERIFIED"
+                if result is not None
+                else "VERIFIED_EVIDENCE_UNAVAILABLE"
+                if evidence_id
+                else "VERIFIED_EVIDENCE_MISSING"
+            )
         else:
             status = "NOT_VERIFIED"
+        if status == "VERIFIED" and result is not None and result.patch_snapshot is not None:
+            from personal_ai_orchestrator.patch_snapshot import snapshot_status
+
+            latest_run = self.store.connection.execute(
+                "SELECT run_id FROM runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            observed = snapshot_status(
+                self.store.connection,
+                task_id=task_id,
+                run_id=latest_run["run_id"] if latest_run else None,
+                base_sha=record.base_sha,
+                snapshot=result.patch_snapshot,
+            )
+            if observed != "CURRENT":
+                status = "VERIFICATION_STALE" if observed == "STALE" else "WORKSPACE_UNAVAILABLE"
+                failure_reason = (
+                    "Worktree changed after verification; the accepted patch snapshot is unchanged."
+                    if observed == "STALE"
+                    else "Current worktree binding could not be established."
+                )
         return VerificationReportView(
             task_id=task_id,
             task_state=record.state.value,
@@ -4184,6 +4291,22 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
         ) -> None:
             count = len(rest)
 
+            if (
+                count == 3
+                and rest[0] == "execution-targets"
+                and rest[2] == "probe"
+                and method == "POST"
+            ):
+                from personal_ai_orchestrator.project_workflow import probe_execution_target
+
+                payload = self._read_json()
+                if payload is None:
+                    return
+                if payload:
+                    raise ControlPlaneError(400, "invalid_json_schema")
+                self._json(200, probe_execution_target(request_service, rest[1]))
+                return
+
             if rest == ("health",):
                 if method != "GET":
                     self._json(405, {"error": "method_not_allowed"})
@@ -4259,6 +4382,17 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                         return
                     self._view(200, request_service.mark_project_opened(project_id))
                     return
+                if count == 3 and sub == "verification" and method in {"GET", "PUT"}:
+                    from personal_ai_orchestrator.project_workflow import project_verification
+
+                    payload = self._read_json() if method == "PUT" else None
+                    if method == "PUT" and payload is None:
+                        return
+                    self._json(200, project_verification(request_service, project_id, payload))
+                    return
+                if count == 3 and sub == "baseline" and method == "GET":
+                    self._view(200, request_service.project_baseline(project_id))
+                    return
                 if count == 3 and sub == "scheduling" and method == "PUT":
                     payload = self._read_json()
                     if payload is None:
@@ -4298,8 +4432,35 @@ def handler_for_control(service: ControlPlaneService) -> type[BaseHTTPRequestHan
                 if count == 3 and sub == "runs" and method == "GET":
                     self._view(200, request_service.task_runs(task_id))
                     return
+                if count == 3 and sub == "preparation" and method == "GET":
+                    from personal_ai_orchestrator.project_preparation import preparation_report
+
+                    request_service.get_task(task_id)
+                    self._json(200, preparation_report(request_service.store, task_id))
+                    return
                 if count == 3 and sub == "verification" and method == "GET":
                     self._view(200, request_service.verification_report(task_id))
+                    return
+                if count == 3 and sub == "patch" and method == "GET":
+                    from personal_ai_orchestrator.project_workflow import task_patch
+
+                    request_service.get_task(task_id)
+                    evidence = parse_qs(urlsplit(self.path).query, keep_blank_values=True).get(
+                        "evidence_id", [None]
+                    )
+                    if len(evidence) != 1:
+                        raise ControlPlaneError(400, "invalid_evidence_id")
+                    self._json(200, task_patch(request_service, task_id, evidence_id=evidence[0]))
+                    return
+                if count == 3 and sub == "verification-history" and method == "GET":
+                    from personal_ai_orchestrator.verification_history import verification_history
+
+                    evidence = parse_qs(urlsplit(self.path).query, keep_blank_values=True).get(
+                        "evidence_id", [None]
+                    )
+                    if len(evidence) != 1:
+                        raise ControlPlaneError(400, "invalid_evidence_id")
+                    self._json(200, verification_history(request_service, task_id, evidence[0]))
                     return
                 if count == 3 and sub == "routing" and method == "GET":
                     self._view(200, request_service.routing_decision(task_id))
@@ -4588,6 +4749,7 @@ class UnixThreadingHTTPServer(ThreadingHTTPServer):
     ) -> None:
         self._socket_path = Path(socket_path)
         self._socket_mode = socket_mode
+        self._bound_socket_identity: tuple[int, int] | None = None
         super().__init__(str(self._socket_path), handler)
 
     def server_bind(self) -> None:
@@ -4604,14 +4766,21 @@ class UnixThreadingHTTPServer(ThreadingHTTPServer):
             finally:
                 probe.close()
         super().server_bind()
+        bound = path.lstat()
+        self._bound_socket_identity = (bound.st_dev, bound.st_ino)
         os.chmod(path, self._socket_mode)
 
     def server_close(self) -> None:
         super().server_close()
         try:
-            self._socket_path.unlink(missing_ok=True)
+            if self._bound_socket_identity is not None:
+                current = self._socket_path.lstat()
+                if (current.st_dev, current.st_ino) == self._bound_socket_identity:
+                    self._socket_path.unlink()
         except OSError:
             pass
+        finally:
+            self._bound_socket_identity = None
 
 
 class ControlPlaneServer:

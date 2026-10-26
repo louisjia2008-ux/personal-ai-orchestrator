@@ -6,6 +6,12 @@ This bundle contains two independent Cordis plugins:
 - `pao-dsh-dispatch/telegram`: an opt-in Telegram controller for one local
   DeepSeek Harness workspace.
 
+The dispatch router admits each new turn independently. Normal tool steps with
+an empty claimed inbox batch reuse that turn's admission. A blocked or unknown
+quota/tier result stops the request before the seed provider can run; Jev outages
+can fall back only to an admitted T3 target. Concurrent requests share admission,
+and disposed agents release their cached turn state.
+
 The Telegram controller uses the public Harness `ctx.agents` API: it creates or
 resumes an Agent, submits a normal user follow-up, observes committed visible
 assistant text, and uses the typed user-cancel operation. It does not spawn a

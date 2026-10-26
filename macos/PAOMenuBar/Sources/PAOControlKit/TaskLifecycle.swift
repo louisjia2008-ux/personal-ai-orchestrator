@@ -110,6 +110,12 @@ public enum TaskLifecycle {
 
     private static func routing(_ detail: TaskDetailView) -> TaskLifecycleStep {
         guard let summary = detail.routingSummary else {
+            if detail.task.schedulingPolicy == "MANUAL", let target = detail.task.manualExecutionTargetId {
+                // Submission itself records this selection. No automatic
+                // routing decision or additional role is inferred.
+                return TaskLifecycleStep(stage: .routing, status: .reached,
+                                         at: detail.task.createdAt, detail: target)
+            }
             return TaskLifecycleStep(stage: .routing, status: .notReached)
         }
         // The newest decision across every declared role dates the stage; a plan
@@ -156,10 +162,12 @@ public enum TaskLifecycle {
                 stage: .execution, status: .inProgress, at: first.startedAt
             )
         }
-        let last = detail.runs.last
-        // A non-zero exit is the run's own verdict, and it is reported as such
-        // rather than folded into the task's state.
-        let failed = detail.runs.contains { ($0.exitCode ?? 0) != 0 }
+        let last = detail.runs.max { $0.startedAt < $1.startedAt }
+        // Manual recovery retains failed attempts. Its current stage follows
+        // the newest attempt; multi-role execution still retains any failure.
+        let failed = detail.task.schedulingPolicy == "MANUAL"
+            ? (last?.exitCode ?? 0) != 0
+            : detail.runs.contains { ($0.exitCode ?? 0) != 0 }
         return TaskLifecycleStep(
             stage: .execution,
             status: failed ? .failed : .reached,
@@ -177,7 +185,7 @@ public enum TaskLifecycle {
             return TaskLifecycleStep(stage: .verification, status: .inProgress)
         case .verified:
             return TaskLifecycleStep(stage: .verification, status: .reached)
-        case .verifiedEvidenceMissing, .verifiedEvidenceUnavailable:
+        case .verifiedEvidenceMissing, .verifiedEvidenceUnavailable, .verificationStale, .workspaceUnavailable:
             // The work passed but the proof cannot be produced. That is not a
             // clean pass, and it is not a verification failure either.
             return TaskLifecycleStep(
@@ -195,6 +203,10 @@ public enum TaskLifecycle {
     }
 
     private static func completion(_ detail: TaskDetailView) -> TaskLifecycleStep {
+        if ["VERIFICATION_STALE", "WORKSPACE_UNAVAILABLE"].contains(detail.verification.status) {
+            return TaskLifecycleStep(stage: .completion, status: .unknown,
+                                     detail: detail.verification.status)
+        }
         let state = detail.task.state
         let at = detail.task.updatedAt
         switch state {
