@@ -241,6 +241,7 @@ def validate_execution_target_launch(
         registry,
         execution_target_id=execution_target_id,
         execution_evidence_journal=execution_evidence_journal,
+        now=now,
     ):
         raise RuntimeError("execution target has not been runtime-verified")
     if not runtime_available:
