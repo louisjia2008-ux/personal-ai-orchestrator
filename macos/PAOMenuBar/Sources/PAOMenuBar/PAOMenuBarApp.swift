@@ -17,21 +17,30 @@ struct PAOMenuBarApp: App {
     @StateObject private var store: OrchestratorStore
 
     init() {
-        let home = ProcessInfo.processInfo.environment["HOME"].flatMap { value in
+        let arguments = ProcessInfo.processInfo.arguments
+        let isolatedHome = arguments.firstIndex(of: "--pao-home").flatMap { index in
+            arguments.indices.contains(index + 1) ? arguments[index + 1] : nil
+        }
+        let home = isolatedHome ?? ProcessInfo.processInfo.environment["HOME"].flatMap { value in
             value.isEmpty ? nil : value
         } ?? NSHomeDirectory()
         let layout = AppSupportLayout.resolve(homeDirectory: home)
-        let path = SocketDiscovery.resolve(defaultLayout: layout)
-        let widgetBridge = WidgetSnapshotBridge.sharedContainer(
+        let path = isolatedHome == nil ? SocketDiscovery.resolve(defaultLayout: layout) : layout.socketPath
+        let widgetBridge = (isolatedHome == nil ? WidgetSnapshotBridge.sharedContainer(
             appGroupIdentifier: Self.widgetAppGroup
-        ) ?? .appOwned(layout: layout)
-        let autoStartDaemon = UserDefaults.standard.object(forKey: "pao.autoStartDaemon") as? Bool ?? true
+        ) : nil) ?? .appOwned(layout: layout)
+        let autoStartDaemon = isolatedHome != nil
+            || (UserDefaults.standard.object(forKey: "pao.autoStartDaemon") as? Bool ?? true)
         _store = StateObject(
             wrappedValue: OrchestratorStore(
                 socketPath: path,
-                daemonConfiguration: DaemonLaunchConfiguration(layout: layout),
+                daemonConfiguration: DaemonLaunchConfiguration(
+                    layout: layout, port: isolatedHome == nil ? 8765 : 0,
+                    homeDirectory: isolatedHome
+                ),
                 widgetSnapshotBridge: widgetBridge,
-                autoStartDaemon: autoStartDaemon
+                autoStartDaemon: autoStartDaemon,
+                initialSchedulingPolicy: "MANUAL"
             )
         )
         // Acceptance evidence: which localization the bundle machinery resolved

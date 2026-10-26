@@ -23,7 +23,7 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 SPAWN_DIAGNOSTICS_VERSION = "pao-spawn-diagnostics-v1"
 
@@ -239,6 +239,12 @@ class SpawnTicket:
     token: contextvars.Token[SpawnTicket | None] | None = None
 
 
+class OutputObserver(Protocol):
+    def feed(self, chunk: bytes) -> bool:
+        """Return false to request bounded cleanup while pipes keep draining."""
+        ...
+
+
 @dataclass
 class _PipeState:
     reader: asyncio.StreamReader
@@ -250,6 +256,8 @@ class _PipeState:
     forced_closed: bool = False
     transport: asyncio.ReadTransport | None = None
     task: asyncio.Task[None] | None = None
+    observer: OutputObserver | None = None
+    observer_stopped: bool = False
 
     def receipt(self) -> PipeCleanup:
         return PipeCleanup(
@@ -307,6 +315,7 @@ class SupervisedProcess:
     spawn_diagnostics: SpawnDiagnostics
     cleanup_result: CleanupResult | None = None
     collected_result: CollectedProcess | None = None
+    stdout_observer: OutputObserver | None = field(default=None, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _pinned: bool = True
     _reaped: bool = False
@@ -338,6 +347,14 @@ class SupervisedProcess:
     @property
     def pid(self) -> int:
         return self.process.pid
+
+    @property
+    def stdout_truncated(self) -> bool:
+        return self._pipes[0].truncated
+
+    @property
+    def stderr_truncated(self) -> bool:
+        return self._pipes[1].truncated
 
 
 class ProcessSupervisor:
@@ -715,6 +732,8 @@ class ProcessSupervisor:
                     if not state.forced_closed:
                         state.eof = True
                     return
+                if state.observer is not None and not state.observer_stopped:
+                    state.observer_stopped = not state.observer.feed(chunk)
                 remaining = max(0, state.cap - len(state.chunks))
                 state.chunks.extend(chunk[:remaining])
                 state.truncated |= len(chunk) > remaining
@@ -796,7 +815,10 @@ class ProcessSupervisor:
         grace_seconds: float = 5.0,
         cleanup_budget_seconds: float = 10.0,
         eof_grace_seconds: float = 2.0,
+        stdout_observer: OutputObserver | None = None,
     ) -> CollectedProcess:
+        if stdout_observer is not None and supervised._operation is not None:
+            raise RuntimeError("output observation must start before collection")
         if supervised._operation is None:
             loop = asyncio.get_running_loop()
             supervised._worker_deadline = (
@@ -807,6 +829,8 @@ class ProcessSupervisor:
             supervised._eof_grace_seconds = max(0.0, min(2.0, eof_grace_seconds))
             supervised._pipes[0].cap = max(0, stdout_cap)
             supervised._pipes[1].cap = max(0, stderr_cap)
+            supervised.stdout_observer = stdout_observer
+            supervised._pipes[0].observer = stdout_observer
         result = await self._join(supervised, propagate_cancel=True)
         if not result.cleanup.confirmed:
             raise CleanupIncomplete(result.cleanup)
@@ -851,6 +875,9 @@ class ProcessSupervisor:
         loop = asyncio.get_running_loop()
         eof_deadline: float | None = None
         while not supervised._cleanup_requested.is_set():
+            if any(state.observer_stopped for state in supervised._pipes):
+                self._request_cleanup(supervised, reason="OUTPUT_OBSERVER_STOPPED")
+                break
             self._observe(supervised)
             if supervised._identity_error:
                 self._request_cleanup(supervised, reason="IDENTITY_UNCERTAIN")

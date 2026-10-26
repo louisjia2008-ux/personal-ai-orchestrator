@@ -6,6 +6,8 @@ struct QuickSubmitView: View {
     @EnvironmentObject private var store: OrchestratorStore
     @State private var intent: String = ""
     @State private var submissionId: UUID?
+    @State private var baseline: TaskBaselineSelection?
+    @State private var baselineRefresh = 0
 
     private var submitting: Bool { submissionId != nil }
 
@@ -50,6 +52,10 @@ struct QuickSubmitView: View {
                 }
             }
             .pickerStyle(.menu)
+            TaskBaselinePicker(
+                projectId: store.selectedProjectId,
+                refreshGeneration: baselineRefresh, selection: $baseline
+            ).disabled(submitting)
             Picker(L10n.newTaskSchedulingPolicy, selection: $store.selectedSchedulingPolicy) {
                 ForEach(Self.selectablePolicies, id: \.self) { policy in
                     Text(L10n.schedulingPolicyName(policy)).tag(policy)
@@ -84,6 +90,8 @@ struct QuickSubmitView: View {
                     .disabled(
                         submitting
                             || store.selectedProjectId == nil
+                            || baseline == nil
+                            || baseline?.projectId != store.selectedProjectId
                             || intent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             || (store.selectedSchedulingPolicy == "MANUAL"
                                 && store.selectedManualExecutionTargetId == nil)
@@ -109,6 +117,7 @@ struct QuickSubmitView: View {
     private func submit() {
         // TextField.onSubmit can fire even when the button is disabled.
         guard !submitting else { return }
+        guard let baseline, baseline.projectId == store.selectedProjectId else { return }
         let value = intent
         let projectId = store.selectedProjectId
         let requestId = UUID()
@@ -117,7 +126,8 @@ struct QuickSubmitView: View {
             defer {
                 if submissionId == requestId { submissionId = nil }
             }
-            let result = await store.quickSubmit(projectId: projectId, intent: value)
+            let result = await store.quickSubmit(projectId: projectId, intent: value, baseline: baseline)
+            if let result, case .failed = result { baselineRefresh += 1 }
             guard submissionId == requestId,
                   let result, case .submitted = result,
                   intent == value else { return }

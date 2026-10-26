@@ -29,7 +29,12 @@ from personal_ai_orchestrator.dispatch_executor import OwnerDispatchExecutor
 from personal_ai_orchestrator.execution_controller import reconcile_workspace_truth
 from personal_ai_orchestrator.process_supervisor import ProcessSupervisor, SupervisedProcess
 from personal_ai_orchestrator.safety_kernel import SafetyKernelStore, TaskState
-from tests.test_dispatch_executor import HELLO_CONTENT, ExecutorHarness, _git
+from tests.test_dispatch_executor import (
+    HELLO_CONTENT,
+    ExecutorHarness,
+    _git,
+    write_worker_script,
+)
 from tests.test_pi_dispatch_executor import HELLO, _executor, _reserve
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX executable/alarm fixtures")
@@ -517,6 +522,17 @@ async def test_receipt_persistence_failure_keeps_writer_quarantined(
     if timed_out:
         lifecycle.write_waiting_worker()
         lifecycle.executor.config = replace(lifecycle.executor.config, worker_timeout_seconds=0.2)
+        original_wait = lifecycle.executor._wait_for_worker
+
+        async def wait_for_ready_before_timeout(supervised):
+            # This case tests receipt persistence after graceful SIGTERM, so
+            # start its timeout only after that handler is actually installed.
+            async with asyncio.timeout(2.0):
+                while not lifecycle.ready.exists():
+                    await asyncio.sleep(0.01)
+            return await original_wait(supervised)
+
+        monkeypatch.setattr(lifecycle.executor, "_wait_for_worker", wait_for_ready_before_timeout)
 
     def fail_receipt_commit(self, **kwargs):
         raise sqlite3.OperationalError("offline receipt transaction failure")
@@ -892,6 +908,10 @@ async def test_spawn_fence_write_failure_cannot_skip_exact_child_cleanup(
 async def test_second_executor_before_attempt_claim_is_observational(
     lifecycle, monkeypatch: pytest.MonkeyPatch
 ):
+    if lifecycle.adapter == "opencode":
+        write_worker_script(
+            lifecycle.script.parent, name=lifecycle.script.name, body=lifecycle.content
+        )
     entered, release = threading.Event(), threading.Event()
     original_admit = lifecycle.executor._admit_quota
 

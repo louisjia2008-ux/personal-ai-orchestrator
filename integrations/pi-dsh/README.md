@@ -9,7 +9,7 @@ pi 扩展包:把 [Personal AI Orchestrator](../../README.md) 的调度决策内�
 | 池 | 模型(pi 目录) | 计费 | 参与条件(实时) |
 | --- | --- | --- | --- |
 | ZAI Coding Plan | glm-5.3 / glm-5.3-flash | 订阅 | 5h/周窗口压力 |
-| MiniMax Token Plan | MiniMax-M3 / M2.7 | 订阅 | 订阅有效 |
+| MiniMax Token Plan | MiniMax-M3 / M2.7 | 订阅 | coding 短窗和周窗可读，且均未耗尽 |
 | DeepSeek | deepseek-v4-pro / v4-flash | paygo | 余额 ≥1 元;<10 元只留 flash |
 
 订阅池健康时优先(已付费);高压时跨池 failover;琐事走轻档,不烧真金白银。
@@ -18,8 +18,11 @@ pi 扩展包:把 [Personal AI Orchestrator](../../README.md) 的调度决策内�
 
 ```bash
 pi install /path/to/personal-ai-orchestrator/integrations/pi-dsh
-# 或从 git:
-pi install git:github.com/louisjia2008-ux/personal-ai-orchestrator
+# 或从 git 克隆后安装(仓库根目录不是可直接安装的扩展包,
+# 需要安装的是 integrations/pi-dsh 子目录):
+git clone https://github.com/louisjia2008-ux/personal-ai-orchestrator.git
+cd personal-ai-orchestrator
+pi install ./integrations/pi-dsh
 ```
 
 需要环境变量 `TYPESAFE_API_KEY`(Jev 决策层);模型凭证用 pi 自己的
@@ -36,7 +39,11 @@ auth store(`pi auth check`)。
 
 - 自动调度开启后:每次提交 prompt → 探测(约 1–2s)→ 决策 → 需要时
   `pi.setModel()` 切换,并给出通知(`模型A → 模型B (conf, tier)`)
-- 决策失败永不阻塞任务:异常时通知并沿用当前模型
+- 没有满足硬规则和任务等级的目标时，阻止本次输入；不会沿用未经准入的当前模型。
+- Jev 不可用时，只有已通过配额门的 T3 目标可以作为安全回退。
+- 模型目录查找、模型切换返回 false 或抛异常时，本次输入均不会发送给模型。
+- 自动调度使用 Pi 的 `input` 事件，在推理前消费被阻止的输入。开启自动调度时，
+  请在 agent 空闲时提交文本任务；运行中的 steering/follow-up 输入会被拒绝并提示重试。
 - `DSH_AUTO=1` 启动即开启;`DSH_DEBUG=1` 输出 stderr 调试日志
 
 ## 架构(代码管规则,Jev 管语义)

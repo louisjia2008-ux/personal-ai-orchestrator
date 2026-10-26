@@ -136,8 +136,11 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
     public let intent: String
     public let projectId: String?
     public let baseSha: String?
+    public let baseline: TaskBaselineReceipt?
     public let workingSubpath: String?
     public let state: String
+    public let currentVerificationStatus: String?
+    public var displayState: String { currentVerificationStatus ?? state }
     public let stateVersion: Int
     public let createdAt: String
     public let updatedAt: String
@@ -176,8 +179,10 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
         case intent
         case projectId = "project_id"
         case baseSha = "base_sha"
+        case baseline
         case workingSubpath = "working_subpath"
         case state
+        case currentVerificationStatus = "current_verification_status"
         case stateVersion = "state_version"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
@@ -207,15 +212,19 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
         autoDecisionId: String? = nil,
         autoGraceDeadlineAt: String? = nil,
         autoAckedAt: String? = nil,
-        autoReason: String? = nil
+        autoReason: String? = nil,
+        currentVerificationStatus: String? = nil,
+        baseline: TaskBaselineReceipt? = nil
     ) {
         self.taskId = taskId
         self.requestId = requestId
         self.intent = intent
         self.projectId = projectId
         self.baseSha = baseSha
+        self.baseline = baseline
         self.workingSubpath = workingSubpath
         self.state = state
+        self.currentVerificationStatus = currentVerificationStatus
         self.stateVersion = stateVersion
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -235,8 +244,10 @@ public struct TaskView: Decodable, Equatable, Identifiable, Sendable {
         intent = try container.decode(String.self, forKey: .intent)
         projectId = try container.decodeIfPresent(String.self, forKey: .projectId)
         baseSha = try container.decodeIfPresent(String.self, forKey: .baseSha)
+        baseline = try container.decodeIfPresent(TaskBaselineReceipt.self, forKey: .baseline)
         workingSubpath = try container.decodeIfPresent(String.self, forKey: .workingSubpath)
         state = try container.decode(String.self, forKey: .state)
+        currentVerificationStatus = try container.decodeIfPresent(String.self, forKey: .currentVerificationStatus)
         stateVersion = try container.decode(Int.self, forKey: .stateVersion)
         createdAt = try container.decode(String.self, forKey: .createdAt)
         updatedAt = try container.decode(String.self, forKey: .updatedAt)
@@ -1840,12 +1851,15 @@ public struct VerificationResultView: Decodable, Equatable, Sendable {
 public struct VerificationStageView: Decodable, Equatable, Identifiable, Sendable {
     public let name: String
     public let exitCode: Int
+    public let stdout: String?
+    public let stderr: String?
+    public let argv: [String]?
 
     public var id: String { name }
     public var passed: Bool { exitCode == 0 }
 
     enum CodingKeys: String, CodingKey {
-        case name
+        case name, stdout, stderr, argv
         case exitCode = "returncode"
     }
 }
@@ -2204,6 +2218,8 @@ public struct SubmitRequest: Encodable, Equatable, Sendable {
     /// M1 WP2: capability tier floor. ``nil`` (the SwiftUI default) means
     /// the daemon normalises to ``"T1"`` (workhorse) at storage time.
     public let minTier: String?
+    public let baselineMode: TaskBaselineMode?
+    public let expectedBaselineFingerprint: String?
 
     enum CodingKeys: String, CodingKey {
         case taskId = "task_id"
@@ -2213,6 +2229,8 @@ public struct SubmitRequest: Encodable, Equatable, Sendable {
         case schedulingPolicy = "scheduling_policy"
         case manualExecutionTargetId = "manual_execution_target_id"
         case minTier = "min_tier"
+        case baselineMode = "baseline_mode"
+        case expectedBaselineFingerprint = "expected_baseline_fingerprint"
     }
 
     public init(
@@ -2222,7 +2240,9 @@ public struct SubmitRequest: Encodable, Equatable, Sendable {
         intent: String,
         schedulingPolicy: String? = nil,
         manualExecutionTargetId: String? = nil,
-        minTier: String? = nil
+        minTier: String? = nil,
+        baselineMode: TaskBaselineMode? = nil,
+        expectedBaselineFingerprint: String? = nil
     ) {
         self.taskId = taskId
         self.requestId = requestId
@@ -2231,6 +2251,8 @@ public struct SubmitRequest: Encodable, Equatable, Sendable {
         self.schedulingPolicy = schedulingPolicy
         self.manualExecutionTargetId = manualExecutionTargetId
         self.minTier = minTier
+        self.baselineMode = baselineMode
+        self.expectedBaselineFingerprint = expectedBaselineFingerprint
     }
 }
 

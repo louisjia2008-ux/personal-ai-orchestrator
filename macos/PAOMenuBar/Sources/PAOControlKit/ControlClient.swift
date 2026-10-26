@@ -40,6 +40,10 @@ public struct PAOControlClient: Sendable {
         try await get("/v1/projects")
     }
 
+    public func projectBaseline(_ projectId: String) async throws -> ProjectBaselinePreview {
+        try await get("/v1/projects/\(projectId)/baseline")
+    }
+
     public func resolveProject(path: String) async throws -> ProjectView {
         try await post("/v1/projects/resolve", body: ProjectPathRequest(path: path))
     }
@@ -389,14 +393,40 @@ public enum PAOHTTP {
         let lines = headerText.components(separatedBy: "\r\n")
         guard let statusLine = lines.first else { return nil }
         let parts = statusLine.split(separator: " ")
-        guard parts.count >= 2, let status = Int(parts[1]) else { return nil }
+        guard parts.count >= 2, ["HTTP/1.0", "HTTP/1.1"].contains(parts[0]),
+              parts[1].utf8.count == 3, parts[1].utf8.allSatisfy({ (48...57).contains($0) }),
+              let status = Int(parts[1]), (100...599).contains(status) else { return nil }
+        let body = data[headerEnd.upperBound...]
+        var contentLength: Int?
+        for line in lines.dropFirst() {
+            guard let colon = line.firstIndex(of: ":") else { return nil }
+            let name = line[..<colon]
+            guard !name.isEmpty, name.utf8.allSatisfy({
+                (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0)
+                    || "!#$%&'*+-.^_`|~".utf8.contains($0)
+            }) else { return nil }
+            // This transport supports the daemon's close-delimited HTTP only;
+            // transfer-coded bytes must never be mistaken for a JSON body.
+            if name.lowercased() == "transfer-encoding" { return nil }
+            if name.lowercased() == "content-length" {
+                for item in line[line.index(after: colon)...].split(separator: ",", omittingEmptySubsequences: false) {
+                    let value = item.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
+                    guard !value.isEmpty, value.utf8.allSatisfy({ (48...57).contains($0) }),
+                          let length = Int(value), contentLength == nil || contentLength == length else { return nil }
+                    contentLength = length
+                }
+            }
+        }
+        // EOF completes a close-delimited response only if any declared length
+        // also matches. Valid JSON alone is not evidence of a complete response.
+        guard contentLength == nil || contentLength == body.count else { return nil }
         var errorCode: String?
-        if let bodyText = String(data: data[headerEnd.upperBound...], encoding: .utf8),
+        if let bodyText = String(data: body, encoding: .utf8),
            let payload = try? JSONSerialization.jsonObject(with: Data(bodyText.utf8)) as? [String: Any],
            let code = payload["error"] as? String {
             errorCode = code
         }
-        return ParsedResponse(status: status, body: data[headerEnd.upperBound...], errorCode: errorCode)
+        return ParsedResponse(status: status, body: body, errorCode: errorCode)
     }
 }
 
@@ -432,6 +462,13 @@ enum PAOSocket {
         }
         defer { close(fd) }
 
+        // Configure before connect: a peer may close before connect returns,
+        // after which Darwin can reject setsockopt with EINVAL.
+        var noSigPipe: Int32 = 1
+        guard setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+            throw PAOClientError.transportFailure
+        }
+
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let pathBytes = Array(bytes)
@@ -450,10 +487,6 @@ enum PAOSocket {
         var tv = timeval(tv_sec: Int(timeoutSeconds), tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
-        // A peer closing mid-write must surface as an error, never as a fatal SIGPIPE.
-        var noSigPipe: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
-
         try request.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             var sent = 0
             while sent < raw.count {

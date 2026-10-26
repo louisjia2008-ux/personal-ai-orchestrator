@@ -1,8 +1,9 @@
 """Bounded host-report delivery and safe, manual-only continuation exports.
 
 The existing audit transition and verification journal remain authoritative.
-This module is an observational projection: it never reads worker result_json,
-provider output, project files, or external conversation/session storage.
+This module never reads worker result_json, provider output, or external
+conversation/session storage. Snapshot freshness reads bounded Git diffs through
+the host observer; source bytes never enter the safe cross-client projection.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from personal_ai_orchestrator.patch_snapshot import snapshot_status
 from personal_ai_orchestrator.verification_evidence import VerificationEvidenceJournal
 from personal_ai_orchestrator.verifier import VerificationResult
 
@@ -25,19 +27,14 @@ RESULT_VERSION = 1
 FILE_LIMIT = 100
 TEST_LIMIT = 50
 GOAL_LIMIT = 1024
-EVIDENCE_BYTE_LIMIT = 1024 * 1024
+# One 1 MiB binary patch encoded as base64, plus bounded verifier stage output.
+EVIDENCE_BYTE_LIMIT = 4 * 1024 * 1024
 AUDIT_CHARACTER_LIMIT = 65536
 AUDIT_EVENT_LIMIT = 200
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _COMMIT = re.compile(r"(?:[a-f0-9]{40}|[a-f0-9]{64})\Z")
 _EVIDENCE = re.compile(r"verify-[a-f0-9]{24}\Z")
 _PASS_PREFIX = "deterministic verification passed: "
-_SENSITIVE = re.compile(
-    r"(?i)(?:\b(?:password|passwd|secret|token|api[ _-]?key|authorization|"
-    r"credential|cookie|bearer|private[ _-]?key|session)\b|"
-    r"(?:sk|ghp|github_pat|xox[baprs])[-_]|AKIA[A-Z0-9]|"
-    r"[A-Za-z0-9_+=-]{24,}|[\\/]|\b[A-Za-z]:|\b\S+@\S+|[<>`])"
-)
 
 
 def _digest(value: dict[str, Any]) -> str:
@@ -46,37 +43,292 @@ def _digest(value: dict[str, Any]) -> str:
     ).hexdigest()
 
 
-def _goal(value: str) -> tuple[str, bool, bool]:
-    """Conservatively withhold suspicious lines; never export a partial secret."""
-    truncated = len(value) > GOAL_LIMIT
-    if truncated:
-        return "Original goal exceeds the safe export limit; review it in PAO.", True, True
-    redacted = False
-    lines = []
-    for line in value.splitlines():
-        # This also strips bidi controls and zero-width formatting characters.
-        if _SENSITIVE.search(line) or any(unicodedata.category(c).startswith("C") for c in line):
-            lines.append("[Goal detail withheld for safe export]")
-            redacted = True
-        else:
-            lines.append(" ".join(line.split()))
-    return " ".join(lines).strip() or "Review the original goal in PAO.", redacted, False
+def _credential_like(value: str, *, identifier: bool = False) -> bool:
+    """True when the value looks like an actual sensitive credential value.
+
+    Detects key prefixes, emails, long hex blobs, and opaque mixed-case
+    random strings. Ordinary long snake_case source identifiers and names
+    that merely mention credential terminology stay allowed.
+    """
+    text = unicodedata.normalize("NFKC", value).strip()
+    if not text:
+        return True
+    if any(unicodedata.category(ch).startswith("C") for ch in text):
+        return True
+    if "\\" in text or text.startswith("/"):
+        return True
+    for raw in re.split(r"[\s\"'`<>,;:()\[\]{}=|]+", text):
+        tok = raw.strip("-_./")
+        if not tok:
+            continue
+        if re.fullmatch(r"(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{6,}", tok):
+            return True
+        if re.fullmatch(r"AKIA[A-Z0-9]{12,}", tok):
+            return True
+        if re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", tok):
+            return True
+        if len(tok) >= 24 and re.fullmatch(r"[0-9a-fA-F]+", tok):
+            if any(ch.isdigit() for ch in tok):
+                return True
+        if not identifier and re.search(r"[A-Za-z0-9_+=-]{24,}", tok):
+            return True
+        for candidate in re.findall(r"[A-Za-z0-9_+=-]{20,}", tok):
+            has_upper = any(ch.isupper() for ch in candidate)
+            has_lower = any(ch.islower() for ch in candidate)
+            has_digit = any(ch.isdigit() for ch in candidate)
+            if has_upper and has_lower and has_digit:
+                # Readable versioned code identifiers are not opaque values.
+                # Keep strong key-prefix/email/hex checks above this exception.
+                number_runs = re.findall(r"\d+", candidate)
+                if (
+                    identifier
+                    and re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", candidate)
+                    and len(number_runs) <= 2
+                    and all(len(run) <= 4 for run in number_runs)
+                    and re.search(r"[a-z]{4,}", candidate)
+                ):
+                    continue
+                return True
+    return False
+
+
+def _forbidden_segment(part: str) -> bool:
+    lowered = part.strip().lower()
+    if part in {".", ".."}:
+        return True
+    if lowered.startswith(".env"):
+        return True
+    if lowered in {
+        ".codex",
+        ".ssh",
+        ".aws",
+        "auth.json",
+        ".netrc",
+        ".npmrc",
+        ".pypirc",
+        ".git-credentials",
+        "id_rsa",
+        "id_ed25519",
+        "credentials.json",
+        "private_key.pem",
+    }:
+        return True
+    return False
 
 
 def _safe_changed_file(value: str) -> bool:
-    if len(value) > 256 or not re.fullmatch(r"[A-Za-z0-9_.@+-]+(?:/[A-Za-z0-9_.@+-]+)*", value):
+    """Accept ordinary relative repo paths; reject absolute, traversal,
+    credential-file, and control/format-character paths."""
+    if not value or len(value) > 256:
+        return False
+    if any(unicodedata.category(ch).startswith("C") for ch in value):
+        return False
+    if "\\" in value or ":" in value:
+        return False
+    if any(
+        ch not in "_ .@+-/" and not ch.isalnum() and not unicodedata.category(ch).startswith("M")
+        for ch in value
+    ):
         return False
     parts = value.split("/")
-    return not any(
-        part in {".", "..", ".codex", ".ssh", ".aws", ".env"} or _SENSITIVE.search(part)
-        for part in parts
+    if any(not part or _forbidden_segment(part) for part in parts):
+        return False
+    for part in parts:
+        stem = part.rsplit(".", 1)[0]
+        if _credential_like(part, identifier=True) or (
+            stem and _credential_like(stem, identifier=True)
+        ):
+            return False
+    return True
+
+
+def _readable_code_identifier(value: str) -> bool:
+    """Keep readable code syntax after the credential and sensitive-value guards."""
+    if not value or len(value) > GOAL_LIMIT or _credential_like(value, identifier=True):
+        return False
+
+    def readable_segment(part: str) -> bool:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", part):
+            return False
+        core = part.strip("_")
+        if not core:
+            return False
+
+        def word(segment: str) -> bool:
+            if re.fullmatch(r"(?:[a-z]+|[A-Z]+)\d{0,4}|\d{1,4}", segment):
+                return True
+            # Retain the established readable CamelCase word structure.
+            # Alternating-case random letters have no such word boundaries.
+            return bool(re.search(r"[a-z]{4,}[A-Z][a-z]{4,}", segment))
+
+        if "_" in core:
+            return all(word(segment) for segment in core.split("_"))
+        if len(core) >= 24 and (core.islower() or core.isupper()):
+            return False
+        return word(core)
+
+    return all(readable_segment(part) for part in value.split("."))
+
+
+def _safe_code_reference(value: str) -> bool:
+    """Recognize code/path data without treating a command as a filename."""
+    if re.match(
+        r"(?i)^(?:cat|sh|bash|zsh|fish|env|python\d*|node|curl|wget|rm|sudo|git|"
+        r"echo|printf|source|eval|exec|open|osascript|powershell|pwsh)\s",
+        value,
+    ):
+        return False
+    if len(value) >= 24 and "/" not in value and "." not in value:
+        if _credential_like(value) and not _readable_code_identifier(value):
+            return False
+    return bool(
+        _safe_changed_file(value)
+        and (not any(ch.isspace() for ch in value) or "/" in value or "." in value)
     )
+
+
+def _safe_goal_reference(value: str) -> bool:
+    """One final slash is directory syntax in a goal, not an empty filename.
+
+    Validate the remaining relative path without normalizing private or invalid
+    segments. Credential value positions still use the stricter code guard.
+    """
+    return _safe_code_reference(value.removesuffix("/"))
+
+
+def _mask_credentials(text: str) -> str:
+    # Explicit assignments are value positions even when the value looks like
+    # ordinary prose or a source path. Apply this before recognizing code spans.
+    literal = r"(?:`[^`]*`|\"[^\"]*\"|'[^']*'|[^\s;,\"'`]+)"
+    assigned = re.compile(
+        r"(?i)\b(password|passwd|secret|token|api[ _-]?key|authorization|"
+        r"credential|cookie|bearer|private[ _-]?key|session)\b[ \t]*[:=][ \t]*"
+        r"(?:(?:Bearer|Basic)[ \t]+)?" + literal
+    )
+    masked = re.sub(r"(?i)\bcookie[ \t]*:[^\r\n]*", "Cookie: [redacted]", text)
+    masked = assigned.sub(lambda match: match.group(1) + "=[redacted]", masked)
+
+    def bare_value(match: re.Match[str]) -> str:
+        if match.group("code") is not None:
+            return match.group(0)
+        value = match.group("value")
+        body = value.strip("\"'`")
+        code_path = (
+            value.startswith("`")
+            and value.endswith("`")
+            and "/" in body
+            and _safe_code_reference(body)
+        )
+        supplied = bool(re.search(r"(?i)\b(?:use|using|set)\s+$", masked[: match.start()]))
+        if not code_path and (
+            supplied
+            or match.group("label").lower() == "bearer"
+            or value[:1] in {"'", '"', "`"}
+            or _credential_like(body)
+            or any(ch.isdigit() or ch.isupper() or ch in "_-=" for ch in body)
+        ):
+            return match.group("label") + " [redacted]"
+        return match.group(0)
+
+    return re.sub(
+        r"(?i)(?P<code>`[^`]*`)|(?<![\w./])"
+        r"(?P<label>token|bearer|secret|password|credential|session)\b[ \t]+"
+        r"(?P<value>" + literal + ")",
+        bare_value,
+        masked,
+    )
+
+
+def _mask_goal_line(line: str) -> str:
+    masked = _mask_credentials(line)
+    # Alternatives are ordered: code spans and quoted paths are atomic, so
+    # private fragments cannot be reintroduced through a protected placeholder.
+    fragments = re.compile(
+        r"(?P<code>`[^`\n]*(?:`|$))"
+        r"|(?P<quoted>\"[^\"\n]*[/\\][^\"\n]*\"|'[^'\n]*[/\\][^'\n]*')"
+        r"|(?P<url>\b[A-Za-z][A-Za-z0-9+.-]*://[^\s`\"'<>,;]+)"
+        r"|(?P<absolute>(?<![\w./])(?:[A-Za-z]:[\\/]|\\\\|~/|/)[^\s`\"'<>,;]*)"
+        r"|(?P<path>(?<![\w./])(?:\.{1,2}/|[\w.@+-]+/)[\w.@+/\-]*)"
+        r"|(?P<token>[\w.@+%=-]+)"
+    )
+
+    def project(match: re.Match[str]) -> str:
+        value = match.group(0)
+        # This exact device literal is public program syntax, only in goals.
+        # Credential values were already masked; URLs and descendants stay private.
+        body = value[1:-1] if match.lastgroup in {"code", "quoted"} else value
+        public_literal = body == "/dev/null"
+        if match.lastgroup == "code":
+            safe = (
+                len(value) >= 2
+                and value.endswith("`")
+                and (public_literal or _safe_goal_reference(body))
+            )
+        elif match.lastgroup == "quoted":
+            safe = public_literal or _safe_goal_reference(body)
+        elif match.lastgroup == "absolute":
+            safe = public_literal
+        elif match.lastgroup == "url":
+            safe = False
+        elif match.lastgroup == "path":
+            safe = _safe_goal_reference(value)
+        elif re.fullmatch(
+            r"[\w.@+-]+\.(?:py|swift|[cm]?js|jsx|tsx?|md|toml|json|ya?ml|sh|[ch]|cpp|rs|go)",
+            value,
+        ):
+            safe = _safe_changed_file(value)
+        elif re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*(?:\.[A-Za-z_][A-Za-z_0-9]*)*", value):
+            safe = not _forbidden_segment(value) and (
+                not _credential_like(value) or _readable_code_identifier(value)
+            )
+        else:
+            token = value.rstrip(".")
+            safe = not token or (not _credential_like(token) and not _forbidden_segment(token))
+        return value if safe else "[redacted]"
+
+    return fragments.sub(project, masked)
+
+
+def _goal(value: str) -> tuple[str, bool, bool]:
+    """Preserve safe code references and mark actual sensitive omissions."""
+    if len(value) > GOAL_LIMIT:
+        return "Original goal exceeds the safe export limit; review it in PAO.", True, True
+    redacted = False
+    lines: list[str] = []
+    in_pem = False
+    begin_pattern = re.compile(r"(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----")
+    end_pattern = re.compile(r"(?i)-----END [A-Z ]*PRIVATE KEY-----")
+    # LF/CRLF are paragraph separators; other controls must reach the guard.
+    for line in value.replace("\r\n", "\n").split("\n"):
+        if any(unicodedata.category(ch).startswith("C") for ch in line):
+            if begin_pattern.search(line):
+                in_pem = end_pattern.search(line) is None
+            elif in_pem and end_pattern.search(line):
+                in_pem = False
+            lines.append("[Goal detail withheld for safe export]")
+            redacted = True
+            continue
+        begin = begin_pattern.search(line)
+        if in_pem or begin:
+            start = begin.end() if begin and not in_pem else 0
+            end = end_pattern.search(line, start)
+            prefix = _mask_goal_line(line[: begin.start()]) if begin and not in_pem else ""
+            suffix = _mask_goal_line(line[end.end() :]) if end else ""
+            lines.append((prefix + " [redacted] " + suffix).strip())
+            in_pem = end is None
+            redacted = True
+            continue
+        masked = _mask_goal_line(line)
+        redacted |= masked != line
+        lines.append(masked.strip())
+    return " ".join(lines).strip() or "Review the original goal in PAO.", redacted, False
 
 
 def _safe_test_name(value: str) -> bool:
     return bool(
         re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _().:+-]{0,79}", value)
-        and not _SENSITIVE.search(value)
+        and not _credential_like(value, identifier=True)
+        and _mask_credentials(value) == value
     )
 
 
@@ -105,6 +357,9 @@ def _verification_transition(connection: sqlite3.Connection, task_id: str) -> sq
         """WITH bounded AS (
         SELECT audit_id, CASE WHEN length(payload_json)<=? THEN payload_json END AS payload_json
         FROM audit_events WHERE task_id=? AND event_type='TASK_STATE_CHANGED'
+        AND audit_id>COALESCE((SELECT MAX(audit_id) FROM audit_events WHERE task_id=?
+            AND event_type IN ('RUN_STARTED','MANUAL_TASK_RETRY_PREPARED',
+                'MANUAL_TASK_REOPEN_PREPARED')),0)
         ORDER BY audit_id DESC LIMIT ?
         ) SELECT audit_id,
         substr(json_extract(payload_json,'$.to'),1,81) AS to_state,
@@ -114,7 +369,7 @@ def _verification_transition(connection: sqlite3.Connection, task_id: str) -> sq
         CASE WHEN json_valid(payload_json) THEN
             json_extract(payload_json,'$.from')='VERIFYING' ELSE 0 END
         ORDER BY audit_id DESC LIMIT 1""",
-        (AUDIT_CHARACTER_LIMIT, task_id, AUDIT_EVENT_LIMIT),
+        (AUDIT_CHARACTER_LIMIT, task_id, task_id, AUDIT_EVENT_LIMIT),
     ).fetchone()
 
 
@@ -302,6 +557,45 @@ def result_delivery(
                 report["limitations"].append("EVIDENCE_DIGEST_MISMATCH")
             elif evidence is not None:
                 _project_evidence(report, evidence, digest)
+                if (
+                    evidence.patch_snapshot is not None
+                    and report["verification"]["status"] == "VERIFIED"
+                ):
+                    snapshot = evidence.patch_snapshot
+                    observed = snapshot_status(
+                        connection,
+                        task_id=task_id,
+                        run_id=run_id,
+                        base_sha=base,
+                        snapshot=snapshot,
+                    )
+                    report["workspace_status"] = observed
+                    if observed == "BINDING_MISMATCH":
+                        report["verification"]["status"] = "EVIDENCE_CONFLICT"
+                        report["completeness"] = "FAILED"
+                    else:
+                        report["binding"]["patch_sha256"] = snapshot.sha256
+                        report["binding"]["patch_byte_count"] = snapshot.byte_count
+                        report["artifacts"].append(
+                            {
+                                "kind": "VERIFIED_PATCH",
+                                "reference": f"pao:patch:{snapshot.sha256}",
+                                "sha256": snapshot.sha256,
+                                "byte_count": snapshot.byte_count,
+                            }
+                        )
+                        if observed != "CURRENT":
+                            report["verification"]["status"] = (
+                                "VERIFICATION_STALE"
+                                if observed == "STALE"
+                                else "WORKSPACE_UNAVAILABLE"
+                            )
+                    if observed != "CURRENT":
+                        report["limitations"].append(
+                            "WORKTREE_CHANGED_SINCE_VERIFICATION"
+                            if observed == "STALE"
+                            else "SNAPSHOT_WORKSPACE_BINDING_UNAVAILABLE"
+                        )
     report["result_id"] = f"result-{_digest(report)}"
     return report
 

@@ -70,6 +70,7 @@ def test_pi_argv_is_one_shot_fail_closed_and_has_no_shell_tool(tmp_path: Path) -
     assert "--no-context-files" in argv
     assert argv[argv.index("-e") + 1] == str(guard)
     assert argv[argv.index("--model") + 1] == "zai/glm-5.3"
+    assert argv[argv.index("--thinking") + 1] == "off"
     assert argv[argv.index("--tools") + 1] == ",".join(PI_ALLOWED_TOOLS)
     assert "bash" not in PI_ALLOWED_TOOLS
     assert "powershell" not in PI_ALLOWED_TOOLS
@@ -83,11 +84,11 @@ def test_seed_pi_guard_overwrites_weakened_previous_copy(tmp_path: Path) -> None
     second = seed_pi_worktree_guard(tmp_path)
 
     assert second == target
-    assert second.read_text(encoding="utf-8") == PI_WORKTREE_GUARD_SOURCE
-    assert "path escapes assigned worktree" in PI_WORKTREE_GUARD_SOURCE
-    assert "symlink escapes assigned worktree" in PI_WORKTREE_GUARD_SOURCE
-    assert "protected host path" in PI_WORKTREE_GUARD_SOURCE
-    assert 'OPTIONAL_PATH_TOOLS = new Set(["grep", "find", "ls"])' in PI_WORKTREE_GUARD_SOURCE
+    source = second.read_text(encoding="utf-8")
+    assert "__PAO_FILE_HELPER__" not in source
+    assert "pi_file_tools.py" in source
+    assert "name: `pao_${definition.name}`" in source
+    assert "createReadToolDefinition" in PI_WORKTREE_GUARD_SOURCE
 
 
 def test_pi_json_summary_accepts_exact_model_complete_tool_lifecycle() -> None:

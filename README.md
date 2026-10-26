@@ -33,7 +33,7 @@ The scheduling decision layer is implemented, verified end-to-end against live A
 | Host | Form | Location | Install |
 |---|---|---|---|
 | [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) | bundle plugin | [`integrations/dsh-plugin/`](integrations/dsh-plugin/) | `dsh plugin --profile <name> add github:louisjia2008-ux/personal-ai-orchestrator` |
-| [pi](https://github.com/earendil-works/pi-coding-agent) | extension package | [`integrations/pi-dsh/`](integrations/pi-dsh/) | `pi install git:github.com:louisjia2008-ux/personal-ai-orchestrator` |
+| [pi](https://github.com/earendil-works/pi-coding-agent) | extension package | [`integrations/pi-dsh/`](integrations/pi-dsh/) | Clone the repository, then `pi install ./integrations/pi-dsh` |
 | any CLI | launcher scripts | [`spikes/jev-dispatch/`](spikes/jev-dispatch/) | `pi-jev "task"` / `dsh "task"` |
 
 ### How it routes
@@ -137,6 +137,33 @@ OpenCode / CLI / macOS / Telegram / DeskPet
 A worker saying `COMPLETE` is **not** task completion.
 
 A task may only advance after host-owned deterministic verification passes. Model routing, quota optimization, fallback, or UI controls can never bypass this rule.
+
+Configure trusted acceptance `commands` before dispatching a task. The host-owned
+JSON file passed through `--verifier-profile` supplies the host default; the bundled
+daemon seeds `runtime-state/policies/verifier-profile.json` under its application-support
+root. Per-project checks configured in **Settings → Projects** take precedence over
+that default and are captured once per attempt, so edits affect the next attempt.
+An effective profile with no commands blocks before any worker starts with
+`VERIFIER_NOT_CONFIGURED`; `git diff --check` alone cannot certify a working
+implementation. Commands are trusted argv lists chosen by the owner, such as the
+project's build and acceptance tests. Prompts cannot supply them.
+
+Pi workers require the Pi 0.85.1 tool-definition API. Their enabled file tools
+are `pao_read`, `pao_edit`, `pao_write`, `pao_grep`, `pao_find`, and `pao_ls`.
+Each uses the host's descriptor-based helper, which rejects symlinks, hard-linked
+files, special files and `.git`/`.pao` metadata. This also rejects links pointing
+inside the worktree. Search respects `.gitignore`; grep uses Python regular
+expressions. The helper has file/output/entry/time bounds. Distinct tool names
+prevent extension load failures from enabling Pi's unrestricted built-ins.
+This tool boundary assumes the host and other local processes are trusted; it
+is not an OS sandbox for arbitrary code execution.
+
+OpenCode workers use `--pure`, disable project configuration, and receive host
+permission rules through their launch environment. Existing project config files
+are left intact. Main-repository fingerprints include HEAD, index entries,
+tracked file contents, nonignored untracked contents, file types, executable
+modes and link text. Ignored files and submodule contents are outside that
+fingerprint's scope.
 
 ## Resource identities
 
@@ -295,8 +322,29 @@ open "dist/Personal AI Orchestrator.app"
 The bundle contains `Contents/Helpers/pao-daemon`; the app starts that helper without manual
 Terminal daemon bootstrap when its typed control socket is unavailable.
 
-The dashboard is still a client. It reads typed `/v1` daemon views and never reads
+The dashboard is still a client. It reads typed daemon views and never reads
 Safety Kernel SQLite, credentials, provider auth files, or browser/session stores directly.
+
+For a manual project task:
+
+1. In **Settings → Projects**, add the Git repository and open **Configure project checks**.
+   Enter trusted acceptance commands (one argv command per line), allowed change paths,
+   and a timeout. Commands run from the task worktree's Git root; use an absolute path
+   to a host interpreter if your virtual environment is excluded from Git. An empty
+   command list blocks execution before a model worker starts.
+2. Create a task, choose **Manual** and its exact runtime/model. If the model needs
+   current execution evidence, **Verify model (one real call)** uses the existing login
+   for one fixed, confined request. Dispatch is enabled only by current host authority.
+3. Click **Dispatch**. The worker uses a separate managed worktree. Check the task's
+   verification stages and **Review and export changes** to inspect/export its patch.
+4. If the task is blocked, correct the configuration or failure, then choose **Keep
+   changes and prepare retry**. Confirmed cleanup is required. This preserves the
+   worktree and returns to READY; a separate Dispatch click starts another attempt.
+   Interrupted manual executions use the existing stricter recovery operation.
+
+Project checks are stored by the host, outside worker worktrees, and captured once
+per attempt. Editing them does not change an active attempt. A VERIFIED task proves
+its configured host checks passed; apply/review the exported patch separately.
 
 DeskPet is an optional client, not a dependency of the project.
 

@@ -45,7 +45,8 @@ struct TaskVerificationSection: View {
 
             if summary.hasResult {
                 TaskFieldRow(label: L10n.detailVerifierProfile, value: summary.profile)
-                if let passed = summary.resultPassed {
+                if let passed = summary.resultPassed,
+                   summary.status != .verificationStale, summary.status != .workspaceUnavailable {
                     LabeledContent(L10n.verificationOverall) {
                         TaskStatusLabel(
                             presentation: StatusStyle.verificationStage(passed: passed),
@@ -77,9 +78,7 @@ struct TaskVerificationSection: View {
         }
     }
 
-    private var footnote: String? {
-        summary.stages.isEmpty ? nil : L10n.verificationStageFooter
-    }
+    private var footnote: String? { nil }
 
     @ViewBuilder
     private var stages: some View {
@@ -91,7 +90,11 @@ struct TaskVerificationSection: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 ForEach(summary.stages) { stage in
-                    HStack(spacing: Spacing.tight) {
+                    DisclosureGroup {
+                        Text(stage.argv.joined(separator: " "))
+                        Text(stage.stdout + stage.stderr)
+                    } label: {
+                      HStack(spacing: Spacing.tight) {
                         let style = StatusStyle.verificationStage(passed: stage.passed)
                         Image(systemName: style.symbol)
                             .foregroundStyle(style.color)
@@ -101,11 +104,10 @@ struct TaskVerificationSection: View {
                         Text(L10n.verificationCheckExit(stage.exitCode))
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
+                      }
                     }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel(
-                        "\(stage.name), \(stage.passed ? L10n.valueStagePassed : L10n.valueStageFailed)"
-                    )
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
                 }
             }
         }

@@ -47,6 +47,13 @@ public final class OrchestratorStore: ObservableObject {
     @Published public private(set) var projects: ProjectListView?
     @Published public private(set) var pendingProjectPreview: ProjectView?
     @Published public private(set) var selectedTaskDetail: TaskDetailView?
+    @Published public private(set) var selectedTaskWorkflow: ManualWorkflowView?
+    @Published public private(set) var selectedTaskPreparation: TaskPreparationView?
+    @Published public private(set) var retryNotice: String?
+    @Published public private(set) var retryInProgress = false
+    @Published public private(set) var probingTargetId: String?
+    @Published public private(set) var probeNotice: String?
+    @Published public private(set) var probeNoticeTargetId: String?
     @Published public private(set) var providers: ProviderHealthListView?
     @Published public private(set) var providerConnections: ProviderConnectionListView?
     @Published public private(set) var providerDiscoveryStatus: ProviderDiscoveryStatusView?
@@ -90,6 +97,10 @@ public final class OrchestratorStore: ObservableObject {
             // onChange or the next request has a chance to run.
             taskDetailRequestId = nil
             selectedTaskDetail = nil
+            selectedTaskWorkflow = nil
+            selectedTaskPreparation = nil
+            retryNotice = nil
+            dispatchNotice = nil
             clearCancellationNotice()
             clearDispatchRecommendation()
         }
@@ -106,7 +117,8 @@ public final class OrchestratorStore: ObservableObject {
     /// Whether the dashboard binary and the connected daemon came from the same
     /// commit. Surfaced in Settings so stale-stack truth is never presented as live.
     public var buildCompatibility: BuildCompatibility {
-        BuildCompatibility.compare(app: BuildIdentity.current, daemonCommitSHA: daemonBuild?.commitSHA)
+        BuildCompatibility.compare(app: BuildIdentity.current, daemonCommitSHA: daemonBuild?.commitSHA,
+                                   daemonBuiltAt: daemonBuild?.builtAt)
     }
 
     public let socketPath: String
@@ -156,8 +168,10 @@ public final class OrchestratorStore: ObservableObject {
                 widgetSnapshotBridge: WidgetSnapshotBridge? = nil,
                 autoStartDaemon: Bool = true,
                 autoRefresh: Bool = true,
+                initialSchedulingPolicy: String = "BALANCED",
                 idFactory: @escaping () -> String = { UUID().uuidString.prefix(12).lowercased() }) {
         self.socketPath = socketPath
+        self.selectedSchedulingPolicy = initialSchedulingPolicy
         let client = PAOControlClient(socketPath: socketPath)
         self.client = client
         let configuration = daemonConfiguration ?? DaemonLaunchConfiguration()
@@ -415,6 +429,8 @@ public final class OrchestratorStore: ObservableObject {
             pendingProjectPreview = nil
             taskDetailRequestId = nil
             selectedTaskDetail = nil
+            selectedTaskWorkflow = nil
+            selectedTaskPreparation = nil
             providers = nil
             providerConnections = nil
             activeStatus = nil
@@ -586,7 +602,9 @@ public final class OrchestratorStore: ObservableObject {
     /// side effects: another invocation or the post-submit refresh may replace
     /// the shared presentation before this method resumes.
     @discardableResult
-    public func quickSubmit(projectId: String?, intent: String) async -> SubmitNotice? {
+    public func quickSubmit(
+        projectId: String?, intent: String, baseline: TaskBaselineSelection? = nil
+    ) async -> SubmitNotice? {
         let requestId = UUID()
         submitRequestId = requestId
         lastSubmittedTaskId = nil
@@ -596,6 +614,11 @@ public final class OrchestratorStore: ObservableObject {
         guard let projectId, !projectId.isEmpty else {
             submitNotice = .projectRequired
             return .projectRequired
+        }
+        if let baseline, baseline.projectId != projectId {
+            let notice = SubmitNotice.failed(detail: L10n.workflow("baselineRefreshRequired"))
+            submitNotice = notice
+            return notice
         }
         if let last = lastSubmit,
            last.intent == trimmed,
@@ -620,7 +643,9 @@ public final class OrchestratorStore: ObservableObject {
             intent: trimmed,
             schedulingPolicy: policy,
             manualExecutionTargetId: manualTarget,
-            minTier: selectedMinTier
+            minTier: selectedMinTier,
+            baselineMode: baseline?.mode,
+            expectedBaselineFingerprint: baseline?.fingerprint
         )
         do {
             let task = try await client.submit(request)
@@ -690,8 +715,12 @@ public final class OrchestratorStore: ObservableObject {
         taskDetailRequestId = requestId
         do {
             let detail = try await client.taskDetail(taskId)
+            let workflow = try? await client.manualWorkflow(taskId)
+            let preparation = try? await client.taskPreparation(taskId)
             guard taskDetailRequestId == requestId, selectedTaskId == taskId else { return }
             selectedTaskDetail = detail
+            selectedTaskWorkflow = workflow
+            selectedTaskPreparation = preparation
             lastError = nil
         } catch let error as PAOClientError {
             guard taskDetailRequestId == requestId, selectedTaskId == taskId else { return }
@@ -702,6 +731,42 @@ public final class OrchestratorStore: ObservableObject {
             lastError = .malformedResponse
             ClientLog.operation("task-detail", outcome: "malformed")
         }
+    }
+
+    public func retryManualTask() async {
+        guard !retryInProgress, let detail = selectedTaskDetail,
+              let workflow = selectedTaskWorkflow, workflow.taskId == detail.task.taskId,
+              workflow.retryAvailable, let prior = workflow.priorDispatchId else { return }
+        retryInProgress = true
+        defer { retryInProgress = false }
+        do {
+            try await client.retryManualTask(task: detail.task, priorDispatchId: prior,
+                                            operation: workflow.recoveryOperation ?? .retry)
+            dispatchNotice = nil
+            if selectedTaskId == detail.task.taskId {
+                retryNotice = L10n.workflow(workflow.recoveryOperation == .reopen ? "reopenReady" : "retryReady")
+            }
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            if selectedTaskId == detail.task.taskId { retryNotice = error.displayDetail }
+        } catch {
+            if selectedTaskId == detail.task.taskId { retryNotice = L10n.workflow("unavailable") }
+        }
+    }
+
+    public func probeExecutionTarget(_ targetId: String) async {
+        guard probingTargetId == nil else { return }
+        probingTargetId = targetId
+        probeNoticeTargetId = targetId
+        probeNotice = nil
+        defer { probingTargetId = nil }
+        do {
+            let result = try await client.probeExecutionTarget(targetId)
+            probeNotice = "\(result.result): \(result.reasonCode)"
+            await refreshOnce()
+        } catch let error as PAOClientError {
+            probeNotice = error.displayDetail
+        } catch { probeNotice = L10n.workflow("unavailable") }
     }
 
     /// Convenience: returns the cached task list (does not refresh).

@@ -394,6 +394,8 @@ public enum L10n {
         currentBundle().localizedString(forKey: key, value: key, table: nil)
     }
 
+    public static func workflow(_ key: String) -> String { tr("workflow.\(key)") }
+
     private static func tr(_ key: String, _ arguments: [CVarArg]) -> String {
         String(format: tr(key), locale: Locale.current, arguments: arguments)
     }
@@ -1421,6 +1423,8 @@ public enum L10n {
         case .verified: return tr("verification.status.verified")
         case .verifiedEvidenceMissing: return tr("verification.status.evidenceMissing")
         case .verifiedEvidenceUnavailable: return tr("verification.status.evidenceUnavailable")
+        case .verificationStale: return tr("verification.status.stale")
+        case .workspaceUnavailable: return tr("verification.status.workspaceUnavailable")
         case .failedVerification: return tr("verification.status.failed")
         case .inProgress: return tr("verification.status.inProgress")
         case .notVerified: return tr("verification.status.notVerified")

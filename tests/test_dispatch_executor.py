@@ -321,7 +321,7 @@ def _close(snapshot: dict) -> None:
     snapshot["store"].close()
 
 
-def test_worker_permission_config_seeded_into_worktree(tmp_path: Path) -> None:
+def test_worker_permission_config_remains_outside_worktree(tmp_path: Path) -> None:
     policy = tmp_path / "policy" / "opencode.json"
     policy.parent.mkdir(parents=True, exist_ok=True)
     policy.write_text(
@@ -350,7 +350,8 @@ def test_worker_permission_config_seeded_into_worktree(tmp_path: Path) -> None:
     finally:
         _close(snapshot)
     seeded = tmp_path / "worktrees" / "task-1" / "opencode.json"
-    assert seeded.read_text(encoding="utf-8") == policy.read_text(encoding="utf-8")
+    assert not seeded.exists()
+    assert json.loads(harness.executor._worker_permissions())["bash"] == "deny"
 
 
 def test_worker_env_excludes_credentials() -> None:
@@ -1077,8 +1078,9 @@ def test_missing_verifier_profile_fails_closed(tmp_path: Path) -> None:
     snapshot = harness.snapshot()
     try:
         assert snapshot["task"].state is TaskState.BLOCKED
-        assert snapshot["run_status"] == "FINISHED"
-        assert "no host verifier profile" in json.dumps(
+        assert snapshot["run_status"] is None
+        assert snapshot["dispatch_failure_code"] == "VERIFIER_NOT_CONFIGURED"
+        assert "project verifier commands are not configured" in json.dumps(
             [e["payload"] for e in snapshot["store"].audit_events("task-1")]
         )
     finally:

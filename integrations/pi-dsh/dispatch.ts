@@ -101,63 +101,67 @@ async function getJson(
   return { status: res.status, body };
 }
 
+// Missing, malformed, stale or unsuccessful quota evidence never admits a pool.
+function quotaWindow(kind: string, used: number, reset: any): QuotaWindow | null {
+  const at = new Date(reset).getTime();
+  if (typeof used !== "number" || !Number.isFinite(used) || used < 0 || used > 1 ||
+      !Number.isFinite(at) || at <= Date.now()) return null;
+  return { kind, used, pressure: pressure(used), resetInHours: (at - Date.now()) / 3600_000 };
+}
+
 async function probeZai(key: string): Promise<QuotaWindow[] | null> {
   try {
     const { status, body } = await getJson(ZAI_QUOTA_URL, key);
-    if (status !== 200 || !body?.success) return null;
-    const rows: { nextResetTime: number; percentage: number }[] =
-      body.data.limits
-        .map((l: any) => ({
-          at: new Date(l.nextResetTime),
-          used: l.percentage / 100,
-        }))
-        .sort((a: any, b: any) => a.at - b.at);
-    const now = Date.now();
-    return rows.map((r: any, i: number) => ({
-      kind:
-        i === 0 && r.at.getTime() - now <= 6 * 3600_000
-          ? "FIVE_HOUR"
-          : i === 0
-            ? "SHORT_TERM"
-            : "WEEKLY",
-      used: r.used,
-      pressure: pressure(r.used),
-      resetInHours: Math.max(0, (r.at.getTime() - now) / 3600_000),
+    if (status !== 200 || body?.success !== true || !Array.isArray(body?.data?.limits) || !body.data.limits.length) return null;
+    const rows = body.data.limits.map((row: any) => quotaWindow("WINDOW", typeof row.percentage === "number" ? row.percentage / 100 : NaN, row.nextResetTime));
+    if (rows.some((row: any) => row === null)) return null;
+    return rows.sort((a: any, b: any) => a.resetInHours - b.resetInHours).map((row: any, i: number) => ({
+      ...row, kind: i === 0 ? (row.resetInHours <= 6 ? "FIVE_HOUR" : "SHORT_TERM") : "WEEKLY",
     }));
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-async function probeMinimax(
-  key: string,
-): Promise<{ inactive?: string }> {
+async function probeMinimax(key: string): Promise<{ inactive?: string; windows?: QuotaWindow[] }> {
   try {
-    const { body } = await getJson(MM_QUOTA_URL, key);
-    const code = body?.base_resp?.status_code;
-    if (code === 2062) return { inactive: body.base_resp.status_msg };
-    return {};
-  } catch {
-    return {}; // unreadable but not proven inactive → include, no windows
-  }
+    const { status, body } = await getJson(MM_QUOTA_URL, key);
+    if (status !== 200 || body?.base_resp?.status_code !== 0) return { inactive: "quota probe unsuccessful" };
+    const data = body.data ?? body;
+    const general = Array.isArray(data.model_remains) ? data.model_remains.filter((row: any) => row?.model === "general") : [];
+    const windows = ["interval", "weekly"].map((period) => {
+      const kind = period === "interval" ? "FIVE_HOUR" : "WEEKLY";
+      const total = data[`current_${period}_total_count`];
+      const used = data[`current_${period}_usage_count`];
+      const planKeys = [`current_${period}_total_count`, `current_${period}_usage_count`, `current_${period}_reset_time`];
+      if (planKeys.some((key) => Object.hasOwn(data, key))) {
+        if (typeof total === "number" && total > 0 && Number.isFinite(total) && typeof used === "number" && used >= 0) {
+          return quotaWindow(kind, used / total, data[`current_${period}_reset_time`]);
+        }
+        // A malformed authoritative plan view cannot fall back to a rosier scope.
+        return null;
+      }
+      const values = general.map((row: any) => quotaWindow(kind,
+        typeof row[`current_${period}_remaining_percent`] === "number" ? 1 - row[`current_${period}_remaining_percent`] / 100 : NaN,
+        row[period === "interval" ? "end_time" : "weekly_end_time"]));
+      if (!values.length || values.some((row: any) => !row)) return null;
+      if (values.some((row: any) => row.used !== values[0].used || Math.abs(row.resetInHours - values[0].resetInHours) > 0.01)) return null;
+      return values[0];
+    });
+    if (windows.some((row: any) => !row)) return { inactive: "coding quota windows are unknown" };
+    if (windows.some((row: any) => row.used >= 1)) return { inactive: "coding quota window exhausted" };
+    return { windows: windows as QuotaWindow[] };
+  } catch { return { inactive: "quota probe unavailable" }; }
 }
 
-async function probeDeepseek(
-  key: string,
-): Promise<{ ok: boolean; balance: number } | null> {
+async function probeDeepseek(key: string): Promise<{ ok: boolean; balance: number } | null> {
   try {
-    const { body } = await getJson(DS_BALANCE_URL, key);
-    const cny = (body?.balance_infos ?? []).find(
-      (i: any) => i.currency === "CNY",
-    );
-    if (!cny) return null;
-    return {
-      ok: Boolean(body?.is_available),
-      balance: Number(cny.total_balance ?? 0),
-    };
-  } catch {
-    return null;
-  }
+    const { status, body } = await getJson(DS_BALANCE_URL, key);
+    if (status !== 200 || typeof body?.is_available !== "boolean" || !Array.isArray(body.balance_infos)) return null;
+    const cny = body.balance_infos.find((row: any) => row.currency === "CNY");
+    const raw = cny?.total_balance;
+    if (!(typeof raw === "number" || (typeof raw === "string" && raw.trim()))) return null;
+    const balance = Number(raw);
+    return Number.isFinite(balance) && balance >= 0 ? { ok: body.is_available, balance } : null;
+  } catch { return null; }
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +277,7 @@ export async function jevAsk(state: any, questions: any): Promise<any> {
       continue;
     }
     if (res.ok) return await res.json();
-    lastErr = new Error(`jev HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    lastErr = new Error(`jev HTTP ${res.status}`);
     if (!retryableStatus(res.status)) throw lastErr;
   }
   throw lastErr;
@@ -290,10 +294,10 @@ function isPressed(c: Admitted): boolean {
   return c.windows.some((w) => w.pressure === "HIGH" || w.pressure === "CRITICAL");
 }
 
-function deterministicPick(admitted: Admitted[], score: number): Admitted {
+function deterministicPick(admitted: Admitted[], score: number): Admitted | undefined {
   const floor = tierFloor(score);
   const pool = admitted.filter((c) => c.target.tier >= floor);
-  const list = pool.length ? pool : admitted;
+  const list = pool;
   return [...list].sort((a, b) => {
     const pa = isPressed(a) ? 1 : 0;
     const pb = isPressed(b) ? 1 : 0;
@@ -328,11 +332,12 @@ function readAnswers(body: any): Answers | null {
   const a = body?.answers;
   const choice = a?.route?.choice;
   const confidence = finite(a?.route?.confidence);
-  if (typeof choice !== "string" || confidence === null) return null;
+  if (typeof choice !== "string" || confidence === null || confidence < 0 || confidence > 1) return null;
   return {
     choice,
     confidence,
-    tierScore: finite(a?.task_tier?.score) ?? UNKNOWN_TIER_SCORE,
+    tierScore: finite(a?.task_tier?.score) !== null && a.task_tier.score >= 0 && a.task_tier.score <= 3
+      ? a.task_tier.score : UNKNOWN_TIER_SCORE,
     noul: finite(a?.defer_acceptable?.noul),
     probabilities: a.route.probabilities,
   };
@@ -342,14 +347,15 @@ function readAnswers(body: any): Answers | null {
 export function fallbackPolicy(admitted: Admitted[], cause: string): DispatchResult {
   const floor = tierFloor(UNKNOWN_TIER_SCORE);
   if (!admitted.some((c) => c.target.tier >= floor)) {
-    // deterministicPick would widen to lower tiers; keep the current model instead.
     return {
+      action: "BLOCK",
       decision: null,
-      reason: `jev unavailable (${cause}) and no admitted T${floor} target → keeping current model`,
+      reason: `jev unavailable (${cause}) and no admitted T${floor} target → execution blocked`,
     };
   }
-  const pick = deterministicPick(admitted, UNKNOWN_TIER_SCORE);
+  const pick = deterministicPick(admitted, UNKNOWN_TIER_SCORE)!;
   return {
+    action: "SAFE_FALLBACK",
     decision: targetId(pick),
     target: pick.target,
     mode: "jev_unavailable",
@@ -380,8 +386,11 @@ export function applyPolicy(admitted: Admitted[], body: any): DispatchResult {
   }
 
   const floor = tierFloor(tierScore);
+  if (!chosen || !admitted.some((c) => c.target.tier >= floor)) {
+    return { action: "BLOCK", decision: null, reason: `no admitted T${floor} target` };
+  }
   if (chosen.target.tier < floor) {
-    const pick = deterministicPick(admitted, tierScore);
+    const pick = deterministicPick(admitted, tierScore)!;
     if (pick !== chosen) {
       reason = `jev chose T${chosen.target.tier} for a T${floor} task → tier floor enforced in code`;
       mode = "policy_override";
@@ -397,6 +406,7 @@ export function applyPolicy(admitted: Admitted[], body: any): DispatchResult {
       : null;
 
   return {
+    action: mode === "jev" ? "ALLOW" : "SAFE_FALLBACK",
     decision: targetId(chosen),
     target: chosen.target,
     mode,
@@ -412,6 +422,7 @@ export function applyPolicy(admitted: Admitted[], body: any): DispatchResult {
 // Entry
 
 export interface DispatchResult {
+  action: "ALLOW" | "BLOCK" | "SAFE_FALLBACK";
   decision: string | null;
   target?: Target;
   mode?: string;
@@ -454,7 +465,7 @@ export async function dispatchTask(prompt: string): Promise<DispatchResult> {
       admitted.push({ target: t, windows: zaiWindows, metering: "subscription" });
     } else if (t.pool === "minimax_token_plan") {
       if (mm.inactive) continue; // reason already gated at pool level
-      admitted.push({ target: t, windows: [], metering: "subscription" });
+      admitted.push({ target: t, windows: mm.windows!, metering: "subscription" });
     } else {
       if (ds === null) gates[tid] = "balance unreadable";
       else if (!ds.ok || ds.balance < POOL_MIN_BALANCE_CNY)
@@ -466,7 +477,7 @@ export async function dispatchTask(prompt: string): Promise<DispatchResult> {
   }
 
   if (!admitted.length) {
-    return { decision: null, reason: "no executable target", excluded: gates };
+    return { action: "BLOCK", decision: null, reason: "no executable target", excluded: gates };
   }
 
   const state = {

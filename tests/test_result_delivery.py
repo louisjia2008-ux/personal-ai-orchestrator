@@ -307,7 +307,11 @@ def test_legacy_or_malformed_digest_attestation_remains_missing(service, digest)
     assert result["completeness"] == "MISSING"
     assert "EVIDENCE_DIGEST_UNATTESTED" in result["limitations"]
     assert result["artifacts"] == []
-    assert service.verification_report("task-1").status == "VERIFIED"
+    # The native detail surface also refuses to present unbound journal bytes
+    # as an established verification result, while preserving the task label.
+    report = service.verification_report("task-1")
+    assert report.status == "VERIFIED_EVIDENCE_UNAVAILABLE"
+    assert report.result is None
 
 
 def test_oversized_audit_fields_cannot_establish_binding(service):

@@ -125,7 +125,8 @@ def test_malformed_pi_stream_does_not_trust_partial_error() -> None:
         b"",
         truncated=False,
     )
-    assert result["worker_failure_class"] == "UNCLASSIFIED"
+    assert result["worker_failure_class"] == "PROTOCOL_ERROR"
+    assert result["pi_diagnostic_code"] == "PI_INVALID_JSONL"
 
 
 def test_failed_plain_worker_transcript_is_not_exposed() -> None:
@@ -183,7 +184,10 @@ def test_incomplete_pi_error_is_not_provider_evidence(truncated: bool) -> None:
     result = PiOwnerDispatchExecutor._host_result_envelope(
         PI_PROTOCOL_ERROR_EXIT, stream, b"", truncated=truncated
     )
-    assert result["worker_failure_class"] == "UNCLASSIFIED"
+    assert result["worker_failure_class"] == "PROTOCOL_ERROR"
+    assert result["pi_diagnostic_code"] == (
+        "PI_OUTPUT_TRUNCATED" if truncated else "PI_MISSING_AGENT_END"
+    )
 
 
 def test_failure_payload_reconstructs_messages_and_validates_metadata() -> None:

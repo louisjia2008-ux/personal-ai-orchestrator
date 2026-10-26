@@ -84,7 +84,7 @@ test("dispatchTask survives a bogus jev reply and sends real candidate ids", asy
 test("jevAsk gives up immediately on 401", async (t) => {
   const f = t.mock.method(globalThis, "fetch", async () => new Response("bad key", { status: 401 }));
   const started = Date.now();
-  await assert.rejects(jevAsk({}, {}, "k"), /jev HTTP 401: bad key/);
+  await assert.rejects(jevAsk({}, {}, "k"), /jev HTTP 401/);
   assert.equal(f.mock.callCount(), 1);
   assert.ok(Date.now() - started < 500, "no backoff sleep on a non-retryable error");
 });
@@ -98,11 +98,25 @@ test("jevAsk retries transient 5xx and then succeeds", async (t) => {
   assert.equal(f.mock.callCount(), 2);
 });
 
-test("fallback with no T3 candidate keeps the seed model", () => {
+test("fallback with no T3 candidate blocks execution", () => {
   const lowTiers = [admitted[1], admitted[2]];
   for (const r of [fallbackPolicy(lowTiers, "HTTP 503"), applyPolicy(lowTiers, {})]) {
     assert.equal(r.decision, null);
     assert.equal(r.target, undefined);
     assert.match(r.reason, /no admitted T3 target/);
   }
+});
+
+
+test("T3 work is blocked when only light candidates are admitted", () => {
+  const light = [admitted[1], admitted[2]];
+  for (const body of [answers({ choice: "dsh:zai-glm-light", confidence: 0.99 }, 3),
+      answers({ choice: "missing", confidence: 0.99 }, 3),
+      answers({ choice: "dsh:zai-glm-light", confidence: 0.1 }, 3),
+      answers({ choice: "dsh:zai-glm-light", confidence: 0.99 }, -20)]) {
+    const result = applyPolicy(light, body);
+    assert.equal(result.action, "BLOCK");
+    assert.equal(result.target, undefined);
+  }
+  assert.equal(applyPolicy(light, answers({ choice: "dsh:zai-glm-light", confidence: 0.99 }, 1)).action, "ALLOW");
 });

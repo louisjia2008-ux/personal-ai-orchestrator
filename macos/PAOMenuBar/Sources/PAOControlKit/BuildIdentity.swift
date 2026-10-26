@@ -99,10 +99,19 @@ public enum BuildCompatibility: Equatable, Sendable {
     }
 
     /// Compare an app identity against a daemon-reported commit.
-    public static func compare(app: BuildIdentity, daemonCommitSHA: String?) -> BuildCompatibility {
+    public static func compare(app: BuildIdentity, daemonCommitSHA: String?,
+                               daemonBuiltAt: String? = nil) -> BuildCompatibility {
         guard let daemonCommitSHA else { return .indeterminate }
         let daemon = daemonCommitSHA.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard app.isKnown, BuildIdentity.isSHA(daemon) else { return .indeterminate }
+        // A dirty development build can keep the same Git HEAD. The common
+        // packaging timestamp binds both halves to the same build invocation.
+        if app.commitSHA == daemon, let daemonBuiltAt,
+           app.builtAt != BuildIdentity.unknownValue, daemonBuiltAt != BuildIdentity.unknownValue,
+           app.builtAt != daemonBuiltAt {
+            return .mismatched(app: "\(app.shortSHA)@\(app.builtAt)",
+                               daemon: "\(String(daemon.prefix(7)))@\(daemonBuiltAt)")
+        }
         return app.commitSHA == daemon
             ? .matched
             : .mismatched(app: app.commitSHA, daemon: daemon)

@@ -180,17 +180,16 @@ class _RecordingExecutor:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, threading.Thread]] = []
-        self._started: list[threading.Event] = []
+        self._started = threading.Event()
 
     def execute(self, request_id: str) -> None:
-        event = threading.Event()
-        self._started.append(event)
         self.calls.append((request_id, threading.current_thread()))
-        event.set()
+        self._started.set()
 
-    def wait_started(self, timeout: float = 0.5) -> None:
-        for event in self._started:
-            event.wait(timeout=timeout)
+    def wait_started(self, timeout: float = 2.0) -> None:
+        # The latch must exist before the worker thread starts. Iterating a
+        # list populated by that thread can return without waiting at all.
+        assert self._started.wait(timeout=timeout), "executor thread did not start"
 
 
 def _build_service(tmp_path: Path) -> ControlPlaneService:

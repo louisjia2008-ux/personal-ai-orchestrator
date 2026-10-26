@@ -6,6 +6,10 @@
 - `pao-dsh-dispatch/telegram`：默认关闭、需显式启用的 Telegram 控制器，
   用于控制本机一个固定工作区中的 DeepSeek Harness。
 
+路由器每轮重新进行配额和任务等级准入；同轮工具续步的空消息批次复用本轮准入。
+配额未知、耗尽或没有满足等级的目标时，会在原始 provider 请求前阻止执行。
+Jev 不可用时只能回退到已准入的 T3 目标；并发请求共享本轮准入，Agent 销毁后清理缓存。
+
 Telegram 控制器只使用 Harness 公开的 `ctx.agents` 接口：创建或恢复 Agent、
 提交普通用户消息、读取已提交的可见回答、执行带类型的用户取消。它不直接启动
 shell，也不会绕过 Harness 的工具、沙箱或审批服务。

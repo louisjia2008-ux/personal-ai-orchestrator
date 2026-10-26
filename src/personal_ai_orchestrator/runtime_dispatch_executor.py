@@ -54,6 +54,10 @@ class RuntimeDispatchExecutor:
         self._executors = dict(executors)
         self.execution_supervisor = _ExecutionSupervisorProxy(self._executors)
 
+    def executor_for_runtime(self, runtime_id: str) -> Any | None:
+        """Host-only access to a runtime's policy and supervised probe surface."""
+        return self._executors.get(runtime_id)
+
     @staticmethod
     def _sibling_pool_blocker(
         *,
